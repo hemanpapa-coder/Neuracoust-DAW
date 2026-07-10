@@ -1443,6 +1443,143 @@ int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, d
     return applyClipEdit(engine, moved > 0) ? moved : 0;
 }
 
+namespace {
+
+constexpr const char* kVolumeParameterId = "track.volume";
+constexpr const char* kPanParameterId = "track.pan";
+
+bool isVolumeParameter(const char* parameterId) {
+    return parameterId != nullptr && std::strcmp(parameterId, kVolumeParameterId) == 0;
+}
+
+bool isPanParameter(const char* parameterId) {
+    return parameterId != nullptr && std::strcmp(parameterId, kPanParameterId) == 0;
+}
+
+/// The points behind a parameter, wherever the track happens to keep them.
+const std::vector<neuracoust::daw::AutomationPointState>* automationPoints(
+    NCEngine* engine, int trackIndex, const char* parameterId) {
+    const auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) {
+        return nullptr;
+    }
+    if (isVolumeParameter(parameterId)) {
+        return &track->volumeAutomation;
+    }
+    if (isPanParameter(parameterId)) {
+        for (const auto& lane : track->automationLanes) {
+            if (lane.parameterId == kPanParameterId) {
+                return &lane.points;
+            }
+        }
+    }
+    return nullptr;
+}
+
+/// Automation changes what the mixer does, not what clips exist: no playlist rebuild.
+bool applyAutomationEdit(NCEngine* engine, bool changed, const char* stepName) {
+    if (!changed) {
+        return false;
+    }
+    engine->reconcileProject();
+    if (stepName != nullptr) {
+        engine->recordStep(stepName);
+    }
+    return true;
+}
+
+} // namespace
+
+bool nc_automation_parameter_supported(const char* parameterId) {
+    return isVolumeParameter(parameterId) || isPanParameter(parameterId);
+}
+
+int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId) {
+    const auto* points = automationPoints(engine, trackIndex, parameterId);
+    return points != nullptr ? static_cast<int>(points->size()) : 0;
+}
+
+double nc_track_automation_time(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex) {
+    const auto* points = automationPoints(engine, trackIndex, parameterId);
+    if (points == nullptr || pointIndex < 0 || static_cast<size_t>(pointIndex) >= points->size()) {
+        return 0.0;
+    }
+    return (*points)[static_cast<size_t>(pointIndex)].timeSeconds;
+}
+
+float nc_track_automation_value(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex) {
+    const auto* points = automationPoints(engine, trackIndex, parameterId);
+    if (points == nullptr || pointIndex < 0 || static_cast<size_t>(pointIndex) >= points->size()) {
+        return 0.0f;
+    }
+    return (*points)[static_cast<size_t>(pointIndex)].value;
+}
+
+bool nc_track_automation_add(NCEngine* engine, int trackIndex, const char* parameterId,
+                             double timeSeconds, float value) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || !nc_automation_parameter_supported(parameterId)) {
+        return false;
+    }
+    const std::string trackName = track->name;
+    const bool changed =
+        isVolumeParameter(parameterId)
+            ? neuracoust::daw::setTrackVolumeAutomationPoint(engine->project, trackName, timeSeconds, value)
+            : neuracoust::daw::setTrackAutomationLanePoint(engine->project, trackName, kPanParameterId,
+                                                           "Pan", timeSeconds, value);
+    return applyAutomationEdit(engine, changed, "Automation point");
+}
+
+bool nc_track_automation_move(NCEngine* engine, int trackIndex, const char* parameterId,
+                              int pointIndex, double timeSeconds, float value) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || pointIndex < 0 || !nc_automation_parameter_supported(parameterId)) {
+        return false;
+    }
+    const std::string trackName = track->name;
+    const auto index = static_cast<size_t>(pointIndex);
+    const bool changed =
+        isVolumeParameter(parameterId)
+            ? neuracoust::daw::moveTrackVolumeAutomationPoint(engine->project, trackName, index,
+                                                              timeSeconds, value)
+            : neuracoust::daw::moveTrackAutomationLanePoint(engine->project, trackName, kPanParameterId,
+                                                            index, timeSeconds, value);
+    return applyAutomationEdit(engine, changed, nullptr);
+}
+
+bool nc_track_automation_delete(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || pointIndex < 0 || !nc_automation_parameter_supported(parameterId)) {
+        return false;
+    }
+    const std::string trackName = track->name;
+    const auto index = static_cast<size_t>(pointIndex);
+    const bool changed =
+        isVolumeParameter(parameterId)
+            ? neuracoust::daw::deleteTrackVolumeAutomationPoint(engine->project, trackName, index)
+            : neuracoust::daw::deleteTrackAutomationLanePoint(engine->project, trackName,
+                                                              kPanParameterId, index);
+    return applyAutomationEdit(engine, changed, "Delete automation point");
+}
+
+int nc_track_automation_clear_range(NCEngine* engine, int trackIndex, const char* parameterId,
+                                    double startSeconds, double endSeconds) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || !nc_automation_parameter_supported(parameterId)) {
+        return 0;
+    }
+    const std::string trackName = track->name;
+    const size_t removed =
+        isVolumeParameter(parameterId)
+            ? neuracoust::daw::deleteTrackVolumeAutomationPointsInRange(engine->project, trackName,
+                                                                        startSeconds, endSeconds)
+            : neuracoust::daw::deleteTrackAutomationLanePointsInRange(engine->project, trackName,
+                                                                      kPanParameterId,
+                                                                      startSeconds, endSeconds);
+    applyAutomationEdit(engine, removed > 0, "Clear automation");
+    return static_cast<int>(removed);
+}
+
 bool nc_project_set_loop_range(NCEngine* engine, double startSeconds, double endSeconds) {
     if (engine == nullptr || !std::isfinite(startSeconds) || !std::isfinite(endSeconds)) {
         return false;

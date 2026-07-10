@@ -982,11 +982,21 @@ final class EngineController: ObservableObject {
         let laneIndex = Dictionary(uniqueKeysWithValues: lanes.enumerated().map { ($1.name, $0) })
 
         return TimelineModel(
-            lanes: lanes.map {
-                TimelineModel.Lane(name: $0.name,
-                                   accent: NSColor.from($0.kind.accent),
-                                   muted: $0.muted,
-                                   selected: $0.id == selectedTrackId)
+            lanes: lanes.map { track in
+                var automation: TimelineModel.Automation?
+                if let parameter = automationLanes[track.id] {
+                    automation = TimelineModel.Automation(
+                        parameterId: parameter.rawValue,
+                        displayName: parameter.displayName,
+                        range: parameter.range,
+                        fallback: parameter == .volume ? track.volumeDb : track.pan,
+                        points: automationPoints(trackId: track.id, parameter))
+                }
+                return TimelineModel.Lane(name: track.name,
+                                          accent: NSColor.from(track.kind.accent),
+                                          muted: track.muted,
+                                          selected: track.id == selectedTrackId,
+                                          automation: automation)
             },
             clips: clips.compactMap { clip in
                 guard let lane = laneIndex[clip.trackName] else { return nil }
@@ -1265,6 +1275,81 @@ final class EngineController: ObservableObject {
         guard let deleted = withClipIds(selection, { nc_clip_delete_many(handle, $0, $1) }), deleted > 0 else { return }
         selectedClipIds = []
         reloadClips()
+        refreshHistory()
+    }
+
+    // MARK: Automation
+
+    /// Only what the renderer actually reads. Storing anything else would draw a
+    /// curve that does nothing to the sound.
+    enum AutomationParameter: String, CaseIterable {
+        case volume = "track.volume"
+        case pan = "track.pan"
+
+        var displayName: String { self == .volume ? "볼륨 (dB)" : "팬" }
+        var range: ClosedRange<Float> { self == .volume ? -60...12 : -1...1 }
+    }
+
+    /// Which lanes have their automation folded out, and on which parameter.
+    @Published private(set) var automationLanes: [Int: AutomationParameter] = [:]
+
+    func toggleAutomation(laneIndex: Int) {
+        guard laneIndex < laneTracks.count else { return }
+        let trackId = laneTracks[laneIndex].id
+        if automationLanes[trackId] == nil {
+            automationLanes[trackId] = .volume
+        } else {
+            automationLanes[trackId] = nil
+        }
+    }
+
+    func cycleAutomationParameter(laneIndex: Int) {
+        guard laneIndex < laneTracks.count,
+              let current = automationLanes[laneTracks[laneIndex].id] else { return }
+        let all = AutomationParameter.allCases
+        let next = all[(all.firstIndex(of: current)! + 1) % all.count]
+        automationLanes[laneTracks[laneIndex].id] = next
+    }
+
+    private func automationPoints(trackId: Int, _ parameter: AutomationParameter)
+        -> [TimelineModel.Automation.Point] {
+        guard let handle else { return [] }
+        let count = Int(nc_track_automation_count(handle, Int32(trackId), parameter.rawValue))
+        return (0..<count).map { index in
+            TimelineModel.Automation.Point(
+                timeSeconds: nc_track_automation_time(handle, Int32(trackId), parameter.rawValue, Int32(index)),
+                value: nc_track_automation_value(handle, Int32(trackId), parameter.rawValue, Int32(index)))
+        }
+    }
+
+    func addAutomationPoint(laneIndex: Int, timeSeconds: Double, value: Float) {
+        guard let handle, laneIndex < laneTracks.count else { return }
+        let trackId = laneTracks[laneIndex].id
+        guard let parameter = automationLanes[trackId],
+              nc_track_automation_add(handle, Int32(trackId), parameter.rawValue, timeSeconds, value)
+        else { return }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// Continuous; the view commits the gesture when the drag ends.
+    func moveAutomationPoint(laneIndex: Int, pointIndex: Int, timeSeconds: Double, value: Float) {
+        guard let handle, laneIndex < laneTracks.count else { return }
+        let trackId = laneTracks[laneIndex].id
+        guard let parameter = automationLanes[trackId],
+              nc_track_automation_move(handle, Int32(trackId), parameter.rawValue,
+                                       Int32(pointIndex), timeSeconds, value)
+        else { return }
+        reloadTracks()
+    }
+
+    func deleteAutomationPoint(laneIndex: Int, pointIndex: Int) {
+        guard let handle, laneIndex < laneTracks.count else { return }
+        let trackId = laneTracks[laneIndex].id
+        guard let parameter = automationLanes[trackId],
+              nc_track_automation_delete(handle, Int32(trackId), parameter.rawValue, Int32(pointIndex))
+        else { return }
+        reloadTracks()
         refreshHistory()
     }
 

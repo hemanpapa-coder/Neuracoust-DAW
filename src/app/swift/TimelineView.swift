@@ -4,11 +4,29 @@ import SwiftUI
 /// What the timeline needs to draw one frame. A value type so the AppKit view can
 /// diff it cheaply and skip redraws.
 struct TimelineModel: Equatable {
+    /// One automatable parameter, and the points the renderer will read.
+    struct Automation: Equatable {
+        let parameterId: String
+        let displayName: String
+        /// The value axis, top to bottom of the sub-lane.
+        let range: ClosedRange<Float>
+        /// Where the fader/knob sits, which is what the curve falls back to.
+        let fallback: Float
+        let points: [Point]
+
+        struct Point: Equatable {
+            let timeSeconds: Double
+            let value: Float
+        }
+    }
+
     struct Lane: Equatable {
         let name: String
         let accent: NSColor
         let muted: Bool
         let selected: Bool
+        /// nil while the lane's automation is folded away.
+        var automation: Automation?
     }
 
     struct Clip: Equatable {
@@ -67,6 +85,11 @@ final class TimelineNSView: NSView {
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
+    var onToggleAutomation: ((Int) -> Void)?             // lane index
+    var onCycleAutomationParameter: ((Int) -> Void)?     // lane index
+    var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
+    var onMoveAutomationPoint: ((Int, Int, Double, Float) -> Void)?  // (lane, point, time, value)
+    var onDeleteAutomationPoint: ((Int, Int) -> Void)?   // (lane, point)
     var onToggleSelect: ((String) -> Void)?              // shift-click
     var onSelectMany: (([String]) -> Void)?              // marquee
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
@@ -88,6 +111,7 @@ final class TimelineNSView: NSView {
         case seeking
         case marquee(origin: NSPoint, current: NSPoint)
         case rangingFrom(seconds: Double)
+        case movingAutomationPoint(laneIndex: Int, pointIndex: Int)
         case moving(clipId: String, grabOffsetSeconds: Double)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
@@ -110,6 +134,7 @@ final class TimelineNSView: NSView {
     /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
     static let rangeStripHeight: CGFloat = 12
     static let laneHeight: CGFloat = 78
+    static let automationHeight: CGFloat = 54
     static let headerWidth: CGFloat = 150
 
     private let playheadLayer = CALayer()
@@ -147,10 +172,31 @@ final class TimelineNSView: NSView {
 
     // MARK: Interaction
 
+    /// Lanes are no longer a uniform stack: an open automation lane adds to the one
+    /// above it, so every vertical position has to be accumulated.
+    private func laneTop(_ index: Int) -> CGFloat {
+        var top = Self.rulerHeight
+        for lane in model.lanes.prefix(index) {
+            top += Self.laneHeight
+            if lane.automation != nil { top += Self.automationHeight }
+        }
+        return top
+    }
+
+    private func automationRect(_ index: Int) -> NSRect? {
+        guard index < model.lanes.count, model.lanes[index].automation != nil else { return nil }
+        return NSRect(x: 0, y: laneTop(index) + Self.laneHeight,
+                      width: bounds.width, height: Self.automationHeight)
+    }
+
+    var totalLaneHeight: CGFloat {
+        laneTop(model.lanes.count) - Self.rulerHeight
+    }
+
     private func clipRect(_ clip: TimelineModel.Clip) -> NSRect {
         let left = x(forSeconds: clip.startSeconds)
         let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
-        let top = Self.rulerHeight + CGFloat(clip.laneIndex) * Self.laneHeight + 6
+        let top = laneTop(clip.laneIndex) + 6
         return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
     }
 
@@ -166,20 +212,52 @@ final class TimelineNSView: NSView {
         model.clips.filter { clipRect($0).intersects(rect) }.map(\.id)
     }
 
-    /// Which lane a point falls in, or nil above/below the lanes.
+    /// Which lane a point falls in — its clip row, not its automation row.
     private func laneIndex(at point: NSPoint) -> Int? {
         guard point.y >= Self.rulerHeight else { return nil }
-        let index = Int((point.y - Self.rulerHeight) / Self.laneHeight)
-        return index >= 0 && index < model.lanes.count ? index : nil
+        for index in model.lanes.indices {
+            let top = laneTop(index)
+            if point.y >= top && point.y < top + Self.laneHeight {
+                return index
+            }
+        }
+        return nil
+    }
+
+    /// Which open automation row a point falls in.
+    private func automationIndex(at point: NSPoint) -> Int? {
+        model.lanes.indices.first { automationRect($0)?.contains(point) ?? false }
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
 
-        // Clicking a lane header selects that track.
+        // Clicking a lane header selects that track; the "A" chip folds automation out.
         if point.x < Self.headerWidth {
             if let lane = laneIndex(at: point) {
-                onSelectLane?(lane)
+                if automationToggleRect(lane).contains(point) {
+                    onToggleAutomation?(lane)
+                } else {
+                    onSelectLane?(lane)
+                }
+            } else if let lane = automationIndex(at: point) {
+                // The parameter name doubles as the parameter picker.
+                onCycleAutomationParameter?(lane)
+            }
+            return
+        }
+
+        if let lane = automationIndex(at: point), let rect = automationRect(lane),
+           let automation = model.lanes[lane].automation {
+            if let existing = automationPoint(at: point, laneIndex: lane) {
+                if event.clickCount >= 2 {
+                    onDeleteAutomationPoint?(lane, existing)
+                } else {
+                    drag = .movingAutomationPoint(laneIndex: lane, pointIndex: existing)
+                }
+            } else {
+                onAddAutomationPoint?(lane, max(0, snapped(seconds(atX: point.x))),
+                                      automationValue(atY: point.y, in: rect, automation))
             }
             return
         }
@@ -267,6 +345,10 @@ final class TimelineNSView: NSView {
             onSeek?(time)
         case .rangingFrom(let origin):
             onSetRange?(origin, max(0, snapped(time)))
+        case .movingAutomationPoint(let lane, let pointIndex):
+            guard let rect = automationRect(lane), let automation = model.lanes[lane].automation else { break }
+            onMoveAutomationPoint?(lane, pointIndex, max(0, snapped(time)),
+                                   automationValue(atY: point.y, in: rect, automation))
         case .marquee(let origin, _):
             drag = .marquee(origin: origin, current: point)
             needsDisplay = true
@@ -328,6 +410,8 @@ final class TimelineNSView: NSView {
                                                        height: abs(current.y - origin.y))))
             }
             needsDisplay = true
+        case .movingAutomationPoint:
+            onCommitEdit?("Automation point")
         case .none, .seeking, .rangingFrom:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -403,6 +487,7 @@ final class TimelineNSView: NSView {
         drawLaneHeaders(context)
         drawGrid(context)
         drawClips(context)
+        drawAutomation(context)
 
         // The lane header column sits above the grid but below the playhead.
         NSColor(hex: 0x0b0806).setFill()
@@ -498,7 +583,7 @@ final class TimelineNSView: NSView {
 
         for (index, lane) in model.lanes.enumerated() {
             let rect = NSRect(x: 0,
-                              y: Self.rulerHeight + CGFloat(index) * Self.laneHeight,
+                              y: laneTop(index),
                               width: Self.headerWidth,
                               height: Self.laneHeight)
             NSColor(hex: lane.selected ? 0x3d352e : 0x332c26).setFill()
@@ -510,8 +595,123 @@ final class TimelineNSView: NSView {
             (lane.name as NSString).draw(at: NSPoint(x: 12, y: rect.minY + 10),
                                          withAttributes: nameAttributes)
 
+            // The button that folds the automation row out from under the lane.
+            let toggle = automationToggleRect(index)
+            NSColor(hex: lane.automation != nil ? 0x5f9fd6 : 0x453d34).setFill()
+            NSBezierPath(roundedRect: toggle, xRadius: 3, yRadius: 3).fill()
+            ("A" as NSString).draw(
+                at: NSPoint(x: toggle.minX + 5, y: toggle.minY + 1),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
+                    .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
+                ])
+
             NSColor(hex: 0x1b1611).setFill()
             NSRect(x: 0, y: rect.maxY - 1, width: bounds.width, height: 1).fill()
+        }
+    }
+
+    private func automationToggleRect(_ index: Int) -> NSRect {
+        NSRect(x: Self.headerWidth - 26, y: laneTop(index) + 10, width: 18, height: 14)
+    }
+
+    /// Value axis: the top of the row is the parameter's maximum.
+    private func automationY(_ value: Float, in rect: NSRect, _ automation: TimelineModel.Automation) -> CGFloat {
+        let span = automation.range.upperBound - automation.range.lowerBound
+        let fraction = (value - automation.range.lowerBound) / max(0.0001, span)
+        return rect.maxY - 6 - CGFloat(fraction) * (rect.height - 12)
+    }
+
+    private func automationValue(atY pointY: CGFloat, in rect: NSRect,
+                                 _ automation: TimelineModel.Automation) -> Float {
+        let span = automation.range.upperBound - automation.range.lowerBound
+        let fraction = Float((rect.maxY - 6 - pointY) / max(1, rect.height - 12))
+        let value = automation.range.lowerBound + fraction * span
+        return min(automation.range.upperBound, max(automation.range.lowerBound, value))
+    }
+
+    private static let automationHandleRadius: CGFloat = 4
+
+    private func automationPoint(at point: NSPoint, laneIndex: Int) -> Int? {
+        guard let rect = automationRect(laneIndex),
+              let automation = model.lanes[laneIndex].automation else { return nil }
+        return automation.points.firstIndex { candidate in
+            let centre = NSPoint(x: x(forSeconds: candidate.timeSeconds),
+                                 y: automationY(candidate.value, in: rect, automation))
+            return abs(centre.x - point.x) <= Self.automationHandleRadius + 3 &&
+                   abs(centre.y - point.y) <= Self.automationHandleRadius + 3
+        }
+    }
+
+    private func drawAutomation(_ context: CGContext) {
+        for (index, lane) in model.lanes.enumerated() {
+            guard let automation = lane.automation, let rect = automationRect(index) else { continue }
+
+            NSColor(hex: 0x241f1b).setFill()
+            rect.fill()
+            NSColor(hex: 0x1b1611).setFill()
+            NSRect(x: 0, y: rect.maxY - 1, width: bounds.width, height: 1).fill()
+
+            // Header: the parameter's name, clickable to swap parameter.
+            (automation.displayName as NSString).draw(
+                at: NSPoint(x: 12, y: rect.minY + 6),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium),
+                    .foregroundColor: NSColor(hex: 0x9a8f80),
+                ])
+
+            context.saveGState()
+            context.clip(to: NSRect(x: lanesRect.minX, y: rect.minY,
+                                    width: lanesRect.width, height: rect.height))
+
+            // The line the curve falls back to when there are no points at all.
+            NSColor(hex: 0x453d34).setStroke()
+            let baseline = NSBezierPath()
+            let baselineY = automationY(automation.fallback, in: rect, automation)
+            baseline.move(to: NSPoint(x: lanesRect.minX, y: baselineY))
+            baseline.line(to: NSPoint(x: lanesRect.maxX, y: baselineY))
+            baseline.lineWidth = 1
+            baseline.setLineDash([2, 3], count: 2, phase: 0)
+            baseline.stroke()
+
+            guard !automation.points.isEmpty else {
+                context.restoreGState()
+                continue
+            }
+
+            // The curve holds its first and last value out to the edges, which is
+            // exactly what automationValueAt does when it runs off either end.
+            let curve = NSBezierPath()
+            let first = automation.points[0]
+            curve.move(to: NSPoint(x: lanesRect.minX,
+                                   y: automationY(first.value, in: rect, automation)))
+            for point in automation.points {
+                curve.line(to: NSPoint(x: x(forSeconds: point.timeSeconds),
+                                       y: automationY(point.value, in: rect, automation)))
+            }
+            if let last = automation.points.last {
+                curve.line(to: NSPoint(x: lanesRect.maxX,
+                                       y: automationY(last.value, in: rect, automation)))
+            }
+            lane.accent.withAlphaComponent(0.85).setStroke()
+            curve.lineWidth = 1.5
+            curve.stroke()
+
+            for point in automation.points {
+                let centre = NSPoint(x: x(forSeconds: point.timeSeconds),
+                                     y: automationY(point.value, in: rect, automation))
+                let handle = NSRect(x: centre.x - Self.automationHandleRadius,
+                                    y: centre.y - Self.automationHandleRadius,
+                                    width: Self.automationHandleRadius * 2,
+                                    height: Self.automationHandleRadius * 2)
+                NSColor(hex: 0x1b1611).setFill()
+                NSBezierPath(ovalIn: handle).fill()
+                lane.accent.setStroke()
+                let ring = NSBezierPath(ovalIn: handle)
+                ring.lineWidth = 1.5
+                ring.stroke()
+            }
+            context.restoreGState()
         }
     }
 
@@ -547,7 +747,7 @@ final class TimelineNSView: NSView {
             let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
             guard right > lanesRect.minX, left < lanesRect.maxX else { continue }
 
-            let top = Self.rulerHeight + CGFloat(clip.laneIndex) * Self.laneHeight + 6
+            let top = laneTop(clip.laneIndex) + 6
             let rect = NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
 
             let body = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
@@ -709,6 +909,11 @@ struct TimelineView: NSViewRepresentable {
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
     let onSetRange: (Double, Double) -> Void
+    let onToggleAutomation: (Int) -> Void
+    let onCycleAutomationParameter: (Int) -> Void
+    let onAddAutomationPoint: (Int, Double, Float) -> Void
+    let onMoveAutomationPoint: (Int, Int, Double, Float) -> Void
+    let onDeleteAutomationPoint: (Int, Int) -> Void
     let onToggleSelect: (String) -> Void
     let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
@@ -742,6 +947,11 @@ struct TimelineView: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange
+        view.onToggleAutomation = onToggleAutomation
+        view.onCycleAutomationParameter = onCycleAutomationParameter
+        view.onAddAutomationPoint = onAddAutomationPoint
+        view.onMoveAutomationPoint = onMoveAutomationPoint
+        view.onDeleteAutomationPoint = onDeleteAutomationPoint
         view.onToggleSelect = onToggleSelect
         view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip

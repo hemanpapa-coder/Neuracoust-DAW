@@ -104,6 +104,19 @@ Two selections, and they do different work:
 Fades and clip gain stay single-clip: their handles hide when more than one clip is
 selected, rather than offering a grab that would move the selection instead.
 
+## Automation
+
+The renderer honours **two** parameters and no others: a track's `volumeAutomation`
+and its `"track.pan"` lane. Both go through `mixTimelineFrame`, which the realtime
+mixer and the offline bounce share — so an automation curve is heard, not just drawn.
+Anything else written into `automationLanes` is stored by the project and ignored by
+the sound, which is why `nc_automation_parameter_supported` refuses it rather than
+letting the UI draw a curve that does nothing.
+
+A lane folds out from the "A" chip in its timeline header; the parameter name below
+it is also the parameter picker. Clicking empty space adds a point, dragging moves
+one (continuous — the view commits the gesture), double-clicking removes it.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.
@@ -122,6 +135,6 @@ The engine encodes and pushes audio (`ListenRoomSender`); it does not run the re
 
 ## Open design questions
 
-The design has no home for several existing features: MIDI piano roll, media pool, AI assistant, diagnostic log, automation lanes, marker/chord/lyric lanes, the 4-format ruler, the edit-mode pad, the routing matrix, and the settings dialogs. Decision deferred: build the new shell first, place these once it runs.
+The design has no home for several existing features: MIDI piano roll, media pool, AI assistant, diagnostic log, marker/chord/lyric lanes, the 4-format ruler, the edit-mode pad, the routing matrix, and the settings dialogs. Decision deferred: build the new shell first, place these once it runs.
 
 The design also *changes* structure — the mixer moves from a floating `NSPanel` to an Edit/Mix tab view, and the monitor station from a floating panel to a fixed 392px right dock.

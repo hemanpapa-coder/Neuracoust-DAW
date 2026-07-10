@@ -348,6 +348,39 @@ int nc_clipboard_clip_count(NCEngine* engine);
 int nc_clip_paste_all(NCEngine* engine, double startSeconds);
 
 // ---------------------------------------------------------------------------
+// Automation
+//
+// The renderer honours exactly two parameters, and both the realtime mixer and the
+// offline bounce read them through the same per-frame code. Anything else stored in
+// a track's automation lanes is kept by the project and ignored by the sound, so the
+// UI must not offer it.
+//
+//   "track.volume"  dB, -120…+24, the fallback is the track's fader
+//   "track.pan"     -1…+1, the fallback is the track's pan knob
+//
+// Points are kept sorted by time; `pointIndex` addresses that order. Moving a point
+// past its neighbours re-sorts them, so read the list back afterwards.
+// ---------------------------------------------------------------------------
+
+/// False for a parameter the sound would ignore.
+bool nc_automation_parameter_supported(const char* parameterId);
+
+int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId);
+double nc_track_automation_time(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);
+float nc_track_automation_value(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);
+
+/// Adds a point, or replaces the one already sitting at that time. Records a step.
+bool nc_track_automation_add(NCEngine* engine, int trackIndex, const char* parameterId,
+                             double timeSeconds, float value);
+/// Continuous, for dragging a point. Records nothing; commit with nc_history_record_gesture.
+bool nc_track_automation_move(NCEngine* engine, int trackIndex, const char* parameterId,
+                              int pointIndex, double timeSeconds, float value);
+bool nc_track_automation_delete(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);
+/// Clears the points inside the edit range. Returns how many went.
+int nc_track_automation_clear_range(NCEngine* engine, int trackIndex, const char* parameterId,
+                                    double startSeconds, double endSeconds);
+
+// ---------------------------------------------------------------------------
 // Range editing
 //
 // The loop range doubles as the edit range, the way the old UI used it. A range

@@ -86,6 +86,24 @@ static bool isSilentBetween(const std::string& path, double fromSeconds, double 
     return last > first;
 }
 
+/// Loudest sample between two times, so a gain ramp can be measured rather than seen.
+static float peakBetween(const std::string& path, double fromSeconds, double toSeconds) {
+    neuracoust::daw::WavAudioData audio;
+    std::string error;
+    if (!neuracoust::daw::readPcmWavFile(path, audio, error) || audio.channels <= 0) {
+        return -1.0f;
+    }
+    const int64_t first = std::max<int64_t>(0, static_cast<int64_t>(fromSeconds * audio.sampleRate));
+    const int64_t last = std::min(audio.frameCount(), static_cast<int64_t>(toSeconds * audio.sampleRate));
+    float peak = 0.0f;
+    for (int64_t frame = first; frame < last; ++frame) {
+        for (int channel = 0; channel < audio.channels; ++channel) {
+            peak = std::max(peak, std::abs(audio.interleavedSamples[frame * audio.channels + channel]));
+        }
+    }
+    return peak;
+}
+
 /// Where a clip sits now, by id. Batch edits renumber the index order.
 static double startOfClip(NCEngine* engine, const char* clipId) {
     for (int index = 0; index < nc_clip_count(engine); ++index) {
@@ -698,6 +716,83 @@ int main() {
             check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a fresh 2 s tone");
             check(nc_range_separate(engine, 0.5, 1.5) > 0, "separate the range");
             check(nc_clip_count(engine) == 3, "head, range, tail");
+        }
+
+        // --- automation has to move the sound, not just draw a line ---------------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a 2 s tone at 0 s");
+
+            check(nc_automation_parameter_supported("track.volume"), "volume is automatable");
+            check(nc_automation_parameter_supported("track.pan"), "pan is automatable");
+            check(!nc_automation_parameter_supported("track.mute"),
+                  "a parameter the renderer ignores is refused");
+
+            // What the clip sounds like before any automation touches it.
+            char plainProject[256] = "/tmp/neuracoust-io-smoke/Unautomated.ndaw";
+            check(nc_project_save_as(engine, plainProject, error, sizeof(error)), "save it plain");
+            const std::string plainBounce = "/tmp/neuracoust-io-smoke/unautomated.wav";
+            {
+                neuracoust::daw::ProjectDocument plain;
+                std::string plainError;
+                std::string plainText;
+                if (FILE* file = fopen(plainProject, "rb")) {
+                    char buffer[8192];
+                    size_t read = 0;
+                    while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) plainText.append(buffer, read);
+                    fclose(file);
+                }
+                check(neuracoust::daw::deserializeProjectForPath(plainText, plainProject, plain, plainError),
+                      "parse the plain project");
+                check(neuracoust::daw::bounceProjectToWav(plain, plainBounce).ok, "bounce it plain");
+            }
+            const float plainPeak = peakBetween(plainBounce, 0.0, 0.2);
+            check(plainPeak > 0.001f, "the untouched tone makes a sound");
+
+            // Full level at 0 s, silence by 2 s: a ramp the ear could hear.
+            check(nc_track_automation_add(engine, 0, "track.volume", 0.0, 0.0f), "point at 0 s, 0 dB");
+            check(nc_track_automation_add(engine, 0, "track.volume", 2.0, -60.0f), "point at 2 s, -60 dB");
+            check(nc_track_automation_count(engine, 0, "track.volume") == 2, "two points");
+            check(std::abs(nc_track_automation_time(engine, 0, "track.volume", 0)) < 0.001,
+                  "the points came back sorted by time");
+            check(!nc_track_automation_add(engine, 0, "track.mute", 0.0, 1.0f),
+                  "an unsupported parameter stores nothing");
+
+            char autoProject[256] = "/tmp/neuracoust-io-smoke/Automated.ndaw";
+            check(nc_project_save_as(engine, autoProject, error, sizeof(error)), "save the automation");
+            neuracoust::daw::ProjectDocument automated;
+            std::string autoError;
+            std::string autoText;
+            if (FILE* file = fopen(autoProject, "rb")) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) autoText.append(buffer, read);
+                fclose(file);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(autoText, autoProject, automated, autoError),
+                  "parse it");
+            const std::string autoBounce = "/tmp/neuracoust-io-smoke/automated.wav";
+            check(neuracoust::daw::bounceProjectToWav(automated, autoBounce).ok, "bounce it");
+
+            const float headPeak = peakBetween(autoBounce, 0.0, 0.2);
+            const float tailPeak = peakBetween(autoBounce, 1.8, 2.0);
+            printf("volume automation: plain %.4f, head %.4f, tail %.4f\n",
+                   plainPeak, headPeak, tailPeak);
+            // A 0 dB point changes nothing; the -60 dB point at the far end must.
+            check(std::abs(headPeak - plainPeak) < plainPeak * 0.05f, "0 dB leaves the head alone");
+            check(tailPeak < headPeak * 0.05f, "the ramp brought the tail down");
+
+            // Deleting the points puts the fader back in charge.
+            check(nc_track_automation_delete(engine, 0, "track.volume", 1), "delete the second point");
+            check(nc_track_automation_delete(engine, 0, "track.volume", 0), "delete the first point");
+            check(nc_track_automation_count(engine, 0, "track.volume") == 0, "no points left");
+
+            // Pan lives in a lane rather than its own vector; same door.
+            check(nc_track_automation_add(engine, 0, "track.pan", 0.0, -1.0f), "pan hard left at 0 s");
+            check(nc_track_automation_add(engine, 0, "track.pan", 2.0, 1.0f), "pan hard right at 2 s");
+            check(nc_track_automation_count(engine, 0, "track.pan") == 2, "two pan points");
+            check(nc_track_automation_clear_range(engine, 0, "track.pan", -0.1, 3.0) == 2,
+                  "clearing the range took both");
         }
 
         // --- bounce through the bridge, and time it -------------------------------
