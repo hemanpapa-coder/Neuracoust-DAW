@@ -413,6 +413,9 @@ target_link_libraries(neuracoust_daw_render PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_bridge_transport_smoke tools/bridge_transport_smoke.c)
 target_link_libraries(neuracoust_bridge_transport_smoke PRIVATE neuracoust_daw_core)
 
+add_executable(neuracoust_vst3_initial_parameters_smoke tools/vst3_initial_parameters_smoke.cpp)
+target_link_libraries(neuracoust_vst3_initial_parameters_smoke PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_project_io_smoke tools/project_io_smoke.cpp)
 target_link_libraries(neuracoust_project_io_smoke PRIVATE neuracoust_daw_core)
 if(APPLE)
@@ -532,6 +535,7 @@ endif()
 # Exercises the exact C facade the SwiftUI app calls. Exits 0 with a SKIP line when
 # no audio device is available, so it stays green on machines without one.
 add_test(NAME bridge_transport_smoke COMMAND neuracoust_bridge_transport_smoke)
+add_test(NAME vst3_initial_parameters_smoke COMMAND neuracoust_vst3_initial_parameters_smoke)
 
 # Document plumbing only — no audio device, so this one runs anywhere.
 add_test(NAME project_io_smoke COMMAND neuracoust_project_io_smoke)

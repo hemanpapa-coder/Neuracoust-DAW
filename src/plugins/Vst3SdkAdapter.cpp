@@ -1036,6 +1036,14 @@ struct Vst3RealtimeProcessor::Impl {
     // Out-of-process fallback for plugins that are unsafe to host in-process.
     std::unique_ptr<Vst3RealtimeBridgeClient> bridge;
     std::vector<Vst3ParameterValueState> bridgeOutputParameters;
+    /// The processor component of a freshly created plug-in does not necessarily hold
+    /// the values its own controller was initialised with — FabFilter Micro's filter
+    /// sits at 4.8 Hz while its controller says 4166 Hz. Nobody syncs the two, so
+    /// every insert used to process with every parameter at zero. Read the controller
+    /// once and send its values in with the first block.
+    std::vector<Vst3ParameterValueState> initialParameters;
+    bool initialsPending = false;
+    std::vector<Vst3ParameterValueState> parameterScratch;
 #if defined(NEURACOUST_HAS_VST3_SDK)
     PreparedProcessor prepared;
     std::vector<float> inputLeft;
@@ -1054,6 +1062,59 @@ struct Vst3RealtimeProcessor::Impl {
 	    Steinberg::int64 processedSamples = 0;
 	    double sampleRate = 48000.0;
 #endif
+
+    /// Reads every writable parameter's value off the freshly initialised controller.
+    /// Nothing is sent to the plug-in here; the values ride in with the first process call.
+    void collectInitialParameters() {
+        initialParameters.clear();
+        initialsPending = false;
+#if defined(NEURACOUST_HAS_VST3_SDK)
+        auto* controller = prepared.controller;
+        if (controller == nullptr) {
+            return;
+        }
+        const int32_t count = controller->getParameterCount();
+        initialParameters.reserve(static_cast<size_t>(std::max(0, count)));
+        for (int32_t index = 0; index < count; ++index) {
+            Steinberg::Vst::ParameterInfo info {};
+            if (controller->getParameterInfo(index, info) != Steinberg::kResultOk) {
+                continue;
+            }
+            // Read-only parameters are meters; writing them means nothing.
+            if ((info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0) {
+                continue;
+            }
+            // Not info.defaultNormalizedValue: FabFilter declares 0 there and then
+            // initialises the controller to 0.7. The controller's live value is what
+            // the plug-in actually means by "no preset loaded".
+            const double value = std::clamp(controller->getParamNormalized(info.id), 0.0, 1.0);
+            initialParameters.push_back({static_cast<uint32_t>(info.id),
+                                         vstString128ToUtf8(info.title), value});
+        }
+        initialsPending = !initialParameters.empty();
+#endif
+    }
+
+    /// The plug-in's own initial values first, then whatever the project stored.
+    const std::vector<Vst3ParameterValueState>& withInitialValues(
+        const std::vector<Vst3ParameterValueState>& stored) {
+        if (!initialsPending) {
+            return stored;
+        }
+        parameterScratch = initialParameters;
+        for (const auto& parameter : stored) {
+            auto found = std::find_if(parameterScratch.begin(), parameterScratch.end(),
+                                      [&](const Vst3ParameterValueState& candidate) {
+                                          return candidate.parameterId == parameter.parameterId;
+                                      });
+            if (found != parameterScratch.end()) {
+                *found = parameter;
+            } else {
+                parameterScratch.push_back(parameter);
+            }
+        }
+        return parameterScratch;
+    }
 };
 
 bool isVst3HostedOutOfProcess(const Vst3PluginDescriptor& descriptor) {
@@ -1897,6 +1958,7 @@ bool Vst3RealtimeProcessor::prepare(const Vst3PluginDescriptor& descriptor,
     impl_->preparedProbe.latencySamples = impl_->prepared.latencySamples;
     impl_->preparedProbe.tailSamples = impl_->prepared.tailSamples;
     impl_->preparedProbe.className = impl_->prepared.className;
+    impl_->collectInitialParameters();
     impl_->preparedProbe.message = "VST3 realtime processor prepared.";
     message = impl_->preparedProbe.message;
     return true;
@@ -2074,9 +2136,12 @@ Vst3ProcessResult Vst3RealtimeProcessor::processInterleavedStereo(float* interle
 	    processData.numOutputs = static_cast<Steinberg::int32>(impl_->outputBuses.size());
 	    processData.inputs = impl_->inputBuses.empty() ? nullptr : impl_->inputBuses.data();
 	    processData.outputs = impl_->outputBuses.empty() ? nullptr : impl_->outputBuses.data();
+    // The first block also carries the plug-in's own initial values, because its
+    // processor does not reliably hold what its controller was initialised with.
+    const auto& effectiveParameters = impl_->withInitialValues(parameters);
     SimpleParameterChanges parameterChanges;
-    if (!parameters.empty()) {
-        parameterChanges.addValues(parameters);
+    if (!effectiveParameters.empty()) {
+        parameterChanges.addValues(effectiveParameters);
         processData.inputParameterChanges = &parameterChanges;
     }
     SimpleParameterChanges outputParameterChanges;
@@ -2110,6 +2175,8 @@ Vst3ProcessResult Vst3RealtimeProcessor::processInterleavedStereo(float* interle
 	    }
 
     result.opened = true;
+    // They are inside the plug-in now; do not resend them every block.
+    impl_->initialsPending = false;
     result.processed = true;
     result.framesProcessed = frameCount;
     result.latencySamples = impl_->prepared.latencySamples;
@@ -2211,9 +2278,12 @@ Vst3ProcessResult Vst3RealtimeProcessor::processMidiInstrument(float* interleave
     processData.inputs = nullptr;
     processData.outputs = &outputBus;
     processData.inputEvents = inputEvents.getEventCount() > 0 ? &inputEvents : nullptr;
+    // The first block also carries the plug-in's own initial values, because its
+    // processor does not reliably hold what its controller was initialised with.
+    const auto& effectiveParameters = impl_->withInitialValues(parameters);
     SimpleParameterChanges parameterChanges;
-    if (!parameters.empty()) {
-        parameterChanges.addValues(parameters);
+    if (!effectiveParameters.empty()) {
+        parameterChanges.addValues(effectiveParameters);
         processData.inputParameterChanges = &parameterChanges;
     }
 
@@ -2232,6 +2302,8 @@ Vst3ProcessResult Vst3RealtimeProcessor::processMidiInstrument(float* interleave
     }
 
     result.opened = true;
+    // They are inside the plug-in now; do not resend them every block.
+    impl_->initialsPending = false;
     result.processed = true;
     result.framesProcessed = frameCount;
     result.latencySamples = impl_->prepared.latencySamples;
