@@ -119,6 +119,7 @@ final class TimelineNSView: NSView {
     var onMoveRegion: ((String, Int, Double) -> Void)?   // (id, lane, start) — continuous
     var onResizeRegion: ((String, Double) -> Void)?      // (id, duration) — continuous
     var onAddRegion: ((Int, Double) -> Void)?            // (lane, start)
+    var onDropAudio: ((Int, Double, [URL]) -> Void)?     // (lane, start, file urls)
     var onMoveMarker: ((Double, Double) -> Void)?        // (from, to) — continuous
     var onDeleteMarker: ((Double) -> Void)?
     var onSelectBetweenMarkers: ((Double) -> Void)?
@@ -174,6 +175,10 @@ final class TimelineNSView: NSView {
     /// away with them, so the view owns the offset itself.
     private var scrollY: CGFloat = 0
 
+    /// The lane a drag is hovering, so it can be lit while a file is over it.
+    private var dropLaneIndex: Int?
+    private var dropSeconds: Double = 0
+
     static let rulerHeight: CGFloat = 30
     /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
     static let rangeStripHeight: CGFloat = 12
@@ -182,6 +187,11 @@ final class TimelineNSView: NSView {
     static let headerWidth: CGFloat = 150
 
     private let playheadLayer = CALayer()
+    /// The drop target is its own layer, not draw(_:), because a layer-backed view
+    /// does not flush draw(_:) during the drag-tracking run loop but a layer change
+    /// commits immediately — the same reason the playhead lives in a layer.
+    private let dropBandLayer = CALayer()
+    private let dropLineLayer = CALayer()
 
     override var isFlipped: Bool { true }
 
@@ -191,6 +201,19 @@ final class TimelineNSView: NSView {
         playheadLayer.backgroundColor = NSColor(hex: 0xff5252).cgColor
         playheadLayer.zPosition = 10
         layer?.addSublayer(playheadLayer)
+
+        dropBandLayer.backgroundColor = NSColor(hex: 0x5f9fd6).withAlphaComponent(0.20).cgColor
+        dropBandLayer.borderColor = NSColor(hex: 0x5f9fd6).cgColor
+        dropBandLayer.borderWidth = 2
+        dropBandLayer.isHidden = true
+        dropBandLayer.zPosition = 9
+        dropLineLayer.backgroundColor = NSColor(hex: 0x5f9fd6).cgColor
+        dropLineLayer.isHidden = true
+        dropLineLayer.zPosition = 11
+        layer?.addSublayer(dropBandLayer)
+        layer?.addSublayer(dropLineLayer)
+
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) { nil }
@@ -624,6 +647,77 @@ final class TimelineNSView: NSView {
         guard next != scrollY else { return }
         scrollY = next
         needsDisplay = true
+    }
+
+    // MARK: File drop
+
+    /// Only audio files, and only over a lane, are a valid drop.
+    private func audioURLs(from sender: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+            .urlReadingContentsConformToTypes: [
+                "public.audio", "public.mp3", "com.microsoft.waveform-audio",
+                "public.aifc-audio", "public.aiff-audio", "com.apple.m4a-audio",
+            ],
+        ]
+        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                         options: options) as? [URL]
+        return urls ?? []
+    }
+
+    private func hideDropTarget() {
+        guard !dropBandLayer.isHidden else { return }
+        dropLaneIndex = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dropBandLayer.isHidden = true
+        dropLineLayer.isHidden = true
+        CATransaction.commit()
+    }
+
+    private func updateDropTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let point = convert(sender.draggingLocation, from: nil)
+        guard point.x >= lanesRect.minX, let lane = laneIndex(at: point), !audioURLs(from: sender).isEmpty else {
+            hideDropTarget()
+            return []
+        }
+        dropLaneIndex = lane
+        dropSeconds = max(0, seconds(atX: point.x))
+        let top = laneTop(lane)
+        let dropX = x(forSeconds: max(0, snapped(dropSeconds)))
+        // The backing layer of a flipped view is geometry-flipped by AppKit, so the
+        // view's own top-down coordinate is used directly — the same as the playhead.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dropBandLayer.frame = CGRect(x: lanesRect.minX, y: top,
+                                     width: lanesRect.width, height: Self.laneHeight)
+        dropLineLayer.frame = CGRect(x: dropX - 1, y: top, width: 3, height: Self.laneHeight)
+        dropBandLayer.isHidden = false
+        dropLineLayer.isHidden = false
+        CATransaction.commit()
+        return .copy
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        updateDropTarget(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        updateDropTarget(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        hideDropTarget()
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let point = convert(sender.draggingLocation, from: nil)
+        defer { hideDropTarget() }
+        guard let lane = laneIndex(at: point) else { return false }
+        let urls = audioURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+        onDropAudio?(lane, max(0, seconds(atX: point.x)), urls)
+        return true
     }
 
     // MARK: Drawing
@@ -1139,6 +1233,7 @@ struct TimelineView: NSViewRepresentable {
     let onMoveRegion: (String, Int, Double) -> Void
     let onResizeRegion: (String, Double) -> Void
     let onAddRegion: (Int, Double) -> Void
+    let onDropAudio: (Int, Double, [URL]) -> Void
     let onMoveMarker: (Double, Double) -> Void
     let onDeleteMarker: (Double) -> Void
     let onSelectBetweenMarkers: (Double) -> Void
@@ -1185,6 +1280,7 @@ struct TimelineView: NSViewRepresentable {
         view.onMoveRegion = onMoveRegion
         view.onResizeRegion = onResizeRegion
         view.onAddRegion = onAddRegion
+        view.onDropAudio = onDropAudio
         view.onMoveMarker = onMoveMarker
         view.onDeleteMarker = onDeleteMarker
         view.onSelectBetweenMarkers = onSelectBetweenMarkers

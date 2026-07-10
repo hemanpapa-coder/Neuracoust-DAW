@@ -72,6 +72,15 @@ needs. Ported:
 
 `src/project/AudioImport.{h,cpp}` holds the import policy ported out of the old UI: where converted media goes (the project's `Audio Files` folder, or a temp folder when the document has no path yet), and that conversion shells out to `/usr/bin/afconvert`. No AppKit — `posix_spawn`, so it is testable. `tools/project_io_smoke.cpp` builds its own fixtures and runs in ctest.
 
+Audio files drag onto the timeline: the `TimelineNSView` is a dragging destination
+for `.fileURL`, maps the drop to (lane, seconds), and imports there via
+`importAudio(intoTrack:at:from:)`. The drop target is highlighted in **CALayers**
+(a band + insertion line), not `draw(_:)` — a layer-backed view does not flush
+`draw(_:)` during the drag-tracking run loop, but a layer change commits immediately,
+the same reason the playhead lives in a layer. Those layers use the view's own
+top-down y directly: the backing layer of a flipped `NSView` is geometry-flipped by
+AppKit, so re-flipping sends them off screen.
+
 The app also accepts files from Finder (`application(_:open:)`): a `.ndaw` opens as a project, audio imports onto track 0. That is how import and open were verified — the open/save panels belong to a system XPC service that automation cannot click.
 
 New, Open and Quit all prompt before discarding unsaved work (`confirmDiscardingChanges`). Autosave is a safety net, not a save.

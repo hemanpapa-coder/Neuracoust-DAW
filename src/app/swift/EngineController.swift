@@ -1007,10 +1007,15 @@ final class EngineController: ObservableObject {
     }
 
     func importAudio(intoTrack trackId: Int, from urls: [URL]) {
+        importAudio(intoTrack: trackId, at: playheadSeconds, from: urls)
+    }
+
+    /// Dropping files places the first at `startSeconds`; the rest follow end-to-end.
+    /// Track and time come from where the drop landed, not the playhead.
+    func importAudio(intoTrack trackId: Int, at startSeconds: Double, from urls: [URL]) {
         guard let handle else { return }
 
-        // Sequential placement: each file starts where the previous one ended.
-        var start = playheadSeconds
+        var start = max(0, startSeconds)
         for url in urls {
             guard nc_audio_import_supported(url.path) else {
                 lastError = "지원하지 않는 형식: \(url.lastPathComponent)"
@@ -1232,6 +1237,23 @@ final class EngineController: ObservableObject {
     func selectLane(_ laneIndex: Int) {
         guard laneIndex < laneTracks.count else { return }
         selectedTrackId = laneTracks[laneIndex].id
+    }
+
+    /// The engine track id for a timeline lane, or nil past the last lane.
+    func trackId(forLane laneIndex: Int) -> Int? {
+        laneIndex >= 0 && laneIndex < laneTracks.count ? laneTracks[laneIndex].id : nil
+    }
+
+    /// Files dropped onto a lane at a point in time. A lane past the last one, or a
+    /// drop below the lanes, does nothing.
+    func dropAudio(onLane laneIndex: Int, atSeconds seconds: Double, urls: [URL]) {
+        guard let trackId = trackId(forLane: laneIndex) else { return }
+        let audio = urls.filter { nc_audio_import_supported($0.path) }
+        guard !audio.isEmpty else {
+            lastError = "가져올 수 있는 오디오 파일이 없습니다."
+            return
+        }
+        importAudio(intoTrack: trackId, at: snap(seconds), from: audio)
     }
 
     func moveClipToLane(_ clipId: String, laneIndex: Int, startSeconds: Double) {

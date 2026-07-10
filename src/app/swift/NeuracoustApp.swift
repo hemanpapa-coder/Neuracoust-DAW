@@ -167,6 +167,7 @@ private struct EditView: View {
                     onMoveRegion: { engine.moveMidiRegion($0, laneIndex: $1, startSeconds: $2) },
                     onResizeRegion: { engine.resizeMidiRegion($0, durationSeconds: $1) },
                     onAddRegion: { engine.addMidiRegion(laneIndex: $0, startSeconds: $1) },
+                    onDropAudio: { engine.dropAudio(onLane: $0, atSeconds: $1, urls: $2) },
                     onMoveMarker: { engine.moveMarker(from: $0, to: $1) },
                     onDeleteMarker: { engine.deleteMarker(at: $0) },
                     onSelectBetweenMarkers: { engine.selectBetweenMarkers(around: $0) },
