@@ -626,14 +626,41 @@ final class EngineController: ObservableObject {
 
     // MARK: - Project file I/O
 
+    /// Asks before throwing away unsaved work. Returns false when the user cancels.
+    /// A clean document never prompts.
+    @discardableResult
+    func confirmDiscardingChanges() -> Bool {
+        guard projectDirty else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = "저장하지 않은 변경 사항이 있습니다"
+        alert.informativeText = projectPath.isEmpty
+            ? "이 프로젝트는 아직 저장된 적이 없습니다."
+            : (projectPath as NSString).lastPathComponent
+        alert.addButton(withTitle: "저장")
+        alert.addButton(withTitle: "저장하지 않음")
+        alert.addButton(withTitle: "취소")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return saveProject()
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Panels are user-initiated; nothing here writes without an explicit choice.
     func newProject() {
-        guard let handle else { return }
+        guard let handle, confirmDiscardingChanges() else { return }
         nc_project_new(handle)
         afterProjectReplaced()
     }
 
     func openProject() {
+        guard confirmDiscardingChanges() else { return }
+
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.init(filenameExtension: "ndaw")].compactMap { $0 }
         panel.allowsMultipleSelection = false
@@ -690,7 +717,7 @@ final class EngineController: ObservableObject {
     }
 
     private func openProject(at url: URL) {
-        guard let handle else { return }
+        guard let handle, confirmDiscardingChanges() else { return }
 
         var preferAutosave = false
         if nc_project_autosave_is_newer(url.path) {

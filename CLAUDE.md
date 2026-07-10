@@ -34,6 +34,9 @@ Three things this tree forces, all of which cost time to rediscover:
 | SwiftUI shell | `src/app/swift/{NeuracoustApp,TransportBar,EngineController}.swift` | Titlebar, transport, status strip, Edit/Mix tabs |
 | Monitor dock | `src/app/swift/{MonitorDock,MonitorControls}.swift` | Level, listen modes, A/B/C sets, meters, DSP modules, remote core |
 | Listen Room | `src/app/swift/{ListenRoom,ChatPanel}.swift` | Relay process, ssh tunnel, chat over `/api/chat` |
+| Mixer | `src/app/swift/{MixerView,MixerControls}.swift` | Strips, faders, meters, inserts, master meter |
+| Plugin browser | `src/app/swift/PluginBrowser.swift` | Facets, search, insert chain |
+| Timeline | `src/app/swift/TimelineView.swift` | AppKit NSView: ruler, grid, clips, waveforms, playhead |
 
 **SwiftUI shell + AppKit/Metal embeds** is the agreed architecture. VST3 plugin editors must embed a native window in an `NSView` using the Steinberg SDK directly, so pure SwiftUI is impossible; the timeline already has a Metal backdrop and a 3,000-line `drawRect`. Everything else (transport, inspector, mixer layout, panels, dialogs) is far faster to build in SwiftUI.
 
@@ -68,7 +71,7 @@ Already ported:
 
 The app also accepts files from Finder (`application(_:open:)`): a `.ndaw` opens as a project, audio imports onto track 0. That is how import and open were verified — the open/save panels belong to a system XPC service that automation cannot click.
 
-**Not yet done:** nothing prompts to save before New, Open or Quit. Unsaved work is only protected by autosave.
+New, Open and Quit all prompt before discarding unsaved work (`confirmDiscardingChanges`). Autosave is a safety net, not a save.
 
 ## Keyboard shortcuts must match on key code, not characters
 

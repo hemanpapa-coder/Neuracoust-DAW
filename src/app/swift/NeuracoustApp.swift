@@ -9,6 +9,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.engine?.open(urls: urls)
         }
     }
+
+    /// Quitting is the last chance to save. Autosave is a safety net, not a save.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let engine else { return .terminateNow }
+        return MainActor.assumeIsolated {
+            engine.confirmDiscardingChanges() ? .terminateNow : .terminateCancel
+        }
+    }
 }
 
 @main
