@@ -232,6 +232,8 @@ struct SlotChip: View {
     let accent: Color
     var bypassed = false
     var badge: String = ""
+    /// The plug-in's editor window is open.
+    var lit = false
     var action: (() -> Void)?
 
     var body: some View {
@@ -263,7 +265,11 @@ struct SlotChip: View {
                 }
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.pill)
-                        .fill((bypassed ? Theme.Palette.textFainter : accent).opacity(0.12))
+                        .fill((bypassed ? Theme.Palette.textFainter : accent).opacity(lit ? 0.28 : 0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                        .strokeBorder(accent.opacity(lit ? 0.9 : 0), lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
             }

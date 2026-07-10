@@ -193,6 +193,51 @@ int main(void) {
                     failures++;
                 }
 
+                // What the editor host needs on its command line.
+                char pluginPath[512] = {0};
+                nc_track_insert_plugin_path(engine, 0, 0, pluginPath, sizeof(pluginPath));
+                if (pluginPath[0] == '\0') {
+                    fprintf(stderr, "FAIL: insert has no plug-in path for the editor host\n");
+                    failures++;
+                }
+
+                // A knob turn in the editor arrives as one of these.
+                const int paramsBefore = nc_track_insert_param_count(engine, 0, 0);
+                if (!nc_track_set_vst3_parameter(engine, 0, 0, 7, "Gain", 0.75)) {
+                    fprintf(stderr, "FAIL: could not set VST3 parameter 7\n");
+                    failures++;
+                } else if (nc_track_insert_param_count(engine, 0, 0) != paramsBefore + 1) {
+                    fprintf(stderr, "FAIL: parameter 7 was not appended\n");
+                    failures++;
+                }
+                // The same id again updates in place rather than appending a duplicate.
+                nc_track_set_vst3_parameter(engine, 0, 0, 7, "Gain", 0.25);
+                if (nc_track_insert_param_count(engine, 0, 0) != paramsBefore + 1) {
+                    fprintf(stderr, "FAIL: re-sending parameter 7 appended a duplicate\n");
+                    failures++;
+                }
+                const int last = nc_track_insert_param_count(engine, 0, 0) - 1;
+                if (nc_track_insert_param_id(engine, 0, 0, last) != 7 ||
+                    nc_track_insert_param_value(engine, 0, 0, last) != 0.25) {
+                    fprintf(stderr, "FAIL: parameter 7 reads back as id=%u value=%f\n",
+                            nc_track_insert_param_id(engine, 0, 0, last),
+                            nc_track_insert_param_value(engine, 0, 0, last));
+                    failures++;
+                }
+                // Out-of-range values must never reach a plug-in.
+                nc_track_set_vst3_parameter(engine, 0, 0, 8, "Wild", 4.5);
+                const int wild = nc_track_insert_param_count(engine, 0, 0) - 1;
+                if (nc_track_insert_param_value(engine, 0, 0, wild) != 1.0) {
+                    fprintf(stderr, "FAIL: parameter 8 was not clamped to 1.0\n");
+                    failures++;
+                }
+                if (nc_track_set_vst3_parameter(engine, 0, 9, 1, "None", 0.5)) {
+                    fprintf(stderr, "FAIL: setting a parameter on an empty slot succeeded\n");
+                    failures++;
+                }
+                printf("vst3 parameters: %d stored on slot 0\n",
+                       nc_track_insert_param_count(engine, 0, 0));
+
                 nc_track_set_insert_bypassed(engine, 0, 0, true);
                 if (!nc_track_insert_bypassed(engine, 0, 0)) {
                     fprintf(stderr, "FAIL: insert bypass did not latch\n");

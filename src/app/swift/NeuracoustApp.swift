@@ -14,7 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let engine else { return .terminateNow }
         return MainActor.assumeIsolated {
-            engine.confirmDiscardingChanges() ? .terminateNow : .terminateCancel
+            guard engine.confirmDiscardingChanges() else { return .terminateCancel }
+            // Editor hosts are child processes: orphaned, their windows outlive the DAW.
+            engine.pluginEditors.closeAll()
+            return .terminateNow
         }
     }
 }
@@ -37,6 +40,7 @@ struct NeuracoustApp: App {
         Window("Neuracoust DAW", id: "main") {
             RootView()
                 .environmentObject(engine)
+                .environmentObject(engine.pluginEditors)
                 .environmentObject(listen)
                 .task {
                     appDelegate.engine = engine

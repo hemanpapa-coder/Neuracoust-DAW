@@ -182,6 +182,7 @@ struct MixerView: View {
 
 struct ChannelStrip: View {
     @EnvironmentObject private var engine: EngineController
+    @EnvironmentObject private var editors: PluginEditorHost
 
     let track: EngineController.Track
     let isChild: Bool
@@ -275,9 +276,14 @@ struct ChannelStrip: View {
                     label: (insert?.isEmpty ?? true) ? "" : insert!.name,
                     accent: accent,
                     bypassed: insert?.bypassed ?? false,
-                    badge: insert?.modeBadge ?? ""
+                    badge: insert?.modeBadge ?? "",
+                    lit: editors.isOpen(.init(trackId: track.id, insertIndex: slot))
                 ) {
-                    engine.openPluginBrowser(forTrack: track.id)
+                    if insert?.isEmpty ?? true {
+                        engine.openPluginBrowser(forTrack: track.id)
+                    } else {
+                        editors.toggle(trackId: track.id, insertIndex: slot)
+                    }
                 }
             }
         }

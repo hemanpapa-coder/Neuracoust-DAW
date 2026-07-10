@@ -8,6 +8,8 @@
 #include "plugins/InsertDspPolicy.h"
 #include "plugins/MonitorDspModules.h"
 #include "plugins/PluginScanner.h"
+#include "plugins/Vst3RealtimeBridgeProtocol.h"
+#include "plugins/Vst3SdkAdapter.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
 #include "project/AudioImport.h"
@@ -630,6 +632,135 @@ void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool by
     track->inserts[static_cast<size_t>(slot)].bypassed = bypassed;
     engine->engine.updateTrackInsertBypassState(track->name, static_cast<size_t>(slot), bypassed);
     engine->recordStep(bypassed ? "Bypass insert" : "Enable insert");
+}
+
+namespace {
+
+neuracoust::daw::TrackInsertSlot* insertAt(NCEngine* engine, int index, int slot) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        return nullptr;
+    }
+    return &track->inserts[static_cast<size_t>(slot)];
+}
+
+} // namespace
+
+void nc_track_insert_plugin_path(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* insert = insertAt(engine, index, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginPath : std::string{});
+}
+
+void nc_track_insert_plugin_format(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* insert = insertAt(engine, index, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginFormat : std::string{});
+}
+
+void nc_track_insert_class_id(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* insert = insertAt(engine, index, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginClassId : std::string{});
+}
+
+void nc_track_insert_class_name(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* insert = insertAt(engine, index, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginClassName : std::string{});
+}
+
+int nc_track_insert_param_count(NCEngine* engine, int index, int slot) {
+    const auto* insert = insertAt(engine, index, slot);
+    return insert != nullptr ? static_cast<int>(insert->parameters.size()) : 0;
+}
+
+uint32_t nc_track_insert_param_id(NCEngine* engine, int index, int slot, int paramIndex) {
+    const auto* insert = insertAt(engine, index, slot);
+    if (insert == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= insert->parameters.size()) {
+        return 0;
+    }
+    return insert->parameters[static_cast<size_t>(paramIndex)].parameterId;
+}
+
+double nc_track_insert_param_value(NCEngine* engine, int index, int slot, int paramIndex) {
+    const auto* insert = insertAt(engine, index, slot);
+    if (insert == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= insert->parameters.size()) {
+        return 0.0;
+    }
+    return insert->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
+}
+
+bool nc_track_insert_observer(NCEngine* engine, int index, int slot,
+                              char* shmName, size_t shmNameLen,
+                              int* maxBlock, double* sampleRate) {
+    copyText(shmName, shmNameLen, std::string{});
+    auto* track = trackAt(engine, index);
+    const auto* insert = insertAt(engine, index, slot);
+    if (track == nullptr || insert == nullptr || insert->pluginPath.empty()) {
+        return false;
+    }
+
+    // The out-of-process rule keys on brand/vendor, which the insert slot does not
+    // store; the scan does. Match the slot back to the plug-in it came from.
+    const auto found = std::find_if(engine->plugins.begin(), engine->plugins.end(),
+                                    [&](const neuracoust::daw::PluginCandidate& candidate) {
+                                        return candidate.path == insert->pluginPath;
+                                    });
+    if (found == engine->plugins.end()) {
+        return false;
+    }
+
+    neuracoust::daw::Vst3PluginDescriptor descriptor;
+    descriptor.name = found->pluginName.empty() ? found->name : found->pluginName;
+    descriptor.brand = found->brand;
+    descriptor.vendor = found->brand;
+    descriptor.bundlePath = found->path;
+    if (!neuracoust::daw::isVst3HostedOutOfProcess(descriptor)) {
+        return false;
+    }
+
+    // Derived identically on the engine side (activeLocalRouteInsertShmKeys).
+    const std::string key = track->name + "\x1f" + std::to_string(static_cast<size_t>(slot));
+    copyText(shmName, shmNameLen, neuracoust::daw::vst3BridgeObserverShmName(key));
+    if (maxBlock != nullptr) {
+        *maxBlock = engine->project.defaultBufferSize > 0 ? engine->project.defaultBufferSize : 256;
+    }
+    if (sampleRate != nullptr) {
+        *sampleRate = engine->project.sampleRate > 0.0 ? engine->project.sampleRate : 48000.0;
+    }
+    return true;
+}
+
+bool nc_track_set_vst3_parameter(NCEngine* engine, int index, int slot,
+                                 uint32_t parameterId, const char* displayName,
+                                 double normalizedValue) {
+    auto* track = trackAt(engine, index);
+    auto* insert = insertAt(engine, index, slot);
+    if (track == nullptr || insert == nullptr) {
+        return false;
+    }
+
+    const double clamped = std::max(0.0, std::min(1.0, normalizedValue));
+    const std::string name = displayName != nullptr ? displayName : "";
+
+    bool found = false;
+    for (auto& parameter : insert->parameters) {
+        if (parameter.parameterId == parameterId) {
+            parameter.normalizedValue = clamped;
+            if (!name.empty()) {
+                parameter.displayName = name;
+            }
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        insert->parameters.push_back({parameterId, name, clamped});
+    }
+
+    // Fine-grained: never rebuild the graph for a knob turn.
+    engine->engine.updateTrackVst3Parameter(track->name, static_cast<size_t>(slot),
+                                            parameterId, name, clamped);
+    return true;
 }
 
 int nc_track_send_count(NCEngine* engine, int index) {

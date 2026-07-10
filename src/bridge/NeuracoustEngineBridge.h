@@ -161,6 +161,32 @@ void nc_track_insert_name(NCEngine* engine, int index, int slot, char* out, size
 bool nc_track_insert_bypassed(NCEngine* engine, int index, int slot);
 void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool bypassed);
 
+/// Everything the out-of-process editor host needs on its command line.
+void nc_track_insert_plugin_path(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+void nc_track_insert_plugin_format(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+void nc_track_insert_class_id(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+void nc_track_insert_class_name(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+
+/// Stored plug-in parameters. The editor is authoritative while it is open; these
+/// are what gets restored when it reopens, and what the project file keeps.
+int nc_track_insert_param_count(NCEngine* engine, int index, int slot);
+uint32_t nc_track_insert_param_id(NCEngine* engine, int index, int slot, int paramIndex);
+double nc_track_insert_param_value(NCEngine* engine, int index, int slot, int paramIndex);
+
+/// True when this insert runs in the sandboxed realtime bridge rather than on the
+/// audio thread. Those editors must be pointed at the bridge's shared memory, or
+/// the plug-in's own meters sit dead while audio plays through it.
+/// Fills the observer shm name, block size and sample rate for the editor host.
+bool nc_track_insert_observer(NCEngine* engine, int index, int slot,
+                              char* shmName, size_t shmNameLen,
+                              int* maxBlock, double* sampleRate);
+
+/// Upserts a parameter into the project and pushes it into the running graph.
+/// Continuous: the editor sends a stream of these while a knob is turned.
+bool nc_track_set_vst3_parameter(NCEngine* engine, int index, int slot,
+                                 uint32_t parameterId, const char* displayName,
+                                 double normalizedValue);
+
 int nc_track_send_count(NCEngine* engine, int index);
 void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);

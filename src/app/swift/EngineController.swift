@@ -264,6 +264,71 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    // MARK: Plug-in editor
+
+    struct InsertDescriptor {
+        let trackName: String
+        let name: String
+        let pluginPath: String
+        let format: String
+        let classId: String
+        let className: String
+        /// Set only when the plug-in runs in the sandboxed bridge, so its editor can
+        /// observe the real audio and light up its own meters.
+        let observerShmName: String
+        let observerMaxBlock: Int
+        let observerSampleRate: Double
+    }
+
+    /// Everything the out-of-process editor host needs to load the plug-in. nil for an empty slot.
+    func insertDescriptor(trackId: Int, insertIndex: Int) -> InsertDescriptor? {
+        guard let handle,
+              let track = tracks.first(where: { $0.id == trackId }),
+              insertIndex < track.inserts.count,
+              !track.inserts[insertIndex].isEmpty else { return nil }
+        let i = Int32(trackId), s = Int32(insertIndex)
+        let path = readEngineString { nc_track_insert_plugin_path(handle, i, s, $0, $1) }
+        guard !path.isEmpty else { return nil }
+
+        var maxBlock: Int32 = 0
+        var sampleRate = 0.0
+        var shmName = [CChar](repeating: 0, count: Int(NC_TEXT_LEN))
+        let outOfProcess = nc_track_insert_observer(handle, i, s, &shmName, shmName.count,
+                                                    &maxBlock, &sampleRate)
+        let observer = (name: outOfProcess ? String(cString: shmName) : "",
+                        maxBlock: Int(maxBlock),
+                        sampleRate: sampleRate)
+        return InsertDescriptor(
+            trackName: track.name,
+            name: track.inserts[insertIndex].name,
+            pluginPath: path,
+            format: readEngineString { nc_track_insert_plugin_format(handle, i, s, $0, $1) },
+            classId: readEngineString { nc_track_insert_class_id(handle, i, s, $0, $1) },
+            className: readEngineString { nc_track_insert_class_name(handle, i, s, $0, $1) },
+            observerShmName: observer.name,
+            observerMaxBlock: observer.maxBlock,
+            observerSampleRate: observer.sampleRate)
+    }
+
+    func storedVst3Parameters(trackId: Int, insertIndex: Int) -> [(id: UInt32, value: Double)] {
+        guard let handle else { return [] }
+        let i = Int32(trackId), s = Int32(insertIndex)
+        let count = Int(nc_track_insert_param_count(handle, i, s))
+        return (0..<count).map { p in
+            (id: nc_track_insert_param_id(handle, i, s, Int32(p)),
+             value: nc_track_insert_param_value(handle, i, s, Int32(p)))
+        }
+    }
+
+    /// One knob turn is a stream of these, so it neither reloads tracks nor records undo.
+    func setVst3Parameter(trackId: Int, insertIndex: Int, parameterId: UInt32, normalizedValue: Double) {
+        guard let handle else { return }
+        if nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
+                                       parameterId, nil, normalizedValue) {
+            projectDirty = nc_project_dirty(handle)
+        }
+    }
+
     // MARK: Monitor station
 
     struct MonitorModule: Identifiable {
@@ -370,6 +435,9 @@ final class EngineController: ObservableObject {
 
     private let tickInterval = 1.0 / 30.0
     private let resyncThreshold = 0.18
+
+    /// Lazy so it can hold an unowned reference back to a fully-formed controller.
+    lazy var pluginEditors = PluginEditorHost(engine: self)
 
     init() {
         handle = nc_engine_create()
