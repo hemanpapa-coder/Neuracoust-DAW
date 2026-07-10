@@ -8,12 +8,14 @@
 #include "plugins/PluginScanner.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
+#include "project/AudioImport.h"
 #include "project/ProjectHistory.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -683,6 +685,218 @@ void nc_project_path(NCEngine* engine, char* out, size_t outLen) {
 
 void nc_project_autosave_error(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->autosaveError : std::string{});
+}
+
+// ---------------------------------------------------------------------------
+// Project file I/O and audio import
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A freshly loaded document replaces everything, so the graph, the monitor chain
+/// and the station controls all have to be pushed again.
+void adoptProject(NCEngine* engine) {
+    if (engine->project.monitorModules.empty()) {
+        engine->project.monitorModules = neuracoust::daw::defaultMonitorDspModules();
+    }
+    engine->reconcileProject();
+    engine->pushModules();
+    engine->pushStationControls();
+    engine->pushListenSettings();
+    engine->history.reset(engine->project);
+}
+
+const neuracoust::daw::ClipState* clipAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.clips.size()) {
+        return nullptr;
+    }
+    return &engine->project.clips[static_cast<size_t>(index)];
+}
+
+} // namespace
+
+void nc_project_new(NCEngine* engine) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->project = neuracoust::daw::defaultProject();
+    engine->projectPath.clear();
+    engine->autosaveError.clear();
+    adoptProject(engine);
+}
+
+bool nc_project_autosave_is_newer(const char* path) {
+    if (path == nullptr || *path == '\0') {
+        return false;
+    }
+    return neuracoust::daw::projectAutosaveIsNewerThanProject(std::filesystem::path(path));
+}
+
+bool nc_project_open(NCEngine* engine, const char* path, bool preferAutosave,
+                     char* error, size_t errorLen) {
+    if (engine == nullptr || path == nullptr || *path == '\0') {
+        copyText(error, errorLen, "no project path");
+        return false;
+    }
+
+    const std::filesystem::path projectPath(path);
+    neuracoust::daw::ProjectDocument loaded;
+    std::string loadError;
+
+    const bool haveAutosave = neuracoust::daw::projectAutosaveIsNewerThanProject(projectPath);
+    bool ok = false;
+    if (preferAutosave && haveAutosave) {
+        ok = neuracoust::daw::loadProjectAutosaveFile(projectPath, loaded, loadError);
+    }
+    if (!ok) {
+        std::error_code fsError;
+        if (!std::filesystem::exists(projectPath, fsError)) {
+            copyText(error, errorLen, "project file not found");
+            return false;
+        }
+        FILE* file = fopen(path, "rb");
+        if (file == nullptr) {
+            copyText(error, errorLen, "could not read the project file");
+            return false;
+        }
+        std::string text;
+        char buffer[8192];
+        size_t read = 0;
+        while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+            text.append(buffer, read);
+        }
+        fclose(file);
+
+        if (!neuracoust::daw::deserializeProjectForPath(text, projectPath, loaded, loadError)) {
+            copyText(error, errorLen, loadError.empty() ? "could not parse the project" : loadError);
+            return false;
+        }
+    }
+
+    engine->project = std::move(loaded);
+    engine->projectPath = path;
+    engine->autosaveError.clear();
+    adoptProject(engine);
+
+    // Recovered or declined, the autosave has served its purpose.
+    std::string removeError;
+    neuracoust::daw::removeProjectAutosaveFile(projectPath, removeError);
+
+    copyText(error, errorLen, "");
+    return true;
+}
+
+bool nc_project_save(NCEngine* engine, char* error, size_t errorLen) {
+    if (engine == nullptr) {
+        copyText(error, errorLen, "engine is null");
+        return false;
+    }
+    if (engine->projectPath.empty()) {
+        copyText(error, errorLen, "the project has no path yet");
+        return false;
+    }
+    return nc_project_save_as(engine, engine->projectPath.c_str(), error, errorLen);
+}
+
+bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t errorLen) {
+    if (engine == nullptr || path == nullptr || *path == '\0') {
+        copyText(error, errorLen, "no project path");
+        return false;
+    }
+
+    const std::filesystem::path projectPath(path);
+    std::string saveError;
+    if (!neuracoust::daw::saveProjectFileWithBackup(engine->project, projectPath, saveError)) {
+        copyText(error, errorLen, saveError.empty() ? "could not save the project" : saveError);
+        return false;
+    }
+
+    engine->projectPath = path;
+    engine->history.markSaved(engine->project);
+
+    // The document now matches disk; drop the autosave.
+    std::string removeError;
+    neuracoust::daw::removeProjectAutosaveFile(projectPath, removeError);
+    engine->autosaveError.clear();
+
+    copyText(error, errorLen, "");
+    return true;
+}
+
+bool nc_audio_import_supported(const char* path) {
+    if (path == nullptr || *path == '\0') {
+        return false;
+    }
+    return neuracoust::daw::isSupportedImportAudioExtension(std::filesystem::path(path));
+}
+
+bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
+                     char* error, size_t errorLen) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || path == nullptr || *path == '\0') {
+        copyText(error, errorLen, "no track or no file");
+        return false;
+    }
+
+    neuracoust::daw::AudioImportResult result;
+    std::string importError;
+    if (!neuracoust::daw::importAudioFile(engine->project,
+                                          std::filesystem::path(engine->projectPath),
+                                          track->name,
+                                          std::filesystem::path(path),
+                                          startSeconds,
+                                          result,
+                                          importError)) {
+        copyText(error, errorLen, importError.empty() ? "import failed" : importError);
+        return false;
+    }
+
+    engine->reconcileProject();
+    engine->recordStep("Import " + std::filesystem::path(path).filename().string());
+    copyText(error, errorLen, "");
+    return true;
+}
+
+int nc_clip_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->project.clips.size()) : 0;
+}
+
+void nc_clip_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* clip = clipAt(engine, index);
+    copyText(out, outLen, clip != nullptr ? clip->id : std::string{});
+}
+
+void nc_clip_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* clip = clipAt(engine, index);
+    if (clip == nullptr) {
+        copyText(out, outLen, "");
+        return;
+    }
+    // Clips carry a region name only once renamed; fall back to the file.
+    copyText(out, outLen, clip->regionName.empty()
+                              ? std::filesystem::path(clip->sourcePath).filename().string()
+                              : clip->regionName);
+}
+
+void nc_clip_track(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* clip = clipAt(engine, index);
+    copyText(out, outLen, clip != nullptr ? clip->trackName : std::string{});
+}
+
+void nc_clip_source_path(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* clip = clipAt(engine, index);
+    copyText(out, outLen, clip != nullptr ? clip->sourcePath : std::string{});
+}
+
+double nc_clip_start_seconds(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->startSeconds : 0.0;
+}
+
+double nc_clip_duration_seconds(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->durationSeconds : 0.0;
 }
 
 // ---------------------------------------------------------------------------

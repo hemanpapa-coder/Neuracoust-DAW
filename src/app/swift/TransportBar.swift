@@ -9,7 +9,7 @@ struct TitleBar: View {
                 Text("Neuracoust DAW")
                     .font(Theme.Font.ui(11, .semibold))
                     .foregroundStyle(Theme.Palette.text)
-                Text("· \(engine.projectName).ndaw")
+                Text("· \(documentLabel)")
                     .font(Theme.Font.ui(11))
                     .foregroundStyle(Theme.Palette.textMuted)
                 // Amber only when there are unsaved changes.
@@ -36,6 +36,13 @@ struct TitleBar: View {
         .frame(height: 34)
         .frame(maxWidth: .infinity)
         .background(Theme.Gradient.titlebar)
+    }
+
+    /// The file name once the document has a home; otherwise its in-memory name.
+    private var documentLabel: String {
+        engine.projectPath.isEmpty
+            ? "\(engine.projectName).ndaw"
+            : (engine.projectPath as NSString).lastPathComponent
     }
 
     private func formatSampleRate(_ rate: Double) -> String {

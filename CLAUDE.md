@@ -62,11 +62,19 @@ Already ported:
 - ~~DSP execution-mode policy~~ → `src/plugins/InsertDspPolicy.{h,cpp}`, pinned by `tests/InsertDspPolicyTest.cpp`. The mode strings are persisted in the project model, so the rules belong to the engine.
 - ~~Undo/redo + dirty tracking + autosave~~ → `src/project/ProjectHistory.{h,cpp}`, pinned by `tests/ProjectHistoryTest.cpp`. Snapshot-based, capped at 100 steps. Autosave lives in the bridge, which owns the project path.
 
+## Project I/O and audio import
+
+`src/project/AudioImport.{h,cpp}` holds the import policy ported out of the old UI: where converted media goes (the project's `Audio Files` folder, or a temp folder when the document has no path yet), and that conversion shells out to `/usr/bin/afconvert`. No AppKit — `posix_spawn`, so it is testable. `tools/project_io_smoke.cpp` builds its own fixtures and runs in ctest.
+
+The app also accepts files from Finder (`application(_:open:)`): a `.ndaw` opens as a project, audio imports onto track 0. That is how import and open were verified — the open/save panels belong to a system XPC service that automation cannot click.
+
+**Not yet done:** nothing prompts to save before New, Open or Quit. Unsaved work is only protected by autosave.
+
 ## Keyboard shortcuts must match on key code, not characters
 
 This machine types Korean. With a Korean input source active, `charactersIgnoringModifiers` for the Z key is not `"z"`, so any shortcut compared against a character silently stops working — including SwiftUI's `.keyboardShortcut("z")`. Match `NSEvent.keyCode` instead (Z is 6). The old UI already knew this: all 308 of its `NSMenuItem`s carry an empty `keyEquivalent` and every shortcut runs through an `NSEvent` monitor.
 
-Menu items still declare ⌘Z so the shortcut is discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers it.
+Menu items still declare their shortcuts so they are discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers all of them (⌘Z, ⌘⇧Z, ⌘N, ⌘O, ⌘S, ⌘⇧S, ⌘I).
 
 **Note for verification:** the computer-use tool cannot press Z here. It maps the character `"z"` to a key code using the active layout, which under Korean input yields key code 0 (the A key). Shortcut behaviour has to be checked by hand.
 

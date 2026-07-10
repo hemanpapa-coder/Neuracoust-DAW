@@ -99,6 +99,7 @@ add_library(neuracoust_daw_core
     src/project/TimelineExport.cpp
     src/project/ProjectDocument.cpp
     src/project/ProjectHistory.cpp
+    src/project/AudioImport.cpp
     src/ui/common/DawUiModel.cpp
     src/bridge/NeuracoustEngineBridge.cpp)
 
@@ -410,6 +411,15 @@ target_link_libraries(neuracoust_daw_render PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_bridge_transport_smoke tools/bridge_transport_smoke.c)
 target_link_libraries(neuracoust_bridge_transport_smoke PRIVATE neuracoust_daw_core)
 
+add_executable(neuracoust_project_io_smoke tools/project_io_smoke.cpp)
+target_link_libraries(neuracoust_project_io_smoke PRIVATE neuracoust_daw_core)
+if(APPLE)
+    # writeTestToneWavFile is only referenced by the fixture builder, so keep the
+    # whole archive rather than let the linker drop it.
+    target_link_options(neuracoust_project_io_smoke PRIVATE
+        "LINKER:-force_load,$<TARGET_FILE:neuracoust_daw_core>")
+endif()
+
 if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/neuracoust_video_render.mm")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/video_render_fixture.mm")
         add_executable(neuracoust_video_render_fixture tools/video_render_fixture.mm)
@@ -520,6 +530,9 @@ endif()
 # Exercises the exact C facade the SwiftUI app calls. Exits 0 with a SKIP line when
 # no audio device is available, so it stays green on machines without one.
 add_test(NAME bridge_transport_smoke COMMAND neuracoust_bridge_transport_smoke)
+
+# Document plumbing only — no audio device, so this one runs anywhere.
+add_test(NAME project_io_smoke COMMAND neuracoust_project_io_smoke)
 
 add_test(NAME vst3_process_worker_smoke COMMAND neuracoust_vst3_process_worker --self-test)
 add_test(NAME vst3_isolated_process_smoke COMMAND neuracoust_vst3_isolated_process_smoke)

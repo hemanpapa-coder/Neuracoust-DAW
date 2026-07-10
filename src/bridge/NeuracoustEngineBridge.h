@@ -195,6 +195,47 @@ void nc_project_path(NCEngine* engine, char* out, size_t outLen);
 void nc_project_autosave_error(NCEngine* engine, char* out, size_t outLen);
 
 // ---------------------------------------------------------------------------
+// Project file I/O and audio import
+// ---------------------------------------------------------------------------
+
+/// Discards the document and starts from defaultProject(). History is reset.
+void nc_project_new(NCEngine* engine);
+
+/// True when an autosave sitting beside `path` is newer than the project itself —
+/// the app crashed or quit with unsaved work. Ask the user before recovering.
+bool nc_project_autosave_is_newer(const char* path);
+
+/// Opens `path`. When `preferAutosave` is true and one exists, the autosave is
+/// loaded instead; otherwise a stale autosave beside the project is removed.
+/// Sets the project path, reconciles the engine, and resets history.
+bool nc_project_open(NCEngine* engine, const char* path, bool preferAutosave,
+                     char* error, size_t errorLen);
+
+/// Writes to the current project path, keeping a backup of what was there.
+/// Fails when the document has no path yet — call nc_project_save_as.
+bool nc_project_save(NCEngine* engine, char* error, size_t errorLen);
+bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t errorLen);
+
+/// wav, wave, mp3, aif, aiff, m4a, caf.
+bool nc_audio_import_supported(const char* path);
+
+/// Imports `path` onto the track at `trackIndex`, starting at `startSeconds`.
+/// Non-WAV sources are converted; the result lands in the project's Audio Files
+/// folder, or a temporary folder when the project has no path yet.
+bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
+                     char* error, size_t errorLen);
+
+/// Clips currently in the document, and their placement. Enough for a timeline to
+/// draw against; the waveform comes from the source file.
+int nc_clip_count(NCEngine* engine);
+void nc_clip_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_clip_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_clip_track(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_clip_source_path(NCEngine* engine, int index, char* out, size_t outLen);
+double nc_clip_start_seconds(NCEngine* engine, int index);
+double nc_clip_duration_seconds(NCEngine* engine, int index);
+
+// ---------------------------------------------------------------------------
 // Plugin browser
 //
 // Scanning ~1000 plug-ins costs about 90 ms, so it runs once and caches. The

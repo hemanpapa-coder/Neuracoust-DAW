@@ -50,6 +50,8 @@ final class EngineController: ObservableObject {
     @Published private(set) var undoStepName = ""
     @Published private(set) var redoStepName = ""
     @Published private(set) var projectDirty = false
+    @Published private(set) var projectPath = ""
+    @Published private(set) var lastError: String?
     @Published private(set) var timeSignature = (numerator: 4, denominator: 4)
 
     // MARK: Tracks
@@ -397,6 +399,7 @@ final class EngineController: ObservableObject {
         )
         loopEnabled = nc_project_loop_enabled(handle)
         reloadTracks()
+        reloadClips()
         reloadMonitorState()
         nc_history_reset(handle)
         refreshHistory()
@@ -419,24 +422,41 @@ final class EngineController: ObservableObject {
         }
     }
 
-    /// Hardware key code for Z on an ANSI layout. Matching on characters breaks the
+    /// Hardware key codes on an ANSI layout. Matching on characters breaks the
     /// moment a Korean input source is active: `charactersIgnoringModifiers` then
-    /// reports "ㅁ", not "z".
-    private static let keyCodeZ: UInt16 = 6
+    /// reports a jamo, not a Latin letter. Every shortcut goes through here, which
+    /// is why the menu items' own key equivalents never have to fire.
+    private enum KeyCode {
+        static let z: UInt16 = 6
+        static let s: UInt16 = 1
+        static let o: UInt16 = 31
+        static let n: UInt16 = 45
+        static let i: UInt16 = 34
+    }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
         // Never steal keys while the user is typing.
         if NSApp.keyWindow?.firstResponder is NSTextView {
             return event
         }
-        guard event.modifierFlags.contains(.command),
-              event.keyCode == Self.keyCodeZ else {
+        guard event.modifierFlags.contains(.command) else {
             return event
         }
-        if event.modifierFlags.contains(.shift) {
-            redo()
-        } else {
-            undo()
+        let shift = event.modifierFlags.contains(.shift)
+
+        switch event.keyCode {
+        case KeyCode.z:
+            shift ? redo() : undo()
+        case KeyCode.s:
+            shift ? saveProjectAs() : saveProject()
+        case KeyCode.o:
+            openProject()
+        case KeyCode.n:
+            newProject()
+        case KeyCode.i:
+            importAudio(intoTrack: 0)
+        default:
+            return event
         }
         return nil
     }
@@ -591,6 +611,7 @@ final class EngineController: ObservableObject {
     func undo() {
         guard let handle, nc_history_undo(handle) else { return }
         reloadTracks()
+        reloadClips()
         reloadMonitorState()
         refreshHistory()
     }
@@ -598,8 +619,177 @@ final class EngineController: ObservableObject {
     func redo() {
         guard let handle, nc_history_redo(handle) else { return }
         reloadTracks()
+        reloadClips()
         reloadMonitorState()
         refreshHistory()
+    }
+
+    // MARK: - Project file I/O
+
+    /// Panels are user-initiated; nothing here writes without an explicit choice.
+    func newProject() {
+        guard let handle else { return }
+        nc_project_new(handle)
+        afterProjectReplaced()
+    }
+
+    func openProject() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "ndaw")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openProject(at: url)
+    }
+
+    @discardableResult
+    func saveProject() -> Bool {
+        guard let handle else { return false }
+        if projectPath.isEmpty {
+            return saveProjectAs()
+        }
+        var errorBuffer = [CChar](repeating: 0, count: 256)
+        guard nc_project_save(handle, &errorBuffer, errorBuffer.count) else {
+            lastError = String(cString: errorBuffer)
+            return false
+        }
+        refreshHistory()
+        return true
+    }
+
+    @discardableResult
+    func saveProjectAs() -> Bool {
+        guard let handle else { return false }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "ndaw")].compactMap { $0 }
+        panel.nameFieldStringValue = projectName.isEmpty ? "Untitled" : projectName
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+        var errorBuffer = [CChar](repeating: 0, count: 256)
+        guard nc_project_save_as(handle, url.path, &errorBuffer, errorBuffer.count) else {
+            lastError = String(cString: errorBuffer)
+            return false
+        }
+        refreshHistory()
+        return true
+    }
+
+    /// Opens a document or imports audio, chosen by extension. Used by the Finder
+    /// hand-off (`application(_:open:)`) as well as the panels.
+    func open(urls: [URL]) {
+        for url in urls {
+            if url.pathExtension.lowercased() == "ndaw" {
+                openProject(at: url)
+            } else if nc_audio_import_supported(url.path) {
+                importAudio(intoTrack: 0, from: [url])
+            } else {
+                lastError = "지원하지 않는 파일: \(url.lastPathComponent)"
+            }
+        }
+    }
+
+    private func openProject(at url: URL) {
+        guard let handle else { return }
+
+        var preferAutosave = false
+        if nc_project_autosave_is_newer(url.path) {
+            let alert = NSAlert()
+            alert.messageText = "복구할 자동 저장본이 있습니다"
+            alert.informativeText = "이 프로젝트보다 나중에 저장된 자동 저장본이 있습니다. 복구하시겠습니까?"
+            alert.addButton(withTitle: "복구")
+            alert.addButton(withTitle: "무시하고 열기")
+            preferAutosave = alert.runModal() == .alertFirstButtonReturn
+        }
+
+        var errorBuffer = [CChar](repeating: 0, count: 256)
+        if nc_project_open(handle, url.path, preferAutosave, &errorBuffer, errorBuffer.count) {
+            afterProjectReplaced()
+        } else {
+            lastError = String(cString: errorBuffer)
+        }
+    }
+
+    func importAudio(intoTrack trackId: Int) {
+        guard let handle else { return }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return }
+        importAudio(intoTrack: trackId, from: panel.urls)
+    }
+
+    func importAudio(intoTrack trackId: Int, from urls: [URL]) {
+        guard let handle else { return }
+
+        // Sequential placement: each file starts where the previous one ended.
+        var start = playheadSeconds
+        for url in urls {
+            guard nc_audio_import_supported(url.path) else {
+                lastError = "지원하지 않는 형식: \(url.lastPathComponent)"
+                continue
+            }
+            var errorBuffer = [CChar](repeating: 0, count: 256)
+            if nc_audio_import(handle, Int32(trackId), url.path, start, &errorBuffer, errorBuffer.count) {
+                start += clipDuration(ofLast: trackId)
+            } else {
+                lastError = String(cString: errorBuffer)
+            }
+        }
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+    }
+
+    private func clipDuration(ofLast trackId: Int) -> Double {
+        guard let handle else { return 0 }
+        let count = Int(nc_clip_count(handle))
+        return count > 0 ? nc_clip_duration_seconds(handle, Int32(count - 1)) : 0
+    }
+
+    private func afterProjectReplaced() {
+        guard let handle else { return }
+        projectName = readEngineString { nc_project_name(handle, $0, $1) }
+        tempoBpm = Int(nc_project_tempo_bpm(handle))
+        timeSignature = (
+            Int(nc_project_time_signature_numerator(handle)),
+            Int(nc_project_time_signature_denominator(handle))
+        )
+        loopEnabled = nc_project_loop_enabled(handle)
+        reloadTracks()
+        reloadClips()
+        reloadMonitorState()
+        refreshHistory()
+        lastError = nil
+    }
+
+    // MARK: - Clips
+
+    struct Clip: Identifiable {
+        let id: String
+        let name: String
+        let trackName: String
+        let sourcePath: String
+        let startSeconds: Double
+        let durationSeconds: Double
+    }
+
+    @Published private(set) var clips: [Clip] = []
+
+    private func reloadClips() {
+        guard let handle else { return }
+        clips = (0..<Int(nc_clip_count(handle))).map { index in
+            let i = Int32(index)
+            return Clip(
+                id: readEngineString { nc_clip_id(handle, i, $0, $1) },
+                name: readEngineString(capacity: 512) { nc_clip_name(handle, i, $0, $1) },
+                trackName: readEngineString { nc_clip_track(handle, i, $0, $1) },
+                sourcePath: readEngineString(capacity: 1024) { nc_clip_source_path(handle, i, $0, $1) },
+                startSeconds: nc_clip_start_seconds(handle, i),
+                durationSeconds: nc_clip_duration_seconds(handle, i)
+            )
+        }
     }
 
     private func refreshHistory() {
@@ -607,6 +797,7 @@ final class EngineController: ObservableObject {
         canUndo = nc_history_can_undo(handle)
         canRedo = nc_history_can_redo(handle)
         projectDirty = nc_project_dirty(handle)
+        projectPath = readEngineString(capacity: 1024) { nc_project_path(handle, $0, $1) }
         undoStepName = readEngineString { nc_history_undo_step_name(handle, $0, $1) }
         redoStepName = readEngineString { nc_history_redo_step_name(handle, $0, $1) }
     }
