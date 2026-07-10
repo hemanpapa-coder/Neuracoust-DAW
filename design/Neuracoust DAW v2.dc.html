@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #282320; }
+  ::-webkit-scrollbar-thumb { background: #5f5244; border-radius: 6px; border: 2px solid #282320; }
+  ::-webkit-scrollbar-thumb:hover { background: #444a52; }
+  a { color: #5f9fd6; }
+  a:hover { color: #84b3dd; }
+  @keyframes ncblink { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+</style>
+</helmet>
+<div data-approot style="position:relative; width:1920px; min-height:1180px; background:#282320; font-family:'Space Grotesk',-apple-system,'Helvetica Neue',sans-serif; color:#ddd5c8; -webkit-font-smoothing:antialiased; user-select:none; overflow:hidden; border-radius:10px; box-shadow:0 40px 120px rgba(0,0,0,.6);">
+
+  <!-- ===== TITLEBAR ===== -->
+  <div style="height:38px; display:flex; align-items:center; gap:12px; padding:0 14px; background:linear-gradient(#463c33,#37302a); border-bottom:1px solid #1b1611; border-radius:10px 10px 0 0;">
+    <div style="display:flex; gap:8px;">
+      <div style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#28c840;"></div>
+    </div>
+    <div style="flex:1; text-align:center; font-size:12px; color:#aeb4bd; font-weight:500; letter-spacing:.2px;">
+      Neuracoust DAW <span style="color:#665c4e;">v260709 · </span><span style="color:#918676;">Midnight Session.ndaw</span>
+      <span style="color:#e6a23c;" title="unsaved changes">●</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#665c4e;">
+      <span style="color:#46d17f;">●</span> CoreAudio · 48.0k · 128
+    </div>
+  </div>
+
+  <!-- ===== TRANSPORT BAR ===== -->
+  <div style="background:linear-gradient(#37302a,#2c2622); border-bottom:1px solid #1b1611;">
+    <!-- row 1 -->
+    <div style="display:flex; align-items:center; gap:14px; padding:9px 14px 8px;">
+      <!-- transport buttons -->
+      <div style="display:flex; align-items:center; gap:4px;">
+        <sc-for list="{{ transportBtns }}" as="b" hint-placeholder-count="6">
+          <button onClick="{{ b.onClick }}" title="{{ b.title }}" style="{{ b.style }}">{{ b.glyphNode }}</button>
+        </sc-for>
+      </div>
+      <div style="width:1px; height:26px; background:#455060;"></div>
+      <!-- loop / click -->
+      <div style="display:flex; align-items:center; gap:4px;">
+        <button onClick="{{ toggleLoop }}" style="{{ loopStyle }}">↻ Loop</button>
+        <button onClick="{{ toggleClick }}" style="{{ clickStyle }}">◑ Click</button>
+        <button onClick="{{ toggleSnap }}" style="{{ snapStyle }}">⊞ Snap</button>
+      </div>
+      <div style="width:1px; height:26px; background:#455060;"></div>
+      <!-- time display -->
+      <div style="display:flex; align-items:stretch; gap:0; border:1px solid #1b1611; border-radius:6px; overflow:hidden; box-shadow:inset 0 1px 3px rgba(0,0,0,.6);">
+        <div style="background:#0b0908; padding:5px 14px; text-align:center; min-width:118px;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; color:#5f9fd6; line-height:1.05; letter-spacing:.5px;">{{ barsBeats }}</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:#665c4e; margin-top:1px;">BARS | BEATS</div>
+        </div>
+        <div style="background:#0b0908; padding:5px 14px; text-align:center; border-left:1px solid #3d352e; min-width:150px;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; color:#ddd5c8; line-height:1.05; letter-spacing:.5px;">{{ timecode }}</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:#665c4e; margin-top:1px;">HH:MM:SS:FF · 25fps</div>
+        </div>
+      </div>
+      <!-- tempo / sig -->
+      <div style="display:flex; align-items:stretch; gap:0; border:1px solid #1b1611; border-radius:6px; overflow:hidden;">
+        <div style="background:#332c26; padding:6px 12px; text-align:center;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; font-weight:600; color:#ddd5c8;">120.0</div>
+          <div style="font-size:9px; color:#665c4e; margin-top:1px;">TEMPO</div>
+        </div>
+        <div style="background:#332c26; padding:6px 12px; text-align:center; border-left:1px solid #4f4339;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; font-weight:600; color:#ddd5c8;">4/4</div>
+          <div style="font-size:9px; color:#665c4e; margin-top:1px;">SIG</div>
+        </div>
+      </div>
+      <div style="flex:1;"></div>
+      <!-- output meter -->
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:10px; color:#918676; line-height:1.5;">
+          <div>MASTER OUT</div>
+          <div style="color:#e6d24a;">-6.2 <span style="color:#665c4e;">dB</span></div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:3px;">
+          <div style="width:150px; height:9px; border-radius:2px; background:#0b0908; overflow:hidden; border:1px solid #1b1611;">
+            <div style="width:74%; height:100%; background:linear-gradient(90deg,#46d17f 0 60%,#e6d24a 60% 85%,#ff5252 85% 100%);"></div>
+          </div>
+          <div style="width:150px; height:9px; border-radius:2px; background:#0b0908; overflow:hidden; border:1px solid #1b1611;">
+            <div style="width:69%; height:100%; background:linear-gradient(90deg,#46d17f 0 60%,#e6d24a 60% 85%,#ff5252 85% 100%);"></div>
+          </div>
+        </div>
+      </div>
+      <div style="width:1px; height:34px; background:#455060;"></div>
+      <!-- view tabs -->
+      <div style="display:flex; gap:3px; background:#0b0908; padding:3px; border-radius:8px; border:1px solid #1b1611;">
+        <sc-for list="{{ views }}" as="v" hint-placeholder-count="3">
+          <button onClick="{{ v.onClick }}" style="{{ v.style }}">{{ v.icon }} {{ v.label }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <!-- row 2 status strip -->
+    <div style="display:flex; align-items:center; gap:0; padding:0 14px 7px; font-family:'IBM Plex Mono',monospace; font-size:10.5px;">
+      <span style="color:#665c4e;">DSP&nbsp;</span><span style="color:#918676;">48.0k</span>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#665c4e;">PDC&nbsp;</span><span style="color:#918676;">0.00 ms</span>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#665c4e;">IN&nbsp;</span><span style="color:#918676;">5.3 ms</span>
+      <span style="color:#665c4e;">&nbsp;/ PLAY&nbsp;</span><span style="color:#918676;">5.3 ms</span>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#665c4e;">CPU&nbsp;</span>
+      <span style="display:inline-block; width:70px; height:7px; background:#0b0908; border-radius:2px; vertical-align:middle; overflow:hidden; border:1px solid #1b1611;"><span style="display:block; width:34%; height:100%; background:#46d17f;"></span></span>
+      <span style="color:#918676;">&nbsp;34%</span>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#a06bff;">◆ MONITOR DSP</span><span style="color:#665c4e;">&nbsp;내부 · 활성</span>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#22c3a6;">◇ REMOTE CORE</span><span style="color:#665c4e;">&nbsp;LAN 대기</span>
+      <div style="flex:1;"></div>
+      <button onClick="{{ openPlugins }}" style="background:#4b4036; border:1px solid #1b1611; color:#aeb4bd; font-family:inherit; font-size:10.5px; padding:3px 12px; border-radius:5px; cursor:pointer;">플러그인 / 인서트</button>
+      <span style="color:#455060; margin:0 10px;">|</span>
+      <span style="color:#665c4e;">Neuracoust · © 2026</span>
+    </div>
+  </div>
+
+  <!-- ===== MAIN AREA ===== -->
+  <div style="height:1030px; display:flex; overflow:hidden;">
+    <div style="flex:1; position:relative; overflow:hidden;">
+
+    <!-- ============ EDIT VIEW ============ -->
+    <sc-if value="{{ isEdit }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Edit Window" style="display:flex; height:100%;">
+
+      <!-- Edit tool rail -->
+      <div style="width:44px; flex-shrink:0; background:#302a24; border-right:1px solid #1b1611; display:flex; flex-direction:column; align-items:center; gap:3px; padding:9px 0;">
+        <sc-for list="{{ tools }}" as="t" hint-placeholder-count="8">
+          <button title="{{ t.title }}" style="{{ t.style }}">{{ t.icon }}</button>
+        </sc-for>
+      </div>
+
+      <!-- Timeline -->
+      <div style="flex:1; display:flex; flex-direction:column; background:#2c2622; overflow:hidden; position:relative;">
+        <!-- video reference preview (synced to playhead) -->
+        <div style="position:absolute; right:16px; top:50px; width:160px; z-index:12; background:#1a1510; border:1px solid #0b0806; border-radius:8px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.55);">
+          <div style="height:92px; background:repeating-linear-gradient(45deg,#26272f,#26272f 6px,#202128 6px,#202128 12px); display:flex; align-items:center; justify-content:center; position:relative;">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:8px; color:#665c4e; letter-spacing:1px;">VIDEO REF</span>
+            <span style="position:absolute; top:5px; left:6px; font-size:7px; color:#ff8a8a; background:rgba(0,0,0,.5); padding:1px 4px; border-radius:3px;">● MUTE</span>
+            <span style="position:absolute; bottom:5px; right:6px; font-family:'IBM Plex Mono',monospace; font-size:9px; color:#c4a6ff; background:rgba(0,0,0,.55); padding:1px 5px; border-radius:3px;">00:00:11:12</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:4px; padding:5px 6px; background:#221e1a;">
+            <button style="width:20px;height:18px;border-radius:4px;border:1px solid #0b0806;background:#3d352e;color:#c9c0b1;font-size:8px;cursor:pointer;">◀|</button>
+            <span style="flex:1; text-align:center; font-size:7.5px; color:#867b6a;">25fps · drop-frame</span>
+            <button style="width:20px;height:18px;border-radius:4px;border:1px solid #0b0806;background:#3d352e;color:#c9c0b1;font-size:8px;cursor:pointer;">|▶</button>
+            <button style="width:20px;height:18px;border-radius:4px;border:1px solid #0b0806;background:#3d352e;color:#918676;font-size:8px;cursor:pointer;">🔒</button>
+          </div>
+        </div>
+        <!-- ruler -->
+        <div style="height:40px; display:flex; border-bottom:1px solid #1b1611; background:#332c26;">
+          <div style="width:576px; flex-shrink:0; border-right:1px solid #1b1611; display:flex; font-size:9px; color:#665c4e; letter-spacing:.4px;">
+            <div style="width:161px; display:flex; align-items:center; padding:0 10px; gap:7px; border-right:1px solid #3d4650;">
+              <span>GRID</span>
+              <span style="background:#26404f; color:#5f9fd6; padding:2px 7px; border-radius:4px; border:1px solid #2c4657;">Bar</span>
+            </div>
+            <div style="width:90px; display:flex; align-items:center; justify-content:center; border-right:1px solid #3d4650;">인서트 A-E</div>
+            <div style="width:90px; display:flex; align-items:center; justify-content:center; border-right:1px solid #3d4650;">인서트 F-J</div>
+            <div style="width:90px; display:flex; align-items:center; justify-content:center; border-right:1px solid #3d4650;">센드 A-E</div>
+            <div style="width:145px; display:flex; align-items:center; justify-content:center;">I / O</div>
+          </div>
+          <div style="flex:1; position:relative; overflow:hidden;">
+            <sc-for list="{{ rulerMarks }}" as="m" hint-placeholder-count="8">
+              <div style="position:absolute; top:0; bottom:0; left:{{ m.left }}; border-left:1px solid {{ m.color }};">
+                <span style="position:absolute; top:5px; left:5px; font-family:'IBM Plex Mono',monospace; font-size:10px; color:#867b6a;">{{ m.label }}</span>
+              </div>
+            </sc-for>
+            <!-- loop region -->
+            <div style="position:absolute; top:0; height:10px; left:360px; width:720px; background:repeating-linear-gradient(90deg,#22c3a6 0 6px,transparent 6px 12px); opacity:.5;"></div>
+            <!-- markers -->
+            <div style="position:absolute; top:22px; left:360px; display:flex; align-items:center; gap:3px;"><span style="color:#e6a23c; font-size:11px;">▼</span><span style="font-size:9.5px; color:#e6a23c;">Verse</span></div>
+            <div style="position:absolute; top:22px; left:900px; display:flex; align-items:center; gap:3px;"><span style="color:#e6a23c; font-size:11px;">▼</span><span style="font-size:9.5px; color:#e6a23c;">Chorus</span></div>
+            <!-- playhead -->
+            <div style="position:absolute; top:0; bottom:0; left:{{ playheadX }}; width:1px; background:#ff5252; z-index:5;"><div style="position:absolute; top:0; left:-5px; border-left:5px solid transparent; border-right:5px solid transparent; border-top:7px solid #ff5252;"></div></div>
+          </div>
+        </div>
+        <!-- track lanes -->
+        <div style="flex:1; overflow-y:auto; overflow-x:hidden;">
+          <sc-for list="{{ editRows }}" as="tk" hint-placeholder-count="8">
+            <!-- video reference lane -->
+            <sc-if value="{{ tk.isVideo }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ tk.laneStyle }}">
+              <div style="width:576px; flex-shrink:0; display:flex; align-items:center; gap:8px; padding:0 12px; border-right:1px solid #1b1611;">
+                <div style="width:5px; height:38px; background:#a06bff; border-radius:2px;"></div>
+                <span style="font-size:14px;">🎬</span>
+                <div style="flex:1; min-width:0;">
+                  <div style="font-size:12px; font-weight:700; color:#f0eadf;">{{ tk.name }} <span style="font-size:7.5px; color:#c4a6ff; background:#2a1f3d; padding:1px 5px; border-radius:3px;">PICTURE</span></div>
+                  <div style="font-size:8.5px; color:#867b6a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ tk.file }} · {{ tk.fps }}</div>
+                </div>
+                <div style="display:flex; gap:3px;">
+                  <button style="width:20px;height:18px;border-radius:3px;border:1px solid #1b1611;background:#463c33;color:#918676;font-size:8px;cursor:pointer;">🔒</button>
+                  <button style="width:20px;height:18px;border-radius:3px;border:1px solid #1b1611;background:#463c33;color:#ff9f43;font-size:8px;cursor:pointer;">M</button>
+                  <button style="padding:0 5px;height:18px;border-radius:3px;border:1px solid #1b1611;background:#463c33;color:#918676;font-size:8px;cursor:pointer;">Relink</button>
+                </div>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#c4a6ff;">{{ tk.tc }}</span>
+              </div>
+              <div style="flex:1; position:relative; background:#1a1510; overflow:hidden; display:flex; align-items:center; padding:6px 8px; gap:2px;">
+                <sc-for list="{{ tk.frames }}" as="f" hint-placeholder-count="14">
+                  <div style="width:58px; height:44px; flex-shrink:0; background:repeating-linear-gradient(45deg,#2a2d36,#2a2d36 5px,#23262e 5px,#23262e 10px); border:1px solid #0b0806; border-radius:2px; display:flex; align-items:flex-end;"><span style="font-size:6px; color:#665c4e; padding:1px 2px; font-family:'IBM Plex Mono',monospace;">{{ f.n }}</span></div>
+                </sc-for>
+                <div style="position:absolute; top:0; bottom:0; left:{{ playheadX }}; width:1px; background:rgba(255,82,82,.7); z-index:4;"></div>
+              </div>
+            </div>
+            </sc-if>
+            <!-- folder row (routing / basic) -->
+            <sc-if value="{{ tk.isFolder }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ tk.onToggle }}" style="{{ tk.folderStyle }}">
+              <div style="width:576px; flex-shrink:0; display:flex; align-items:center; gap:8px; padding:0 12px; border-right:1px solid #1b1611;">
+                <span style="font-size:10px; color:{{ tk.color }};">{{ tk.chevron }}</span>
+                <span style="font-size:13px;">🗀</span>
+                <span style="font-size:12.5px; font-weight:700; color:#f0eadf;">{{ tk.name }}</span>
+                <span style="font-size:8.5px; color:{{ tk.color }}; background:{{ tk.color }}22; padding:1px 6px; border-radius:3px;">{{ tk.typeLabel }}</span>
+                <span style="font-size:9px; color:#867b6a;">{{ tk.count }}</span>
+                <div style="flex:1;"></div>
+                <sc-if value="{{ tk.isRouting }}" hint-placeholder-val="{{ true }}">
+                  <span style="font-size:9px; color:#918676; font-family:'IBM Plex Mono',monospace;">{{ tk.out }}</span>
+                </sc-if>
+                <button onClick="{{ tk.onFolderDsp }}" style="{{ tk.dspChip }}">DSP</button>
+              </div>
+              <div style="flex:1; display:flex; align-items:center; padding:0 14px;">
+                <span style="font-size:9px; color:#867b6a;">폴더 · 접으면 하위 트랙 숨김</span>
+              </div>
+            </div>
+            </sc-if>
+            <!-- track row -->
+            <sc-if value="{{ tk.isTrack }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ tk.onSelect }}" style="{{ tk.laneStyle }}">
+              <!-- lane header (Pro Tools style columns) -->
+              <div style="width:576px; flex-shrink:0; background:{{ tk.headerBg }}; border-right:1px solid #1b1611; display:flex;">
+                <!-- color strip -->
+                <div style="width:5px; background:{{ tk.color }}; flex-shrink:0;"></div>
+                <!-- controls -->
+                <div style="width:140px; flex-shrink:0; padding:5px 7px; display:flex; flex-direction:column; gap:4px; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:4px;">
+                    <sc-if value="{{ tk.indent }}" hint-placeholder-val="{{ false }}"><span style="color:{{ tk.indentColor }}; font-size:11px; margin-right:1px;">└</span></sc-if>
+                    <span style="flex:1; font-size:12px; font-weight:600; color:#e8e1d5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ tk.name }}</span>
+                    <span style="font-size:8px; color:{{ tk.color }}; background:{{ tk.tagBg }}; padding:1px 4px; border-radius:3px; letter-spacing:.4px;">{{ tk.tag }}</span>
+                  </div>
+                  <div style="display:flex; gap:3px;">
+                    <button onClick="{{ tk.onArm }}" style="{{ tk.recBtn }}">●</button>
+                    <button style="{{ tk.inBtn }}">I</button>
+                    <button onClick="{{ tk.onSolo }}" style="{{ tk.soloBtn }}">S</button>
+                    <button onClick="{{ tk.onMute }}" style="{{ tk.muteBtn }}">M</button>
+                  </div>
+                  <div style="display:flex; gap:3px;">
+                    <div style="flex:2; background:#282320; border:1px solid #4f4339; border-radius:3px; font-size:8.5px; color:#aaa08e; padding:2px 5px; display:flex; justify-content:space-between;">{{ tk.trackView }} <span style="color:#665c4e;">▾</span></div>
+                  </div>
+                  <div style="display:flex; gap:3px;">
+                    <div style="flex:1.4; background:#282320; border:1px solid #4f4339; border-radius:3px; font-size:8px; color:#aaa08e; padding:2px 5px; display:flex; justify-content:space-between;">{{ tk.autoMode }} <span style="color:#665c4e;">▾</span></div>
+                    <button onClick="{{ tk.onDsp }}" style="flex:1; border-radius:3px; font-size:8px; padding:2px 5px; text-align:center; {{ tk.dspChip }}">DSP</button>
+                  </div>
+                </div>
+                <!-- meter -->
+                <div style="width:6px; flex-shrink:0; display:flex; gap:1px; padding:4px 0;">
+                  <div style="flex:1; background:#0b0908; border-radius:1px; position:relative; overflow:hidden;"><div style="position:absolute; left:0; right:0; bottom:0; height:{{ tk.meter }}; background:linear-gradient(#e6d24a,#46d17f);"></div></div>
+                </div>
+                <!-- inserts A-E -->
+                <div style="width:90px; flex-shrink:0; border-left:1px solid #3d4650; padding:4px; display:flex; flex-direction:column; gap:2px;">
+                  <sc-for list="{{ tk.insAE }}" as="sl" hint-placeholder-count="5">
+                    <div style="{{ sl.style }}">{{ sl.label }}</div>
+                  </sc-for>
+                </div>
+                <!-- inserts F-J -->
+                <div style="width:90px; flex-shrink:0; border-left:1px solid #3d4650; padding:4px; display:flex; flex-direction:column; gap:2px;">
+                  <sc-for list="{{ tk.insFJ }}" as="sl" hint-placeholder-count="5">
+                    <div style="{{ sl.style }}">{{ sl.label }}</div>
+                  </sc-for>
+                </div>
+                <!-- sends A-E -->
+                <div style="width:90px; flex-shrink:0; border-left:1px solid #3d4650; padding:4px; display:flex; flex-direction:column; gap:2px;">
+                  <sc-for list="{{ tk.sendAE }}" as="sl" hint-placeholder-count="5">
+                    <div style="{{ sl.style }}">{{ sl.label }}</div>
+                  </sc-for>
+                </div>
+                <!-- I/O -->
+                <div style="width:145px; flex-shrink:0; border-left:1px solid #3d4650; padding:5px 7px; display:flex; flex-direction:column; gap:4px;">
+                  <div style="background:#282320; border:1px solid #4f4339; border-radius:3px; font-size:9px; color:#c9c0b1; padding:3px 6px; display:flex; justify-content:space-between;">{{ tk.output }} <span style="color:#665c4e;">▾</span></div>
+                  <div style="background:#0a1410; border:1px solid #16301f; border-radius:3px; padding:3px 6px; margin-top:auto;">
+                    <div style="display:flex; justify-content:space-between; font-size:8.5px;"><span style="color:#4d8267;">vol</span><span style="color:#5fe38a; font-family:'IBM Plex Mono',monospace;">{{ tk.vol }}</span></div>
+                    <div style="display:flex; justify-content:space-between; font-size:8.5px; margin-top:2px;"><span style="color:#4d8267;">팬</span><span style="color:#5fe38a; font-family:'IBM Plex Mono',monospace;">{{ tk.pan }}</span></div>
+                  </div>
+                </div>
+              </div>
+              <!-- lane content -->
+              <div style="flex:1; position:relative; background:{{ tk.laneBg }}; overflow:hidden;">
+                <sc-for list="{{ tk.gridlines }}" as="g" hint-placeholder-count="8">
+                  <div style="position:absolute; top:0; bottom:0; left:{{ g }}; border-left:1px solid rgba(255,255,255,.035);"></div>
+                </sc-for>
+                <sc-for list="{{ tk.clips }}" as="c" hint-placeholder-count="1">
+                  <div onContextMenu="{{ c.onCtx }}" style="position:absolute; top:6px; bottom:6px; left:{{ c.left }}; width:{{ c.width }}; background:{{ c.bg }}; border:1px solid {{ c.border }}; border-radius:4px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:context-menu;">
+                    <div style="height:14px; background:{{ c.headBg }}; display:flex; align-items:center; padding:0 6px; gap:4px;">
+                      <span style="font-size:8.5px; color:{{ c.headText }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500;">{{ c.name }}</span>
+                    </div>
+                    <svg viewBox="0 0 {{ c.vbW }} 40" preserveAspectRatio="none" style="position:absolute; left:0; right:0; top:14px; bottom:0; width:100%; height:calc(100% - 14px);">
+                      <sc-if value="{{ c.isWave }}" hint-placeholder-val="{{ true }}">
+                      <path d="{{ c.wave }}" fill="{{ c.waveFill }}"></path>
+                      </sc-if>
+                    </svg>
+                    <sc-if value="{{ c.isMidi }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:absolute; left:0; right:0; top:14px; bottom:0;">
+                      <sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="10"><div style="{{ nt.style }}"></div></sc-for>
+                    </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ tk.showPlayhead }}" hint-placeholder-val="{{ true }}">
+                  <div style="position:absolute; top:0; bottom:0; left:{{ playheadX }}; width:1px; background:rgba(255,82,82,.7); z-index:4;"></div>
+                </sc-if>
+              </div>
+            </div>
+            </sc-if>
+          </sc-for>
+          <!-- add track -->
+          <div style="display:flex; height:34px; align-items:center; padding-left:16px;">
+            <button style="background:transparent; border:1px dashed #5f5244; color:#867b6a; font-size:11px; padding:5px 14px; border-radius:5px; cursor:pointer;">＋ 트랙 추가</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ============ MIX VIEW ============ -->
+    <sc-if value="{{ isMix }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Mixer Window" style="display:flex; flex-direction:column; height:100%; background:#2c2622;">
+      <!-- mix toolbar -->
+      <div style="height:42px; display:flex; align-items:center; gap:14px; padding:0 16px; background:#332c26; border-bottom:1px solid #1b1611;">
+        <span style="font-size:13px; font-weight:600; color:#e8e1d5;">믹서</span>
+        <span style="font-size:10.5px; color:#665c4e;">Audio · Instrument · Aux · VCA · Bus Folder · Master</span>
+        <div style="flex:1;"></div>
+        <span style="font-size:10px; color:#665c4e; margin-right:2px;">표시</span>
+        <div style="display:flex; gap:4px;">
+          <sc-for list="{{ mixViewToggles }}" as="m" hint-placeholder-count="6">
+            <button style="{{ m.style }}">{{ m.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+      <!-- routing warning banner -->
+      <div style="display:flex; align-items:center; gap:8px; padding:5px 16px; background:#2a2416; border-bottom:1px solid #1b1611; font-size:10.5px; color:#e6c04a;">
+        <span>⚠</span> 라우팅: <span style="color:#c9b26a;">Reverb Bus → Master 지연 보정 2.9ms 적용됨</span>
+        <span style="color:#665c4e;">·</span>
+        <span style="color:#c9b26a;">해결되지 않은 경로 없음</span>
+      </div>
+      <!-- strips grouped by folder -->
+      <div style="flex:1; display:flex; overflow-x:auto; overflow-y:hidden; padding:14px 14px 18px; gap:8px; align-items:flex-start;">
+        <sc-for list="{{ mixColumns }}" as="col" hint-placeholder-count="5">
+        <div style="{{ col.wrapStyle }}">
+          <sc-if value="{{ col.isGroup }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ col.labelStyle }}">🗀 {{ col.label }}</div>
+          </sc-if>
+          <div style="display:flex; gap:4px; align-items:flex-start;">
+        <sc-for list="{{ col.strips }}" as="s" hint-placeholder-count="1">
+          <div style="{{ s.stripStyle }}">
+            <!-- header -->
+            <div style="height:3px; background:{{ s.color }};"></div>
+            <div style="padding:6px 9px; display:flex; align-items:center; gap:6px; background:{{ s.headBg }}; border-bottom:1px solid #3d4650;">
+              <span style="width:7px; height:7px; border-radius:2px; background:{{ s.color }};"></span>
+              <span style="font-size:9px; color:{{ s.color }}; letter-spacing:.6px; text-transform:uppercase; font-weight:700;">{{ s.kind }}</span>
+            </div>
+            <!-- inserts A-E -->
+            <sc-if value="{{ s.showInserts }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:6px 8px; border-bottom:1px solid #3d4650;">
+              <div style="font-size:8px; color:#867b6a; letter-spacing:.5px; margin-bottom:4px;">인서트 A–E</div>
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <sc-for list="{{ s.insAE }}" as="sl" hint-placeholder-count="5"><div onClick="{{ openPlugins }}" style="{{ sl.style }}">{{ sl.label }}</div></sc-for>
+              </div>
+            </div>
+            </sc-if>
+            <!-- sends A-E -->
+            <sc-if value="{{ s.showSends }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:6px 8px; border-bottom:1px solid #3d4650;">
+              <div style="font-size:8px; color:#867b6a; letter-spacing:.5px; margin-bottom:4px;">센드 A–E</div>
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <sc-for list="{{ s.sendAE }}" as="sl" hint-placeholder-count="5"><div style="{{ sl.style }}">{{ sl.label }}</div></sc-for>
+              </div>
+            </div>
+            </sc-if>
+            <!-- io -->
+            <div style="padding:6px 8px; border-bottom:1px solid #3d4650; display:flex; flex-direction:column; gap:3px;">
+              <div style="font-size:8px; color:#867b6a; letter-spacing:.5px;">I / O</div>
+              <div style="{{ s.ioPill }}">{{ s.in }} <span style="color:#665c4e;">▾</span></div>
+              <div style="{{ s.ioPill }}">{{ s.out }} <span style="color:#665c4e;">▾</span></div>
+            </div>
+            <!-- auto + group -->
+            <div style="padding:6px 8px; border-bottom:1px solid #3d4650; display:flex; flex-direction:column; gap:3px;">
+              <div style="display:flex; align-items:center; gap:4px;"><span style="font-size:8px; color:#867b6a; width:20px;">오토</span><div style="flex:1; background:#282320; border:1px solid #4f4339; border-radius:3px; padding:2px 6px; font-size:8.5px; color:#8fd0b8; display:flex; justify-content:space-between;">{{ s.auto }} <span style="color:#665c4e;">▾</span></div></div>
+              <div style="background:#282320; border:1px solid #4f4339; border-radius:3px; padding:2px 6px; font-size:8.5px; color:#867b6a; display:flex; justify-content:space-between;">{{ s.group }} <span style="color:#665c4e;">▾</span></div>
+            </div>
+            <!-- pan -->
+            <div style="padding:8px 8px 7px; border-bottom:1px solid #3d4650;">
+              <div style="display:flex; justify-content:space-between; font-size:8px; color:#867b6a; margin-bottom:5px;"><span>PAN</span><span style="color:#aaa08e; font-family:'IBM Plex Mono',monospace;">{{ s.pan }}</span></div>
+              <div style="position:relative; height:6px; background:#282320; border-radius:3px; border:1px solid #4f4339;">
+                <div style="position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background:#665c4e;"></div>
+                <div style="position:absolute; top:50%; left:{{ s.panPos }}; width:10px; height:10px; border-radius:50%; background:{{ s.color }}; transform:translate(-50%,-50%); box-shadow:0 1px 2px rgba(0,0,0,.5);"></div>
+              </div>
+            </div>
+            <!-- buttons -->
+            <div style="padding:7px 8px; border-bottom:1px solid #3d4650; display:flex; gap:4px;">
+              <sc-if value="{{ s.hasArm }}" hint-placeholder-val="{{ true }}">
+                <button onClick="{{ s.onArm }}" style="{{ s.armBtn }}">●</button>
+                <button style="{{ s.inBtn }}">I</button>
+              </sc-if>
+              <sc-if value="{{ s.hasSolo }}" hint-placeholder-val="{{ true }}"><button onClick="{{ s.onSolo }}" style="{{ s.soloBtn }}">S</button></sc-if>
+              <button onClick="{{ s.onMute }}" style="{{ s.muteBtn }}">M</button>
+            </div>
+            <!-- fader area -->
+            <div style="display:flex; padding:9px 5px 6px; height:212px;">
+              <div style="width:22px; position:relative; font-family:'IBM Plex Mono',monospace; font-size:6.5px; color:#7a6f5f;">
+                <span style="position:absolute; top:2%; right:3px;">12</span>
+                <span style="position:absolute; top:19%; right:3px;">0</span>
+                <span style="position:absolute; top:40%; right:3px;">-12</span>
+                <span style="position:absolute; top:62%; right:3px;">-24</span>
+                <span style="position:absolute; top:84%; right:3px;">-∞</span>
+              </div>
+              <div style="flex:1; display:flex; justify-content:center; position:relative;">
+                <div style="width:4px; background:#1c1712; border-radius:3px; position:relative; border:1px solid #4f4339;">
+                  <div style="position:absolute; left:50%; top:19%; width:9px; height:1px; background:#665c4e; transform:translateX(-50%);"></div>
+                </div>
+                <div style="position:absolute; left:50%; top:{{ s.faderTop }}; transform:translate(-50%,-50%); width:36px; height:36px; border-radius:50%; background:radial-gradient(circle at 50% 28%, rgba(255,255,255,.22), rgba(255,255,255,.03) 46%, rgba(0,0,0,.45) 100%), radial-gradient(circle at 50% 65%, #3c444e, #171c22); border:1px solid #0b0806; box-shadow:inset 0 1px 2px rgba(255,255,255,.28), inset 0 -3px 6px rgba(0,0,0,.55), 0 3px 9px rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center;">
+                  <div style="position:absolute; top:3px; left:50%; transform:translateX(-50%); width:4px; height:4px; border-radius:50%; background:{{ s.color }}; box-shadow:0 0 5px {{ s.color }};"></div>
+                  <span style="font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:600; color:#f0eadf; text-shadow:0 1px 1px rgba(0,0,0,.6);">{{ s.vol }}</span>
+                </div>
+              </div>
+              <sc-if value="{{ s.showMeter }}" hint-placeholder-val="{{ true }}">
+              <div style="width:14px; display:flex; gap:1.5px;">
+                <div style="flex:1; background:#0b0908; border-radius:1px; position:relative; overflow:hidden; border:1px solid #1b1611;">
+                  <div style="position:absolute; left:0; right:0; bottom:0; height:{{ s.meterL }}; background:linear-gradient(#ff5252 0 12%,#e6d24a 12% 32%,#46d17f 32% 100%);"></div>
+                  <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg, rgba(0,0,0,.55) 0 1px, transparent 1px 4px);"></div>
+                </div>
+                <div style="flex:1; background:#0b0908; border-radius:1px; position:relative; overflow:hidden; border:1px solid #1b1611;">
+                  <div style="position:absolute; left:0; right:0; bottom:0; height:{{ s.meterR }}; background:linear-gradient(#ff5252 0 12%,#e6d24a 12% 32%,#46d17f 32% 100%);"></div>
+                  <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg, rgba(0,0,0,.55) 0 1px, transparent 1px 4px);"></div>
+                </div>
+              </div>
+              </sc-if>
+            </div>
+            <!-- vol readout -->
+            <div style="text-align:center; font-family:'IBM Plex Mono',monospace; font-size:12px; color:#e8e1d5; padding:1px 0 3px;">{{ s.vol }} <span style="font-size:8px; color:#665c4e;">dB</span></div>
+            <!-- dyn -->
+            <div style="padding:0 8px 6px;"><div style="background:#282320; border:1px solid #4f4339; border-radius:4px; padding:3px 7px; font-size:8.5px; color:#aaa08e; display:flex; justify-content:space-between;">dyn <span style="color:#665c4e;">▾</span></div></div>
+            <!-- nameplate -->
+            <div style="background:{{ s.plateBg }}; padding:6px 4px; text-align:center;">
+              <div style="font-size:11px; font-weight:700; color:{{ s.plateText }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ s.name }}</div>
+            </div>
+            <!-- channel stats -->
+            <div style="padding:6px 8px; background:#25201b; display:flex; flex-direction:column; gap:2px; font-family:'IBM Plex Mono',monospace; font-size:8px;">
+              <div style="display:flex; justify-content:space-between;"><span style="color:#867b6a;">peak</span><span style="color:{{ s.peakColor }};">{{ s.peak }}</span></div>
+              <div style="display:flex; justify-content:space-between;"><span style="color:#867b6a;">GR</span><span style="color:#918676;">{{ s.gr }}</span></div>
+              <div style="display:flex; justify-content:space-between;"><span style="color:#867b6a;">DSP</span><span style="color:#918676;">{{ s.dsp }}</span></div>
+            </div>
+          </div>
+        </sc-for>
+          </div>
+          <sc-if value="{{ col.isMeterPanel }}" hint-placeholder-val="{{ false }}">
+          <div style="width:176px; background:linear-gradient(#2e2823,#25201b); border:1px solid #0b0806; border-radius:8px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,.3);">
+            <div style="padding:6px 9px; background:#3a2f1a; border-bottom:1px solid #0b0806; display:flex; align-items:center; gap:6px;"><span style="width:7px;height:7px;border-radius:2px;background:#e6a23c;"></span><span style="font-size:9px;color:#e6a23c;font-weight:700;letter-spacing:.6px;">MASTER METER</span></div>
+            <div style="display:flex; padding:10px 8px 8px; gap:5px;">
+              <div style="width:15px; display:flex; flex-direction:column; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:6.5px; color:#867b6a; text-align:right; padding:1px 0;">
+                <sc-for list="{{ masterMeter.marks }}" as="m" hint-placeholder-count="9"><span>{{ m }}</span></sc-for>
+              </div>
+              <div style="flex:1; display:flex; flex-direction:column; gap:1px; background:#0b0908; padding:2px; border-radius:2px; border:1px solid #0b0806;">
+                <sc-for list="{{ masterMeter.L }}" as="g" hint-placeholder-count="30"><div style="{{ g.style }}"></div></sc-for>
+              </div>
+              <div style="flex:1; display:flex; flex-direction:column; gap:1px; background:#0b0908; padding:2px; border-radius:2px; border:1px solid #0b0806;">
+                <sc-for list="{{ masterMeter.R }}" as="g" hint-placeholder-count="30"><div style="{{ g.style }}"></div></sc-for>
+              </div>
+              <div style="width:15px; display:flex; flex-direction:column; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:6.5px; color:#867b6a; padding:1px 0;">
+                <sc-for list="{{ masterMeter.marks }}" as="m" hint-placeholder-count="9"><span>{{ m }}</span></sc-for>
+              </div>
+            </div>
+            <div style="padding:8px 9px 10px; border-top:1px solid #0b0806; display:flex; flex-direction:column; gap:8px;">
+              <div>
+                <div style="font-size:8px;color:#867b6a;letter-spacing:.5px;margin-bottom:4px;">PEAK</div>
+                <div style="display:flex; flex-direction:column; gap:3px;">
+                  <sc-for list="{{ masterMeter.peakBtns }}" as="b" hint-placeholder-count="3"><button style="{{ b.style }}">{{ b.label }}</button></sc-for>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:8px;color:#867b6a;letter-spacing:.5px;margin-bottom:4px;">OVERS</div>
+                <div style="display:flex; gap:3px;">
+                  <sc-for list="{{ masterMeter.oversBtns }}" as="b" hint-placeholder-count="2"><button style="{{ b.style }}">{{ b.label }}</button></sc-for>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:8px;color:#867b6a;letter-spacing:.5px;margin-bottom:4px;">METER MODE</div>
+                <div style="display:flex; flex-direction:column; gap:3px;">
+                  <sc-for list="{{ masterMeter.modeBtns }}" as="b" hint-placeholder-count="3"><button style="{{ b.style }}">{{ b.label }}</button></sc-for>
+                </div>
+              </div>
+              <div style="display:flex; gap:14px; padding-top:2px;">
+                <div style="display:flex; align-items:center; gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:#4d1f1f;box-shadow:inset 0 0 2px #000;"></span><span style="font-size:8.5px;color:#867b6a;">Phase</span></div>
+                <div style="display:flex; align-items:center; gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:#ff5252;box-shadow:0 0 5px #ff5252;"></span><span style="font-size:8.5px;color:#867b6a;">Overs</span></div>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+        </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    </div><!-- /left area -->
+
+    <!-- ===== MONITOR DOCK (always-on) ===== -->
+    <div data-screen-label="Monitor Dock" style="width:392px; flex-shrink:0; background:#221e1a; border-left:1px solid #0b0806; display:flex; flex-direction:column; overflow:hidden;">
+      <div style="padding:10px 14px; background:linear-gradient(#2a2137,#221e1a); border-bottom:1px solid #0b0806; display:flex; align-items:center; gap:8px;">
+        <span style="width:8px;height:8px;border-radius:2px;background:#a06bff;"></span>
+        <div style="flex:1;">
+          <div style="font-size:13px; font-weight:700; color:#f0eadf;">모니터 스테이션 <span style="font-size:9px; color:#867b6a; font-weight:400;">· 상시 표시</span></div>
+          <div style="font-size:9.5px; color:#867b6a;">Master → Monitor → A: Main 1-2 · 32 out</div>
+        </div>
+        <button onClick="{{ toggleSetup }}" style="{{ setupBtnStyle }}">⚙ 설정</button>
+      </div>
+      <div style="flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px;">
+
+        <!-- level + monitor controls -->
+        <div style="display:flex; gap:12px; align-items:center;">
+          <div style="text-align:center;">
+            <div style="width:72px;height:72px;border-radius:50%;background:radial-gradient(circle at 50% 36%,#564a3e,#221e1a);border:1px solid #0b0806;position:relative;box-shadow:0 4px 10px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.08);">
+              <div style="position:absolute;left:50%;top:8px;width:2.5px;height:22px;background:#a06bff;transform-origin:50% 28px;transform:rotate(-22deg);border-radius:2px;"></div>
+              <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:#ddd5c8;">-6</div>
+            </div>
+            <div style="font-size:9px;color:#665c4e;margin-top:4px;">MONITOR dB</div>
+          </div>
+          <div style="flex:1; display:flex; flex-direction:column; gap:5px;">
+            <div style="display:flex; gap:4px;">
+              <sc-for list="{{ monModes }}" as="m" hint-placeholder-count="4"><button style="{{ m.style }}">{{ m.label }}</button></sc-for>
+            </div>
+            <div style="display:flex; gap:4px;">
+              <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.06);color:#ff9f43;">Dim</button>
+              <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.06);">Mono</button>
+              <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.06);">Talk</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- output mode: speaker / headphone -->
+        <div>
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button onClick="{{ setSpk }}" style="{{ outSpkStyle }}">🔊 스피커</button>
+            <button onClick="{{ setHp }}" style="{{ outHpStyle }}">🎧 헤드폰</button>
+          </div>
+          <sc-if value="{{ monOutSpk }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex; gap:5px; margin-bottom:8px;">
+              <sc-for list="{{ abcSets }}" as="a" hint-placeholder-count="3">
+                <button onClick="{{ a.onSelect }}" onContextMenu="{{ a.onCtx }}" style="{{ a.tabStyle }}">
+                  <div style="font-size:12px;font-weight:700;color:{{ a.tabColor }};">{{ a.id }}</div>
+                  <div style="font-size:8px;color:#867b6a;">{{ a.name }}</div>
+                </button>
+              </sc-for>
+            </div>
+            <div onContextMenu="{{ abcSets.0.onCtx }}" style="background:#2a3037; border:1px solid #3d4650; border-radius:7px; padding:9px;">
+              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="font-size:9px;color:#867b6a;">스피커 모델</span><span style="font-size:10px;color:#c9c0b1;">{{ spkModel }}</span></div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="font-size:9px;color:#867b6a;">물리 출력</span><span style="font-size:10px;color:#8fd0b8;">{{ spkPhys }}</span></div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:7px;"><span style="font-size:9px;color:#867b6a;">시뮬 가중치</span><span style="font-size:10px;color:#c4a6ff;">{{ spkWeight }}</span></div>
+              <div style="font-size:8px;color:#665c4e;margin-bottom:6px;">우클릭 → 모델 · 물리 출력 · 가중치 · 룸 EQ</div>
+              <div style="font-size:9px;color:#867b6a;margin-bottom:5px;">스피커 시뮬레이션 · 3종</div>
+              <div style="display:flex; gap:4px;">
+                <sc-for list="{{ simSel }}" as="st" hint-placeholder-count="3"><button style="{{ st.style }}">{{ st.label }}</button></sc-for>
+              </div>
+              <sc-if value="{{ monSetup }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:9px; border-top:1px solid #3d4650; padding-top:8px;">
+                  <div style="font-size:9px;color:#867b6a;margin-bottom:5px;">인서트 · 스피커 체인 (최대 5)</div>
+                  <div style="display:flex; flex-direction:column; gap:2px;">
+                    <sc-for list="{{ activeSet.insAE }}" as="sl" hint-placeholder-count="5"><div onClick="{{ openPlugins }}" style="{{ sl.style }}">{{ sl.label }}</div></sc-for>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ monOutHp }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#2a3037; border:1px solid #3d4650; border-radius:7px; padding:9px;">
+              <div style="display:flex; gap:5px; margin-bottom:8px;">
+                <button onClick="{{ setHpVirt }}" style="{{ hpVirtStyle }}">가상 스피커</button>
+                <button onClick="{{ setHpModel }}" style="{{ hpModelStyle }}">헤드폰 모델</button>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:4px;"><span style="font-size:9px;color:#867b6a;">모델</span><span style="font-size:10px;color:#c9c0b1;">Sonarworks · HD 650</span></div>
+              <div style="font-size:8.5px;color:#665c4e;">헤드폰 모니터 → 크로스피드 + 가상 스피커/헤드폰 보정</div>
+              <sc-if value="{{ monSetup }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:9px; border-top:1px solid #3d4650; padding-top:8px;">
+                  <div style="font-size:9px;color:#867b6a;margin-bottom:5px;">인서트 · 헤드폰 체인 (최대 5)</div>
+                  <div style="display:flex; flex-direction:column; gap:2px;">
+                    <sc-for list="{{ activeSet.insAE }}" as="sl" hint-placeholder-count="5"><div onClick="{{ openPlugins }}" style="{{ sl.style }}">{{ sl.label }}</div></sc-for>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+        </div>
+
+        <!-- streaming reference monitoring -->
+        <div>
+          <div style="font-size:9px;color:#867b6a;letter-spacing:.5px;margin-bottom:6px;">레퍼런스 모니터링 · A/B</div>
+          <div style="display:flex; gap:4px;">
+            <sc-for list="{{ streamRefs }}" as="r" hint-placeholder-count="5">
+              <button style="{{ r.style }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ r.dot }};flex-shrink:0;"></span>{{ r.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- meters: DSP + Jitter + phase + spectrum -->
+        <div style="background:#1a1510; border:1px solid #0b0806; border-radius:7px; padding:11px; font-family:'IBM Plex Mono',monospace; font-size:9.5px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="color:#867b6a;">DSP 부하</span><span style="color:#46d17f;">38%</span></div>
+          <div style="height:5px;background:#0b0908;border-radius:2px;overflow:hidden;margin-bottom:8px;"><div style="width:38%;height:100%;background:linear-gradient(90deg,#46d17f,#e6d24a);"></div></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="color:#867b6a;">지터 (Jitter)</span><span style="color:#46d17f;">42 ps</span></div>
+          <div style="height:5px;background:#0b0908;border-radius:2px;overflow:hidden;margin-bottom:8px;"><div style="width:18%;height:100%;background:linear-gradient(90deg,#46d17f,#6fa6d0);"></div></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="color:#867b6a;">위상 상관</span><span style="color:#46d17f;">+0.93</span></div>
+          <div style="height:5px;background:#0b0908;border-radius:2px;overflow:hidden;"><div style="width:93%;height:100%;background:linear-gradient(90deg,#e6d24a,#46d17f);"></div></div>
+          <div style="display:flex; justify-content:space-between; margin-top:8px;"><span style="color:#867b6a;">Low / Mid / High</span><span style="color:#918676;">32 · 51 · 21</span></div>
+          <div style="display:flex; justify-content:space-between; margin-top:5px;"><span style="color:#867b6a;">L / R Peak</span><span style="color:#e6d24a;">-6.2 / -6.9</span></div>
+          <div style="margin-top:9px;">
+            <div style="font-size:8.5px;color:#665c4e;margin-bottom:4px;">SPECTRUM</div>
+            <div style="display:flex; gap:2px; height:36px; align-items:flex-end;">
+              <sc-for list="{{ spectrumBars }}" as="b" hint-placeholder-count="24"><div style="flex:1;height:{{ b.h }};background:{{ b.color }};border-radius:1px;"></div></sc-for>
+            </div>
+          </div>
+        </div>
+
+        <!-- monitor DSP modules -->
+        <div style="background:#221e1a; border:1px solid #0b0806; border-radius:7px; overflow:hidden;">
+          <div style="padding:8px 12px; border-bottom:1px solid #0b0806; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:11px;font-weight:600;color:#f0eadf;">Monitor DSP 모듈</span>
+            <button style="font-size:9px;color:#a06bff;background:#2a1f3d;border:1px solid #48376b;border-radius:5px;padding:3px 8px;cursor:pointer;">전체 Bypass</button>
+          </div>
+          <div style="padding:6px;">
+            <sc-for list="{{ monModules }}" as="m" hint-placeholder-count="8">
+              <div style="display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:6px;margin-bottom:2px;background:{{ m.rowBg }};">
+                <div style="{{ m.toggleStyle }}"><div style="{{ m.knobStyle }}"></div></div>
+                <div style="flex:1;"><div style="font-size:11px;color:{{ m.text }};font-weight:500;">{{ m.name }}</div><div style="font-size:8.5px;color:#665c4e;">{{ m.detail }}</div></div>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:{{ m.statColor }};">{{ m.stat }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- DSP source + listen room + remote core -->
+        <div style="display:flex; gap:6px;">
+          <button style="flex:1;padding:7px;border-radius:6px;border:1px solid #48376b;background:#2a1f3d;color:#c4a6ff;font-size:10.5px;font-weight:600;cursor:pointer;">내부 DSP</button>
+          <button style="flex:1;padding:7px;border-radius:6px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10.5px;cursor:pointer;">EXT / NDS</button>
+        </div>
+        <div style="background:#221e1a;border:1px solid #0b0806;border-radius:7px;padding:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><span style="font-size:11px;color:#c9c0b1;font-weight:600;">Listen Room</span><span style="font-size:9px;color:#867b6a;background:#0f0c0a;padding:2px 7px;border-radius:4px;">● Offer Ready</span></div>
+          <div style="display:flex; gap:5px;">
+            <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #2c4657;background:#20282e;color:#5f9fd6;font-size:10px;cursor:pointer;">▶ 송출</button>
+            <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10px;cursor:pointer;">⟳ Ping</button>
+            <button style="flex:1;padding:6px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#918676;font-size:10px;cursor:pointer;">⧉ 링크</button>
+          </div>
+          <div style="display:flex; gap:5px; margin-top:6px;">
+            <button onClick="{{ openChat }}" style="{{ chatBellStyle }}">💬 대화창 · 클라이언트</button>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:8.5px; color:#665c4e; margin-top:6px;">queued 0 · drops 0 · relay fallback 준비</div>
+        </div>
+        <div style="background:#221e1a;border:1px solid #0b0806;border-radius:7px;padding:10px;">
+          <div style="display:flex; align-items:center; gap:7px; margin-bottom:8px;"><span style="width:7px;height:7px;border-radius:2px;background:#22c3a6;"></span><span style="font-size:11px;color:#f0eadf;font-weight:600;">Remote Core / DSP</span></div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 9px; background:#122320; border:1px solid #1e4a42; border-radius:5px;"><div><div style="font-size:10px;color:#5fe3c5;font-weight:600;">studio-mac-2 · LAN</div><div style="font-size:8px;color:#665c4e;font-family:'IBM Plex Mono',monospace;">192.168.1.42 · UDP · 4.1ms</div></div><span style="font-size:8.5px;color:#22c3a6;">● Discovered</span></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== CLIP CONTEXT MENU ===== -->
+  <sc-if value="{{ ctxOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeCtx }}" onContextMenu="{{ closeCtx }}" style="position:absolute; inset:0; z-index:60;">
+    <div onClick="{{ stop }}" style="position:absolute; left:{{ ctxX }}; top:{{ ctxY }}; display:flex; align-items:flex-start;">
+      <div style="width:172px; background:#37302a; border:1px solid #0b0806; border-radius:8px; padding:5px; box-shadow:0 14px 34px rgba(0,0,0,.6);">
+        <sc-for list="{{ ctxCatRows }}" as="c" hint-placeholder-count="7">
+          <div onMouseEnter="{{ c.onEnter }}" style="{{ c.rowStyle }}"><span>{{ c.label }}</span><span style="color:{{ c.arrowColor }}; font-size:9px;">▶</span></div>
+        </sc-for>
+      </div>
+      <div style="margin-left:3px; margin-top:{{ ctxSubTop }}; width:256px; background:#37302a; border:1px solid #0b0806; border-radius:8px; padding:5px; box-shadow:0 14px 34px rgba(0,0,0,.6);">
+        <sc-for list="{{ ctxItems }}" as="it" hint-placeholder-count="6">
+          <div style="{{ it.rowStyle }}">
+            <sc-if value="{{ it.check }}" hint-placeholder-val="{{ false }}"><span style="color:#a9cce8; font-size:11px;">✓</span></sc-if>
+            <span style="flex:1; white-space:nowrap;">{{ it.label }}</span>
+            <sc-if value="{{ it.arrow }}" hint-placeholder-val="{{ false }}"><span style="color:#7a6f5f; font-size:9px;">▶</span></sc-if>
+            <span style="color:#918676; font-size:10px; font-family:'IBM Plex Mono',monospace;">{{ it.sk }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== MONITOR OUTPUT MENU ===== -->
+  <sc-if value="{{ moctxOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeMoctx }}" onContextMenu="{{ closeMoctx }}" style="position:absolute; inset:0; z-index:60;">
+    <div onClick="{{ stop }}" style="position:absolute; left:{{ moctxX }}; top:{{ moctxY }}; display:flex; align-items:flex-start;">
+      <div style="width:186px; background:#37302a; border:1px solid #0b0806; border-radius:8px; padding:5px; box-shadow:0 14px 34px rgba(0,0,0,.6);">
+        <sc-for list="{{ moCatRows }}" as="c" hint-placeholder-count="5">
+          <div onMouseEnter="{{ c.onEnter }}" onClick="{{ c.onClick }}" style="{{ c.rowStyle }}"><span>{{ c.label }}</span><sc-if value="{{ c.arrow }}" hint-placeholder-val="{{ false }}"><span style="color:{{ c.arrowColor }}; font-size:9px;">▶</span></sc-if></div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ moSubHasItems }}" hint-placeholder-val="{{ true }}">
+      <div style="margin-left:3px; margin-top:{{ moSubTop }}; width:186px; background:#37302a; border:1px solid #0b0806; border-radius:8px; padding:5px; box-shadow:0 14px 34px rgba(0,0,0,.6); max-height:300px; overflow-y:auto;">
+        <sc-for list="{{ moItems }}" as="it" hint-placeholder-count="6">
+          <div onClick="{{ it.onSel }}" style="{{ it.rowStyle }}">
+            <sc-if value="{{ it.check }}" hint-placeholder-val="{{ false }}"><span style="color:#a9cce8; font-size:11px;">✓</span></sc-if>
+            <span style="flex:1; white-space:nowrap;">{{ it.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== LISTEN ROOM CHAT ===== -->
+  <sc-if value="{{ chatOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeChat }}" style="position:absolute; inset:0; background:rgba(5,6,8,.4); z-index:58;">
+    <div onClick="{{ stop }}" style="position:absolute; right:410px; bottom:40px; width:320px; height:420px; background:#221e1a; border:1px solid #0b0806; border-radius:12px; box-shadow:0 24px 60px rgba(0,0,0,.6); display:flex; flex-direction:column; overflow:hidden;">
+      <div style="padding:11px 14px; background:linear-gradient(#2a2137,#221e1a); border-bottom:1px solid #0b0806; display:flex; align-items:center; gap:8px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#46d17f;"></span>
+        <div style="flex:1;"><div style="font-size:12.5px; font-weight:700; color:#f0eadf;">Listen Room · 대화창</div><div style="font-size:9px; color:#867b6a;">클라이언트 (원격) · Native Live</div></div>
+        <button onClick="{{ closeChat }}" style="width:24px;height:24px;border-radius:6px;border:1px solid #4f4339;background:#3d352e;color:#918676;cursor:pointer;">✕</button>
+      </div>
+      <div style="flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px;">
+        <sc-for list="{{ chatMsgs }}" as="m" hint-placeholder-count="3">
+          <div style="{{ m.rowStyle }}"><div style="{{ m.bubbleStyle }}">{{ m.text }}</div></div>
+        </sc-for>
+      </div>
+      <div style="padding:10px; border-top:1px solid #0b0806; display:flex; gap:6px;">
+        <div style="flex:1; background:#0f0c0a; border:1px solid #4f4339; border-radius:7px; padding:7px 10px; font-size:11px; color:#665c4e;">메시지 입력…</div>
+        <button style="padding:7px 12px; border-radius:7px; border:1px solid #2c4657; background:#20282e; color:#5f9fd6; font-size:11px; cursor:pointer;">전송</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== PLUGIN MODAL ===== -->
+  <sc-if value="{{ pluginOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closePlugins }}" style="position:absolute; inset:0; background:rgba(5,6,8,.72); display:flex; align-items:center; justify-content:center; z-index:50;">
+    <div onClick="{{ stop }}" style="width:1120px; height:680px; background:#302a24; border:1px solid #1b1611; border-radius:12px; box-shadow:0 40px 120px rgba(0,0,0,.7); display:flex; flex-direction:column; overflow:hidden;">
+      <div style="height:46px; display:flex; align-items:center; gap:12px; padding:0 16px; background:linear-gradient(#463c33,#37302a); border-bottom:1px solid #1b1611;">
+        <span style="font-size:14px; font-weight:600; color:#f0eadf;">플러그인 브라우저</span>
+        <span style="font-size:10.5px; color:#665c4e;">대상: Kick · 인서트 슬롯 C</span>
+        <div style="flex:1;"></div>
+        <div style="display:flex; align-items:center; gap:6px; background:#282320; border:1px solid #4f4339; border-radius:6px; padding:5px 10px; width:240px;">
+          <span style="color:#665c4e;">⌕</span><span style="font-size:11px; color:#665c4e;">플러그인 검색…</span>
+        </div>
+        <button onClick="{{ closePlugins }}" style="width:26px; height:26px; border-radius:6px; border:1px solid #4f4339; background:#3d352e; color:#918676; cursor:pointer;">✕</button>
+      </div>
+      <div style="flex:1; display:flex; overflow:hidden;">
+        <!-- filters -->
+        <div style="width:200px; flex-shrink:0; background:#2c2622; border-right:1px solid #1b1611; padding:14px; overflow-y:auto;">
+          <sc-for list="{{ pluginFilters }}" as="f" hint-placeholder-count="4">
+            <div style="margin-bottom:16px;">
+              <div style="font-size:9.5px; color:#665c4e; letter-spacing:.6px; text-transform:uppercase; margin-bottom:7px;">{{ f.group }}</div>
+              <sc-for list="{{ f.items }}" as="it" hint-placeholder-count="4">
+                <div style="{{ it.style }}">{{ it.label }} <span style="float:right; color:#665c4e; font-family:'IBM Plex Mono',monospace; font-size:9px;">{{ it.count }}</span></div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+        <!-- list -->
+        <div style="flex:1; overflow-y:auto; padding:8px;">
+          <sc-for list="{{ pluginList }}" as="p" hint-placeholder-count="9">
+            <div style="display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:7px; margin-bottom:2px; background:{{ p.rowBg }}; cursor:pointer;">
+              <div style="width:36px; height:36px; border-radius:7px; background:{{ p.iconBg }}; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; color:{{ p.iconText }}; flex-shrink:0;">{{ p.abbr }}</div>
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; align-items:center; gap:8px;"><span style="font-size:12.5px; font-weight:600; color:#e8e1d5;">{{ p.name }}</span><span style="font-size:8.5px; color:{{ p.badgeColor }}; background:{{ p.badgeBg }}; padding:1px 6px; border-radius:3px;">{{ p.badge }}</span></div>
+                <div style="font-size:10px; color:#867b6a; margin-top:2px;">{{ p.brand }} · {{ p.cat }}</div>
+              </div>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:{{ p.statColor }};">{{ p.stat }}</span>
+              <button style="font-size:10px; color:#5f9fd6; background:#20282e; border:1px solid #2c4657; border-radius:5px; padding:5px 12px; cursor:pointer;">추가</button>
+            </div>
+          </sc-for>
+        </div>
+        <!-- insert chain -->
+        <div style="width:250px; flex-shrink:0; background:#2c2622; border-left:1px solid #1b1611; display:flex; flex-direction:column;">
+          <div style="padding:12px 14px; border-bottom:1px solid #4f4339; font-size:11px; color:#c9c0b1; font-weight:600;">인서트 체인 · Kick</div>
+          <div style="flex:1; padding:10px; overflow-y:auto;">
+            <sc-for list="{{ insertChain }}" as="c" hint-placeholder-count="4">
+              <div style="display:flex; align-items:center; gap:7px; background:#3d352e; border:1px solid #4f4339; border-left:3px solid {{ c.color }}; border-radius:6px; padding:8px 9px; margin-bottom:5px;">
+                <span style="color:#574d40; cursor:grab;">⠿</span>
+                <div style="flex:1;"><div style="font-size:11px; color:{{ c.nameColor }};">{{ c.name }}</div><div style="font-size:8.5px; color:#665c4e;">{{ c.sub }}</div></div>
+                <span style="font-size:11px; color:{{ c.byColor }}; cursor:pointer;" title="bypass">⏻</span>
+              </div>
+            </sc-for>
+            <div style="border:1px dashed #5f5244; border-radius:6px; padding:9px; text-align:center; font-size:10px; color:#665c4e;">＋ 빈 슬롯</div>
+          </div>
+          <div style="padding:10px 14px; border-top:1px solid #4f4339; font-size:9px; color:#665c4e; font-family:'IBM Plex Mono',monospace;">
+            <span style="color:#a06bff;">◆ Monitor DSP anchor</span> 보호됨
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1180}}">
+class Component extends DCLogic {
+  state = {
+    view: 'edit',
+    playing: false,
+    loop: true,
+    click: false,
+    snap: true,
+    pluginOpen: false,
+    selected: 0,
+    monOut: 'spk',
+    monSetup: false,
+    monSet: 'A',
+    hpMode: 'virt',
+    spkModel: 'Neumann KH 120 II',
+    spkPhys: '메인 1-2',
+    spkWeight: '0 · 기본',
+    hpModelName: 'Sonarworks · HD 650',
+    moctx: { open:false, cat:'model', x:0, y:0 },
+    chatOpen: false,
+    chatUnread: true,
+    ctx: { open:false, cid:null },
+    folders: [
+      { id:'drums', name:'Drums', type:'routing', color:'#5f9fd6', collapsed:false, out:'Bus 3-4 → Master', db:'-3.0', meter:64, dsp:true },
+      { id:'vox',   name:'Vocals', type:'basic',   color:'#ff9f43', collapsed:false, out:'—', db:'—', meter:0, dsp:false },
+    ],
+    tracks: [
+      { name:'Kick',      tag:'AUD', kind:'audio', color:'#5f9fd6', arm:true,  mute:false, solo:false, dsp:true,  grp:'drums', db:'-4.2', meter:62, clips:[{name:'Kick_01.wav', start:40, len:300, seed:1.7}], route:'IN 1 → Master' },
+      { name:'Snare Top',  tag:'AUD', kind:'audio', color:'#5f9fd6', arm:false, mute:false, solo:false, dsp:true,  grp:'drums', db:'-6.8', meter:48, clips:[{name:'Snare_01.wav', start:40, len:300, seed:2.3}], route:'IN 2 → Master' },
+      { name:'OH · Stereo',tag:'AUD', kind:'audio', color:'#5f9fd6', arm:false, mute:false, solo:false, dsp:false, grp:'drums', db:'-9.1', meter:40, clips:[{name:'Overheads.wav', start:40, len:660, seed:3.1}], route:'IN 3-4 → Master' },
+      { name:'Bass DI',    tag:'AUD', kind:'audio', color:'#5f9fd6', arm:false, mute:false, solo:false, dsp:true,  grp:null,    db:'-5.4', meter:55, clips:[{name:'Bass_DI.wav', start:120, len:560, seed:1.1}], route:'IN 5 → Master' },
+      { name:'Rhodes',     tag:'INST',kind:'inst',  color:'#3ddc84', arm:false, mute:false, solo:false, dsp:false, grp:null,    db:'-11.2',meter:33, clips:[{name:'Rhodes MIDI', start:200, len:480, seed:2.7}], route:'Instrument → Master' },
+      { name:'MIDI · Synth', tag:'MIDI',kind:'midi', color:'#22c3a6', arm:false, mute:false, solo:false, dsp:false, grp:null,  db:'-8.0', meter:36, clips:[{name:'Synth Arp', start:120, len:560, seed:3.4}], route:'MIDI → Bass Synth' },
+      { name:'Lead Vox',   tag:'AUD', kind:'audio', color:'#5f9fd6', arm:false, mute:false, solo:true,  dsp:true,  grp:'vox',   db:'-3.9', meter:71, clips:[{name:'Vox_Take3.wav', start:360, len:520, seed:4.2},{name:'Vox_Adlib.wav', start:920, len:200, seed:5.5}], route:'IN 6 → Master' },
+      { name:'Reverb Bus', tag:'AUX', kind:'aux',   color:'#22c3a6', arm:false, mute:false, solo:false, dsp:false, grp:null,    db:'-14.0',meter:22, clips:[], route:'Aux → Master' },
+      { name:'Drum VCA',   tag:'VCA', kind:'vca',   color:'#c56bff', arm:false, mute:false, solo:false, dsp:false, grp:null,    db:'—',   meter:0,  clips:[], route:'VCA' },
+    ],
+  };
+
+  // deterministic waveform path over vbW x 40, baseline 20
+  wavePath(seed, vbW) {
+    const n = Math.max(24, Math.floor(vbW / 5));
+    const mid = 20;
+    let top = [], bot = [];
+    for (let i = 0; i <= n; i++) {
+      const x = (i / n) * vbW;
+      const env = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.27 * seed) * Math.cos(i * 0.11 + seed));
+      const a = env * 17;
+      top.push(x.toFixed(1) + ',' + (mid - a).toFixed(1));
+      bot.push(x.toFixed(1) + ',' + (mid + a).toFixed(1));
+    }
+    return 'M' + top.join(' L') + ' L' + bot.reverse().join(' L') + ' Z';
+  }
+
+  btn(active, activeBg, activeColor) {
+    const base = 'width:30px;height:26px;border-radius:5px;border:1px solid #1b1611;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+    return base + (active
+      ? `background:${activeBg};color:${activeColor};box-shadow:inset 0 0 0 1px ${activeColor}55;`
+      : 'background:#4b4036;color:#918676;');
+  }
+
+  renderVals() {
+    const s = this.state;
+    const set = (patch) => this.setState(patch);
+    const sel = s.tracks[s.selected] || s.tracks[0];
+    const openCtxAt = (e, cid) => {
+      e.preventDefault(); e.stopPropagation();
+      let x = 160, y = 160;
+      const root = document.querySelector('[data-approot]');
+      if (root) { const r = root.getBoundingClientRect(); x = (e.clientX - r.left) * (1920 / r.width); y = (e.clientY - r.top) * (1180 / r.height); }
+      x = Math.max(8, Math.min(x, 1920 - 480)); y = Math.max(8, Math.min(y, 1180 - 360));
+      set({ ctx: { open:true, x, y, cid, cat:'edit' } });
+    };
+    const openMoctx = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      let x = 160, y = 160;
+      const root = document.querySelector('[data-approot]');
+      if (root) { const r = root.getBoundingClientRect(); x = (e.clientX - r.left) * (1920 / r.width); y = (e.clientY - r.top) * (1180 / r.height); }
+      x = Math.max(8, Math.min(x, 1920 - 420)); y = Math.max(8, Math.min(y, 1180 - 300));
+      set({ moctx: { open:true, x, y, cat:'model' } });
+    };
+
+    // ---- transport buttons (Sony recorder / switcher tactile feel) ----
+    const tbBase = 'width:38px;height:33px;border-radius:5px;border:1px solid #0b0806;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;color:#c8ced6;background:linear-gradient(#3c444e,#252b32);box-shadow:inset 0 1px 0 rgba(255,255,255,.10), inset 0 -2px 3px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.55);';
+    const transportBtns = [
+      { title:'처음으로', glyph:'⏮', style:tbBase },
+      { title:'되감기',   glyph:'⏪', style:tbBase },
+      { title:'빨리감기', glyph:'⏩', style:tbBase },
+      { title:'끝으로',   glyph:'⏭', style:tbBase },
+      { title:'재생/정지', glyph: s.playing ? '⏸' : '▶',
+        style:tbBase + 'width:48px;' + (s.playing ? 'background:linear-gradient(#2f7048,#1a4a2c);color:#7dffb0;box-shadow:inset 0 1px 0 rgba(255,255,255,.18), 0 0 12px rgba(70,209,127,.55), 0 1px 2px rgba(0,0,0,.5);' : 'color:#8ff0b8;'),
+        onClick: () => set({ playing: !s.playing }) },
+      { title:'정지', glyph:'■', style:tbBase, onClick: () => set({ playing:false }) },
+      { title:'녹음', glyph:'●', style:tbBase + 'color:#ff6b6b;box-shadow:inset 0 1px 0 rgba(255,255,255,.10), inset 0 -2px 3px rgba(0,0,0,.45), 0 0 9px rgba(255,82,82,.35), 0 1px 2px rgba(0,0,0,.55);', onClick: () => {} },
+    ].map(b => ({ ...b, glyphNode: b.glyph, onClick: b.onClick || (()=>{}) }));
+
+    const pill = (active, col) => 'padding:6px 11px;border-radius:6px;border:1px solid #1b1611;font-size:11px;cursor:pointer;font-family:inherit;' +
+      (active ? `background:${col}22;color:${col};box-shadow:inset 0 0 0 1px ${col}55;` : 'background:#4b4036;color:#918676;');
+
+    // ---- view tabs ----
+    const views = [
+      { key:'edit', label:'Edit', icon:'≣' },
+      { key:'mix',  label:'Mix',  icon:'⋮⋮' },
+    ].map(v => ({
+      label:v.label, icon:v.icon,
+      onClick: () => set({ view:v.key }),
+      style: 'padding:6px 16px;border-radius:6px;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;' +
+        (s.view===v.key ? 'background:#d9a441;color:#241f1b;box-shadow:0 1px 4px rgba(217,164,65,.4);' : 'background:transparent;color:#918676;'),
+    }));
+
+    // ---- edit tools ----
+    const toolBtn = (active) => 'width:30px;height:30px;border-radius:6px;border:1px solid #1b1611;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;' +
+      (active ? 'background:#26404f;color:#5f9fd6;' : 'background:#3d352e;color:#918676;');
+    const tools = [
+      {title:'선택', icon:'⌖', a:true},{title:'그랩', icon:'✋'},{title:'트림', icon:'⇥'},
+      {title:'페이드', icon:'◣'},{title:'펜/오토메이션', icon:'✎'},{title:'분할', icon:'✂'},
+      {title:'마커', icon:'⚑'},{title:'확대', icon:'⌕'},
+    ].map(t => ({ title:t.title, icon:t.icon, style: toolBtn(t.a) }));
+
+    // ---- ruler ----
+    const barPx = 135;
+    const rulerMarks = [];
+    for (let i=0;i<11;i++){
+      rulerMarks.push({ left:(i*barPx)+'px', label:(i+1)+'', color:i%4===0?'#2f353d':'#463c33' });
+    }
+    const playheadX = '250px';
+
+    // ---- tracks (edit lanes) ----
+    const gridArr = [];
+    for (let i=1;i<11;i++) gridArr.push((i*barPx)+'px');
+
+    const tracks = s.tracks.map((t, idx) => {
+      const isSel = idx === s.selected;
+      const clips = t.clips.map((c, ci) => {
+        const vbW = Math.max(60, c.len);
+        const isMidi = t.kind==='midi' || t.kind==='inst';
+        let notes = [];
+        if (isMidi) {
+          const cnt = Math.max(6, Math.floor(c.len/20));
+          for (let k=0;k<cnt;k++){
+            const pitch = (Math.sin(k*0.8*c.seed)*Math.cos(k*0.3)+1)/2;
+            notes.push({ style:'position:absolute; height:3px; border-radius:1px; background:'+t.color+'; box-shadow:0 0 3px '+t.color+'88; left:'+((k/cnt)*96+1).toFixed(1)+'%; width:'+(80/cnt).toFixed(1)+'%; bottom:'+(12+pitch*66).toFixed(0)+'%;' });
+          }
+        }
+        return {
+          left:c.start+'px', width:c.len+'px', name:c.name, vbW,
+          wave: this.wavePath(c.seed, vbW),
+          isMidi, isWave: !isMidi, notes,
+          bg: (t.kind==='inst'||t.kind==='midi') ? 'linear-gradient(#12291f,#0e2318)' : (t.color==='#5f9fd6'?'linear-gradient(#1e3140,#182833)':'#1e3140'),
+          border: t.color+'66',
+          headBg: t.color+'2a',
+          headText: t.color,
+          waveFill: t.color+'99',
+          onCtx: (e)=>openCtxAt(e, idx+'-'+ci),
+        };
+      });
+      const smallBtn = (on,c,bg)=>'width:20px;height:18px;border-radius:3px;border:1px solid #1b1611;font-size:9px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;'+(on?`background:${bg};color:${c};`:'background:#463c33;color:#665c4e;');
+      const mkSlots=(list,col)=>{const o=[];for(let i=0;i<5;i++){const v=list[i];o.push(v?{label:v,style:'height:15px;display:flex;align-items:center;padding:0 5px;border-radius:2px;font-size:8px;color:'+col+';background:'+col+'1e;border-left:2px solid '+col+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'}:{label:'',style:'height:15px;border-radius:2px;background:#2a3037;border:1px solid #3d4650;'});}return o;};
+      const insDefs={'Kick':{ae:['NC EQ','NC Comp','Tape Sat'],fj:[],sd:['→ Rev']},'Snare Top':{ae:['NC EQ','Gate','NC Comp'],fj:['Plate'],sd:['→ Rev']},'OH · Stereo':{ae:['NC EQ'],fj:[],sd:['→ Rev']},'Bass DI':{ae:['NC EQ','NC Comp','Amp Sim'],fj:[],sd:[]},'Rhodes':{ae:['NC EQ','Chorus'],fj:[],sd:['→ Rev']},'Lead Vox':{ae:['NC EQ','NC Comp','DeEss','Sat'],fj:['Delay'],sd:['→ Rev','→ Dly']},'Reverb Bus':{ae:['NC Reverb'],fj:[],sd:[]},'Drum VCA':{ae:[],fj:[],sd:[]}};
+      const idf=insDefs[t.name]||{ae:[],fj:[],sd:[]};
+      const sendCol = t.kind==='vca'?'#c56bff':'#22c3a6';
+      return {
+        name:t.name, tag:t.tag, color:t.color, tagBg:t.color+'22',
+        autoMode: t.kind==='vca'?'auto':'read', trackView: t.kind==='inst'?'MIDI 노트':'웨이브폼',
+        db:t.db, meter:t.meter+'%',
+        insAE: mkSlots(idf.ae, t.color), insFJ: mkSlots(idf.fj, t.color), sendAE: mkSlots(idf.sd, sendCol),
+        output: t.kind==='aux'?'Master':t.kind==='vca'?'—':'A 1-2', vol: t.db, pan: t.kind==='vca'?'—':'C',
+        headerBg: isSel ? '#423931' : '#332c26',
+        laneBg: isSel ? '#2a2521' : '#25201b',
+        laneStyle: 'display:flex; height:118px; border-bottom:1px solid #1b1611; cursor:pointer;' + (isSel?'box-shadow:inset 3px 0 0 '+t.color+';':''),
+        clips, gridlines:gridArr, showPlayhead:true,
+        isTrack:true, isFolder:false, kind:t.kind, indent: !!t.grp, indentColor: t.grp?t.color:'transparent',
+        dspOn:t.dsp,
+        dspChip: 'font-size:8px;padding:1px 5px;border-radius:3px;border:1px solid #1b1611;cursor:pointer;letter-spacing:.3px;'+(t.dsp?'background:#2a1f3d;color:#c4a6ff;':'background:#463c33;color:#7a6f5f;'),
+        recBtn: smallBtn(t.arm,'#ff5252','#4d1f1f'),
+        inBtn: smallBtn(false,'#5f9fd6','#26404f'),
+        soloBtn: smallBtn(t.solo,'#ffd24d','#4d4715'),
+        muteBtn: smallBtn(t.mute,'#ff9f43','#4d3315'),
+        onSelect: () => set({ selected: idx }),
+        onArm: (e)=>{ e.stopPropagation(); const tr=[...s.tracks]; tr[idx]={...t,arm:!t.arm}; set({tracks:tr}); },
+        onMute:(e)=>{ e.stopPropagation(); const tr=[...s.tracks]; tr[idx]={...t,mute:!t.mute}; set({tracks:tr}); },
+        onSolo:(e)=>{ e.stopPropagation(); const tr=[...s.tracks]; tr[idx]={...t,solo:!t.solo}; set({tracks:tr}); },
+        onDsp:(e)=>{ e.stopPropagation(); const tr=[...s.tracks]; tr[idx]={...t,dsp:!t.dsp}; set({tracks:tr}); },
+      };
+    });
+
+    // ---- edit rows: folders (routing / basic) + tracks with collapse ----
+    const editRows = [];
+    s.folders.forEach(f => {
+      const kids = tracks.filter((tr, ix) => s.tracks[ix].grp === f.id);
+      editRows.push({
+        isFolder:true, isTrack:false, folderId:f.id, name:f.name, color:f.color,
+        typeLabel: f.type==='routing' ? '라우팅 폴더' : '베이직 폴더',
+        isRouting: f.type==='routing', collapsed:f.collapsed, count:kids.length+' 트랙',
+        out:f.out, db:f.db, meter:(f.meter||0)+'%', dspOn:f.dsp,
+        chevron: f.collapsed ? '▶' : '▼',
+        folderStyle:'display:flex; height:36px; border-bottom:1px solid #1b1611; cursor:pointer; background:linear-gradient('+f.color+'26,'+f.color+'14);',
+        dspChip:'font-size:8px;padding:2px 7px;border-radius:3px;border:1px solid #1b1611;cursor:pointer;letter-spacing:.3px;'+(f.dsp?'background:#2a1f3d;color:#c4a6ff;':'background:#463c33;color:#7a6f5f;'),
+        onToggle: () => { const fl=s.folders.map(x=>x.id===f.id?{...x,collapsed:!x.collapsed}:x); set({folders:fl}); },
+        onFolderDsp: (e) => { e.stopPropagation(); const fl=s.folders.map(x=>x.id===f.id?{...x,dsp:!x.dsp}:x); set({folders:fl}); },
+      });
+      if (!f.collapsed) kids.forEach(k => editRows.push(k));
+    });
+    tracks.forEach((tr, ix) => { if (!s.tracks[ix].grp) editRows.push(tr); });
+    // video reference lane (post-audio picture sync)
+    editRows.unshift({
+      isVideo:true, isTrack:false, isFolder:false,
+      name:'Video Ref', file:'Scene_04_picture.mov', fps:'25 fps', tc:'00:00:11:12',
+      frames: Array.from({length:14}, (_,i)=>({ n: (i+1) })),
+      laneStyle:'display:flex; height:64px; border-bottom:1px solid #1b1611; background:#22232c;',
+      onLock:(e)=>e.stopPropagation(), onMute:(e)=>e.stopPropagation(),
+    });
+
+    // ---- inspector ----
+    const kindLabels = { audio:'오디오 트랙', inst:'인스트루먼트', aux:'Aux 리턴', vca:'VCA', master:'마스터' };
+    const selInserts = [
+      { name:'NC Channel EQ', fmt:'VST3', color:'#5f9fd6', dot:'#46d17f' },
+      { name:'NC Compressor', fmt:'VST3', color:'#5f9fd6', dot:'#46d17f' },
+      { name:'Transient Designer', fmt:'AU', color:'#3ddc84', dot:'#e6a23c' },
+    ];
+
+    // ---- mix strips (Neuracoust console — PT workflow, flat identity) ----
+    const stripDefs = [
+      ...s.tracks.map(t=>({ ...t })),
+      { name:'Master', kind:'master', color:'#e6a23c', db:'0.0', mute:false, solo:null, master:true },
+    ];
+    const stripKindLabel = { audio:'오디오', inst:'인스트', aux:'AUX', vca:'VCA', master:'마스터', folder:'BUS FOLDER', basicfolder:'폴더' };
+    const dbToTop = (db) => {
+      if (db==='0.0') return '18%';
+      const n = parseFloat(db);
+      if (isNaN(n)) return '18%';
+      return Math.min(88, Math.max(2, 18 + (-n)*2.2)) + '%';
+    };
+    const mkSlot5 = (list, col) => {
+      const o=[];
+      for(let i=0;i<5;i++){const v=list[i];
+        o.push(v
+          ? {label:v, style:'height:14px;display:flex;align-items:center;padding:0 5px;border-radius:3px;font-size:8px;color:'+col+';background:'+col+'1e;border-left:2px solid '+col+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;'}
+          : {label:'', style:'height:14px;border-radius:3px;background:#282320;border:1px dashed #3d4650;'});
+      }
+      return o;
+    };
+    const panLabels = ['L30','C','R22','L14','R28','C','L8'];
+    const panPositions = ['30%','50%','61%','43%','64%','50%','46%'];
+    const buildStrip = (t, i, childSuffix) => {
+      const isFolder = t.kind==='folder' || t.kind==='basicfolder';
+      const isMasterish = t.master;
+      const isTrack = i < s.tracks.length && !isFolder && !isMasterish;
+      const insColor = t.master?'#e6a23c':t.kind==='aux'?'#22c3a6':t.kind==='inst'?'#3ddc84':t.kind==='vca'?'#c56bff':isFolder?t.color:'#5f9fd6';
+      const insList = t.master?['NC Bus Comp','NC Limiter','NC Meter']
+        : t.kind==='aux'?['NC Reverb']
+        : t.kind==='vca'?[]
+        : t.kind==='basicfolder'?[]
+        : t.kind==='folder'?['NC Bus Comp']
+        : i%2===0?['NC EQ','NC Comp']:['NC EQ'];
+      const sendList = (isMasterish||t.kind==='aux'||t.kind==='vca'||isFolder) ? [] : (i<3?['→ Rev']:[]);
+      const meterVal = t.meter || (t.master?70:isFolder?60:30);
+      const sbtn = (on,c,bg)=>'flex:1;height:20px;border-radius:4px;border:1px solid #1b1611;font-size:9px;font-weight:600;cursor:pointer;'+(on?'background:'+bg+';color:'+c+';':'background:#3d352e;color:#918676;');
+      const toggle = (key)=> isTrack ? ()=>{ const tr=[...s.tracks]; tr[i]={...tr[i], [key]:!tr[i][key]}; set({tracks:tr}); } : ()=>{};
+      const baseBg = t.master?'#31291a':t.kind==='aux'?'#20302c':t.kind==='vca'?'#2b2637':isFolder?'#262c34':'#332c26';
+      const baseBorder = t.master?'#5a4526':t.kind==='aux'?'#2a5148':t.kind==='vca'?'#463a63':isFolder?(t.color+'88'):'#3d4650';
+      return {
+        name:t.name, kind:(stripKindLabel[t.kind]||t.kind)+(childSuffix?' · CHILD':''), color:t.color,
+        headBg: t.master?'#3a2f1a':t.kind==='aux'?'#25382f':t.kind==='vca'?'#332a45':isFolder?(t.color+'22'):'#37302a',
+        stripStyle:'width:122px; flex-shrink:0; background:'+baseBg+'; border:1px solid '+baseBorder+'; border-radius:8px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,.25);',
+        showInserts: t.kind!=='vca' && t.kind!=='basicfolder',
+        insAE: mkSlot5(insList, insColor),
+        showSends: t.kind!=='vca' && !isFolder,
+        sendAE: mkSlot5(sendList, '#22c3a6'),
+        ioPill:'background:#282320; border:1px solid #4f4339; border-radius:3px; padding:2px 6px; font-size:8.5px; color:#aaa08e; display:flex; justify-content:space-between;',
+        in: t.master?'Sum Bus':t.kind==='aux'?'Bus 1':t.kind==='vca'?'—':t.kind==='folder'?'Bus 1-2':t.kind==='basicfolder'?'—':'IN '+(i+1),
+        out: t.master?'Main Out':t.kind==='vca'?'—':t.kind==='basicfolder'?'—':t.kind==='folder'?'Master':'A 1-2',
+        auto: t.kind==='vca'?'auto write':'auto read',
+        group: t.kind==='vca'?'Drum Grp':(isMasterish||isFolder)?'그룹 —':'Drum Grp',
+        pan: (isMasterish||t.kind==='vca'||isFolder)?'C':(panLabels[i]||'C'),
+        panPos: (isMasterish||t.kind==='vca'||isFolder)?'50%':(panPositions[i]||'50%'),
+        hasArm: isTrack && t.kind!=='vca' && t.kind!=='aux',
+        hasSolo: t.solo!==null,
+        armBtn: sbtn(t.arm,'#ff5252','#4d1f1f'),
+        inBtn: sbtn(false,'#5f9fd6','#26404f'),
+        soloBtn: sbtn(t.solo,'#ffd24d','#4d4715'),
+        muteBtn: sbtn(t.mute,'#ff9f43','#4d3315'),
+        showMeter: t.kind!=='vca' && t.kind!=='basicfolder',
+        faderTop: dbToTop(t.db),
+        meterL: meterVal+'%', meterR: Math.max(0,meterVal-6)+'%',
+        vol: t.db==='—'?'0.0':t.db,
+        plateBg: t.master?'#4a3a1e':t.kind==='aux'?'#1e4a3f':t.kind==='vca'?'#3a2d55':isFolder?(t.color+'33'):'#37302a',
+        plateText: t.master?'#f0c26a':t.kind==='aux'?'#5fe3c5':t.kind==='vca'?'#d0a6ff':isFolder?t.color:'#e8e1d5',
+        peak: t.db==='—'?'—':t.db,
+        peakColor: (parseFloat(t.db)>-3)?'#e6d24a':'#46d17f',
+        gr: insList.some(x=>/Comp|Bus/.test(x))?'-2.4':'0.0',
+        dsp: t.master?'0.9ms':t.kind==='vca'?'—':isFolder?'0.4ms':'0.2ms',
+        onArm: toggle('arm'), onMute: toggle('mute'), onSolo: toggle('solo'),
+      };
+    };
+    // compose columns: folder groups (bordered) + ungrouped strips + master
+    const mixColumns = [];
+    s.folders.forEach((f, fi) => {
+      const kids = [];
+      s.tracks.forEach((t, ix)=>{ if(t.grp===f.id) kids.push(buildStrip(t, ix, true)); });
+      const fStrip = buildStrip({ name:f.type==='routing'?'Bus Folder':'Folder', kind:f.type==='routing'?'folder':'basicfolder', color:f.color, db:f.db==='—'?'0.0':f.db, mute:false, solo:false }, 900+fi, false);
+      mixColumns.push({
+        isGroup:true, color:f.color,
+        label:(f.type==='routing'?'BUS FOLDER':'FOLDER')+' · '+kids.length+' CH',
+        wrapStyle:'display:flex; flex-direction:column; gap:5px; padding:6px; border:1.5px solid '+f.color+'99; border-radius:12px; background:'+f.color+'10;',
+        labelStyle:'font-size:8.5px; font-weight:700; color:'+f.color+'; letter-spacing:.6px; padding:1px 4px;',
+        strips:[fStrip, ...kids],
+      });
+    });
+    s.tracks.forEach((t, ix)=>{ if(!t.grp) mixColumns.push({ isGroup:false, wrapStyle:'display:flex; flex-direction:column;', strips:[buildStrip(t, ix, false)] }); });
+    mixColumns.push({ isGroup:false, wrapStyle:'display:flex; flex-direction:column;', strips:[buildStrip({ name:'Master', kind:'master', color:'#e6a23c', db:'0.0', mute:false, solo:null, master:true }, 800, false)] });
+    // Dorrough-style master meter + controls (affects whole mix)
+    const makeMeter = (level) => {
+      const n = 30, out = [];
+      for (let i=0;i<n;i++){
+        const posFromBottom = (n-1-i)/(n-1);
+        const lit = posFromBottom <= level;
+        const c = i<3 ? '#ff5252' : i<10 ? '#e6d24a' : '#46d17f';
+        out.push({ style:'height:5px;border-radius:1px;background:'+(lit?c:'#181c22')+';'+(lit?'box-shadow:0 0 4px '+c+'99;':'') });
+      }
+      return out;
+    };
+    const meterMarks = ['0','4','8','12','16','20','24','30','40'];
+    const masterMeter = {
+      L: makeMeter(0.76), R: makeMeter(0.70), marks: meterMarks,
+      peakBtns: [
+        { label:'Auto', on:true }, { label:'Hold', on:false }, { label:'Reset', on:false },
+      ].map(b=>({ label:b.label, style:'padding:5px 4px;border-radius:5px;font-size:9px;cursor:pointer;border:1px solid '+(b.on?'#4d3a20':'#4f4339')+';'+(b.on?'background:#2a2113;color:#e6a23c;font-weight:600;':'background:#3d352e;color:#918676;') })),
+      oversBtns: [
+        { label:'Display', on:true }, { label:'Reset', on:false },
+      ].map(b=>({ label:b.label, style:'flex:1;padding:5px 4px;border-radius:5px;font-size:9px;cursor:pointer;border:1px solid '+(b.on?'#4d3a20':'#4f4339')+';'+(b.on?'background:#2a2113;color:#e6a23c;font-weight:600;':'background:#3d352e;color:#918676;') })),
+      modeBtns: [
+        { label:'Phase', on:false }, { label:'Sum/Diff', on:false }, { label:'Left/Right', on:true },
+      ].map(b=>({ label:b.label, style:'padding:5px 4px;border-radius:5px;font-size:9px;cursor:pointer;border:1px solid '+(b.on?'#4d3a20':'#4f4339')+';'+(b.on?'background:#3a2f14;color:#ffd24d;font-weight:600;box-shadow:0 0 8px rgba(255,210,77,.35);':'background:#3d352e;color:#918676;') })),
+    };
+    mixColumns.push({ isGroup:false, isMeterPanel:true, wrapStyle:'display:flex; flex-direction:column;', strips:[] });
+
+    // mix view toggles
+    const mixViewToggles = ['I/O','인서트','센드','다이나믹','VCA','전체'].map((l,i)=>({
+      label:l, style:'padding:5px 11px;border-radius:5px;border:1px solid '+(i<3||i===5?'#2c4657':'#4f4339')+';font-size:10.5px;cursor:pointer;font-family:inherit;'+((i<3||i===5)?'background:#20282e;color:#5f9fd6;':'background:#3d352e;color:#918676;'),
+    }));
+
+    // ---- monitor ----
+    const monModes = [
+      {label:'Stereo', a:true},{label:'Mono'},{label:'M/S'},{label:'Ø'},
+    ].map(m=>({ label:m.label, style:'flex:1;padding:6px;border-radius:5px;border:1px solid '+(m.a?'#3d2d5e':'#4f4339')+';font-size:10px;cursor:pointer;'+(m.a?'background:#241a38;color:#a06bff;font-weight:600;':'background:#3d352e;color:#918676;') }));
+    const monModules = [
+      {name:'Speaker Simulation', detail:'Neumann KH 120 II', on:true, stat:'ACTIVE', statColor:'#46d17f'},
+      {name:'Headphone Simulation', detail:'bypassed', on:false, stat:'OFF', statColor:'#665c4e'},
+      {name:'Graphic EQ', detail:'31-band · flat', on:true, stat:'ACTIVE', statColor:'#46d17f'},
+      {name:'Room Correction', detail:'Studio A · 측정됨', on:true, stat:'ACTIVE', statColor:'#46d17f'},
+      {name:'Crossfeed', detail:'Chu Moy · 30%', on:false, stat:'OFF', statColor:'#665c4e'},
+      {name:'Spectrum Meter', detail:'실시간', on:true, stat:'ACTIVE', statColor:'#46d17f'},
+      {name:'Phase Meter', detail:'상관 +0.93', on:true, stat:'ACTIVE', statColor:'#46d17f'},
+      {name:'Oscilloscope', detail:'2.0ms/div', on:false, stat:'OFF', statColor:'#665c4e'},
+    ].map(m=>({
+      name:m.name, detail:m.detail, stat:m.stat, statColor:m.statColor,
+      text: m.on?'#ddd5c8':'#867b6a',
+      rowBg: m.on?'#1a1e24':'transparent',
+      toggleStyle:'width:34px;height:19px;border-radius:10px;flex-shrink:0;position:relative;transition:.15s;'+(m.on?'background:#a06bff;':'background:#4f4339;'),
+      knobStyle:'position:absolute;top:2px;'+(m.on?'left:17px;':'left:2px;')+'width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4);',
+    }));
+    const spectrumBars = [];
+    for (let i=0;i<24;i++){
+      const h = (25 + Math.abs(Math.sin(i*0.6)*Math.cos(i*0.3))*70);
+      const col = i<8?'#5f9fd6':i<16?'#22c3a6':'#a06bff';
+      spectrumBars.push({ h:h+'%', color:col });
+    }
+
+    // ---- plugin modal ----
+    const pluginFilters = [
+      { group:'Scope', items:[['설치됨','48'],['Neuracoust','12'],['즐겨찾기','6']] },
+      { group:'Category', items:[['EQ','9'],['Dynamics','11'],['Reverb','7'],['Modulation','8'],['Analyzer','5']] },
+      { group:'Format', items:[['VST3','44'],['AU','31'],['내부','12']] },
+    ].map(f=>({ group:f.group, items:f.items.map((it,i)=>({ label:it[0], count:it[1], style:'font-size:11px;padding:5px 8px;border-radius:5px;margin-bottom:2px;cursor:pointer;color:'+(i===0&&f.group==='Scope'?'#5f9fd6':'#aaa08e')+';'+(i===0&&f.group==='Scope'?'background:#20282e;':'') })) }));
+
+    const plug = (name, brand, cat, abbr, badge, stat, ok, nc) => {
+      const bc = nc ? '#a06bff' : ok ? '#46d17f' : '#e6a23c';
+      return { name, brand, cat, abbr, badge, stat,
+        rowBg:'transparent',
+        iconBg: nc?'#241a38':'#1b2b3a', iconText: nc?'#a06bff':'#5f9fd6',
+        badge, badgeColor: nc?'#a06bff':'#5f9fd6', badgeBg: nc?'#241a38':'#1a2731',
+        statColor: bc };
+    };
+    const pluginList = [
+      plug('NC Channel EQ','Neuracoust','EQ','EQ','내부','READY',true,true),
+      plug('NC Compressor','Neuracoust','Dynamics','CP','내부','READY',true,true),
+      plug('NC Reverb Suite','Neuracoust','Reverb','RV','내부','READY',true,true),
+      plug('NC Room Correction','Neuracoust','Monitor','RC','내부','MONITOR',true,true),
+      plug('Pro-Q Style EQ','ThirdParty','EQ','Q','VST3','READY',true,false),
+      plug('Bus Glue Comp','ThirdParty','Dynamics','BG','VST3','READY',true,false),
+      plug('Tape Saturator','ThirdParty','Saturation','TP','VST3','PROBE',false,false),
+      plug('Vintage Plate','ThirdParty','Reverb','VP','AU','READY',true,false),
+      plug('SpectraScope','ThirdParty','Analyzer','SS','VST3','SCAN…',false,false),
+    ];
+
+    const insertChain = [
+      { name:'NC Channel EQ', sub:'VST3 · Ready', color:'#5f9fd6', nameColor:'#e8e1d5', byColor:'#46d17f' },
+      { name:'NC Compressor', sub:'VST3 · Ready', color:'#5f9fd6', nameColor:'#e8e1d5', byColor:'#46d17f' },
+      { name:'Tape Saturator', sub:'VST3 · Bypassed', color:'#e6a23c', nameColor:'#867b6a', byColor:'#665c4e' },
+    ];
+
+    // ---- monitor dock: speaker / headphone sets ----
+    const simTypes = ['정밀 (Flat)','빈티지 컬러','룸 보정'];
+    const abcSets = [
+      {id:'A', name:'Mains',     model:'Neumann KH 120 II', sim:'정밀 (Flat)', ins:['NC Room Corr','NC EQ']},
+      {id:'B', name:'Nearfield', model:'Yamaha NS-10M',     sim:'빈티지 컬러', ins:['NC NS-10 Sim']},
+      {id:'C', name:'Grot Box',  model:'Auratone 5C',       sim:'룸 보정',     ins:[]},
+    ].map(a=>({
+      id:a.id, name:a.name, model:a.model, sim:a.sim, active: s.monSet===a.id,
+      onSelect: ()=>set({monSet:a.id}),
+      onCtx: openMoctx,
+      tabStyle:'flex:1;padding:7px 4px;border-radius:6px;border:1px solid '+(s.monSet===a.id?'#48376b':'#4f4339')+';cursor:pointer;text-align:center;'+(s.monSet===a.id?'background:#2a1f3d;':'background:#3d352e;'),
+      tabColor: s.monSet===a.id?'#c4a6ff':'#918676',
+      insAE: mkSlot5(a.ins, '#a06bff'),
+    }));
+    const activeSet = abcSets.find(a=>a.active) || abcSets[0];
+    const simSel = simTypes.map(st=>({ label:st, active: st===activeSet.sim,
+      style:'flex:1;padding:5px 4px;border-radius:5px;border:1px solid '+(st===activeSet.sim?'#48376b':'#4f4339')+';font-size:9px;cursor:pointer;text-align:center;'+(st===activeSet.sim?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;') }));
+    const hpModels = ['Sonarworks · HD 650','Neuracoust · Studio Virt','Apple Spatial'];
+
+    // ---- streaming reference monitoring ----
+    const streamRefs = [
+      {label:'YouTube', color:'#ff5252'},{label:'Spotify', color:'#46d17f'},
+      {label:'Tidal', color:'#6fa6d0'},{label:'Melon', color:'#3ddc84'},{label:'Bugs', color:'#ff9f43'},
+    ].map(r=>({ label:r.label, dot:r.color,
+      style:'flex:1;min-width:0;padding:5px 3px;border-radius:5px;border:1px solid #4f4339;background:#3d352e;color:#c9c0b1;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:3px;' }));
+
+    // ---- clip right-click context menu ----
+    const ctxCats = [
+      {id:'color', label:'색상'}, {id:'edit', label:'편집'}, {id:'audio', label:'오디오 처리'},
+      {id:'tempo', label:'템포 동기화'}, {id:'gain', label:'클립 게인'}, {id:'fade', label:'페이드'},
+      {id:'sel', label:'선택 / 로케이트'},
+    ];
+    const ctxSub = {
+      color: [{label:'Teal',check:true},{label:'Blue'},{label:'Gold'},{label:'Rose'},{label:'Green'},{label:'Violet'},{label:'Coral'},{label:'Cyan'}],
+      edit: [
+        {label:'이름 변경…'},{label:'뒤에 복제', sk:'⌘D'},{label:'선택 트랙으로 가상 복제'},
+        {label:'뮤트'},{label:'극성 반전'},{label:'잠금'},{sep:true},
+        {label:'그리드만큼 앞으로', sk:','},{label:'그리드만큼 뒤로', sk:'.'},
+        {label:'플레이헤드에서 자르기', sk:'B'},{label:'인접 클립 접합', sk:'G'},
+        {label:'음악 메타데이터 다시 분석'},{sep:true},{label:'삭제', sk:'⌫'},
+      ],
+      audio: [{label:'Stem Magic: 4 스템 분리', accent:true},{label:'Stem Magic: 드럼 파트 분리', accent:true}],
+      tempo: [
+        {label:'이 클립을 템포 마스터로'},{label:'프로젝트 템포 유지'},{label:'원본 템포 유지', check:true},
+        {label:'프로젝트 템포로 스트레치 예정'},{label:'프로젝트 템포에 맞춰 배율 적용'},{label:'시간 배율 초기화'},
+      ],
+      gain: [{label:'0 dB'},{label:'-3 dB'},{label:'+3 dB'},{label:'직접 입력…'}],
+      fade: [
+        {label:'페이드 값 입력…'},{label:'페이드 인 50 ms'},{label:'페이드 아웃 50 ms'},
+        {label:'자동 크로스페이드', sk:'F'},{label:'페이드 제거'},{sep:true},
+        {label:'양쪽 곡선', arrow:true},{label:'인 곡선', arrow:true},{label:'아웃 곡선', arrow:true},
+      ],
+      sel: [{label:'클립 구간 선택 / 해제', sk:'P'},{label:'클립 반복 재생', sk:'⌥P'}],
+    };
+    const activeCatIdx = Math.max(0, ctxCats.findIndex(c=>c.id===s.ctx.cat));
+    const ctxCatRows = ctxCats.map((c,i)=>({
+      label:c.label, id:c.id,
+      onEnter: ()=>{ if(s.ctx.cat!==c.id) set({ ctx:{...s.ctx, cat:c.id} }); },
+      rowStyle:'display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:11px;cursor:default;'+(s.ctx.cat===c.id?'background:#3a6ba8;color:#fff;':'color:#ddd5c8;'),
+      arrowColor: s.ctx.cat===c.id?'#cfe0ff':'#7a6f5f',
+    }));
+    const ctxItems = (ctxSub[s.ctx.cat||'edit']||[]).map(it=>({
+      sep: !!it.sep, label: it.label||'', sk: it.sk||'', check: !!it.check, arrow: !!it.arrow,
+      rowStyle: it.sep ? 'height:1px;background:#4f4339;margin:4px 8px;'
+        : 'display:flex;align-items:center;gap:8px;padding:5px 10px 5px '+(it.check?'8px':'22px')+';border-radius:5px;font-size:11px;cursor:pointer;color:'+(it.accent?'#a9cce8':'#ddd5c8')+';',
+    }));
+    const ctxSubTop = (6 + activeCatIdx*27) + 'px';
+
+    // ---- monitor output right-click menu (model / physical out / sim weight) ----
+    const moCats = [
+      {id:'model', label:'모델 선택', sub:true},
+      {id:'phys', label:'물리 출력', sub:true},
+      {id:'weight', label:'시뮬레이션 가중치', sub:true},
+      {id:'roomeq', label:'이 출력 룸 EQ', sub:false},
+      {id:'shortcut', label:'전역 단축키 설정…', sub:false},
+    ];
+    const moSub = {
+      model: ['Neumann KH 120 II','Genelec 8010A','Genelec 8030C','Genelec 8040B','Genelec 8331A','Genelec 8351B','Yamaha NS-10M','Auratone 5C','Avantone Pro Gauss 7'].map(v=>({label:v, val:v, key:'spkModel', check:v===s.spkModel})),
+      phys: ['출력 없음','메인 1-2','출력 3-4','출력 5-6','출력 7-8','출력 9-10','출력 11-12','출력 13-14','출력 15-16'].map(v=>({label:v, val:v, key:'spkPhys', check:v===s.spkPhys})),
+      weight: ['-50%','-25%','0 · 기본','+25%','+50%','+75%','+100%'].map(v=>({label:'가중치 '+v, val:v, key:'spkWeight', check:v===s.spkWeight})),
+    };
+    const moActiveIdx = Math.max(0, moCats.findIndex(c=>c.id===s.moctx.cat));
+    const moCatRows = moCats.map(c=>({
+      label:c.label, arrow:c.sub,
+      onEnter: c.sub ? ()=>{ if(s.moctx.cat!==c.id) set({ moctx:{...s.moctx, cat:c.id} }); } : ()=>{},
+      onClick: c.sub ? ()=>{} : ()=>set({ moctx:{...s.moctx, open:false} }),
+      rowStyle:'display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-radius:5px;font-size:11px;cursor:'+(c.sub?'default':'pointer')+';'+((c.sub&&s.moctx.cat===c.id)?'background:#3a6ba8;color:#fff;':'color:#ddd5c8;'),
+      arrowColor:(c.sub&&s.moctx.cat===c.id)?'#cfe0ff':'#7a6f5f',
+    }));
+    const moItems = ((moSub[s.moctx.cat]||[])).map(it=>({
+      label:it.label, check:it.check,
+      onSel: ()=>set({ [it.key]: it.val, moctx:{...s.moctx, open:false} }),
+      rowStyle:'display:flex;align-items:center;gap:8px;padding:5px 10px 5px '+(it.check?'8px':'22px')+';border-radius:5px;font-size:11px;cursor:pointer;color:#ddd5c8;',
+    }));
+    const moSubHasItems = (moSub[s.moctx.cat]||[]).length > 0;
+    const moSubTop = (6 + moActiveIdx*30) + 'px';
+
+    // ---- Listen Room chat ----
+    const chatMsgs = (this.state.chatMsgs || [
+      { who:'them', name:'클라이언트 (원격)', text:'믹스 좋은데요! 보컬만 살짝 올려줄 수 있어요?' },
+      { who:'me',   name:'나', text:'네, 0.5dB 올려볼게요' },
+      { who:'them', name:'클라이언트 (원격)', text:'퍼펙트 👍 킥도 조금 더 타이트하게' },
+    ]).map(m=>({
+      ...m,
+      rowStyle:'display:flex; '+(m.who==='me'?'justify-content:flex-end;':'justify-content:flex-start;'),
+      bubbleStyle:'max-width:78%; padding:6px 9px; border-radius:9px; font-size:10.5px; line-height:1.4; '+(m.who==='me'?'background:#20282e; color:#c4d6ea; border:1px solid #2c4657;':'background:#37302a; color:#ddd5c8; border:1px solid #4f4339;'),
+    }));
+
+    return {
+      isEdit: s.view==='edit', isMix: s.view==='mix',
+      transportBtns, views,
+      barsBeats:'005 | 03 | 000', timecode:'00:00:11:12',
+      loopStyle: pill(s.loop,'#22c3a6'), clickStyle: pill(s.click,'#5f9fd6'), snapStyle: pill(s.snap,'#5f9fd6'),
+      toggleLoop:()=>set({loop:!s.loop}), toggleClick:()=>set({click:!s.click}), toggleSnap:()=>set({snap:!s.snap}),
+      openPlugins:()=>set({pluginOpen:true}), closePlugins:()=>set({pluginOpen:false}), stop:(e)=>e.stopPropagation(),
+      pluginOpen: s.pluginOpen,
+      tools, rulerMarks, playheadX, tracks, editRows,
+      selName:sel.name, selColor:sel.color, selKindLabel:kindLabels[sel.kind]||sel.kind, selRoute:sel.route,
+      selArmBg: sel.arm?'#4d1f1f':'#463c33', selArmColor: sel.arm?'#ff5252':'#918676',
+      selInserts,
+      strips: mixColumns, mixColumns, masterMeter, mixViewToggles,
+      monModes, monModules, spectrumBars,
+      pluginFilters, pluginList, insertChain,
+      // monitor dock
+      monOutSpk: s.monOut==='spk', monOutHp: s.monOut==='hp', monSetup: s.monSetup,
+      setSpk:()=>set({monOut:'spk'}), setHp:()=>set({monOut:'hp'}), toggleSetup:()=>set({monSetup:!s.monSetup}),
+      hpVirt: s.hpMode==='virt', hpModel: s.hpMode==='model',
+      setHpVirt:()=>set({hpMode:'virt'}), setHpModel:()=>set({hpMode:'model'}),
+      hpVirtStyle:'flex:1;padding:6px;border-radius:5px;border:1px solid '+(s.hpMode==='virt'?'#48376b':'#4f4339')+';font-size:10px;cursor:pointer;'+(s.hpMode==='virt'?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;'),
+      hpModelStyle:'flex:1;padding:6px;border-radius:5px;border:1px solid '+(s.hpMode==='model'?'#48376b':'#4f4339')+';font-size:10px;cursor:pointer;'+(s.hpMode==='model'?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;'),
+      abcSets, activeSet, simSel, hpModels, streamRefs,
+      outSpkStyle:'flex:1;padding:8px;border-radius:6px;border:1px solid '+(s.monOut==='spk'?'#48376b':'#4f4339')+';font-size:11px;font-weight:600;cursor:pointer;'+(s.monOut==='spk'?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;'),
+      outHpStyle:'flex:1;padding:8px;border-radius:6px;border:1px solid '+(s.monOut==='hp'?'#48376b':'#4f4339')+';font-size:11px;font-weight:600;cursor:pointer;'+(s.monOut==='hp'?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;'),
+      setupBtnStyle:'font-size:10px;padding:4px 10px;border-radius:5px;cursor:pointer;border:1px solid '+(s.monSetup?'#48376b':'#4f4339')+';'+(s.monSetup?'background:#2a1f3d;color:#c4a6ff;':'background:#3d352e;color:#918676;'),
+      // context menu
+      ctxOpen: s.ctx.open, ctxX: (s.ctx.x||140)+'px', ctxY: (s.ctx.y||140)+'px',
+      ctxCatRows, ctxItems, ctxSubTop,
+      closeCtx:()=>set({ ctx:{open:false, cid:null} }),
+      // monitor output menu
+      moctxOpen: s.moctx.open, moctxX: (s.moctx.x||160)+'px', moctxY: (s.moctx.y||160)+'px',
+      moCatRows, moItems, moSubTop, moSubHasItems,
+      closeMoctx:()=>set({ moctx:{...s.moctx, open:false} }),
+      spkModel: s.spkModel, spkPhys: s.spkPhys, spkWeight: s.spkWeight,
+      // listen room chat
+      chatOpen: s.chatOpen, chatUnread: s.chatUnread, chatMsgs,
+      openChat:()=>set({ chatOpen:true, chatUnread:false }), closeChat:()=>set({ chatOpen:false }),
+      chatBellStyle:'position:relative;flex:1;padding:6px;border-radius:5px;border:1px solid '+(s.chatUnread?'#4d3a20':'#4f4339')+';font-size:10px;cursor:pointer;'+(s.chatUnread?'background:#2a2113;color:#e6a23c;animation:ncblink 1s ease-in-out infinite;':'background:#3d352e;color:#918676;'),
+    };
+  }
+}
+</script>
+</body>
+</html>
