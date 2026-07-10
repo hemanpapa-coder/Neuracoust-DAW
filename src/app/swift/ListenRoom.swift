@@ -30,6 +30,7 @@ final class ListenRoomController: ObservableObject {
     @Published private(set) var chatMessages: [ChatMessage] = []
     @Published private(set) var chatUnread = 0
     @Published var chatOpen = false
+    @Published var qrOpen = false
 
     /// Surfaced in the dock when the relay script is missing or fails to launch.
     @Published private(set) var lastError: String?

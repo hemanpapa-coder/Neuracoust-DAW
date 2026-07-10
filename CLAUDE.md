@@ -264,6 +264,17 @@ The engine encodes and pushes audio (`ListenRoomSender`); it does not run the re
 - `start-relay.sh` is a **launcher**: it `nohup`s the daemon and exits 0 once the daemon answers `/api/stats`. The script exiting is normal — do not read it as the relay dying. A non-zero exit is the only failure signal; the log is at `/tmp/neuracoust-listen-relay.log`.
 - Because the daemon is detached, the app reaps it explicitly (`pkill -f listen_relay.py`) on stop and on `willTerminate`. Without that it outlives the app. The same applies to the reverse ssh tunnel.
 - Chat rides the relay's `/api/chat` endpoint: GET with `since=<lastId>` polled once a second, POST to send. `sender` is `studio` for us.
+- The **share URL must point at a reachable address, not loopback.** The relay ingests
+  on `127.0.0.1` but binds its HTTP/WebSocket to `0.0.0.0`, so a listener needs the
+  machine's LAN IP. `listenRoomShareHost` finds it by asking the routing table which
+  local address a socket bound for the gateway would get (a UDP `connect` that sends
+  nothing) — that lands on the default-route interface, not whichever `getifaddrs`
+  lists first (often a disconnected `169.254.` link-local one). Falls back to any
+  private-range interface, then link-local, then loopback. An explicit `relayHost`
+  (a tunnel hostname) is used as-is.
+- The QR invite is `CIQRCodeGenerator` (Core Image, no dependency), popped over from
+  the Listen Room's QR button. It encodes the same share URL, so it is only as
+  reachable as that URL — which is why the host fix above matters more than the QR.
 
 ## Open design questions
 

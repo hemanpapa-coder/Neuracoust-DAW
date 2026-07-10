@@ -21,6 +21,8 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -160,9 +162,117 @@ std::string listenRoomShareUrl(const ListenRoomSettings& settings) {
     return listenRoomPublicShareUrl(safe);
 }
 
+namespace {
+
+bool isLoopbackOrEmptyHost(const std::string& host) {
+    return host.empty() || host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+bool isPrivateIPv4(const std::string& ip) {
+    // The ranges a listener on the same WiFi would actually be able to reach.
+    return ip.rfind("192.168.", 0) == 0 || ip.rfind("10.", 0) == 0 ||
+           ip.rfind("172.16.", 0) == 0 || ip.rfind("172.17.", 0) == 0 ||
+           ip.rfind("172.18.", 0) == 0 || ip.rfind("172.19.", 0) == 0 ||
+           ip.rfind("172.2", 0) == 0 || ip.rfind("172.30.", 0) == 0 ||
+           ip.rfind("172.31.", 0) == 0;
+}
+
+/// The IPv4 the machine would use to reach the network, found by asking the routing
+/// table which local address a socket bound for the gateway would get. No packet is
+/// sent — connect on a UDP socket only picks the route. This lands on the interface
+/// that carries the default route, not whichever getifaddrs lists first (which is
+/// often a disconnected link-local one).
+std::string outboundRouteIPv4() {
+#if !defined(_WIN32)
+    const int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        return {};
+    }
+    sockaddr_in probe{};
+    probe.sin_family = AF_INET;
+    probe.sin_port = htons(9);  // discard; nothing is sent
+    // A routable public address, only so the kernel picks the default-route interface.
+    ::inet_pton(AF_INET, "203.0.113.1", &probe.sin_addr);
+    std::string result;
+    if (::connect(sock, reinterpret_cast<sockaddr*>(&probe), sizeof(probe)) == 0) {
+        sockaddr_in local{};
+        socklen_t length = sizeof(local);
+        if (::getsockname(sock, reinterpret_cast<sockaddr*>(&local), &length) == 0) {
+            char buffer[INET_ADDRSTRLEN] = {0};
+            if (::inet_ntop(AF_INET, &local.sin_addr, buffer, sizeof(buffer)) != nullptr) {
+                result = buffer;
+            }
+        }
+    }
+    ::close(sock);
+    if (isPrivateIPv4(result)) {
+        return result;
+    }
+#endif
+    return {};
+}
+
+/// Falls back to scanning every interface for a private-range address when there is
+/// no default route (e.g. an isolated switch), then to link-local, then to nothing.
+std::string scanInterfacesIPv4() {
+#if !defined(_WIN32)
+    ifaddrs* interfaces = nullptr;
+    if (::getifaddrs(&interfaces) != 0) {
+        return {};
+    }
+    std::string privateHit;
+    std::string linkLocalHit;
+    for (ifaddrs* entry = interfaces; entry != nullptr; entry = entry->ifa_next) {
+        if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if ((entry->ifa_flags & IFF_UP) == 0 || (entry->ifa_flags & IFF_LOOPBACK) != 0) {
+            continue;
+        }
+        char buffer[INET_ADDRSTRLEN] = {0};
+        auto* addr = reinterpret_cast<sockaddr_in*>(entry->ifa_addr);
+        if (::inet_ntop(AF_INET, &addr->sin_addr, buffer, sizeof(buffer)) == nullptr) {
+            continue;
+        }
+        const std::string ip = buffer;
+        if (isPrivateIPv4(ip) && privateHit.empty()) {
+            privateHit = ip;
+        } else if (ip.rfind("169.254.", 0) == 0 && linkLocalHit.empty()) {
+            linkLocalHit = ip;
+        }
+    }
+    ::freeifaddrs(interfaces);
+    if (!privateHit.empty()) {
+        return privateHit;
+    }
+    return linkLocalHit;
+#else
+    return {};
+#endif
+}
+
+} // namespace
+
+std::string listenRoomShareHost(const ListenRoomSettings& settings) {
+    // An explicitly configured host (a tunnel address, a hostname) wins.
+    if (!isLoopbackOrEmptyHost(settings.relayHost)) {
+        return settings.relayHost;
+    }
+    if (std::string routed = outboundRouteIPv4(); !routed.empty()) {
+        return routed;
+    }
+    if (std::string scanned = scanInterfacesIPv4(); !scanned.empty()) {
+        return scanned;
+    }
+    // Nothing reachable: loopback, which at least works on this machine.
+    return "127.0.0.1";
+}
+
 std::string listenRoomPublicShareUrl(const ListenRoomSettings& settings) {
     const auto safe = normalizedListenRoomSettings(settings);
-    std::string url = "http://" + safe.relayHost + ":" + std::to_string(safe.relayHttpPort) +
+    // The listener's URL must point at an address they can reach, not the loopback
+    // the relay ingests on.
+    std::string url = "http://" + listenRoomShareHost(safe) + ":" + std::to_string(safe.relayHttpPort) +
         "/?session=" + safe.sessionName +
         "&quality=" + safe.quality +
         "&latency=" + safe.latencyMode +

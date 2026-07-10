@@ -58,6 +58,10 @@ struct ListenRoomStatus {
 
 uint32_t listenRoomSessionId(const std::string& text);
 std::string listenRoomShareUrl(const ListenRoomSettings& settings);
+/// The best address a listener could reach the relay at: the default-route LAN IP,
+/// else any private-range interface, else link-local, else loopback. An explicitly
+/// set relayHost (e.g. a tunnel hostname) is used as-is.
+std::string listenRoomShareHost(const ListenRoomSettings& settings);
 std::string listenRoomPublicShareUrl(const ListenRoomSettings& settings);
 std::string listenRoomEffectiveCodec(const ListenRoomSettings& settings);
 std::string listenRoomQualityLabel(const ListenRoomSettings& settings);

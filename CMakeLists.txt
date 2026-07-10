@@ -286,6 +286,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MonitorControls.swift
         src/app/swift/MonitorDock.swift
         src/app/swift/ListenRoom.swift
+        src/app/swift/ListenInviteQR.swift
         src/app/swift/ChatPanel.swift
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift
@@ -417,6 +418,9 @@ target_link_libraries(neuracoust_bridge_transport_smoke PRIVATE neuracoust_daw_c
 add_executable(neuracoust_vst3_initial_parameters_smoke tools/vst3_initial_parameters_smoke.cpp)
 target_link_libraries(neuracoust_vst3_initial_parameters_smoke PRIVATE neuracoust_daw_core)
 
+add_executable(neuracoust_listen_share_host_smoke tools/listen_share_host_smoke.cpp)
+target_link_libraries(neuracoust_listen_share_host_smoke PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_project_io_smoke tools/project_io_smoke.cpp)
 target_link_libraries(neuracoust_project_io_smoke PRIVATE neuracoust_daw_core)
 if(APPLE)
@@ -537,6 +541,7 @@ endif()
 # no audio device is available, so it stays green on machines without one.
 add_test(NAME bridge_transport_smoke COMMAND neuracoust_bridge_transport_smoke)
 add_test(NAME vst3_initial_parameters_smoke COMMAND neuracoust_vst3_initial_parameters_smoke)
+add_test(NAME listen_share_host_smoke COMMAND neuracoust_listen_share_host_smoke)
 
 # Document plumbing only — no audio device, so this one runs anywhere.
 add_test(NAME project_io_smoke COMMAND neuracoust_project_io_smoke)
