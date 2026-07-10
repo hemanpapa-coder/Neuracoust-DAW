@@ -11,6 +11,15 @@ elseif(WIN32)
     enable_language(RC)
 endif()
 
+# The SwiftUI app needs a generator that speaks Swift. Ninja also qualifies, but
+# Xcode is what ships with the toolchain here. Under Unix Makefiles the engine and
+# all its tools/tests still build — only the app target is skipped.
+set(NEURACOUST_BUILD_SWIFT_APP OFF)
+if(APPLE AND (CMAKE_GENERATOR STREQUAL "Xcode" OR CMAKE_GENERATOR MATCHES "Ninja"))
+    enable_language(Swift)
+    set(NEURACOUST_BUILD_SWIFT_APP ON)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -88,7 +97,8 @@ add_library(neuracoust_daw_core
     src/project/StemMagicBridge.cpp
     src/project/TimelineExport.cpp
     src/project/ProjectDocument.cpp
-    src/ui/common/DawUiModel.cpp)
+    src/ui/common/DawUiModel.cpp
+    src/bridge/NeuracoustEngineBridge.cpp)
 
 target_include_directories(neuracoust_daw_core PUBLIC src)
 if(NOT NEURACOUST_OPUS_INCLUDE_DIR AND EXISTS "${NEURACOUST_LISTEN_SOURCE_DIR}/build/_deps/opus_lib-src/include/opus.h")
@@ -261,6 +271,54 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
+# The new SwiftUI app. Swift reaches the C++ engine through the pure-C facade in
+# src/bridge, imported via a bridging header. Heavy views (timeline, piano roll,
+# meters, VST3 editor windows) will be AppKit/Metal wrapped in NSViewRepresentable.
+# ---------------------------------------------------------------------------
+if(NEURACOUST_BUILD_SWIFT_APP)
+    add_executable(NeuracoustDAW MACOSX_BUNDLE
+        src/app/swift/NeuracoustApp.swift
+        src/app/swift/Theme.swift
+        src/app/swift/TransportBar.swift
+        src/app/swift/EngineController.swift
+        resources/icons/NeuracoustDAW.icns)
+
+    set_source_files_properties(resources/icons/NeuracoustDAW.icns
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    target_link_libraries(NeuracoustDAW PRIVATE neuracoust_daw_core)
+
+    # This source tree lives under a path containing a space. Bridging-header and
+    # header-search settings must reach the compiler quoted, so they go through
+    # Xcode build settings rather than raw -import-objc-header / -I flags.
+    set_target_properties(NeuracoustDAW PROPERTIES
+        OUTPUT_NAME "Neuracoust DAW"
+        MACOSX_BUNDLE TRUE
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.neuracoust.daw"
+        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/app/swift/Bridging.h"
+        XCODE_ATTRIBUTE_HEADER_SEARCH_PATHS "\"${CMAKE_CURRENT_SOURCE_DIR}/src\""
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.neuracoust.daw"
+        MACOSX_BUNDLE_BUNDLE_NAME "Neuracoust DAW"
+        MACOSX_BUNDLE_DISPLAY_NAME "Neuracoust DAW"
+        MACOSX_BUNDLE_ICON_FILE "NeuracoustDAW.icns"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${NEURACOUST_DAW_VERSION}")
+
+    # The engine spawns these; keep them next to the app the way it expects.
+    add_dependencies(NeuracoustDAW NeuracoustVst3EditorHost NeuracoustAuEditorHost)
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:NeuracoustVst3EditorHost>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust VST3 Editor Host"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:NeuracoustAuEditorHost>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust AU Editor Host")
+else()
+    message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
+endif()
+
+# ---------------------------------------------------------------------------
 # Engine-side tools and probes
 # ---------------------------------------------------------------------------
 add_executable(nuclust_mock_plugin_client tools/nuclust_mock_plugin_client.cpp)
@@ -292,6 +350,9 @@ target_link_libraries(neuracoust_remote_core_server PRIVATE neuracoust_daw_core)
 
 add_executable(neuracoust_daw_render tools/neuracoust_daw_render.cpp)
 target_link_libraries(neuracoust_daw_render PRIVATE neuracoust_daw_core)
+
+add_executable(neuracoust_bridge_transport_smoke tools/bridge_transport_smoke.c)
+target_link_libraries(neuracoust_bridge_transport_smoke PRIVATE neuracoust_daw_core)
 
 if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/neuracoust_video_render.mm")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/video_render_fixture.mm")
@@ -390,6 +451,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME waves_compat_audit_summary_smoke
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/waves_compat_audit.py" --self-test-summary)
 endif()
+# Exercises the exact C facade the SwiftUI app calls. Exits 0 with a SKIP line when
+# no audio device is available, so it stays green on machines without one.
+add_test(NAME bridge_transport_smoke COMMAND neuracoust_bridge_transport_smoke)
+
 add_test(NAME vst3_process_worker_smoke COMMAND neuracoust_vst3_process_worker --self-test)
 add_test(NAME vst3_isolated_process_smoke COMMAND neuracoust_vst3_isolated_process_smoke)
 add_test(NAME remote_core_server_self_test COMMAND neuracoust_remote_core_server --self-test)

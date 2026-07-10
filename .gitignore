@@ -22,3 +22,6 @@ compile_commands.json
 *.dmg
 *.pkg
 *.zip
+
+# Xcode generator output (SwiftUI app)
+build-xcode/
