@@ -170,6 +170,13 @@ private struct EditView: View {
                 engine.deleteSelectedClip()
             }
 
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            zoomButton("복사", enabled: engine.selectedClipId != nil) { engine.copySelectedClip() }
+            zoomButton("잘라내기", enabled: engine.selectedClipId != nil) { engine.cutSelectedClip() }
+            zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipAtPlayhead() }
+            zoomButton("복제", enabled: engine.selectedClipId != nil) { engine.duplicateSelectedClip() }
+
             Text(String(format: "%.1f s 표시 · 드래그: 이동 · 가장자리: 트림 · B: 분할 · Delete: 삭제", engine.visibleDuration))
                 .font(Theme.Font.mono(8))
                 .foregroundStyle(Theme.Palette.textFainter)

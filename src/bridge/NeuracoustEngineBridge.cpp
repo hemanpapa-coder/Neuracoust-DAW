@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,9 @@ struct NCEngine {
         std::vector<float> maxs;
     };
     std::map<std::string, WaveformPeaks> waveformCache;
+
+    /// One clip, the way the old UI's clipClipboard_ held one.
+    std::optional<neuracoust::daw::ClipState> clipboard;
 
     neuracoust::daw::ProjectHistory history;
     std::string projectPath;     // empty until the document has a home on disk
@@ -927,11 +931,18 @@ double nc_project_snap_time(NCEngine* engine, double seconds) {
 
 namespace {
 
-/// Every clip edit reshapes the render graph, so reconcile — cheaply first.
+/// The renderer does not read project.clips. It rebuilds them from trackPlaylists
+/// (makeProjectAudioRenderPlan calls rebuildProjectClipsFromActivePlaylists), so a
+/// clip edit that only touches project.clips changes the picture and nothing else —
+/// the audio keeps playing from the old placement. Only appendAudioClipAt rebuilds
+/// the placements for us; every other edit operation leaves them stale.
+///
+/// Push the clips back into the playlists after each edit, then reconcile.
 bool applyClipEdit(NCEngine* engine, bool changed) {
     if (!changed) {
         return false;
     }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
     engine->reconcileProject();
     return true;
 }
@@ -961,6 +972,7 @@ bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds) {
     if (!neuracoust::daw::splitClip(engine->project, clipId, seconds, newClipId)) {
         return false;
     }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
     engine->reconcileProject();
     engine->recordStep("Split clip");
     return true;
@@ -971,6 +983,7 @@ bool nc_clip_delete(NCEngine* engine, const char* clipId) {
     if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
         return false;
     }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
     engine->reconcileProject();
     engine->recordStep("Delete clip");
     return true;
@@ -984,6 +997,94 @@ float nc_clip_gain_db(NCEngine* engine, int index) {
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
     if (engine == nullptr || clipId == nullptr) return false;
     return applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
+}
+
+namespace {
+
+const neuracoust::daw::ClipState* findClipById(NCEngine* engine, const std::string& clipId) {
+    for (const auto& clip : engine->project.clips) {
+        if (clip.id == clipId) {
+            return &clip;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+bool nc_clip_copy(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    const auto* clip = findClipById(engine, clipId);
+    if (clip == nullptr) return false;
+    engine->clipboard = *clip;
+    return true;
+}
+
+bool nc_clip_cut(NCEngine* engine, const char* clipId) {
+    if (!nc_clip_copy(engine, clipId)) {
+        return false;
+    }
+    if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Cut clip");
+    return true;
+}
+
+bool nc_clipboard_has_clip(NCEngine* engine) {
+    return engine != nullptr && engine->clipboard.has_value();
+}
+
+void nc_clipboard_clip_name(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr || !engine->clipboard.has_value()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    const auto& clip = *engine->clipboard;
+    copyText(out, outLen, clip.regionName.empty()
+                              ? std::filesystem::path(clip.sourcePath).filename().string()
+                              : clip.regionName);
+}
+
+bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || !engine->clipboard.has_value()) {
+        return false;
+    }
+
+    std::string newClipId;
+    if (!neuracoust::daw::pasteClip(engine->project, *engine->clipboard,
+                                    std::max(0.0, startSeconds), newClipId)) {
+        return false;
+    }
+    // pasteClip pushes onto project.clips and stops there — the placements would
+    // stay stale and the pasted clip would play silent.
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Paste clip");
+    copyText(out, outLen, newClipId);
+    return true;
+}
+
+bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || clipId == nullptr) return false;
+
+    const auto* clip = findClipById(engine, clipId);
+    if (clip == nullptr) return false;
+    const double newStart = clip->startSeconds + clip->durationSeconds;
+
+    std::string newClipId;
+    if (!neuracoust::daw::duplicateClip(engine->project, clipId, newStart, newClipId)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Duplicate clip");
+    copyText(out, outLen, newClipId);
+    return true;
 }
 
 bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs) {

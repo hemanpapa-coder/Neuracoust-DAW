@@ -260,6 +260,16 @@ bool nc_clip_delete(NCEngine* engine, const char* clipId);
 float nc_clip_gain_db(NCEngine* engine, int index);
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
 
+/// Clipboard. Copy stores the clip; paste places a copy at `startSeconds` on the
+/// clip's original track. Cut copies then deletes. All record their own step.
+bool nc_clip_copy(NCEngine* engine, const char* clipId);
+bool nc_clip_cut(NCEngine* engine, const char* clipId);
+bool nc_clipboard_has_clip(NCEngine* engine);
+void nc_clipboard_clip_name(NCEngine* engine, char* out, size_t outLen);
+/// Returns the new clip's id in `out`, or empty on failure.
+bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outLen);
+bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t outLen);
+
 // ---------------------------------------------------------------------------
 // Waveform peaks
 //

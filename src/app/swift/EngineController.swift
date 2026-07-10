@@ -433,6 +433,10 @@ final class EngineController: ObservableObject {
         static let n: UInt16 = 45
         static let i: UInt16 = 34
         static let b: UInt16 = 11
+        static let c: UInt16 = 8
+        static let x: UInt16 = 7
+        static let v: UInt16 = 9
+        static let d: UInt16 = 2
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
     }
@@ -470,6 +474,14 @@ final class EngineController: ObservableObject {
             newProject()
         case KeyCode.i:
             importAudio(intoTrack: 0)
+        case KeyCode.c where selectedClipId != nil:
+            copySelectedClip()
+        case KeyCode.x where selectedClipId != nil:
+            cutSelectedClip()
+        case KeyCode.v where clipboardClipName != nil:
+            pasteClipAtPlayhead()
+        case KeyCode.d where selectedClipId != nil:
+            duplicateSelectedClip()
         default:
             return event
         }
@@ -902,6 +914,49 @@ final class EngineController: ObservableObject {
 
     func commitClipGesture(_ stepName: String) {
         recordGesture(stepName)
+    }
+
+    // MARK: Clipboard
+
+    @Published private(set) var clipboardClipName: String?
+
+    func copySelectedClip() {
+        guard let handle, let clipId = selectedClipId, nc_clip_copy(handle, clipId) else { return }
+        refreshClipboard()
+    }
+
+    func cutSelectedClip() {
+        guard let handle, let clipId = selectedClipId, nc_clip_cut(handle, clipId) else { return }
+        selectedClipId = nil
+        reloadClips()
+        refreshClipboard()
+        refreshHistory()
+    }
+
+    /// Pastes at the playhead, onto the clip's original track.
+    func pasteClipAtPlayhead() {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_paste(handle, playheadSeconds, &buffer, buffer.count) else { return }
+        selectedClipId = String(cString: buffer)
+        reloadClips()
+        refreshHistory()
+    }
+
+    func duplicateSelectedClip() {
+        guard let handle, let clipId = selectedClipId else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return }
+        selectedClipId = String(cString: buffer)
+        reloadClips()
+        refreshHistory()
+    }
+
+    private func refreshClipboard() {
+        guard let handle else { return }
+        clipboardClipName = nc_clipboard_has_clip(handle)
+            ? readEngineString { nc_clipboard_clip_name(handle, $0, $1) }
+            : nil
     }
 
     func splitSelectedClipAtPlayhead() {

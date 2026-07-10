@@ -2,7 +2,9 @@
 // files. No audio device is opened: this is document plumbing, not playback.
 
 #include "bridge/NeuracoustEngineBridge.h"
+#include "audio/OfflineBounce.h"
 #include "audio/WavFile.h"
+#include "project/ProjectDocument.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +45,23 @@ static bool makeFixtures(std::string& wavPath, std::string& m4aPath) {
     const std::string command =
         "/usr/bin/afconvert '" + wavPath + "' '" + m4aPath + "' -f m4af -d aac >/dev/null 2>&1";
     return std::system(command.c_str()) == 0;
+}
+
+/// Seconds at which the rendered file first carries signal, or -1.
+static double firstAudibleSecond(const std::string& path) {
+    neuracoust::daw::WavAudioData audio;
+    std::string error;
+    if (!neuracoust::daw::readPcmWavFile(path, audio, error) || audio.channels <= 0) {
+        return -1;
+    }
+    for (int64_t frame = 0; frame < audio.frameCount(); ++frame) {
+        for (int channel = 0; channel < audio.channels; ++channel) {
+            if (std::abs(audio.interleavedSamples[frame * audio.channels + channel]) > 0.01f) {
+                return static_cast<double>(frame) / audio.sampleRate;
+            }
+        }
+    }
+    return -1;
 }
 
 int main() {
@@ -210,6 +229,106 @@ int main() {
         check(nc_clip_count(engine) == 0, "the clip is gone");
         check(nc_history_undo(engine), "undo the delete");
         check(nc_clip_count(engine) == 1, "the clip came back");
+
+        // A clip edit that only touches project.clips is invisible to the renderer:
+        // it rebuilds clips from trackPlaylists. Moving a clip must move the sound,
+        // not just the picture. Bounce and measure where the audio actually starts.
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "import for bounce");
+            char bounceClip[128] = {0};
+            nc_clip_id(engine, 0, bounceClip, sizeof(bounceClip));
+
+            check(nc_clip_move(engine, bounceClip, 3.0), "move the clip to 3 s");
+            check(std::abs(nc_clip_start_seconds(engine, 0) - 3.0) < 0.01, "the model agrees");
+
+            // Bounce the document the bridge is holding, through the same plan the
+            // realtime engine builds.
+            neuracoust::daw::ProjectDocument rendered;
+            std::string parseError;
+            char projectFile[256] = "/tmp/neuracoust-io-smoke/Moved.ndaw";
+            check(nc_project_save_as(engine, projectFile, error, sizeof(error)), "save for bounce");
+
+            FILE* file = fopen(projectFile, "rb");
+            check(file != nullptr, "read back the saved project");
+            std::string text;
+            if (file != nullptr) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) text.append(buffer, read);
+                fclose(file);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(text, projectFile, rendered, parseError),
+                  "parse it back");
+
+            const std::string bouncePath = "/tmp/neuracoust-io-smoke/moved.wav";
+            const auto bounce = neuracoust::daw::bounceProjectToWav(rendered, bouncePath);
+            check(bounce.ok, "bounce succeeded");
+
+            const double audibleAt = firstAudibleSecond(bouncePath);
+            printf("moved clip: audio starts at %.3f s (expect 3.000)\n", audibleAt);
+            check(std::abs(audibleAt - 3.0) < 0.05,
+                  "moving a clip moves the sound, not just the picture");
+        }
+
+        // --- clipboard: a pasted clip must be audible, not just visible ---------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "import for clipboard");
+            char sourceClip[128] = {0};
+            nc_clip_id(engine, 0, sourceClip, sizeof(sourceClip));
+
+            check(!nc_clipboard_has_clip(engine), "the clipboard starts empty");
+            check(nc_clip_copy(engine, sourceClip), "copy the clip");
+            check(nc_clipboard_has_clip(engine), "the clipboard holds a clip");
+
+            char pasted[128] = {0};
+            check(nc_clip_paste(engine, 4.0, pasted, sizeof(pasted)), "paste at 4 s");
+            check(nc_clip_count(engine) == 2, "two clips after pasting");
+            check(strlen(pasted) > 0 && strcmp(pasted, sourceClip) != 0, "the paste has its own id");
+
+            // Delete the original so only the pasted clip can make a sound.
+            check(nc_clip_delete(engine, sourceClip), "delete the original");
+            check(nc_clip_count(engine) == 1, "only the pasted clip remains");
+
+            char clipboardProject[256] = "/tmp/neuracoust-io-smoke/Pasted.ndaw";
+            check(nc_project_save_as(engine, clipboardProject, error, sizeof(error)), "save the paste");
+
+            neuracoust::daw::ProjectDocument pastedProject;
+            std::string pasteParseError;
+            FILE* pasteFile = fopen(clipboardProject, "rb");
+            std::string pasteText;
+            if (pasteFile != nullptr) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), pasteFile)) > 0) pasteText.append(buffer, read);
+                fclose(pasteFile);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(pasteText, clipboardProject,
+                                                             pastedProject, pasteParseError),
+                  "parse the pasted project");
+
+            const std::string pasteBounce = "/tmp/neuracoust-io-smoke/pasted.wav";
+            const auto bounce = neuracoust::daw::bounceProjectToWav(pastedProject, pasteBounce);
+            check(bounce.ok, "bounce the paste");
+            const double audibleAt = firstAudibleSecond(pasteBounce);
+            printf("pasted clip: audio starts at %.3f s (expect 4.000)\n", audibleAt);
+            check(std::abs(audibleAt - 4.0) < 0.05, "a pasted clip is audible where it was pasted");
+
+            // Cut removes it and fills the clipboard.
+            char remaining[128] = {0};
+            nc_clip_id(engine, 0, remaining, sizeof(remaining));
+            check(nc_clip_cut(engine, remaining), "cut the clip");
+            check(nc_clip_count(engine) == 0, "cut removed it");
+            check(nc_clipboard_has_clip(engine), "cut left it on the clipboard");
+
+            // Duplicate places a copy right after the original.
+            char duplicated[128] = {0};
+            check(nc_clip_paste(engine, 0.0, pasted, sizeof(pasted)), "paste it back");
+            nc_clip_id(engine, 0, remaining, sizeof(remaining));
+            check(nc_clip_duplicate(engine, remaining, duplicated, sizeof(duplicated)), "duplicate it");
+            check(nc_clip_count(engine) == 2, "duplicate made a second clip");
+        }
 
         // snapProjectTime always snaps — it does not consult a "snap enabled" flag.
         // The default project's grid unit is 1 s, so 1.234 lands on 1.0. Whether to
