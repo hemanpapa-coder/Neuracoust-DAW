@@ -421,6 +421,23 @@ struct MonitorDock: View {
                     }
             }
 
+            // Quality, latency, a fresh link, and a studio ping — the rest of the old
+            // UI's Listen Room controls. Quality and latency cycle on click.
+            HStack(spacing: Theme.Space.sm) {
+                actionButton("음질 · \(listen.qualityTitle)",
+                             tint: listen.enabled ? Theme.Palette.accent : Theme.Palette.textSecondary) {
+                    listen.cycleQuality()
+                }
+                actionButton("지연 · \(listen.latencyTitle)",
+                             tint: listen.enabled ? Theme.Palette.accent : Theme.Palette.textSecondary) {
+                    listen.cycleLatency()
+                }
+            }
+            HStack(spacing: Theme.Space.sm) {
+                actionButton("↻ 새 링크") { listen.resetToken() }
+                actionButton("◎ Ping", enabled: listen.enabled) { listen.ping() }
+            }
+
             Button {
                 listen.chatOpen.toggle()
                 if listen.chatOpen { listen.markChatRead() }

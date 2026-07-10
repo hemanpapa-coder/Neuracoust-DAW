@@ -3133,6 +3133,12 @@ void nc_listen_set_enabled(NCEngine* engine, bool enabled) {
     engine->pushListenSettings();
 }
 
+void nc_listen_reset_token(NCEngine* engine) {
+    if (engine == nullptr) return;
+    engine->project.listenRoomAccessToken = generateListenAccessToken();
+    engine->pushListenSettings();
+}
+
 void nc_listen_session_name(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->listenSettings().sessionName : std::string{});
 }

@@ -735,6 +735,10 @@ void nc_listen_relay_host(NCEngine* engine, char* out, size_t outLen);
 int nc_listen_relay_http_port(NCEngine* engine);
 int nc_listen_relay_tcp_ingest_port(NCEngine* engine);
 
+/// Regenerates the share token, invalidating any link already handed out. The caller
+/// restarts the relay if it is running, so a listener on the old link is dropped.
+void nc_listen_reset_token(NCEngine* engine);
+
 void nc_listen_quality(NCEngine* engine, char* out, size_t outLen);
 void nc_listen_set_quality(NCEngine* engine, const char* quality);
 void nc_listen_latency_mode(NCEngine* engine, char* out, size_t outLen);

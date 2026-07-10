@@ -295,6 +295,12 @@ The engine encodes and pushes audio (`ListenRoomSender`); it does not run the re
 - `start-relay.sh` is a **launcher**: it `nohup`s the daemon and exits 0 once the daemon answers `/api/stats`. The script exiting is normal — do not read it as the relay dying. A non-zero exit is the only failure signal; the log is at `/tmp/neuracoust-listen-relay.log`.
 - Because the daemon is detached, the app reaps it explicitly (`pkill -f listen_relay.py`) on stop and on `willTerminate`. Without that it outlives the app. The same applies to the reverse ssh tunnel.
 - Chat rides the relay's `/api/chat` endpoint: GET with `since=<lastId>` polled once a second, POST to send. `sender` is `studio` for us.
+- The rest of the old UI's controls are ported: **음질** (quality) cycles
+  PCM → Bal → High → Max, **지연** (latency) cycles Low → Std → Sync, **새 링크** (reset)
+  regenerates the token via `nc_listen_reset_token` and restarts the relay so the old
+  link is dropped, and **Ping** posts `{"sender":"studio", "text":"Studio is checking
+  the Listen Room feed."}` — just `sendChat` reused. Quality and latency ride into the
+  share URL, so changing them changes the link.
 - The **share URL must point at a reachable address, not loopback.** The relay ingests
   on `127.0.0.1` but binds its HTTP/WebSocket to `0.0.0.0`, so a listener needs the
   machine's LAN IP. `listenRoomShareHost` finds it by asking the routing table which

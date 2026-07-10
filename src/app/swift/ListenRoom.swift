@@ -26,6 +26,10 @@ final class ListenRoomController: ObservableObject {
     @Published private(set) var transportMode = ""
     @Published private(set) var statusMessage = ""
     @Published private(set) var shareUrl = ""
+    @Published private(set) var quality = "opus_high"
+    @Published private(set) var latencyMode = "stable"
+    @Published private(set) var latencyTargetMs = 0
+    @Published private(set) var packetsSent: UInt64 = 0
 
     @Published private(set) var chatMessages: [ChatMessage] = []
     @Published private(set) var chatUnread = 0
@@ -359,5 +363,80 @@ final class ListenRoomController: ObservableObject {
         shareUrl = withUnsafePointer(to: status.shareUrl) {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
+        latencyTargetMs = Int(status.latencyTargetMs)
+        packetsSent = status.packetsSent
+        quality = engine.readEngineString { nc_listen_quality(handle, $0, $1) }
+        latencyMode = engine.readEngineString { nc_listen_latency_mode(handle, $0, $1) }
+    }
+
+    // MARK: Quality, latency, token, ping
+
+    /// The compact button title, matching the old UI.
+    var qualityTitle: String {
+        switch quality {
+        case "pcm_lossless": return "PCM"
+        case "opus_balanced": return "Bal"
+        case "opus_max": return "Max"
+        default: return "High"
+        }
+    }
+
+    var latencyTitle: String {
+        switch latencyMode {
+        case "low": return "Low"
+        case "video_sync": return "Sync"
+        default: return "Std"
+        }
+    }
+
+    /// Cycles PCM → Balanced → High → Max, the way the old UI's button did.
+    func cycleQuality() {
+        guard let handle = engine.rawHandle else { return }
+        let next: String
+        switch quality {
+        case "pcm_lossless": next = "opus_balanced"
+        case "opus_balanced": next = "opus_high"
+        case "opus_high": next = "opus_max"
+        default: next = "pcm_lossless"
+        }
+        nc_listen_set_quality(handle, next)
+        quality = engine.readEngineString { nc_listen_quality(handle, $0, $1) }
+        statusMessage = "품질: \(qualityTitle)"
+    }
+
+    /// Cycles Low → Standard → Video Sync.
+    func cycleLatency() {
+        guard let handle = engine.rawHandle else { return }
+        let next: String
+        switch latencyMode {
+        case "low": next = "stable"
+        case "stable": next = "video_sync"
+        default: next = "low"
+        }
+        nc_listen_set_latency_mode(handle, next)
+        latencyMode = engine.readEngineString { nc_listen_latency_mode(handle, $0, $1) }
+        statusMessage = "지연: \(latencyTitle)"
+    }
+
+    /// A new share link. Anyone on the old link is dropped: the token changes, and if
+    /// we are broadcasting the relay is restarted so it stops honouring the old one.
+    func resetToken() {
+        guard let handle = engine.rawHandle else { return }
+        nc_listen_reset_token(handle)
+        if enabled {
+            stop()
+            start()
+        }
+        statusMessage = "새 공유 링크 생성"
+    }
+
+    /// Drops a studio message into the listener chat, so they can confirm the feed.
+    func ping() {
+        guard enabled else {
+            statusMessage = "Listen Room을 먼저 시작하세요"
+            return
+        }
+        sendChat("Studio is checking the Listen Room feed.")
+        statusMessage = "Ping 전송"
     }
 }
