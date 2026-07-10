@@ -1,24 +1,42 @@
 import SwiftUI
 
-/// Maps dB to fader travel. Linear in dB would waste the top of the throw, so the
-/// design's scale is compressed below -12: 12 at the top, then 0, -12, -24, -∞.
+/// Maps dB to fader travel.
+///
+/// The bottom of the throw is real silence, not -60 dB with an -∞ label on it. The
+/// engine clamps volume to -120 dB, so that is the floor. A straight line from -120
+/// would waste most of the throw on inaudible values, so the bottom 6% collapses
+/// -120…-60 and the rest runs linearly from -60 to +12 — where mixing actually happens.
 enum FaderScale {
+    static let silenceDb: Float = -120
     static let minDb: Float = -60
     static let maxDb: Float = 12
 
+    /// Fraction of the throw given to the -120…-60 collapse.
+    private static let tailFraction = 0.06
+
     /// 0 at the bottom of the throw, 1 at the top.
     static func position(forDb db: Float) -> Double {
-        let clamped = min(maxDb, max(minDb, db))
-        return Double((clamped - minDb) / (maxDb - minDb))
+        let clamped = min(maxDb, max(silenceDb, db))
+        if clamped <= minDb {
+            let tail = Double((clamped - silenceDb) / (minDb - silenceDb))
+            return tail * tailFraction
+        }
+        let head = Double((clamped - minDb) / (maxDb - minDb))
+        return tailFraction + head * (1 - tailFraction)
     }
 
     static func db(forPosition position: Double) -> Float {
         let clamped = min(1, max(0, position))
-        return minDb + Float(clamped) * (maxDb - minDb)
+        if clamped <= tailFraction {
+            let tail = Float(clamped / tailFraction)
+            return silenceDb + tail * (minDb - silenceDb)
+        }
+        let head = Float((clamped - tailFraction) / (1 - tailFraction))
+        return minDb + head * (maxDb - minDb)
     }
 
     static let marks: [(String, Float)] = [
-        ("12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("-∞", -60),
+        ("12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("-∞", silenceDb),
     ]
 }
 
@@ -45,8 +63,9 @@ struct FaderScaleMarks: View {
     }
 }
 
+/// "-∞" only at the engine's true floor. A -60 dB signal is quiet, not silent.
 func dbLabel(_ db: Float) -> String {
-    db <= FaderScale.minDb ? "-∞" : String(format: "%.1f", db)
+    db <= FaderScale.silenceDb + 0.5 ? "-∞" : String(format: "%.1f", db)
 }
 
 /// Vertical channel fader. Drag the cap; double-click returns to unity.
@@ -90,7 +109,9 @@ struct ChannelFader: View {
                     }
                     .onEnded { _ in dragStartDb = nil }
             )
-            .onTapGesture(count: 2) { onChange(0) }
+            // A DragGesture with minimumDistance 0 swallows taps, so the reset has
+            // to outrank it.
+            .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(0) })
         }
     }
 
@@ -157,7 +178,7 @@ struct PanSlider: View {
                         onChange(value)
                     }
             )
-            .onTapGesture(count: 2) { onChange(0) }
+            .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(0) })
         }
         .frame(height: 12)
     }

@@ -439,7 +439,7 @@ struct ChannelStrip: View {
 
     private var peakDb: Float {
         let peak = max(track.peakLeft, track.peakRight)
-        return peak <= 0.00001 ? FaderScale.minDb : Float(peakToDb(peak))
+        return peak <= 0.00001 ? FaderScale.silenceDb : Float(peakToDb(peak))
     }
 
     private func statRow(_ label: String, _ value: String) -> some View {

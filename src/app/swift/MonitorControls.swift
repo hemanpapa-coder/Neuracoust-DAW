@@ -65,7 +65,8 @@ struct RotaryKnob: View {
                 }
                 .onEnded { _ in dragStartValue = nil }
         )
-        .onTapGesture(count: 2) { onChange(resetValue) }
+        // The drag gesture would otherwise swallow the double-click.
+        .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(resetValue) })
     }
 }
 
