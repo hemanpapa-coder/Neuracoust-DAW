@@ -155,6 +155,7 @@ private struct EditView: View {
                     onSeek: { engine.seek($0) },
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
                     onSelect: { engine.selectClip($0) },
+                    onSetRange: { engine.setLoopRange(start: $0, end: $1) },
                     onToggleSelect: { engine.toggleClipSelection($0) },
                     onSelectMany: { engine.selectClips($0) },
                     onMoveClip: { engine.moveClip($0, to: $1) },
@@ -195,6 +196,15 @@ private struct EditView: View {
             zoomButton("잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
             zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
             zoomButton("복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
+
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            // Range edits act on the loop range, dragged out along the top of the ruler.
+            let hasRange = engine.hasEditRange
+            zoomButton("구간 복사", enabled: hasRange) { engine.copyRange() }
+            zoomButton("구간 잘라내기", enabled: hasRange) { engine.cutRange() }
+            zoomButton("구간 지우기", enabled: hasRange) { engine.clearRange() }
+            zoomButton("구간 분리", enabled: hasRange) { engine.separateRange() }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 

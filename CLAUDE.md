@@ -55,13 +55,16 @@ Three things this tree forces, all of which cost time to rediscover:
 - **Waves SoundGrid delivers CoreAudio callbacks in bursts** → wake jitter reads ~1 buffer period even when idle. Judge severity by render headroom against a learned baseline, never by raw jitter.
 - Thread priority hierarchy: audio render (RT time-constraint) > worker processing (USER_INITIATED) > worker load + editor observer (UTILITY).
 
-## Not yet ported out of the old UI — do this before anyone deletes it
+## Nothing is left in the old UI
 
-One piece is left in `../DAW/src/app/macos/DawWindowController.mm`:
+`../DAW/src/app/macos/DawWindowController.mm` no longer holds anything this project
+needs. Ported:
 
-1. Plugin editor process lifecycle + the parameter bridge
-
-Already ported:
+- ~~Plugin editor process lifecycle + parameter bridge~~ → `src/app/swift/PluginEditor.swift`
+  plus `nc_track_set_vst3_parameter` / `nc_track_insert_observer`. **Track inserts only** —
+  instrument slots, master inserts and monitor speaker slots (the old encoded-index
+  scheme) and the Waves RS124 parameter mirroring are still unported, and nothing in the
+  new UI asks for them yet.
 - ~~DSP execution-mode policy~~ → `src/plugins/InsertDspPolicy.{h,cpp}`, pinned by `tests/InsertDspPolicyTest.cpp`. The mode strings are persisted in the project model, so the rules belong to the engine.
 - ~~Undo/redo + dirty tracking + autosave~~ → `src/project/ProjectHistory.{h,cpp}`, pinned by `tests/ProjectHistoryTest.cpp`. Snapshot-based, capped at 100 steps. Autosave lives in the bridge, which owns the project path.
 
@@ -84,6 +87,22 @@ Menu items still declare their shortcuts so they are discoverable; the `NSEvent`
 ## Bounce
 
 `nc_bounce_to_wav` renders the engine's document and blocks — about 25x realtime with no plug-ins, so a three-minute song would freeze the UI for seconds. The app instead serializes the document (`nc_project_serialize`) and renders that snapshot on a background task through `nc_bounce_snapshot_to_wav`, which touches no shared state. `project_io_smoke` proves the two paths are sample-for-sample identical; if they ever diverge, a background export would be quietly lying.
+
+## Selection and range editing
+
+Two selections, and they do different work:
+
+- **Clip selection** (`selectedClipIds`) — shift-click adds, a marquee drag from empty
+  lane space sweeps. Every edit over it goes through one `nc_clip_*_many` call so it
+  records **one** undo step, and so the move delta is clamped once against the earliest
+  clip: pushing a selection into zero stops it instead of piling the clips together.
+- **Range** — the loop range doubles as the edit range, dragged along the top 12 pt of
+  the ruler. `nc_range_*` slices clips at the range edges; clearing 2–3 s out of a
+  ten-second clip leaves the head and the tail playing. It is not an edit, so it records
+  no history.
+
+Fades and clip gain stay single-clip: their handles hide when more than one clip is
+selected, rather than offering a grab that would move the selection instead.
 
 ## Snapping
 

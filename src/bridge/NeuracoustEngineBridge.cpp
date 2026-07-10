@@ -1443,6 +1443,86 @@ int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, d
     return applyClipEdit(engine, moved > 0) ? moved : 0;
 }
 
+bool nc_project_set_loop_range(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr || !std::isfinite(startSeconds) || !std::isfinite(endSeconds)) {
+        return false;
+    }
+    const double start = std::max(0.0, std::min(startSeconds, endSeconds));
+    const double end = std::max(startSeconds, endSeconds);
+    if (end <= start) {
+        return false;
+    }
+    engine->project.loopStartSeconds = start;
+    engine->project.loopEndSeconds = end;
+    engine->reconcileProject();
+    return true;
+}
+
+int nc_range_copy(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    auto copied = neuracoust::daw::copyClipRange(engine->project, startSeconds, endSeconds);
+    if (copied.empty()) {
+        return 0;
+    }
+    // copyClipRange already anchors the slices to the range start, which is the
+    // shape pasteClipRange wants.
+    engine->clipboard = std::move(copied);
+    return static_cast<int>(engine->clipboard.size());
+}
+
+int nc_range_cut(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    std::vector<neuracoust::daw::ClipState> copied;
+    if (!neuracoust::daw::cutClipRange(engine->project, startSeconds, endSeconds, copied) ||
+        copied.empty()) {
+        return 0;
+    }
+    engine->clipboard = std::move(copied);
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Cut range");
+    return static_cast<int>(engine->clipboard.size());
+}
+
+bool nc_range_clear(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::clearClipRange(engine->project, startSeconds, endSeconds)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Clear range");
+    return true;
+}
+
+int nc_range_separate(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    engine->lastResultIds.clear();
+    std::vector<std::string> newClipIds;
+    if (!neuracoust::daw::separateClipRange(engine->project, startSeconds, endSeconds, newClipIds)) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Separate range");
+    engine->lastResultIds = newClipIds;
+    return static_cast<int>(newClipIds.size());
+}
+
+int nc_range_duplicate(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    engine->lastResultIds.clear();
+    std::vector<std::string> newClipIds;
+    if (!neuracoust::daw::duplicateClipRange(engine->project, startSeconds, endSeconds, newClipIds)) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Duplicate range");
+    engine->lastResultIds = newClipIds;
+    return static_cast<int>(newClipIds.size());
+}
+
 int nc_clip_delete_many(NCEngine* engine, const char* const* clipIds, int count) {
     int deleted = 0;
     for (const auto& id : resolveClipIds(engine, clipIds, count)) {

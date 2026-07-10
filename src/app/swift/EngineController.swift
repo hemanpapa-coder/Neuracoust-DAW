@@ -37,6 +37,9 @@ final class EngineController: ObservableObject {
     // UI state the engine knows nothing about.
     @Published var viewTab: ViewTab = .edit
     @Published var loopEnabled = false
+    /// The loop range doubles as the edit range, the way the old UI used it.
+    @Published private(set) var loopStartSeconds: Double = 0
+    @Published private(set) var loopEndSeconds: Double = 4
     @Published var clickEnabled = false
     @Published var snapEnabled = true
     @Published var recording = false
@@ -466,6 +469,8 @@ final class EngineController: ObservableObject {
             Int(nc_project_time_signature_denominator(handle))
         )
         loopEnabled = nc_project_loop_enabled(handle)
+        loopStartSeconds = nc_project_loop_start(handle)
+        loopEndSeconds = nc_project_loop_end(handle)
         reloadTracks()
         reloadClips()
         reloadMonitorState()
@@ -882,6 +887,8 @@ final class EngineController: ObservableObject {
             Int(nc_project_time_signature_denominator(handle))
         )
         loopEnabled = nc_project_loop_enabled(handle)
+        loopStartSeconds = nc_project_loop_start(handle)
+        loopEndSeconds = nc_project_loop_end(handle)
         reloadTracks()
         reloadClips()
         reloadMonitorState()
@@ -985,7 +992,10 @@ final class EngineController: ObservableObject {
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
             visibleStart: visibleStart,
-            visibleDuration: visibleDuration
+            visibleDuration: visibleDuration,
+            rangeStart: loopStartSeconds,
+            rangeEnd: loopEndSeconds,
+            loopEnabled: loopEnabled
         )
     }
 
@@ -1242,6 +1252,51 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         guard let deleted = withClipIds(selection, { nc_clip_delete_many(handle, $0, $1) }), deleted > 0 else { return }
         selectedClipIds = []
+        reloadClips()
+        refreshHistory()
+    }
+
+    // MARK: Range editing
+
+    func setLoopRange(start: Double, end: Double) {
+        guard let handle, nc_project_set_loop_range(handle, start, end) else { return }
+        loopStartSeconds = nc_project_loop_start(handle)
+        loopEndSeconds = nc_project_loop_end(handle)
+    }
+
+    /// True when the range covers any time at all — every range edit needs that.
+    var hasEditRange: Bool { loopEndSeconds > loopStartSeconds }
+
+    func copyRange() {
+        guard let handle, nc_range_copy(handle, loopStartSeconds, loopEndSeconds) > 0 else { return }
+        refreshClipboard()
+    }
+
+    func cutRange() {
+        guard let handle, nc_range_cut(handle, loopStartSeconds, loopEndSeconds) > 0 else { return }
+        selectedClipIds = []
+        reloadClips()
+        refreshClipboard()
+        refreshHistory()
+    }
+
+    func clearRange() {
+        guard let handle, nc_range_clear(handle, loopStartSeconds, loopEndSeconds) else { return }
+        selectedClipIds = []
+        reloadClips()
+        refreshHistory()
+    }
+
+    /// Leaves the range standing as clips of its own, ready to be dragged.
+    func separateRange() {
+        guard let handle, nc_range_separate(handle, loopStartSeconds, loopEndSeconds) > 0 else { return }
+        reloadClips()
+        refreshHistory()
+    }
+
+    func duplicateRange() {
+        guard let handle, nc_range_duplicate(handle, loopStartSeconds, loopEndSeconds) > 0 else { return }
+        selectBatchResult()
         reloadClips()
         refreshHistory()
     }

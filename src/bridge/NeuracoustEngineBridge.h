@@ -348,6 +348,26 @@ int nc_clipboard_clip_count(NCEngine* engine);
 int nc_clip_paste_all(NCEngine* engine, double startSeconds);
 
 // ---------------------------------------------------------------------------
+// Range editing
+//
+// The loop range doubles as the edit range, the way the old UI used it. A range
+// edit slices clips at its edges rather than treating them whole: cutting 2–3 s
+// out of a ten-second clip leaves the rest of it playing.
+// ---------------------------------------------------------------------------
+
+bool nc_project_set_loop_range(NCEngine* engine, double startSeconds, double endSeconds);
+
+/// Copies the slice of every clip the range overlaps onto the clipboard, keeping
+/// each one's offset from the range start. Paste with `nc_clip_paste_all`.
+int nc_range_copy(NCEngine* engine, double startSeconds, double endSeconds);
+int nc_range_cut(NCEngine* engine, double startSeconds, double endSeconds);
+/// Deletes what lies inside the range and leaves a hole; the clipboard is untouched.
+bool nc_range_clear(NCEngine* engine, double startSeconds, double endSeconds);
+/// Splits every clip at both range edges, so the range becomes clips of its own.
+int nc_range_separate(NCEngine* engine, double startSeconds, double endSeconds);
+int nc_range_duplicate(NCEngine* engine, double startSeconds, double endSeconds);
+
+// ---------------------------------------------------------------------------
 // Bounce (offline export)
 //
 // Renders the whole document through the same plan the realtime engine builds.

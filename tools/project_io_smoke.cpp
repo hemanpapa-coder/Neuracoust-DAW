@@ -65,6 +65,27 @@ static double firstAudibleSecond(const std::string& path) {
     return -1;
 }
 
+/// True when nothing louder than the noise floor plays between two times.
+static bool isSilentBetween(const std::string& path, double fromSeconds, double toSeconds) {
+    neuracoust::daw::WavAudioData audio;
+    std::string error;
+    if (!neuracoust::daw::readPcmWavFile(path, audio, error) || audio.channels <= 0) {
+        return false;
+    }
+    // Stay off the edges: a clip boundary carries a click, and a fade needs room.
+    const int64_t first = static_cast<int64_t>((fromSeconds + 0.05) * audio.sampleRate);
+    const int64_t last = std::min(audio.frameCount(),
+                                  static_cast<int64_t>((toSeconds - 0.05) * audio.sampleRate));
+    for (int64_t frame = std::max<int64_t>(0, first); frame < last; ++frame) {
+        for (int channel = 0; channel < audio.channels; ++channel) {
+            if (std::abs(audio.interleavedSamples[frame * audio.channels + channel]) > 0.01f) {
+                return false;
+            }
+        }
+    }
+    return last > first;
+}
+
 /// Where a clip sits now, by id. Batch edits renumber the index order.
 static double startOfClip(NCEngine* engine, const char* clipId) {
     for (int index = 0; index < nc_clip_count(engine); ++index) {
@@ -588,6 +609,55 @@ int main() {
             const double batchAudibleAt = firstAudibleSecond(batchBounce);
             printf("pasted selection: audio starts at %.3f s (expect 6.000)\n", batchAudibleAt);
             check(std::abs(batchAudibleAt - 6.0) < 0.05, "the pasted selection is audible at 6 s");
+        }
+
+        // --- range editing slices clips, it does not delete them whole -------------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a 2 s tone at 0 s");
+            check(nc_clip_count(engine) == 1, "one clip");
+
+            check(nc_project_set_loop_range(engine, 0.5, 1.5), "set the edit range to 0.5–1.5 s");
+            check(std::abs(nc_project_loop_start(engine) - 0.5) < 0.001, "range start reads back");
+            check(std::abs(nc_project_loop_end(engine) - 1.5) < 0.001, "range end reads back");
+            check(!nc_project_set_loop_range(engine, 2.0, 2.0), "an empty range is refused");
+
+            // Copy takes only the slice inside the range, not the whole clip.
+            check(nc_range_copy(engine, 0.5, 1.5) == 1, "the range holds one clip's slice");
+            check(nc_clipboard_clip_count(engine) == 1, "the clipboard took the slice");
+
+            // Clearing leaves the head and the tail of the clip behind.
+            check(nc_range_clear(engine, 0.5, 1.5), "clear the range");
+            check(nc_clip_count(engine) == 2, "the clip became a head and a tail");
+
+            char rangeProject[256] = "/tmp/neuracoust-io-smoke/Range.ndaw";
+            check(nc_project_save_as(engine, rangeProject, error, sizeof(error)), "save the cleared range");
+            neuracoust::daw::ProjectDocument ranged;
+            std::string rangeError;
+            std::string rangeText;
+            if (FILE* file = fopen(rangeProject, "rb")) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) rangeText.append(buffer, read);
+                fclose(file);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(rangeText, rangeProject, ranged, rangeError),
+                  "parse it");
+            const std::string rangeBounce = "/tmp/neuracoust-io-smoke/range.wav";
+            check(neuracoust::daw::bounceProjectToWav(ranged, rangeBounce).ok, "bounce it");
+
+            const double audibleAt = firstAudibleSecond(rangeBounce);
+            printf("cleared range: audio starts at %.3f s, hole 0.5–1.5 s silent = %d\n",
+                   audibleAt, isSilentBetween(rangeBounce, 0.5, 1.5) ? 1 : 0);
+            check(audibleAt >= 0.0 && audibleAt < 0.05, "the head still plays from 0 s");
+            check(isSilentBetween(rangeBounce, 0.5, 1.5), "the cleared range is silent");
+            check(!isSilentBetween(rangeBounce, 1.5, 2.0), "the tail after the range still plays");
+
+            // Separate splits at both edges without removing anything.
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a fresh 2 s tone");
+            check(nc_range_separate(engine, 0.5, 1.5) > 0, "separate the range");
+            check(nc_clip_count(engine) == 3, "head, range, tail");
         }
 
         // --- bounce through the bridge, and time it -------------------------------

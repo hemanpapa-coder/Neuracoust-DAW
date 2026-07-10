@@ -32,6 +32,11 @@ struct TimelineModel: Equatable {
     /// Seconds at the left edge, and seconds across the visible width.
     var visibleStart: Double = 0
     var visibleDuration: Double = 30
+
+    /// The loop range, which is also the range every range edit acts on.
+    var rangeStart: Double = 0
+    var rangeEnd: Double = 0
+    var loopEnabled: Bool = false
 }
 
 /// Timeline surface: ruler, grid, lanes, clips with waveforms, playhead.
@@ -61,6 +66,7 @@ final class TimelineNSView: NSView {
     var onSeek: ((Double) -> Void)?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
+    var onSetRange: ((Double, Double) -> Void)?          // (start, end)
     var onToggleSelect: ((String) -> Void)?              // shift-click
     var onSelectMany: (([String]) -> Void)?              // marquee
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
@@ -81,6 +87,7 @@ final class TimelineNSView: NSView {
         case none
         case seeking
         case marquee(origin: NSPoint, current: NSPoint)
+        case rangingFrom(seconds: Double)
         case moving(clipId: String, grabOffsetSeconds: Double)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
@@ -100,6 +107,8 @@ final class TimelineNSView: NSView {
     private var drag = Drag.none
 
     static let rulerHeight: CGFloat = 30
+    /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
+    static let rangeStripHeight: CGFloat = 12
     static let laneHeight: CGFloat = 78
     static let headerWidth: CGFloat = 150
 
@@ -175,7 +184,13 @@ final class TimelineNSView: NSView {
             return
         }
 
-        // The ruler is for scrubbing, not for grabbing clips.
+        if point.y < Self.rangeStripHeight {
+            let origin = max(0, snapped(seconds(atX: point.x)))
+            drag = .rangingFrom(seconds: origin)
+            return
+        }
+
+        // The rest of the ruler is for scrubbing, not for grabbing clips.
         if point.y < Self.rulerHeight {
             drag = .seeking
             onSeek?(max(0, seconds(atX: point.x)))
@@ -250,6 +265,8 @@ final class TimelineNSView: NSView {
             break
         case .seeking:
             onSeek?(time)
+        case .rangingFrom(let origin):
+            onSetRange?(origin, max(0, snapped(time)))
         case .marquee(let origin, _):
             drag = .marquee(origin: origin, current: point)
             needsDisplay = true
@@ -311,7 +328,8 @@ final class TimelineNSView: NSView {
                                                        height: abs(current.y - origin.y))))
             }
             needsDisplay = true
-        case .none, .seeking:
+        case .none, .seeking, .rangingFrom:
+            // The range is a view of where to edit, not an edit. Nothing to undo.
             break
         }
         drag = .none
@@ -381,6 +399,7 @@ final class TimelineNSView: NSView {
         bounds.fill()
 
         drawRuler(context)
+        drawRange(context)
         drawLaneHeaders(context)
         drawGrid(context)
         drawClips(context)
@@ -390,6 +409,33 @@ final class TimelineNSView: NSView {
         NSRect(x: Self.headerWidth - 1, y: 0, width: 1, height: bounds.height).fill()
 
         drawMarquee(context)
+    }
+
+    /// A band across every lane, plus a solid grip in the ruler strip that set it.
+    private func drawRange(_ context: CGContext) {
+        guard model.rangeEnd > model.rangeStart else { return }
+        let left = max(lanesRect.minX, x(forSeconds: model.rangeStart))
+        let right = min(lanesRect.maxX, x(forSeconds: model.rangeEnd))
+        guard right > left else { return }
+
+        // Green while it is looping, neutral while it is only an edit range.
+        let tint = model.loopEnabled ? NSColor(hex: 0x5cb87a) : NSColor(hex: 0x9a8f80)
+
+        tint.withAlphaComponent(0.08).setFill()
+        NSRect(x: left, y: Self.rulerHeight, width: right - left,
+               height: bounds.height - Self.rulerHeight).fill()
+
+        tint.withAlphaComponent(0.55).setFill()
+        NSRect(x: left, y: 0, width: right - left, height: Self.rangeStripHeight).fill()
+
+        tint.withAlphaComponent(0.5).setStroke()
+        let edges = NSBezierPath()
+        for edge in [left, right] {
+            edges.move(to: NSPoint(x: edge, y: Self.rangeStripHeight))
+            edges.line(to: NSPoint(x: edge, y: bounds.height))
+        }
+        edges.lineWidth = 1
+        edges.stroke()
     }
 
     private func drawMarquee(_ context: CGContext) {
@@ -662,6 +708,7 @@ struct TimelineView: NSViewRepresentable {
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
+    let onSetRange: (Double, Double) -> Void
     let onToggleSelect: (String) -> Void
     let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
@@ -694,6 +741,7 @@ struct TimelineView: NSViewRepresentable {
         view.onSeek = onSeek
         view.onZoom = onZoom
         view.onSelect = onSelect
+        view.onSetRange = onSetRange
         view.onToggleSelect = onToggleSelect
         view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip
