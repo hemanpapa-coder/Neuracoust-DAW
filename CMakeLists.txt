@@ -284,6 +284,8 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MonitorDock.swift
         src/app/swift/ListenRoom.swift
         src/app/swift/ChatPanel.swift
+        src/app/swift/MixerControls.swift
+        src/app/swift/MixerView.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 

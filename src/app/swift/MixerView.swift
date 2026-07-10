@@ -1,0 +1,554 @@
+import SwiftUI
+
+struct MixerView: View {
+    @EnvironmentObject private var engine: EngineController
+
+    /// Section visibility, mirroring the design's toolbar chips.
+    @State private var showIO = true
+    @State private var showInserts = true
+    @State private var showSends = true
+    @State private var showDynamics = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            routingBanner
+
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: Theme.Space.md) {
+                    ForEach(columns, id: \.id) { column in
+                        column.view
+                    }
+                    MasterMeterPanel()
+                }
+                .padding(Theme.Space.xl)
+            }
+            .scrollIndicators(.visible)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Theme.Palette.surface)
+    }
+
+    // MARK: Toolbar
+
+    private var toolbar: some View {
+        HStack(spacing: Theme.Space.xl) {
+            Text("믹서")
+                .font(Theme.Font.ui(11, .bold))
+                .foregroundStyle(Theme.Palette.text)
+            Text("Audio · Instrument · Aux · VCA · Bus Folder · Master")
+                .font(Theme.Font.ui(8.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+
+            Spacer()
+
+            Text("표시")
+                .font(Theme.Font.ui(8.5))
+                .foregroundStyle(Theme.Palette.textLabel)
+
+            HStack(spacing: Theme.Space.sm) {
+                chip("I/O", $showIO)
+                chip("인서트", $showInserts)
+                chip("센드", $showSends)
+                chip("다이나믹", $showDynamics)
+            }
+        }
+        .padding(.horizontal, Theme.Space.xxl)
+        .frame(height: 34)
+        .background(Theme.Palette.ruler)
+    }
+
+    private func chip(_ title: String, _ binding: Binding<Bool>) -> some View {
+        Button { binding.wrappedValue.toggle() } label: {
+            Text(title)
+                .font(Theme.Font.ui(10.5))
+                .foregroundStyle(binding.wrappedValue ? Theme.Palette.accent : Theme.Palette.textMuted)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(binding.wrappedValue ? Color(hex: 0x20282e) : Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(binding.wrappedValue ? Color(hex: 0x2c4657) : Theme.Palette.divider, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Routing banner
+
+    /// The engine reports delay compensation; anything non-zero is worth surfacing.
+    private var routingBanner: some View {
+        Group {
+            if engine.delayCompensationMs > 0.001 {
+                HStack(spacing: Theme.Space.md) {
+                    Text("⚠")
+                    Text("라우팅:")
+                    Text(String(format: "지연 보정 %.1fms 적용됨", engine.delayCompensationMs))
+                        .foregroundStyle(Theme.Palette.yellow)
+                    Text("·").foregroundStyle(Theme.Palette.textFainter)
+                    Text("해결되지 않은 경로 없음")
+                        .foregroundStyle(Color(hex: 0xc9b26a))
+                    Spacer()
+                }
+                .font(Theme.Font.ui(9))
+                .foregroundStyle(Color(hex: 0xe6c04a))
+                .padding(.horizontal, Theme.Space.xxl)
+                .frame(height: 22)
+                .frame(maxWidth: .infinity)
+                .background(Theme.Palette.amber.opacity(0.10))
+            }
+        }
+    }
+
+    // MARK: Columns
+
+    private struct Column: Identifiable {
+        let id: String
+        let view: AnyView
+    }
+
+    /// Folder tracks own the strips whose `folder` names them; everything else
+    /// stands alone. Master goes last, next to the meter panel.
+    private var columns: [Column] {
+        let all = engine.mixerTracks
+        let folders = all.filter { $0.kind == .folder || $0.kind == .bus }
+        let grouped = Set(all.filter { !$0.folder.isEmpty }.map(\.folder))
+
+        var result: [Column] = []
+
+        for folder in folders {
+            let children = all.filter { $0.folder == folder.name }
+            result.append(Column(id: "folder-\(folder.id)", view: AnyView(
+                folderColumn(folder, children: children)
+            )))
+        }
+
+        for track in all where track.folder.isEmpty
+            && track.kind != .master
+            && !(track.kind == .folder || track.kind == .bus)
+            && !grouped.contains(track.name) {
+            result.append(Column(id: "track-\(track.id)", view: AnyView(strip(track))))
+        }
+
+        for track in all where track.kind == .master {
+            result.append(Column(id: "master-\(track.id)", view: AnyView(strip(track))))
+        }
+
+        return result
+    }
+
+    private func folderColumn(_ folder: EngineController.Track,
+                              children: [EngineController.Track]) -> some View {
+        let accent = folder.kind.accent
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("\(folder.kind == .bus ? "BUS FOLDER" : "FOLDER") · \(children.count) CH")
+                .font(Theme.Font.ui(8.5, .bold))
+                .tracking(0.6)
+                .foregroundStyle(accent)
+                .padding(.horizontal, 4)
+
+            HStack(alignment: .top, spacing: 5) {
+                strip(folder)
+                ForEach(children) { child in strip(child, isChild: true) }
+            }
+        }
+        .padding(Theme.Space.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.modal)
+                .fill(accent.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.modal)
+                        .stroke(accent.opacity(0.6), lineWidth: 1.5)
+                )
+        )
+    }
+
+    private func strip(_ track: EngineController.Track, isChild: Bool = false) -> some View {
+        ChannelStrip(
+            track: track,
+            isChild: isChild,
+            showIO: showIO,
+            showInserts: showInserts,
+            showSends: showSends,
+            showDynamics: showDynamics
+        )
+    }
+}
+
+struct ChannelStrip: View {
+    @EnvironmentObject private var engine: EngineController
+
+    let track: EngineController.Track
+    let isChild: Bool
+    let showIO: Bool
+    let showInserts: Bool
+    let showSends: Bool
+    let showDynamics: Bool
+
+    private var accent: Color { track.kind.accent }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            VStack(spacing: Theme.Space.md) {
+                if showInserts && track.kind.showsInserts { slotSection("인서트 A–E", track.inserts, accent) }
+                if showSends && track.kind.showsSends { slotSection("센드 A–E", track.sends, Theme.Palette.teal) }
+                if showIO { ioSection }
+                panSection
+                buttonRow
+                faderSection
+                volumeReadout
+                if showDynamics { dynamicsSelector }
+            }
+            .padding(.horizontal, Theme.Space.md)
+            .padding(.vertical, Theme.Space.lg)
+
+            nameplate
+            channelStats
+        }
+        .frame(width: 122)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                .fill(stripBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                        .stroke(stripBorder, lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+    }
+
+    private var stripBackground: Color {
+        switch track.kind {
+        case .master: return Color(hex: 0x31291a)
+        case .aux, .bus: return Color(hex: 0x20302c)
+        case .vca: return Color(hex: 0x2b2637)
+        case .folder: return Color(hex: 0x262c34)
+        default: return Theme.Palette.ruler
+        }
+    }
+
+    private var stripBorder: Color {
+        switch track.kind {
+        case .master: return Color(hex: 0x5a4526)
+        case .aux, .bus: return Color(hex: 0x2a5148)
+        case .vca: return Color(hex: 0x463a63)
+        case .folder: return accent.opacity(0.53)
+        default: return Theme.Palette.coolDivider
+        }
+    }
+
+    // MARK: Sections
+
+    private var header: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(accent).frame(height: 3)
+            HStack(spacing: Theme.Space.sm) {
+                Circle().fill(accent).frame(width: 5, height: 5)
+                Text(track.kind.label + (isChild ? " · CHILD" : ""))
+                    .font(Theme.Font.mono(7, .semibold))
+                    .tracking(0.5)
+                    .foregroundStyle(Theme.Palette.textDim)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Space.md)
+            .frame(height: 18)
+            .background(accent.opacity(0.13))
+        }
+    }
+
+    private func slotSection(_ title: String, _ items: [String], _ tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            // The design shows five slots whether or not the engine filled them.
+            ForEach(0..<5, id: \.self) { slot in
+                SlotChip(label: slot < items.count ? items[slot] : "", accent: tint)
+            }
+        }
+    }
+
+    private var ioSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("I / O")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            ioPill(track.inputBus.isEmpty ? "—" : track.inputBus)
+            ioPill(track.outputBus.isEmpty ? "—" : track.outputBus)
+        }
+    }
+
+    private func ioPill(_ text: String) -> some View {
+        HStack(spacing: 0) {
+            Text(text)
+                .font(Theme.Font.ui(8.5))
+                .foregroundStyle(Theme.Palette.textDim)
+                .lineLimit(1)
+            Spacer(minLength: 2)
+            Text("▾")
+                .font(Theme.Font.ui(6))
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+        .padding(.horizontal, Theme.Space.md)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                .fill(Theme.Palette.background)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                )
+        )
+    }
+
+    private var panSection: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text("PAN")
+                    .font(Theme.Font.mono(6.5))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                Spacer()
+                Text(track.panLabel)
+                    .font(Theme.Font.mono(7.5, .medium))
+                    .foregroundStyle(Theme.Palette.textDim)
+            }
+            PanSlider(pan: track.pan, accent: accent) { engine.setTrackPan(track.id, $0) }
+        }
+    }
+
+    private var buttonRow: some View {
+        HStack(spacing: 2) {
+            if track.kind.hasArm {
+                stateButton("●", on: track.recordArmed, tint: Theme.Palette.red) {
+                    engine.toggleTrackArm(track.id)
+                }
+                stateButton("I", on: track.inputMonitoring, tint: Theme.Palette.accent) {
+                    engine.toggleTrackInputMonitoring(track.id)
+                }
+            }
+            if track.kind.hasSolo {
+                stateButton("S", on: track.solo, tint: Theme.Palette.yellow) {
+                    engine.toggleTrackSolo(track.id)
+                }
+            }
+            stateButton("M", on: track.muted, tint: Theme.Palette.orange) {
+                engine.toggleTrackMute(track.id)
+            }
+        }
+    }
+
+    private func stateButton(_ title: String,
+                             on: Bool,
+                             tint: Color,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.ui(9, .semibold))
+                .foregroundStyle(on ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                        .fill(on ? tint : Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                                .stroke(Theme.Palette.border, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var faderSection: some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            FaderScaleMarks(capHeight: 26)
+                .frame(height: 132)
+
+            ChannelFader(volumeDb: track.volumeDb, accent: accent) {
+                engine.setTrackVolume(track.id, $0)
+            }
+            .frame(width: 34, height: 132)
+
+            HStack(spacing: 2) {
+                VerticalMeter(peak: track.peakLeft)
+                VerticalMeter(peak: track.peakRight)
+            }
+            .frame(height: 132)
+        }
+    }
+
+    private var volumeReadout: some View {
+        HStack(spacing: 2) {
+            Text(dbLabel(track.volumeDb))
+                .font(Theme.Font.mono(11, .semibold))
+                .foregroundStyle(Theme.Palette.textNumeric)
+            Text("dB")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+    }
+
+    private var dynamicsSelector: some View {
+        HStack(spacing: 2) {
+            Text("dyn")
+                .font(Theme.Font.ui(8))
+                .foregroundStyle(Theme.Palette.textDim)
+            Text("▾")
+                .font(Theme.Font.ui(6))
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                .fill(Theme.Palette.button)
+        )
+    }
+
+    private var nameplate: some View {
+        Text(track.name)
+            .font(Theme.Font.ui(10, .bold))
+            .foregroundStyle(Theme.Palette.text)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Space.md)
+            .background(accent.opacity(0.16))
+    }
+
+    /// peak is real. GR needs per-insert gain reduction the engine does not publish,
+    /// and per-track DSP time is not exposed either — both read "—" rather than lie.
+    private var channelStats: some View {
+        VStack(spacing: 1) {
+            statRow("peak", dbLabel(peakDb))
+            statRow("GR", "—")
+            statRow("DSP", "—")
+        }
+        .padding(.horizontal, Theme.Space.md)
+        .padding(.vertical, Theme.Space.sm)
+        .frame(maxWidth: .infinity)
+        .background(Theme.Palette.stripFooter)
+    }
+
+    private var peakDb: Float {
+        let peak = max(track.peakLeft, track.peakRight)
+        return peak <= 0.00001 ? FaderScale.minDb : Float(peakToDb(peak))
+    }
+
+    private func statRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFainter)
+            Spacer()
+            Text(value)
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(value == "—" ? Theme.Palette.textFainter : Theme.Palette.textLabel)
+        }
+    }
+}
+
+/// Dorrough-style master meter beside the strips.
+struct MasterMeterPanel: View {
+    @EnvironmentObject private var engine: EngineController
+
+    private static let marks = ["0", "4", "8", "12", "16", "20", "24", "30", "40"]
+
+    var body: some View {
+        VStack(spacing: Theme.Space.lg) {
+            HStack(spacing: Theme.Space.md) {
+                Circle().fill(Theme.Palette.amber).frame(width: 5, height: 5)
+                Text("MASTER METER")
+                    .font(Theme.Font.mono(7.5, .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Palette.amber)
+            }
+
+            HStack(alignment: .top, spacing: Theme.Space.md) {
+                VStack(alignment: .trailing, spacing: 0) {
+                    ForEach(Self.marks, id: \.self) { mark in
+                        Text(mark)
+                            .font(Theme.Font.mono(6))
+                            .foregroundStyle(Color(hex: 0x7a6f5f))
+                        if mark != Self.marks.last { Spacer(minLength: 0) }
+                    }
+                }
+                .frame(width: 16, height: 210)
+
+                HStack(spacing: 3) {
+                    VerticalMeter(peak: engine.outputPeakLeft, segments: 30)
+                    VerticalMeter(peak: engine.outputPeakRight, segments: 30)
+                }
+                .frame(height: 210)
+            }
+
+            VStack(spacing: Theme.Space.sm) {
+                labelledRow("PEAK", ["Auto", "Hold", "Reset"], active: 0)
+                labelledRow("OVERS", ["Display", "Reset"], active: 0)
+                labelledRow("MODE", ["Phase", "Sum/Diff", "Left/Right"], active: 2)
+            }
+
+            HStack(spacing: Theme.Space.lg) {
+                led("PHASE", lit: engine.phaseCorrelation < 0, tint: Theme.Palette.yellow)
+                led("OVERS", lit: max(engine.outputPeakLeft, engine.outputPeakRight) >= 0.999,
+                    tint: Theme.Palette.red)
+            }
+        }
+        .padding(Theme.Space.xl)
+        .frame(width: 168)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                .fill(Color(hex: 0x31291a))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                        .stroke(Color(hex: 0x5a4526), lineWidth: 1)
+                )
+        )
+    }
+
+    /// The button rows are display-only until the engine exposes meter modes.
+    private func labelledRow(_ title: String, _ items: [String], active: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(Theme.Font.mono(6))
+                .foregroundStyle(Theme.Palette.textFaint)
+            HStack(spacing: 2) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    Text(item)
+                        .font(Theme.Font.ui(8))
+                        .foregroundStyle(index == active ? Theme.Palette.amber : Theme.Palette.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .fill(index == active ? Color(hex: 0x2a2113) : Theme.Palette.button)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                        .stroke(index == active ? Color(hex: 0x4d3a20) : Theme.Palette.divider,
+                                                lineWidth: 1)
+                                )
+                        )
+                }
+            }
+        }
+    }
+
+    private func led(_ title: String, lit: Bool, tint: Color) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            Circle()
+                .fill(lit ? tint : Theme.Palette.recess)
+                .frame(width: 6, height: 6)
+                .shadow(color: lit ? tint.opacity(0.8) : .clear, radius: 3)
+            Text(title)
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+    }
+}

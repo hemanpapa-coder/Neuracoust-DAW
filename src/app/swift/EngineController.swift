@@ -44,6 +44,78 @@ final class EngineController: ObservableObject {
     @Published private(set) var tempoBpm = 120
     @Published private(set) var timeSignature = (numerator: 4, denominator: 4)
 
+    // MARK: Tracks
+
+    struct Track: Identifiable {
+        let id: Int
+        let name: String
+        let kind: TrackKind
+        let colorHex: String
+        let folder: String
+        var inputBus: String
+        var outputBus: String
+        var volumeDb: Float
+        var pan: Float
+        var muted: Bool
+        var solo: Bool
+        var recordArmed: Bool
+        var inputMonitoring: Bool
+        var inserts: [String]
+        var sends: [String]
+
+        var peakLeft: Float = 0
+        var peakRight: Float = 0
+
+        var panLabel: String {
+            let value = Int((abs(pan) * 100).rounded())
+            if value == 0 { return "C" }
+            return pan < 0 ? "L\(value)" : "R\(value)"
+        }
+    }
+
+    enum TrackKind: String {
+        case audio, instrument, midi, aux, vca, folder, bus, master, monitor
+
+        init(engineType: String) {
+            self = TrackKind(rawValue: engineType) ?? .audio
+        }
+
+        var label: String {
+            switch self {
+            case .audio: return "AUDIO"
+            case .instrument: return "INST"
+            case .midi: return "MIDI"
+            case .aux: return "AUX"
+            case .vca: return "VCA"
+            case .folder: return "FOLDER"
+            case .bus: return "BUS"
+            case .master: return "MASTER"
+            case .monitor: return "MONITOR"
+            }
+        }
+
+        /// Palette from docs/design-tokens.md.
+        var accent: Color {
+            switch self {
+            case .audio, .folder: return Theme.Palette.accent
+            case .instrument: return Theme.Palette.instrument
+            case .midi: return Theme.Palette.instrument
+            case .aux, .bus: return Theme.Palette.teal
+            case .vca: return Theme.Palette.vca
+            case .master: return Theme.Palette.amber
+            case .monitor: return Theme.Palette.purple
+            }
+        }
+
+        var isMasterish: Bool { self == .master || self == .monitor }
+        var hasArm: Bool { self == .audio || self == .instrument || self == .midi }
+        var hasSolo: Bool { !isMasterish }
+        var showsInserts: Bool { self != .vca }
+        var showsSends: Bool { self != .vca && self != .folder && !isMasterish }
+    }
+
+    @Published private(set) var tracks: [Track] = []
+
     // MARK: Monitor station
 
     struct MonitorModule: Identifiable {
@@ -173,6 +245,7 @@ final class EngineController: ObservableObject {
             Int(nc_project_time_signature_denominator(handle))
         )
         loopEnabled = nc_project_loop_enabled(handle)
+        reloadTracks()
         reloadMonitorState()
 
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
@@ -258,6 +331,125 @@ final class EngineController: ObservableObject {
         var tick: Int32 = 0
         nc_project_bars_beats(handle, playheadSeconds, &bar, &beat, &tick)
         return (Int(bar), Int(beat), Int(tick))
+    }
+
+    // MARK: - Tracks
+
+    /// Structure only. Peaks come from the tick; volume/pan/mute follow the setters.
+    private func reloadTracks() {
+        guard let handle else { return }
+
+        tracks = (0..<Int(nc_track_count(handle))).map { index in
+            let i = Int32(index)
+            let insertCount = Int(nc_track_insert_count(handle, i))
+            let sendCount = Int(nc_track_send_count(handle, i))
+
+            return Track(
+                id: index,
+                name: readEngineString { nc_track_name(handle, i, $0, $1) },
+                kind: TrackKind(engineType: readEngineString { nc_track_type(handle, i, $0, $1) }),
+                colorHex: readEngineString { nc_track_color(handle, i, $0, $1) },
+                folder: readEngineString { nc_track_folder(handle, i, $0, $1) },
+                inputBus: readEngineString { nc_track_input_bus(handle, i, $0, $1) },
+                outputBus: readEngineString { nc_track_output_bus(handle, i, $0, $1) },
+                volumeDb: nc_track_volume_db(handle, i),
+                pan: nc_track_pan(handle, i),
+                muted: nc_track_muted(handle, i),
+                solo: nc_track_solo(handle, i),
+                recordArmed: nc_track_record_armed(handle, i),
+                inputMonitoring: nc_track_input_monitoring(handle, i),
+                inserts: (0..<insertCount).map { slot in
+                    readEngineString { nc_track_insert_name(handle, i, Int32(slot), $0, $1) }
+                },
+                sends: (0..<sendCount).map { slot in
+                    readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) }
+                }
+            )
+        }
+    }
+
+    /// Mixer strips show every track; the master meter panel handles the master bus.
+    var mixerTracks: [Track] { tracks.filter { $0.kind != .monitor } }
+
+    func setTrackVolume(_ id: Int, _ db: Float) {
+        guard let handle else { return }
+        nc_track_set_volume_db(handle, Int32(id), db)
+        syncTrack(id)
+    }
+
+    func setTrackPan(_ id: Int, _ pan: Float) {
+        guard let handle else { return }
+        nc_track_set_pan(handle, Int32(id), pan)
+        syncTrack(id)
+    }
+
+    func toggleTrackMute(_ id: Int) {
+        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
+        nc_track_set_muted(handle, Int32(id), !track.muted)
+        syncTrack(id)
+    }
+
+    /// Solo is additive here, the way the engine models it — several tracks can be
+    /// soloed at once, and Master/Monitor refuse it.
+    func toggleTrackSolo(_ id: Int) {
+        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
+        nc_track_set_solo(handle, Int32(id), !track.solo)
+        syncTrack(id)
+    }
+
+    func toggleTrackArm(_ id: Int) {
+        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
+        nc_track_set_record_armed(handle, Int32(id), !track.recordArmed)
+        syncTrack(id)
+    }
+
+    func toggleTrackInputMonitoring(_ id: Int) {
+        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
+        nc_track_set_input_monitoring(handle, Int32(id), !track.inputMonitoring)
+        syncTrack(id)
+    }
+
+    /// Re-read one track's mutable fields from the engine rather than assuming the
+    /// write landed — the edit operations clamp and can refuse.
+    private func syncTrack(_ id: Int) {
+        guard let handle, let position = tracks.firstIndex(where: { $0.id == id }) else { return }
+        let i = Int32(id)
+        tracks[position].volumeDb = nc_track_volume_db(handle, i)
+        tracks[position].pan = nc_track_pan(handle, i)
+        tracks[position].muted = nc_track_muted(handle, i)
+        tracks[position].solo = nc_track_solo(handle, i)
+        tracks[position].recordArmed = nc_track_record_armed(handle, i)
+        tracks[position].inputMonitoring = nc_track_input_monitoring(handle, i)
+    }
+
+    /// Meters arrive keyed by track name, so match on name, not position.
+    private func applyTrackMeters(_ status: NCEngineStatus) {
+        guard !tracks.isEmpty else { return }
+
+        var peaks: [String: (Float, Float)] = [:]
+        let count = min(Int(status.trackMeterCount), Int(NC_MAX_TRACK_METERS))
+        withUnsafePointer(to: status.trackMeterNames) { namesPointer in
+            namesPointer.withMemoryRebound(to: CChar.self,
+                                           capacity: Int(NC_MAX_TRACK_METERS) * Int(NC_NAME_LEN)) { flat in
+                for index in 0..<count {
+                    let name = String(cString: flat.advanced(by: index * Int(NC_NAME_LEN)))
+                    guard !name.isEmpty else { continue }
+                    let left = withUnsafePointer(to: status.trackPeakLeft) {
+                        $0.withMemoryRebound(to: Float.self, capacity: Int(NC_MAX_TRACK_METERS)) { $0[index] }
+                    }
+                    let right = withUnsafePointer(to: status.trackPeakRight) {
+                        $0.withMemoryRebound(to: Float.self, capacity: Int(NC_MAX_TRACK_METERS)) { $0[index] }
+                    }
+                    peaks[name] = (left, right)
+                }
+            }
+        }
+
+        for index in tracks.indices {
+            let (left, right) = peaks[tracks[index].name] ?? (0, 0)
+            tracks[index].peakLeft = left
+            tracks[index].peakRight = right
+        }
     }
 
     // MARK: - Monitor station
@@ -394,6 +586,7 @@ final class EngineController: ObservableObject {
         }
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        applyTrackMeters(status)
         listenRoom?.refresh()
     }
 

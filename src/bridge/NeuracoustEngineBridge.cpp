@@ -137,6 +137,12 @@ bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen) {
         copyText(error, errorLen, status.message.empty() ? "audio device did not open" : status.message);
         return false;
     }
+
+    // start() builds the DSP engine, and only loadProject seeds its per-track meter
+    // arrays. The load above ran before that engine existed, so its meters would stay
+    // empty until the next load. Push the project in once more now that it is there.
+    engine->engine.loadProject(engine->project, loadError);
+
     copyText(error, errorLen, "");
     return true;
 }
@@ -183,11 +189,13 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->remoteDspMonitorActive = s.remoteDspMonitorActive;
     out->remoteDspRoundTripMs = s.remoteDspRoundTripMs;
 
-    const size_t meterCount = std::min({s.trackPeakLeft.size(),
+    const size_t meterCount = std::min({s.trackMeterNames.size(),
+                                        s.trackPeakLeft.size(),
                                         s.trackPeakRight.size(),
                                         static_cast<size_t>(NC_MAX_TRACK_METERS)});
     out->trackMeterCount = static_cast<int>(meterCount);
     for (size_t i = 0; i < meterCount; ++i) {
+        copyText(out->trackMeterNames[i], NC_NAME_LEN, s.trackMeterNames[i]);
         out->trackPeakLeft[i] = s.trackPeakLeft[i];
         out->trackPeakRight[i] = s.trackPeakRight[i];
     }
@@ -317,6 +325,197 @@ double nc_project_loop_start(NCEngine* engine) {
 
 double nc_project_loop_end(NCEngine* engine) {
     return engine != nullptr ? engine->project.loopEndSeconds : 0.0;
+}
+
+// ---------------------------------------------------------------------------
+// Tracks / mixer
+// ---------------------------------------------------------------------------
+
+namespace {
+
+neuracoust::daw::TrackState* trackAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.tracks.size()) {
+        return nullptr;
+    }
+    return &engine->project.tracks[static_cast<size_t>(index)];
+}
+
+/// Volume and pan travel together through updateTrackMix.
+void pushTrackMix(NCEngine* engine, const neuracoust::daw::TrackState& track) {
+    engine->engine.updateTrackMix(track.name, track.volumeDb, track.pan);
+}
+
+/// Arm, input monitoring, mute and solo travel together.
+void pushTrackRealtimeState(NCEngine* engine, const neuracoust::daw::TrackState& track) {
+    engine->engine.updateTrackRealtimeState(track.name,
+                                            track.recordArmed,
+                                            track.inputMonitoring,
+                                            track.muted,
+                                            track.solo);
+}
+
+} // namespace
+
+int nc_track_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->project.tracks.size()) : 0;
+}
+
+void nc_track_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->name : std::string{});
+}
+
+void nc_track_type(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->trackType : std::string{});
+}
+
+void nc_track_color(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->colorHex : std::string{});
+}
+
+void nc_track_folder(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->folderName : std::string{});
+}
+
+void nc_track_input_bus(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->inputBus : std::string{});
+}
+
+void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->outputBus : std::string{});
+}
+
+float nc_track_volume_db(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr ? track->volumeDb : 0.0f;
+}
+
+float nc_track_pan(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr ? track->pan : 0.0f;
+}
+
+bool nc_track_muted(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr && track->muted;
+}
+
+bool nc_track_solo(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr && track->solo;
+}
+
+bool nc_track_record_armed(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr && track->recordArmed;
+}
+
+bool nc_track_input_monitoring(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr && track->inputMonitoring;
+}
+
+void nc_track_set_volume_db(NCEngine* engine, int index, float db) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    neuracoust::daw::setTrackVolumeDb(engine->project, track->name, db);
+    pushTrackMix(engine, *track);
+}
+
+void nc_track_set_pan(NCEngine* engine, int index, float pan) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    neuracoust::daw::setTrackPan(engine->project, track->name, pan);
+    pushTrackMix(engine, *track);
+}
+
+void nc_track_set_muted(NCEngine* engine, int index, bool muted) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    neuracoust::daw::setTrackMuted(engine->project, track->name, muted);
+    pushTrackRealtimeState(engine, *track);
+}
+
+void nc_track_set_solo(NCEngine* engine, int index, bool solo) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    // Additive, not exclusive: setTrackSolo touches only this track's flag, and
+    // refuses outright on protected tracks (Master, Monitor).
+    neuracoust::daw::setTrackSolo(engine->project, track->name, solo);
+    pushTrackRealtimeState(engine, *track);
+}
+
+void nc_track_set_record_armed(NCEngine* engine, int index, bool armed) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    neuracoust::daw::setTrackRecordArmed(engine->project, track->name, armed);
+    pushTrackRealtimeState(engine, *track);
+}
+
+void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return;
+    neuracoust::daw::setTrackInputMonitoring(engine->project, track->name, monitoring);
+    pushTrackRealtimeState(engine, *track);
+}
+
+int nc_track_insert_count(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr ? static_cast<int>(track->inserts.size()) : 0;
+}
+
+void nc_track_insert_name(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    copyText(out, outLen, track->inserts[static_cast<size_t>(slot)].pluginName);
+}
+
+bool nc_track_insert_bypassed(NCEngine* engine, int index, int slot) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        return false;
+    }
+    return track->inserts[static_cast<size_t>(slot)].bypassed;
+}
+
+void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool bypassed) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        return;
+    }
+    track->inserts[static_cast<size_t>(slot)].bypassed = bypassed;
+    engine->engine.updateTrackInsertBypassState(track->name, static_cast<size_t>(slot), bypassed);
+}
+
+int nc_track_send_count(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    return track != nullptr ? static_cast<int>(track->sends.size()) : 0;
+}
+
+void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    copyText(out, outLen, track->sends[static_cast<size_t>(slot)].busName);
+}
+
+float nc_track_send_gain_db(NCEngine* engine, int index, int slot) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) {
+        return 0.0f;
+    }
+    return track->sends[static_cast<size_t>(slot)].gainDb;
 }
 
 // ---------------------------------------------------------------------------

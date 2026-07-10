@@ -14,6 +14,9 @@ extern "C" {
 
 #define NC_MAX_TRACK_METERS 64
 #define NC_TEXT_LEN 128
+#define NC_NAME_LEN 64
+#define NC_MAX_INSERT_SLOTS 10
+#define NC_MAX_SEND_SLOTS 5
 
 // Flat mirror of AudioEngineStatus, trimmed to what the shell and transport
 // need. Grows as panels land — keep it a plain C struct so Swift sees it as a
@@ -54,7 +57,9 @@ typedef struct {
     bool remoteDspMonitorActive;
     double remoteDspRoundTripMs;
 
+    // Meters arrive as parallel arrays keyed by track name, not by track index.
     int trackMeterCount;
+    char trackMeterNames[NC_MAX_TRACK_METERS][NC_NAME_LEN];
     float trackPeakLeft[NC_MAX_TRACK_METERS];
     float trackPeakRight[NC_MAX_TRACK_METERS];
 
@@ -98,6 +103,48 @@ bool nc_project_loop_enabled(NCEngine* engine);
 void nc_project_set_loop_enabled(NCEngine* engine, bool enabled);
 double nc_project_loop_start(NCEngine* engine);
 double nc_project_loop_end(NCEngine* engine);
+
+// ---------------------------------------------------------------------------
+// Tracks / mixer
+//
+// Tracks are addressed by index into ProjectDocument::tracks. Mutations edit the
+// project model and push the change through the engine's fine-grained realtime
+// setters — never a full loadProject.
+// ---------------------------------------------------------------------------
+
+int nc_track_count(NCEngine* engine);
+
+void nc_track_name(NCEngine* engine, int index, char* out, size_t outLen);
+/// "audio", "instrument", "midi", "aux", "vca", "folder", "bus", "master", "monitor"
+void nc_track_type(NCEngine* engine, int index, char* out, size_t outLen);
+/// "#RRGGBB", possibly empty.
+void nc_track_color(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_folder(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_input_bus(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen);
+
+float nc_track_volume_db(NCEngine* engine, int index);
+float nc_track_pan(NCEngine* engine, int index);
+bool nc_track_muted(NCEngine* engine, int index);
+bool nc_track_solo(NCEngine* engine, int index);
+bool nc_track_record_armed(NCEngine* engine, int index);
+bool nc_track_input_monitoring(NCEngine* engine, int index);
+
+void nc_track_set_volume_db(NCEngine* engine, int index, float db);
+void nc_track_set_pan(NCEngine* engine, int index, float pan);
+void nc_track_set_muted(NCEngine* engine, int index, bool muted);
+void nc_track_set_solo(NCEngine* engine, int index, bool solo);
+void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
+void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
+
+int nc_track_insert_count(NCEngine* engine, int index);
+void nc_track_insert_name(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+bool nc_track_insert_bypassed(NCEngine* engine, int index, int slot);
+void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool bypassed);
+
+int nc_track_send_count(NCEngine* engine, int index);
+void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
+float nc_track_send_gain_db(NCEngine* engine, int index, int slot);
 
 // ---------------------------------------------------------------------------
 // Monitor station

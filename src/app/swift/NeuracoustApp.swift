@@ -43,7 +43,7 @@ struct RootView: View {
                 Group {
                     switch engine.viewTab {
                     case .edit: EditViewPlaceholder()
-                    case .mix: MixViewPlaceholder()
+                    case .mix: MixerView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -73,15 +73,6 @@ private struct EditViewPlaceholder: View {
                 Theme.Palette.surface
                 PlaceholderLabel("Edit — 타임라인 (AppKit/Metal 예정)")
             }
-        }
-    }
-}
-
-private struct MixViewPlaceholder: View {
-    var body: some View {
-        ZStack {
-            Theme.Palette.surface
-            PlaceholderLabel("Mix — 채널 스트립 (예정)")
         }
     }
 }

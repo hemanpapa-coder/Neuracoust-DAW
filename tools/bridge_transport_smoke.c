@@ -39,8 +39,12 @@ int main(void) {
     usleep(600 * 1000);
 
     nc_engine_status(engine, &status);
-    printf("after 0.6s: transportRunning=%d  playbackSeconds=%.4f\n",
-           status.transportRunning, status.playbackSeconds);
+    printf("after 0.6s: transportRunning=%d  playbackSeconds=%.4f  trackMeters=%d\n",
+           status.transportRunning, status.playbackSeconds, status.trackMeterCount);
+    for (int i = 0; i < status.trackMeterCount && i < 8; ++i) {
+        printf("   meter[%d] %-12s L=%.4f R=%.4f\n",
+               i, status.trackMeterNames[i], status.trackPeakLeft[i], status.trackPeakRight[i]);
+    }
 
     int failures = 0;
     if (!status.transportRunning) {
@@ -49,6 +53,16 @@ int main(void) {
     }
     if (status.playbackSeconds < 0.3) {
         fprintf(stderr, "FAIL: playhead did not advance (%.4f s)\n", status.playbackSeconds);
+        failures++;
+    }
+    // Only loadProject seeds the DSP engine's meter arrays, and the DSP engine does
+    // not exist until start(). Master and Monitor are excluded by the engine.
+    if (status.trackMeterCount != 2) {
+        fprintf(stderr, "FAIL: expected 2 track meters (Audio 1, Audio 2), got %d\n",
+                status.trackMeterCount);
+        failures++;
+    } else if (strcmp(status.trackMeterNames[0], "Audio 1") != 0) {
+        fprintf(stderr, "FAIL: meter[0] is '%s', expected 'Audio 1'\n", status.trackMeterNames[0]);
         failures++;
     }
 
@@ -69,6 +83,52 @@ int main(void) {
         fprintf(stderr, "FAIL: empty timecode\n");
         failures++;
     }
+
+    // ---- tracks / mixer ----
+    const int trackCount = nc_track_count(engine);
+    printf("tracks: %d\n", trackCount);
+    if (trackCount < 3) {
+        fprintf(stderr, "FAIL: default project should carry audio + master + monitor tracks\n");
+        failures++;
+    }
+
+    char trackName[128] = {0};
+    nc_track_name(engine, 0, trackName, sizeof(trackName));
+    if (strcmp(trackName, "Audio 1") != 0) {
+        fprintf(stderr, "FAIL: track 0 is '%s', expected 'Audio 1'\n", trackName);
+        failures++;
+    }
+
+    nc_track_set_volume_db(engine, 0, -12.0f);
+    if (nc_track_volume_db(engine, 0) < -12.5f || nc_track_volume_db(engine, 0) > -11.5f) {
+        fprintf(stderr, "FAIL: track volume readback %.2f, expected -12\n", nc_track_volume_db(engine, 0));
+        failures++;
+    }
+    nc_track_set_volume_db(engine, 0, 0.0f);
+
+    nc_track_set_pan(engine, 0, 0.5f);
+    if (nc_track_pan(engine, 0) < 0.45f || nc_track_pan(engine, 0) > 0.55f) {
+        fprintf(stderr, "FAIL: track pan readback %.2f, expected 0.5\n", nc_track_pan(engine, 0));
+        failures++;
+    }
+    nc_track_set_pan(engine, 0, 0.0f);
+
+    nc_track_set_muted(engine, 0, true);
+    if (!nc_track_muted(engine, 0)) {
+        fprintf(stderr, "FAIL: track mute did not latch\n");
+        failures++;
+    }
+    nc_track_set_muted(engine, 0, false);
+
+    // Solo is additive, not exclusive: soloing two tracks leaves both soloed.
+    nc_track_set_solo(engine, 0, true);
+    nc_track_set_solo(engine, 1, true);
+    if (!nc_track_solo(engine, 0) || !nc_track_solo(engine, 1)) {
+        fprintf(stderr, "FAIL: solo should be additive across tracks\n");
+        failures++;
+    }
+    nc_track_set_solo(engine, 0, false);
+    nc_track_set_solo(engine, 1, false);
 
     // ---- monitor station ----
     const int moduleCount = nc_monitor_module_count(engine);
