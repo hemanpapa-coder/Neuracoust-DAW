@@ -3,27 +3,63 @@
 This project builds a **new UI** for the Neuracoust DAW while **reusing the existing, battle-tested C++ audio engine** from the sibling project at `/Volumes/Program Dev/DAW`.
 
 ## Goal
-Reproduce the Claude Design look (`Neuracoust DAW.dc.html`, made in Claude Design — an HTML/CSS visual spec) as a **native macOS app**, driven by the **same realtime audio engine** we already built. Keep engine and UI as separate layers so both can keep evolving independently.
+Reproduce the Claude Design look as a **native macOS app**, driven by the **same realtime audio engine** we already built. Keep engine and UI as separate layers so both can keep evolving independently.
 
-## Architecture — Plan A (native app, reuse engine)
-- **Reuse as-is (do NOT rewrite):** the audio/engine layer from `../DAW/src`:
-  - `src/audio` — realtime engine (CoreAudio, render graph, DSP, jitter/dropout handling)
-  - `src/plugins` — VST3 hosting incl. the out-of-process realtime bridge + editor host
-  - `src/project` — project model, playlists, edit operations
-  - `src/core` — DawState and core types
-  - Plus the build wiring (`CMakeLists.txt`) and the VST3 SDK references those need.
-- **Rebuild fresh:** only the UI layer (equivalent of `../DAW/src/app/macos/DawWindowController.mm`), matching the Claude design.
-- **Design-token/theme layer FIRST:** centralize colors, spacing, radii, typography as native variables so future design changes = swap tokens, not rewrite components. Build the UI as reusable component views (transport, track lane, mixer strip, inspector, monitor, meters, knobs, faders, timeline/waveform).
-- Consider **SwiftUI** for the new UI (easier to match modern designs; interop with the C++ engine and any AppKit bits via NSHostingView). AppKit is also fine. Decide with the user.
+## Build
 
-## The engine is proven — inherit these hard-won facts (see `../DAW` git history + its memory)
-- **VST3 realtime hosting is out-of-process** over shared memory (crash-prone/blocked plugins run live via a worker). Editor GUIs run in a separate editor-host process.
-- **Playlist model is the render source of truth**: playback renders from `trackPlaylists` placements, NOT the flat `project.clips` list. Copy/paste must reconcile into placements or clips play silent.
-- **Waves SoundGrid output delivers CoreAudio callbacks in bursts** → wake-jitter reads ~1 buffer period even idle; severity must be based on render headroom + a learned baseline, not raw jitter.
-- **Every edit/Play must not rebuild the whole graph**: cache decoded WAVs, reuse still-valid plug-in workers by signature, don't tear down chains on load. Realtime render must not block long on the engine mutex (priority inversion → dropouts).
-- Thread priority hierarchy: audio render = RT time-constraint > worker processing (USER_INITIATED) > worker load + editor observer (UTILITY).
+```sh
+# Engine, tools, tests (no Swift needed)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j8
+(cd build && ctest --output-on-failure)
 
-## First steps for the new session
-1. Confirm with the user: SwiftUI vs AppKit for the new UI, and get the `Neuracoust DAW.dc.html` (export the file here, paste it, or connect the Claude Design MCP) so you can map it component-by-component.
-2. Copy the reusable engine dirs from `../DAW` into this project and get a minimal build (engine-only) compiling.
-3. Stand up the design-token layer + a shell window, then implement panels one at a time against the engine API.
+# The SwiftUI app. Swift needs a Swift-capable generator; Ninja is not installed here.
+cmake -S . -B build-xcode -G Xcode
+cmake --build build-xcode --config Debug --target NeuracoustDAW
+open "build-xcode/Debug/Neuracoust DAW.app"
+```
+
+Three things this tree forces, all of which cost time to rediscover:
+- The source path contains a space (`/Volumes/Program Dev`). The bridging header and header search paths must go through Xcode build settings (`XCODE_ATTRIBUTE_*`), not raw `-import-objc-header` / `-I` flags, or the arguments get split at the space.
+- A Swift file holding `@main` must not be named `main.swift`.
+- The VST3 SDK is **referenced in place** at `../DAW/third_party/vst3sdk`, not copied — that tree also carries `depot_tools` and `libwebrtc-src` (~460k files). **DW therefore depends on the DAW folder existing.** WebRTC is off by default and not needed.
+
+## Layers
+
+| Layer | Path | Status |
+|---|---|---|
+| Engine (do NOT rewrite) | `src/{audio,core,project,plugins,license,nuclust,ai,ui}` | Imported verbatim, builds standalone |
+| Editor hosts (engine spawns these) | `src/app/macos/*EditorHostMain.mm` | Kept verbatim |
+| C facade for Swift | `src/bridge/NeuracoustEngineBridge.{h,cpp}` | Transport + status; grows per panel |
+| Design tokens | `src/app/swift/Theme.swift` | Complete — from `docs/design-tokens.md` |
+| SwiftUI shell | `src/app/swift/{NeuracoustApp,TransportBar,EngineController}.swift` | Titlebar, transport, status strip, Edit/Mix tabs, monitor dock stub |
+
+**SwiftUI shell + AppKit/Metal embeds** is the agreed architecture. VST3 plugin editors must embed a native window in an `NSView` using the Steinberg SDK directly, so pure SwiftUI is impossible; the timeline already has a Metal backdrop and a 3,000-line `drawRect`. Everything else (transport, inspector, mixer layout, panels, dialogs) is far faster to build in SwiftUI.
+
+## Two documents that must not be lost
+
+- **`docs/legacy-ui-contract.md`** — what the discarded 50,602-line `DawWindowController.mm` did: the engine API it consumed, its threading rules, every panel and keyboard shortcut, and the non-view logic that exists nowhere else.
+- **`docs/design-tokens.md`** — exact colors, spacing, radii, typography, gradients and shadows from `design/Neuracoust DAW v2.dc.html`, plus the mapping from the old `nc*()` theme helpers.
+
+## Engine contract — the parts that bite
+
+- **The engine pushes nothing.** No callbacks, no KVO, no notifications. It exposes one `AudioEngineStatus status()` snapshot; the UI polls it at ~30 Hz. Predict the playhead from the wall clock between polls and resync only past ~0.18 s of drift, or it steps visibly.
+- **All engine calls are main-thread-only.** Never hold a lock while calling in.
+- **Never rebuild the whole graph on an edit.** Try `updateProject()` first, fall back to `loadProject()` only if it returns false.
+- **Playlist model is the render source of truth**: playback renders from `trackPlaylists` placements, not the flat `project.clips` list. (This reconciliation already lives in the engine — `copyPlaylistPlacementToActivePlaylist` in `EditOperations.cpp`.)
+- **VST3 realtime hosting is out-of-process** over shared memory; editor GUIs run in a separate editor-host process.
+- **Waves SoundGrid delivers CoreAudio callbacks in bursts** → wake jitter reads ~1 buffer period even when idle. Judge severity by render headroom against a learned baseline, never by raw jitter.
+- Thread priority hierarchy: audio render (RT time-constraint) > worker processing (USER_INITIATED) > worker load + editor observer (UTILITY).
+
+## Not yet ported out of the old UI — do this before anyone deletes it
+
+These exist **only** in `../DAW/src/app/macos/DawWindowController.mm`:
+1. Undo/redo stack + dirty tracking + the autosave trigger (`setProjectDirty:`)
+2. DSP execution-mode policy (native / internal / remote_internal / external)
+3. Plugin editor process lifecycle + the parameter bridge
+
+## Open design questions
+
+The design has no home for several existing features: MIDI piano roll, media pool, AI assistant, diagnostic log, automation lanes, marker/chord/lyric lanes, the 4-format ruler, the edit-mode pad, the routing matrix, and the settings dialogs. Decision deferred: build the new shell first, place these once it runs.
+
+The design also *changes* structure — the mixer moves from a floating `NSPanel` to an Edit/Mix tab view, and the monitor station from a floating panel to a fixed 392px right dock.
