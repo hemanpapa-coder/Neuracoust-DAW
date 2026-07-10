@@ -26,6 +26,8 @@ final class ListenRoomController: ObservableObject {
     @Published private(set) var transportMode = ""
     @Published private(set) var statusMessage = ""
     @Published private(set) var shareUrl = ""
+    /// The public invite link (external page + token) — what Copy and QR hand out.
+    @Published private(set) var externalShareUrl = ""
     @Published private(set) var quality = "opus_high"
     @Published private(set) var latencyMode = "stable"
     @Published private(set) var latencyTargetMs = 0
@@ -241,7 +243,9 @@ final class ListenRoomController: ObservableObject {
 
     func copyShareLink() {
         guard let handle = engine.rawHandle else { return }
-        let link = engine.readEngineString(capacity: 256) { nc_listen_public_share_url(handle, $0, $1) }
+        // The external page link is the shareable one; the LAN address only works on
+        // the same network.
+        let link = engine.readEngineString(capacity: 512) { nc_listen_external_share_url(handle, $0, $1) }
         guard !link.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -363,6 +367,7 @@ final class ListenRoomController: ObservableObject {
         shareUrl = withUnsafePointer(to: status.shareUrl) {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
+        externalShareUrl = engine.readEngineString(capacity: 512) { nc_listen_external_share_url(handle, $0, $1) }
         latencyTargetMs = Int(status.latencyTargetMs)
         packetsSent = status.packetsSent
         quality = engine.readEngineString { nc_listen_quality(handle, $0, $1) }

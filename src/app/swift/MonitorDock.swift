@@ -426,7 +426,7 @@ struct MonitorDock: View {
                 actionButton("⧉ 링크", enabled: listen.enabled) { listen.copyShareLink() }
                 actionButton("⊞ QR", enabled: listen.enabled) { listen.qrOpen.toggle() }
                     .popover(isPresented: $listen.qrOpen, arrowEdge: .bottom) {
-                        ListenInvitePanel(shareURL: listen.shareUrl) { listen.copyShareLink() }
+                        ListenInvitePanel(shareURL: listen.externalShareUrl) { listen.copyShareLink() }
                     }
             }
 

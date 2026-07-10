@@ -49,7 +49,12 @@ struct ListenInvitePanel: View {
         if host.hasPrefix("169.254.") {
             return "링크-로컬 주소입니다. 같은 케이블/직결 링크의 기기만 접속됩니다."
         }
-        return "같은 네트워크(\(host))의 기기에서 스캔하세요."
+        // A LAN address versus a public hostname reads differently.
+        let isLan = host.hasPrefix("192.168.") || host.hasPrefix("10.") || host.hasPrefix("172.")
+        if isLan {
+            return "같은 네트워크(\(host))의 기기에서 스캔하세요."
+        }
+        return "외부 주소(\(host)) — 인터넷의 어디서든 접속됩니다."
     }
 
     var body: some View {

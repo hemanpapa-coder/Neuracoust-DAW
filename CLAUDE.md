@@ -319,9 +319,17 @@ The engine encodes and pushes audio (`ListenRoomSender`); it does not run the re
   lists first (often a disconnected `169.254.` link-local one). Falls back to any
   private-range interface, then link-local, then loopback. An explicit `relayHost`
   (a tunnel hostname) is used as-is.
+- **Copy and QR hand out the external invite link, not the LAN one.** The LAN URL
+  (`nc_listen_public_share_url`, a 192.168 address) only works on the same network;
+  the shareable link is the external page plus the token, built by
+  `nc_listen_external_share_url` exactly as the old UI did: a base URL — env
+  `NEURACOUST_LISTEN_EXTERNAL_URL`, then `~/.neuracoust/listen_external_url`, then the
+  `https://neuracoust.tplinkdns.com/listen/index.html?external=1` default — with
+  `external=1&profile=external&session&quality&latency&transport&connect&token`
+  appended (reserved keys the base already carries are dropped so they never double).
 - The QR invite is `CIQRCodeGenerator` (Core Image, no dependency), popped over from
-  the Listen Room's QR button. It encodes the same share URL, so it is only as
-  reachable as that URL — which is why the host fix above matters more than the QR.
+  the Listen Room's QR button. It encodes the external link, so it reaches a listener
+  anywhere the DDNS host and the router's port-forward do.
 
 ## Open design questions
 

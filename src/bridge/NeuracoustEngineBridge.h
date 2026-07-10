@@ -746,7 +746,14 @@ void nc_listen_set_latency_mode(NCEngine* engine, const char* mode);
 
 /// Share link for the local relay, and the token-bearing invite link.
 void nc_listen_share_url(NCEngine* engine, char* out, size_t outLen);
+/// The LAN address a listener on the same network reaches the relay at.
 void nc_listen_public_share_url(NCEngine* engine, char* out, size_t outLen);
+/// The public invite link a listener anywhere reaches through the external page, the
+/// way the old UI built it: a base URL (env NEURACOUST_LISTEN_EXTERNAL_URL, then
+/// ~/.neuracoust/listen_external_url, then the tplinkdns default) with
+/// external/profile/session/quality/latency/transport/connect/token appended. This is
+/// what Copy and QR hand out — the LAN address only works on the same network.
+void nc_listen_external_share_url(NCEngine* engine, char* out, size_t outLen);
 
 #ifdef __cplusplus
 } // extern "C"

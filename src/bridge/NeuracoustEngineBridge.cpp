@@ -19,6 +19,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <set>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -3187,4 +3189,84 @@ void nc_listen_share_url(NCEngine* engine, char* out, size_t outLen) {
 void nc_listen_public_share_url(NCEngine* engine, char* out, size_t outLen) {
     if (engine == nullptr) { copyText(out, outLen, ""); return; }
     copyText(out, outLen, neuracoust::daw::listenRoomPublicShareUrl(engine->listenSettings()));
+}
+
+namespace {
+
+std::string trimmedText(std::string value) {
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+/// Where the external listener page lives. Matches the old UI: an env override, then
+/// a dotfile, then the tplinkdns default. The base may already carry query items.
+std::string externalListenPageBase() {
+    if (const char* env = std::getenv("NEURACOUST_LISTEN_EXTERNAL_URL")) {
+        const std::string value = trimmedText(env);
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    if (const char* home = std::getenv("HOME")) {
+        std::ifstream file(std::string(home) + "/.neuracoust/listen_external_url");
+        if (file) {
+            std::string value((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+            value = trimmedText(value);
+            if (!value.empty()) {
+                return value;
+            }
+        }
+    }
+    return "https://neuracoust.tplinkdns.com/listen/index.html?external=1";
+}
+
+} // namespace
+
+void nc_listen_external_share_url(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const auto settings = engine->listenSettings();
+
+    const std::string base = externalListenPageBase();
+    // Split the base into its path and any query it already carries.
+    const auto queryPos = base.find('?');
+    const std::string path = base.substr(0, queryPos);
+
+    // Keep any non-reserved query items the base URL brought (e.g. a router hint),
+    // drop the ones we set ourselves so they are never duplicated.
+    static const std::set<std::string> reserved = {
+        "external", "profile", "session", "quality", "latency", "transport", "connect", "token"};
+    std::string kept;
+    if (queryPos != std::string::npos) {
+        std::string query = base.substr(queryPos + 1);
+        size_t start = 0;
+        while (start <= query.size()) {
+            const size_t amp = query.find('&', start);
+            const std::string pair = query.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+            if (!pair.empty()) {
+                const std::string name = pair.substr(0, pair.find('='));
+                if (reserved.find(name) == reserved.end()) {
+                    kept += (kept.empty() ? "" : "&") + pair;
+                }
+            }
+            if (amp == std::string::npos) break;
+            start = amp + 1;
+        }
+    }
+
+    const std::string transport = settings.transportMode.empty() ? "direct_fallback" : settings.transportMode;
+    const std::string connect = settings.transportMode == "relay" ? "server" : "direct";
+    std::string query = kept.empty() ? "" : kept + "&";
+    query += "external=1&profile=external";
+    query += "&session=" + (settings.sessionName.empty() ? std::string("mix") : settings.sessionName);
+    query += "&quality=" + (settings.quality.empty() ? std::string("opus_high") : settings.quality);
+    query += "&latency=" + (settings.latencyMode.empty() ? std::string("stable") : settings.latencyMode);
+    query += "&transport=" + transport;
+    query += "&connect=" + connect;
+    if (!settings.accessToken.empty()) {
+        query += "&token=" + settings.accessToken;
+    }
+    copyText(out, outLen, path + "?" + query);
 }
