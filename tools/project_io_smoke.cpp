@@ -3,6 +3,7 @@
 
 #include "bridge/NeuracoustEngineBridge.h"
 #include "audio/OfflineBounce.h"
+#include "audio/ProjectAudioRenderer.h"
 #include "audio/WavFile.h"
 #include "project/ProjectDocument.h"
 
@@ -946,6 +947,47 @@ int main() {
                       "out-of-range values are clamped");
                 check(!nc_track_set_instrument_vst3_parameter(engine, 0, 1, "None", 0.5),
                       "a track with no instrument refuses");
+
+                // Velocity is drawn as brightness, which proves nothing. Check that the
+                // value reaches the events the renderer hands the instrument.
+                check(nc_midi_note_velocity(engine, regionId, 0) == 100, "the note kept its velocity");
+                check(topUndoStep(engine) == "Add note", "adding it was the last step");
+                check(nc_midi_note_set_velocity(engine, regionId, noteId, 20), "soften it");
+                check(nc_midi_note_velocity(engine, regionId, 0) == 20, "the new velocity stuck");
+                check(topUndoStep(engine) == "Add note", "a velocity drag records nothing on its own");
+
+                {
+                    neuracoust::daw::ProjectAudioRenderPlan velocityPlan;
+                    std::string planError;
+                    char velocityTrack[128] = {0};
+                    nc_track_name(engine, instrumentTrack, velocityTrack, sizeof(velocityTrack));
+                    // Rebuild the plan the way the renderer does, and read the events out.
+                    neuracoust::daw::ProjectDocument document;
+                    std::string documentError;
+                    char velocityProject[256] = "/tmp/neuracoust-io-smoke/Velocity.ndaw";
+                    check(nc_project_save_as(engine, velocityProject, error, sizeof(error)), "save it");
+                    std::string documentText;
+                    if (FILE* file = fopen(velocityProject, "rb")) {
+                        char buffer[8192];
+                        size_t read = 0;
+                        while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) documentText.append(buffer, read);
+                        fclose(file);
+                    }
+                    check(neuracoust::daw::deserializeProjectForPath(documentText, velocityProject,
+                                                                     document, documentError),
+                          "parse it");
+                    check(neuracoust::daw::makeProjectAudioRenderPlan(document, velocityPlan, planError),
+                          "plan it");
+                    const auto events = neuracoust::daw::collectMidiEventsForRenderBlock(
+                        velocityPlan, velocityTrack, 0,
+                        static_cast<int64_t>(10.0 * velocityPlan.sampleRate));
+                    int noteOnVelocity = -1;
+                    for (const auto& event : events) {
+                        if (event.noteOn) noteOnVelocity = event.velocity;
+                    }
+                    printf("midi velocity: the note-on event carries %d\n", noteOnVelocity);
+                    check(noteOnVelocity == 20, "the renderer's note-on carries the new velocity");
+                }
 
                 check(nc_midi_note_delete(engine, regionId, noteId), "delete the note");
                 check(nc_midi_note_count(engine, regionId) == 0, "no notes left");

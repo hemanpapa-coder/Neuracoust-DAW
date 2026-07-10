@@ -252,6 +252,103 @@ final class PianoRollNSView: NSView {
     }
 }
 
+/// The velocity lane, pinned under the roll rather than scrolling with the keyboard.
+/// It shares the roll's left gutter and beat mapping so a bar stands under its note.
+final class VelocityLaneNSView: NSView {
+    var model = PianoRollModel() {
+        didSet {
+            guard model != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    var onSetVelocity: ((String, Int) -> Void)?
+    var onCommitEdit: ((String) -> Void)?
+
+    private static let gutterWidth: CGFloat = 44
+    private var draggingNoteId: String?
+
+    override var isFlipped: Bool { true }
+    required init?(coder: NSCoder) { nil }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    private var laneRect: NSRect {
+        NSRect(x: Self.gutterWidth, y: 0,
+               width: max(0, bounds.width - Self.gutterWidth), height: bounds.height)
+    }
+
+    private func x(forBeat beat: Double) -> CGFloat {
+        laneRect.minX + CGFloat(beat / max(0.001, model.lengthBeats)) * laneRect.width
+    }
+
+    /// Notes that start on the same beat stack into one bar; the topmost one wins.
+    private func note(at point: NSPoint) -> PianoRollModel.Note? {
+        model.notes.reversed().first { abs(x(forBeat: $0.startBeats) - point.x) <= 5 }
+    }
+
+    private func velocity(atY pointY: CGFloat) -> Int {
+        let fraction = (laneRect.maxY - 4 - pointY) / max(1, laneRect.height - 8)
+        return max(1, min(127, Int((fraction * 127).rounded())))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let hit = note(at: point) else { return }
+        draggingNoteId = hit.id
+        onSetVelocity?(hit.id, velocity(atY: point.y))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let id = draggingNoteId else { return }
+        onSetVelocity?(id, velocity(atY: convert(event.locationInWindow, from: nil).y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if draggingNoteId != nil { onCommitEdit?("Note velocity") }
+        draggingNoteId = nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(hex: 0x191512).setFill()
+        bounds.fill()
+        NSColor(hex: 0x0b0806).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+
+        ("VEL" as NSString).draw(
+            at: NSPoint(x: 6, y: 5),
+            withAttributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 7, weight: .bold),
+                .foregroundColor: NSColor(hex: 0x6b6156),
+            ])
+
+        for note in model.notes {
+            let barX = x(forBeat: note.startBeats)
+            let top = laneRect.maxY - 4 - CGFloat(note.velocity) / 127.0 * (laneRect.height - 8)
+            NSColor(hex: 0x9b7fd4).setFill()
+            NSRect(x: barX - 1.5, y: top, width: 3, height: laneRect.maxY - 4 - top).fill()
+            NSColor(hex: 0xd8c8ff).setFill()
+            NSRect(x: barX - 3, y: top - 1, width: 6, height: 2).fill()
+        }
+    }
+}
+
+struct VelocityLane: NSViewRepresentable {
+    let model: PianoRollModel
+    let onSetVelocity: (String, Int) -> Void
+    let onCommitEdit: (String) -> Void
+
+    func makeNSView(context: Context) -> VelocityLaneNSView { VelocityLaneNSView(frame: .zero) }
+
+    func updateNSView(_ lane: VelocityLaneNSView, context: Context) {
+        lane.model = model
+        lane.onSetVelocity = onSetVelocity
+        lane.onCommitEdit = onCommitEdit
+    }
+}
+
 struct PianoRoll: NSViewRepresentable {
     let model: PianoRollModel
     let onAddNote: (Int, Double, Double) -> Void
@@ -299,6 +396,13 @@ struct PianoRollPanel: View {
                     onDeleteNote: { engine.deleteNote($0) },
                     onCommitEdit: { engine.commitClipGesture($0) }
                 )
+
+                VelocityLane(
+                    model: model(for: region),
+                    onSetVelocity: { engine.setNoteVelocity($0, $1) },
+                    onCommitEdit: { engine.commitClipGesture($0) }
+                )
+                .frame(height: 44)
             }
             .frame(height: 260)
             .background(Theme.Palette.panel)
@@ -316,7 +420,7 @@ struct PianoRollPanel: View {
 
             Spacer()
 
-            Text("클릭 = 노트 추가 · 더블클릭 = 삭제 · 오른쪽 끝 = 길이")
+            Text("클릭 = 노트 추가 · 더블클릭 = 삭제 · 오른쪽 끝 = 길이 · VEL 레인 = 세기")
                 .font(Theme.Font.mono(8))
                 .foregroundStyle(Theme.Palette.textFainter)
 

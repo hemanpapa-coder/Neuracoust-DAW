@@ -152,6 +152,11 @@ piano roll under the timeline. In the roll a click adds a note, a drag moves it,
 right edge resizes it, a double-click deletes it. A click that lands just short of an
 existing note does **not** stack a second note on top of it.
 
+The velocity lane is pinned under the roll rather than scrolling with the keyboard —
+inside the scroll view it sat 730 pt down and was never on screen. Dragging a bar is
+continuous, like a fader: `nc_midi_note_set_velocity` records nothing and the view
+commits the gesture.
+
 An instrument dropped on an instrument track from the plug-in browser fills its
 instrument slot rather than an insert, and clicking its chip opens its editor — the
 editor host addresses the instrument slot as insert index `-1`.

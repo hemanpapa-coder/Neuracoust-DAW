@@ -1555,6 +1555,14 @@ final class EngineController: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Continuous: dragging the velocity lane streams these.
+    func setNoteVelocity(_ noteId: String, _ velocity: Int) {
+        guard let handle, let regionId = editingRegionId else { return }
+        let clamped = max(1, min(127, velocity))
+        guard nc_midi_note_set_velocity(handle, regionId, noteId, Int32(clamped)) else { return }
+        objectWillChange.send()
+    }
+
     func deleteNote(_ noteId: String) {
         guard let handle, let regionId = editingRegionId,
               nc_midi_note_delete(handle, regionId, noteId) else { return }

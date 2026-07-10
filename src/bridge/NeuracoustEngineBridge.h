@@ -437,6 +437,7 @@ bool nc_midi_note_add(NCEngine* engine, const char* regionId, int pitch, double 
 bool nc_midi_note_move(NCEngine* engine, const char* regionId, const char* noteId,
                        int pitch, double startBeats);
 bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* noteId, double durationBeats);
+/// Continuous: records nothing. Commit with nc_history_record_gesture.
 bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity);
 bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId);
 

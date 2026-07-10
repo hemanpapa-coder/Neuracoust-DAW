@@ -1769,9 +1769,10 @@ bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* not
 
 bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity) {
     if (engine == nullptr || regionId == nullptr || noteId == nullptr) return false;
+    // Continuous: a velocity drag streams these, so it records nothing on its own.
     return applyMidiEdit(engine,
                          neuracoust::daw::setMidiNoteVelocity(engine->project, regionId, noteId, velocity),
-                         "Note velocity");
+                         nullptr);
 }
 
 bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId) {
