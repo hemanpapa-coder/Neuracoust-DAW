@@ -1849,9 +1849,12 @@ final class EngineController: ObservableObject {
     private func loadWaveforms() {
         guard let handle else { return }
         for clip in clips where waveforms[clip.sourcePath] == nil {
-            var mins = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
-            var maxs = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
-            if nc_waveform_peaks(handle, clip.sourcePath, &mins, &maxs) {
+            // The peak count scales with the file's length, so read however many it has.
+            let count = Int(nc_waveform_peak_count(handle, clip.sourcePath))
+            guard count > 0 else { continue }
+            var mins = [Float](repeating: 0, count: count)
+            var maxs = [Float](repeating: 0, count: count)
+            if nc_waveform_peaks(handle, clip.sourcePath, &mins, &maxs, Int32(count)) {
                 waveforms[clip.sourcePath] = (mins, maxs,
                                               nc_waveform_duration_seconds(handle, clip.sourcePath))
             }

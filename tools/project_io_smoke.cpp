@@ -1114,13 +1114,16 @@ int main() {
 
             // The peaks span the file; the view needs the file's length to map a clip
             // window onto them. It is only known once the file has been read.
-            float mins[NC_WAVEFORM_BUCKETS] = {0};
-            float maxs[NC_WAVEFORM_BUCKETS] = {0};
             char clipSource[1024] = {0};
             nc_clip_source_path(engine, 0, clipSource, sizeof(clipSource));
             check(nc_waveform_duration_seconds(engine, clipSource) == 0.0,
                   "the file's length is unknown before its peaks are read");
-            check(nc_waveform_peaks(engine, clipSource, mins, maxs), "read the peaks");
+            const int peakCount = nc_waveform_peak_count(engine, clipSource);
+            check(peakCount > 0, "the file yields peaks");
+            std::vector<float> mins(static_cast<size_t>(peakCount), 0.0f);
+            std::vector<float> maxs(static_cast<size_t>(peakCount), 0.0f);
+            check(nc_waveform_peaks(engine, clipSource, mins.data(), maxs.data(), peakCount),
+                  "read the peaks");
             const double fileSeconds = nc_waveform_duration_seconds(engine, clipSource);
             printf("waveform: the source file is %.3f s long\n", fileSeconds);
             check(fileSeconds > 1.9 && fileSeconds < 2.1, "and now it is the 2 s fixture");
@@ -1216,37 +1219,49 @@ int main() {
 
     // --- waveform peaks -------------------------------------------------------
     {
-        std::vector<float> mins(NC_WAVEFORM_BUCKETS, 0.0f);
-        std::vector<float> maxs(NC_WAVEFORM_BUCKETS, 0.0f);
-        check(!nc_waveform_peaks(engine, "/tmp/definitely-not-audio.wav", mins.data(), maxs.data()),
-              "peaks fail on a missing file");
+        check(nc_waveform_peak_count(engine, "/tmp/definitely-not-audio.wav") == 0,
+              "a missing file yields no peaks");
 
-        check(nc_waveform_peaks(engine, wavPath, mins.data(), maxs.data()), "peaks read from a wav");
+        const int peakCount = nc_waveform_peak_count(engine, wavPath);
+        check(peakCount > 0, "peaks read from a wav");
+
+        // The count scales with the file, not a fixed bucket total: the 2 s fixture at
+        // 48 kHz and 256 samples/peak is about 375 peaks, far more than the old 2048
+        // that got smeared across a long clip.
+        const double seconds = nc_waveform_duration_seconds(engine, wavPath);
+        printf("waveform: %d peaks over %.3f s (%.0f peaks/s)\n",
+               peakCount, seconds, peakCount / std::max(0.001, seconds));
+        check(peakCount > static_cast<int>(seconds * 150),
+              "the resolution is at least ~150 peaks per second");
+
+        std::vector<float> mins(static_cast<size_t>(peakCount), 0.0f);
+        std::vector<float> maxs(static_cast<size_t>(peakCount), 0.0f);
+        check(nc_waveform_peaks(engine, wavPath, mins.data(), maxs.data(), peakCount), "peaks copy out");
 
         float lowest = 0.0f;
         float highest = 0.0f;
-        int silentBuckets = 0;
-        for (int bucket = 0; bucket < NC_WAVEFORM_BUCKETS; ++bucket) {
-            lowest = std::min(lowest, mins[bucket]);
-            highest = std::max(highest, maxs[bucket]);
-            if (maxs[bucket] - mins[bucket] < 0.01f) {
-                ++silentBuckets;
+        int silentPeaks = 0;
+        for (int peak = 0; peak < peakCount; ++peak) {
+            lowest = std::min(lowest, mins[peak]);
+            highest = std::max(highest, maxs[peak]);
+            if (maxs[peak] - mins[peak] < 0.01f) {
+                ++silentPeaks;
             }
         }
-        printf("waveform: min=%.3f max=%.3f silent buckets=%d/%d\n",
-               lowest, highest, silentBuckets, NC_WAVEFORM_BUCKETS);
+        printf("waveform: min=%.3f max=%.3f silent peaks=%d/%d\n",
+               lowest, highest, silentPeaks, peakCount);
 
         // writeTestToneWavFile emits about -21 dBFS; the point is that the envelope
         // is present, full and symmetric, not that it is loud.
         check(highest > 0.05f, "the tone reaches a real positive peak");
         check(lowest < -0.05f, "and a real negative peak");
-        check(silentBuckets == 0, "no bucket of a continuous tone is silent");
+        check(silentPeaks == 0, "no peak of a continuous tone is silent");
         check(std::abs(highest + lowest) < 0.05f, "the envelope is symmetric");
 
         // The second read must come from the cache and agree exactly.
-        std::vector<float> mins2(NC_WAVEFORM_BUCKETS, 0.0f);
-        std::vector<float> maxs2(NC_WAVEFORM_BUCKETS, 0.0f);
-        check(nc_waveform_peaks(engine, wavPath, mins2.data(), maxs2.data()), "peaks read again");
+        std::vector<float> mins2(static_cast<size_t>(peakCount), 0.0f);
+        std::vector<float> maxs2(static_cast<size_t>(peakCount), 0.0f);
+        check(nc_waveform_peaks(engine, wavPath, mins2.data(), maxs2.data(), peakCount), "peaks read again");
         check(std::equal(mins.begin(), mins.end(), mins2.begin()), "cached mins match");
         check(std::equal(maxs.begin(), maxs.end(), maxs2.begin()), "cached maxs match");
     }

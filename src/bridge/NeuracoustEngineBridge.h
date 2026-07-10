@@ -573,12 +573,16 @@ bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBoun
 // re-reading the file.
 // ---------------------------------------------------------------------------
 
-#define NC_WAVEFORM_BUCKETS 2048
 
-/// Reads (or reuses) the peaks for `path`, writing NC_WAVEFORM_BUCKETS values into
+
 /// each of `mins` and `maxs`, both in -1…1. Returns false when the file cannot be
 /// read. Channels are summed to mono.
-bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs);
+/// Peaks are stored at a fixed sample resolution, so their count scales with the
+/// file's length rather than being clamped to a bucket total — a long clip no longer
+/// smears when zoomed. Analyzes and caches the file on first call.
+int nc_waveform_peak_count(NCEngine* engine, const char* path);
+/// Copies up to `count` peaks (min/max per slice) into the caller's buffers.
+bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs, int count);
 /// The whole file's length. The buckets span the file, not the clip, so a trimmed
 /// clip has to know where inside the file its own audio starts and ends.
 /// Zero until `nc_waveform_peaks` has read the file.

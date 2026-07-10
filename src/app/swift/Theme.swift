@@ -166,7 +166,7 @@ enum Theme {
 
     /// Fixed artboard the design was drawn against.
     static let artboard = CGSize(width: 1920, height: 1180)
-    static let monitorDockWidth: CGFloat = 392
+    static let monitorDockWidth: CGFloat = 294
     static let toolRailWidth: CGFloat = 44
     static let laneHeaderWidth: CGFloat = 576
 }

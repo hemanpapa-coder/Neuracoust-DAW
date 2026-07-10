@@ -249,11 +249,17 @@ frame, not the time the drag started from.
 
 ## Waveforms
 
-`nc_waveform_peaks` returns 2048 buckets spanning the **whole source file**, cached by
-path. A clip plays a window of that file — `sourceOffsetSeconds` to
+Peaks are cached per path at a **fixed sample resolution** — 256 samples per peak,
+~5 ms — not a fixed bucket count, so their number scales with the file's length. A
+fixed 2048 buckets smeared a long clip; at 256 samples/peak a 5-minute file has
+~55,000 peaks and stays crisp at any zoom. `nc_waveform_peak_count` gives the count
+(analyzing on first call); `nc_waveform_peaks` copies that many.
+
+A clip plays a window of the file — `sourceOffsetSeconds` to
 `sourceOffsetSeconds + durationSeconds` — so the timeline maps each on-screen column
-into the window, not into the file. Drawing the file across the clip made every
-trimmed or split clip show audio it would never play.
+into the window, not the file, and takes the **min/max over the peaks that column
+covers** so a transient is never skipped between samples. Drawing the file across the
+clip made every trimmed or split clip show audio it would never play.
 
 `nc_waveform_duration_seconds` returns 0 until the file's peaks have been read; the
 view needs it to do the mapping at all.

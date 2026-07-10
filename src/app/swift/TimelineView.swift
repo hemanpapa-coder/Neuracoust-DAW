@@ -1178,22 +1178,30 @@ final class TimelineNSView: NSView {
         let lastColumn = Int(min(rect.width, lanesRect.maxX - rect.minX))
         guard lastColumn > firstColumn else { return }
 
-        // The buckets span the whole file. A trimmed or split clip plays a window of
-        // it, so map each on-screen column into that window rather than the file.
+        // The peaks span the whole file. A trimmed or split clip plays a window of it,
+        // so map each on-screen column into that window rather than the file.
         let fileDuration = peaks.durationSeconds
         let windowStart = fileDuration > 0 ? clip.sourceOffsetSeconds / fileDuration : 0
         let windowSpan = fileDuration > 0 ? clip.durationSeconds / fileDuration : 1
 
+        // A column usually covers many peaks; take the loudest of them so a transient
+        // is never skipped between samples. Zoomed in it covers less than one peak,
+        // and both edges land on the same index — still crisp.
         for column in firstColumn..<lastColumn {
-            let fraction = windowStart + Double(column) / Double(rect.width) * windowSpan
-            let bucket = min(buckets - 1, max(0, Int(fraction * Double(buckets))))
+            let startFraction = windowStart + Double(column) / Double(rect.width) * windowSpan
+            let endFraction = windowStart + Double(column + 1) / Double(rect.width) * windowSpan
+            let first = min(buckets - 1, max(0, Int(startFraction * Double(buckets))))
+            let last = min(buckets - 1, max(first, Int(endFraction * Double(buckets))))
 
-            let low = CGFloat(peaks.mins[bucket])
-            let high = CGFloat(peaks.maxs[bucket])
+            var low: Float = 0
+            var high: Float = 0
+            for bucket in first...last {
+                low = min(low, peaks.mins[bucket])
+                high = max(high, peaks.maxs[bucket])
+            }
             let pointX = rect.minX + CGFloat(column) + 0.5
-
-            path.move(to: NSPoint(x: pointX, y: midY - high * halfHeight))
-            path.line(to: NSPoint(x: pointX, y: midY - low * halfHeight))
+            path.move(to: NSPoint(x: pointX, y: midY - CGFloat(high) * halfHeight))
+            path.line(to: NSPoint(x: pointX, y: midY - CGFloat(low) * halfHeight))
             drew = true
         }
 

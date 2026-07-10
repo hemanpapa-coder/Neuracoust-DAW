@@ -2266,55 +2266,88 @@ bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBoun
     return result.ok;
 }
 
-bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs) {
-    if (engine == nullptr || path == nullptr || mins == nullptr || maxs == nullptr) {
+namespace {
+
+/// Peaks are cached at a fixed sample resolution, not a fixed bucket count, so a long
+/// clip does not smear: 256 samples per peak is ~5 ms, finer than a pixel at any
+/// zoom the timeline reaches. The view decimates these to columns at draw time. A
+/// ceiling keeps a very long file from allocating without bound — past it the samples
+/// per peak grows instead.
+constexpr int64_t kWaveformSamplesPerPeak = 256;
+constexpr int64_t kWaveformMaxPeaks = 2'000'000;  // ~3 hours at 256 samples/peak, 48 kHz
+
+const NCEngine::WaveformPeaks* ensureWaveformPeaks(NCEngine* engine, const std::string& key) {
+    auto cached = engine->waveformCache.find(key);
+    if (cached != engine->waveformCache.end()) {
+        return &cached->second;
+    }
+
+    neuracoust::daw::WavAudioData audio;
+    std::string error;
+    if (!neuracoust::daw::readPcmWavFile(key, audio, error) ||
+        audio.channels <= 0 || audio.interleavedSamples.empty()) {
+        return nullptr;
+    }
+
+    const int64_t frames = audio.frameCount();
+    const int channels = audio.channels;
+
+    int64_t samplesPerPeak = kWaveformSamplesPerPeak;
+    if (frames / samplesPerPeak > kWaveformMaxPeaks) {
+        samplesPerPeak = (frames + kWaveformMaxPeaks - 1) / kWaveformMaxPeaks;
+    }
+    const int64_t peakCount = std::max<int64_t>(1, (frames + samplesPerPeak - 1) / samplesPerPeak);
+
+    NCEngine::WaveformPeaks peaks;
+    peaks.mins.assign(static_cast<size_t>(peakCount), 0.0f);
+    peaks.maxs.assign(static_cast<size_t>(peakCount), 0.0f);
+    peaks.durationSeconds = audio.sampleRate > 0
+        ? static_cast<double>(frames) / audio.sampleRate
+        : 0.0;
+
+    for (int64_t peak = 0; peak < peakCount; ++peak) {
+        const int64_t begin = peak * samplesPerPeak;
+        const int64_t end = std::min(frames, begin + samplesPerPeak);
+        float low = 0.0f;
+        float high = 0.0f;
+        for (int64_t frame = begin; frame < end; ++frame) {
+            // Sum to mono: the timeline draws one envelope per clip.
+            float sum = 0.0f;
+            for (int channel = 0; channel < channels; ++channel) {
+                sum += audio.interleavedSamples[static_cast<size_t>(frame * channels + channel)];
+            }
+            const float value = sum / static_cast<float>(channels);
+            low = std::min(low, value);
+            high = std::max(high, value);
+        }
+        peaks.mins[static_cast<size_t>(peak)] = std::max(-1.0f, low);
+        peaks.maxs[static_cast<size_t>(peak)] = std::min(1.0f, high);
+    }
+
+    return &engine->waveformCache.emplace(key, std::move(peaks)).first->second;
+}
+
+} // namespace
+
+int nc_waveform_peak_count(NCEngine* engine, const char* path) {
+    if (engine == nullptr || path == nullptr) {
+        return 0;
+    }
+    const auto* peaks = ensureWaveformPeaks(engine, path);
+    return peaks != nullptr ? static_cast<int>(peaks->mins.size()) : 0;
+}
+
+bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs, int count) {
+    if (engine == nullptr || path == nullptr || mins == nullptr || maxs == nullptr || count <= 0) {
         return false;
     }
-
-    const std::string key(path);
-    auto cached = engine->waveformCache.find(key);
-    if (cached == engine->waveformCache.end()) {
-        neuracoust::daw::WavAudioData audio;
-        std::string error;
-        if (!neuracoust::daw::readPcmWavFile(key, audio, error) ||
-            audio.channels <= 0 || audio.interleavedSamples.empty()) {
-            return false;
-        }
-
-        NCEngine::WaveformPeaks peaks;
-        peaks.mins.assign(NC_WAVEFORM_BUCKETS, 0.0f);
-        peaks.maxs.assign(NC_WAVEFORM_BUCKETS, 0.0f);
-        peaks.durationSeconds = audio.sampleRate > 0
-            ? static_cast<double>(audio.frameCount()) / audio.sampleRate
-            : 0.0;
-
-        const int64_t frames = audio.frameCount();
-        const int channels = audio.channels;
-        for (int bucket = 0; bucket < NC_WAVEFORM_BUCKETS; ++bucket) {
-            const int64_t begin = frames * bucket / NC_WAVEFORM_BUCKETS;
-            const int64_t end = std::max(begin + 1, frames * (bucket + 1) / NC_WAVEFORM_BUCKETS);
-
-            float low = 0.0f;
-            float high = 0.0f;
-            for (int64_t frame = begin; frame < end && frame < frames; ++frame) {
-                // Sum to mono: the timeline draws one envelope per clip.
-                float sum = 0.0f;
-                for (int channel = 0; channel < channels; ++channel) {
-                    sum += audio.interleavedSamples[static_cast<size_t>(frame * channels + channel)];
-                }
-                const float value = sum / static_cast<float>(channels);
-                low = std::min(low, value);
-                high = std::max(high, value);
-            }
-            peaks.mins[static_cast<size_t>(bucket)] = std::max(-1.0f, low);
-            peaks.maxs[static_cast<size_t>(bucket)] = std::min(1.0f, high);
-        }
-
-        cached = engine->waveformCache.emplace(key, std::move(peaks)).first;
+    const auto* peaks = ensureWaveformPeaks(engine, path);
+    if (peaks == nullptr) {
+        return false;
     }
-
-    std::memcpy(mins, cached->second.mins.data(), NC_WAVEFORM_BUCKETS * sizeof(float));
-    std::memcpy(maxs, cached->second.maxs.data(), NC_WAVEFORM_BUCKETS * sizeof(float));
+    const size_t available = std::min<size_t>(static_cast<size_t>(count), peaks->mins.size());
+    std::memcpy(mins, peaks->mins.data(), available * sizeof(float));
+    std::memcpy(maxs, peaks->maxs.data(), available * sizeof(float));
     return true;
 }
 
