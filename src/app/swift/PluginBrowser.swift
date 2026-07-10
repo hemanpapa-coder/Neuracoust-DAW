@@ -218,8 +218,17 @@ struct PluginBrowser: View {
     // MARK: Insert chain
 
     private var targetTrack: EngineController.Track? {
-        guard let id = engine.pluginTargetTrack else { return nil }
+        guard let id = engine.pluginTargetTrack, id != EngineController.masterInsertTargetId else { return nil }
         return engine.tracks.first { $0.id == id }
+    }
+
+    /// The browser also fills the master chain, which belongs to no track.
+    private var targetIsMaster: Bool {
+        engine.pluginTargetTrack == EngineController.masterInsertTargetId
+    }
+
+    private var targetChain: [EngineController.InsertSlot] {
+        targetIsMaster ? engine.masterInserts : (targetTrack?.inserts ?? [])
     }
 
     private var chainColumn: some View {
@@ -229,7 +238,7 @@ struct PluginBrowser: View {
                     Text("인서트 체인")
                         .font(Theme.Font.ui(11, .bold))
                         .foregroundStyle(Theme.Palette.textBright)
-                    Text(targetTrack?.name ?? "—")
+                    Text(targetIsMaster ? "Master" : (targetTrack?.name ?? "—"))
                         .font(Theme.Font.ui(9))
                         .foregroundStyle(Theme.Palette.textFaint)
                 }
@@ -248,12 +257,12 @@ struct PluginBrowser: View {
                 .buttonStyle(.plain)
             }
 
-            if let track = targetTrack {
+            if engine.pluginBrowserOpen {
                 VStack(spacing: Theme.Space.sm) {
-                    ForEach(track.inserts) { slot in
-                        chainRow(track: track, slot: slot)
+                    ForEach(targetChain) { slot in
+                        chainRow(slot: slot)
                     }
-                    if track.inserts.isEmpty {
+                    if targetChain.isEmpty {
                         Text("아직 인서트가 없습니다")
                             .font(Theme.Font.ui(9))
                             .foregroundStyle(Theme.Palette.textFainter)
@@ -274,8 +283,12 @@ struct PluginBrowser: View {
         .background(Theme.Palette.surface)
     }
 
-    private func chainRow(track: EngineController.Track,
-                          slot: EngineController.InsertSlot) -> some View {
+    private func chainRow(slot: EngineController.InsertSlot) -> some View {
+        let accent = targetIsMaster ? Theme.Palette.orange : (targetTrack?.kind.accent ?? Theme.Palette.textFaint)
+        return chainRowBody(slot: slot, accent: accent)
+    }
+
+    private func chainRowBody(slot: EngineController.InsertSlot, accent: Color) -> some View {
         HStack(spacing: Theme.Space.md) {
             Text("⠿")
                 .font(Theme.Font.mono(9))
@@ -297,12 +310,20 @@ struct PluginBrowser: View {
 
             if !slot.isEmpty {
                 iconButton("⏻", tint: slot.bypassed ? Theme.Palette.orange : Theme.Palette.textFaint) {
-                    engine.toggleInsertBypass(track: track.id, slot: slot.id)
+                    if targetIsMaster { engine.toggleMasterInsertBypass(slot: slot.id) }
+                    else if let track = targetTrack { engine.toggleInsertBypass(track: track.id, slot: slot.id) }
                 }
-                iconButton("↑") { engine.moveInsert(track: track.id, slot: slot.id, direction: -1) }
-                iconButton("↓") { engine.moveInsert(track: track.id, slot: slot.id, direction: 1) }
+                iconButton("↑") {
+                    if targetIsMaster { engine.moveMasterInsert(slot: slot.id, direction: -1) }
+                    else if let track = targetTrack { engine.moveInsert(track: track.id, slot: slot.id, direction: -1) }
+                }
+                iconButton("↓") {
+                    if targetIsMaster { engine.moveMasterInsert(slot: slot.id, direction: 1) }
+                    else if let track = targetTrack { engine.moveInsert(track: track.id, slot: slot.id, direction: 1) }
+                }
                 iconButton("✕", tint: Theme.Palette.red) {
-                    engine.removeInsert(track: track.id, slot: slot.id)
+                    if targetIsMaster { engine.removeMasterInsert(slot: slot.id) }
+                    else if let track = targetTrack { engine.removeInsert(track: track.id, slot: slot.id) }
                 }
             }
         }
@@ -313,7 +334,7 @@ struct PluginBrowser: View {
                 .fill(Theme.Palette.background)
                 .overlay(alignment: .leading) {
                     Rectangle()
-                        .fill(slot.isEmpty ? .clear : track.kind.accent)
+                        .fill(slot.isEmpty ? .clear : accent)
                         .frame(width: 3)
                 }
         )

@@ -268,8 +268,8 @@ listenRoomChatPollTimer_ = [NSTimer scheduledTimerWithTimeInterval:1.0 ...];
 ### 3. 플러그인 에디터 프로세스 수명주기 + 파라미터 브리지 — ✅ 이식 완료
 > `src/app/swift/PluginEditor.swift` + 브리지의 `nc_track_set_vst3_parameter` /
 > `nc_track_set_instrument_vst3_parameter` / `nc_track_insert_observer`.
-> 트랙 인서트와 인스트루먼트 슬롯(슬롯 인덱스 `-1`)을 옮겼다. 마스터 인서트와 모니터
-> 스피커 슬롯은 **브리지에도 UI에도 없어서** 아직 열 것이 없고, Waves RS124 미러링도 없다.
+> 트랙 인서트, 인스트루먼트 슬롯(슬롯 인덱스 `-1`), 마스터 인서트(트랙 id `-1`)를 옮겼다.
+> 모니터 스피커 슬롯은 브리지에도 UI에도 없어서 아직 열 것이 없고, Waves RS124 미러링도 없다.
 > 프로토콜(실측): 호스트→앱 `READY`, `PARAM <id> <normalized>`, `HOST_STAGE`, `HOST_ERROR`;
 > 앱→호스트 `PARAM_SET <id> <normalized>`. 호스트는 `PARAM_SET` 으로 받은 값을
 > `lastPolledParameterValues_` 에 기록하므로 복원한 값이 `PARAM` 으로 되돌아오지 않는다(핑퐁 없음).

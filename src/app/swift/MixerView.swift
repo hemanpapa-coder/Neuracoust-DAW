@@ -286,18 +286,22 @@ struct ChannelStrip: View {
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
             ForEach(0..<5, id: \.self) { slot in
-                let insert = slot < track.inserts.count ? track.inserts[slot] : nil
+                // The master chain is the project's, not the Master track's.
+                let isMaster = track.kind == .master
+                let ownerId = isMaster ? EngineController.masterInsertTargetId : track.id
+                let chain = isMaster ? engine.masterInserts : track.inserts
+                let insert = slot < chain.count ? chain[slot] : nil
                 SlotChip(
                     label: (insert?.isEmpty ?? true) ? "" : insert!.name,
                     accent: accent,
                     bypassed: insert?.bypassed ?? false,
                     badge: insert?.modeBadge ?? "",
-                    lit: editors.isOpen(.init(trackId: track.id, insertIndex: slot))
+                    lit: editors.isOpen(.init(trackId: ownerId, insertIndex: slot))
                 ) {
                     if insert?.isEmpty ?? true {
-                        engine.openPluginBrowser(forTrack: track.id)
+                        engine.openPluginBrowser(forTrack: ownerId)
                     } else {
-                        editors.toggle(trackId: track.id, insertIndex: slot)
+                        editors.toggle(trackId: ownerId, insertIndex: slot)
                     }
                 }
             }

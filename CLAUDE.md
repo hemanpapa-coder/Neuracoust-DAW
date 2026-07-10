@@ -160,6 +160,15 @@ An insert's parameters are pushed into the live chain (`updateTrackVst3Parameter
 an instrument's live in the render plan, so a knob turn there reconciles the project
 instead. There is no fine-grained push for instruments.
 
+## Master inserts
+
+A chain of its own, applied to the mix on its way out. The engine keeps it in
+`project.masterInserts` — **not** on the Master track, whose `inserts` stay empty.
+The plug-in browser and the editor host address it with the sentinel track id `-1`
+(`EngineController.masterInsertTargetId`), the way the instrument slot uses insert
+index `-1`. `addMasterVst3Insert` refuses a second copy of the same plug-in; that is
+the engine's rule.
+
 ## There is no recording
 
 The transport's round button is **not** a take recorder. `nc_engine_set_recording` →

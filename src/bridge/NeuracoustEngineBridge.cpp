@@ -2374,6 +2374,168 @@ int nc_plugin_facet_tally(NCEngine* engine, int kind, int index) {
     return tally;
 }
 
+namespace {
+
+neuracoust::daw::InsertState* masterInsertAt(NCEngine* engine, int slot) {
+    if (engine == nullptr || slot < 0 ||
+        static_cast<size_t>(slot) >= engine->project.masterInserts.size()) {
+        return nullptr;
+    }
+    return &engine->project.masterInserts[static_cast<size_t>(slot)];
+}
+
+} // namespace
+
+int nc_master_insert_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.masterInserts.size());
+}
+
+void nc_master_insert_name(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginName : std::string{});
+}
+
+bool nc_master_insert_bypassed(NCEngine* engine, int slot) {
+    const auto* insert = masterInsertAt(engine, slot);
+    return insert != nullptr && insert->bypassed;
+}
+
+void nc_master_insert_plugin_path(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginPath : std::string{});
+}
+
+void nc_master_insert_plugin_format(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginFormat : std::string{});
+}
+
+void nc_master_insert_class_id(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginClassId : std::string{});
+}
+
+void nc_master_insert_class_name(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->pluginClassName : std::string{});
+}
+
+bool nc_master_add_insert(NCEngine* engine, int pluginIndex) {
+    const auto* plugin = pluginAt(engine, pluginIndex);
+    if (engine == nullptr || plugin == nullptr) {
+        return false;
+    }
+
+    neuracoust::daw::InsertState insert;
+    insert.pluginName = plugin->name;
+    insert.pluginFormat = plugin->format.empty() ? "VST3" : plugin->format;
+    insert.pluginPath = plugin->path;
+    insert.pluginClassId = plugin->pluginClassId;
+    insert.pluginClassName = plugin->pluginClassName;
+    insert.available = plugin->exists;
+    insert.dspAvailable = true;
+
+    // addMasterVst3Insert refuses a duplicate of the same plug-in, which is the
+    // engine's rule, not ours.
+    if (!neuracoust::daw::addMasterVst3Insert(engine->project, insert)) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Add " + insert.pluginName + " to master");
+    return true;
+}
+
+bool nc_master_remove_insert(NCEngine* engine, int slot) {
+    if (masterInsertAt(engine, slot) == nullptr) {
+        return false;
+    }
+    if (!neuracoust::daw::removeMasterVst3Insert(engine->project, static_cast<size_t>(slot))) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Remove master insert");
+    return true;
+}
+
+bool nc_master_set_insert_bypassed(NCEngine* engine, int slot, bool bypassed) {
+    auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr || insert->bypassed == bypassed) {
+        return false;
+    }
+    if (!neuracoust::daw::toggleMasterVst3InsertBypass(engine->project, static_cast<size_t>(slot))) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep(bypassed ? "Bypass master insert" : "Enable master insert");
+    return true;
+}
+
+int nc_master_move_insert(NCEngine* engine, int slot, int direction) {
+    if (masterInsertAt(engine, slot) == nullptr) {
+        return -1;
+    }
+    const int moved = neuracoust::daw::moveMasterInsert(engine->project, static_cast<size_t>(slot), direction);
+    if (moved < 0) {
+        return -1;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Reorder master inserts");
+    return moved;
+}
+
+int nc_master_insert_param_count(NCEngine* engine, int slot) {
+    const auto* insert = masterInsertAt(engine, slot);
+    return insert != nullptr ? static_cast<int>(insert->parameters.size()) : 0;
+}
+
+uint32_t nc_master_insert_param_id(NCEngine* engine, int slot, int paramIndex) {
+    const auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= insert->parameters.size()) {
+        return 0;
+    }
+    return insert->parameters[static_cast<size_t>(paramIndex)].parameterId;
+}
+
+double nc_master_insert_param_value(NCEngine* engine, int slot, int paramIndex) {
+    const auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= insert->parameters.size()) {
+        return 0.0;
+    }
+    return insert->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
+}
+
+bool nc_master_set_vst3_parameter(NCEngine* engine, int slot, uint32_t parameterId,
+                                  const char* displayName, double normalizedValue) {
+    auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr) {
+        return false;
+    }
+
+    const double clamped = std::max(0.0, std::min(1.0, normalizedValue));
+    const std::string name = displayName != nullptr ? displayName : "";
+
+    auto found = std::find_if(insert->parameters.begin(), insert->parameters.end(),
+                              [&](const neuracoust::daw::Vst3ParameterValueState& parameter) {
+                                  return parameter.parameterId == parameterId;
+                              });
+    if (found != insert->parameters.end()) {
+        found->normalizedValue = clamped;
+        if (!name.empty()) {
+            found->displayName = name;
+        }
+    } else {
+        insert->parameters.push_back({parameterId,
+                                      name.empty() ? "Param " + std::to_string(parameterId) : name,
+                                      clamped});
+    }
+
+    // Fine-grained: never rebuild the graph for a knob turn.
+    engine->engine.updateMasterVst3Parameter(static_cast<size_t>(slot), parameterId, name, clamped);
+    return true;
+}
+
 bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex) {
     auto* track = trackAt(engine, trackIndex);
     const auto* plugin = pluginAt(engine, pluginIndex);

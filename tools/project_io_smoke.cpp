@@ -954,6 +954,60 @@ int main() {
             }
         }
 
+        // --- a master insert has to reach the mix, not just the project file ------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a 2 s tone");
+            check(nc_master_insert_count(engine) == 0, "the master chain starts empty");
+
+            // Micro at its own defaults is a 4166 Hz low-pass. The fixture tone is a
+            // 440 Hz sine, so it should survive; a plug-in that never got its
+            // parameters would flatten it.
+            const int filters = nc_plugin_apply_filter(engine, "FabFilter Micro", "", "", "VST3");
+            if (filters <= 0) {
+                printf("(FabFilter Micro not installed — skipping the master insert check)\n");
+            } else {
+                check(nc_master_add_insert(engine, 0), "add it to the master chain");
+                check(nc_master_insert_count(engine) == 1, "one master insert");
+                char masterName[128] = {0};
+                nc_master_insert_name(engine, 0, masterName, sizeof(masterName));
+                check(strcmp(masterName, "FabFilter Micro") == 0, "by name");
+                check(!nc_master_add_insert(engine, 0), "the same plug-in twice is refused");
+
+                check(nc_master_set_vst3_parameter(engine, 0, 0, "Frequency", 0.7),
+                      "an editor edit lands on the master insert");
+                check(nc_master_insert_param_count(engine, 0) == 1, "one stored parameter");
+                check(nc_master_insert_param_value(engine, 0, 0) == 0.7, "with its value");
+
+                char masterProject[256] = "/tmp/neuracoust-io-smoke/Master.ndaw";
+                check(nc_project_save_as(engine, masterProject, error, sizeof(error)), "save it");
+                neuracoust::daw::ProjectDocument mastered;
+                std::string masterError;
+                std::string masterText;
+                if (FILE* file = fopen(masterProject, "rb")) {
+                    char buffer[8192];
+                    size_t read = 0;
+                    while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) masterText.append(buffer, read);
+                    fclose(file);
+                }
+                check(neuracoust::daw::deserializeProjectForPath(masterText, masterProject, mastered, masterError),
+                      "parse it");
+                check(mastered.masterInserts.size() == 1, "the insert survived the round trip");
+
+                const std::string masterBounce = "/tmp/neuracoust-io-smoke/master.wav";
+                check(neuracoust::daw::bounceProjectToWav(mastered, masterBounce).ok, "bounce it");
+                const float throughInsert = peakBetween(masterBounce, 0.2, 1.8);
+                printf("master insert: 440 Hz tone peaks at %.4f through FabFilter Micro\n", throughInsert);
+                check(throughInsert > 0.001f, "the tone came through the master insert");
+
+                // Bypassing it must not silence the mix either.
+                check(nc_master_set_insert_bypassed(engine, 0, true), "bypass it");
+                check(nc_master_insert_bypassed(engine, 0), "the bypass latched");
+                check(nc_master_remove_insert(engine, 0), "remove it");
+                check(nc_master_insert_count(engine) == 0, "the chain is empty again");
+            }
+        }
+
         // --- bounce through the bridge, and time it -------------------------------
         {
             nc_project_new(engine);

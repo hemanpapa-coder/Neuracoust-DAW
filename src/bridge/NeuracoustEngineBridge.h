@@ -211,6 +211,33 @@ double nc_track_instrument_param_value(NCEngine* engine, int index, int paramInd
 bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
                                             const char* displayName, double normalizedValue);
 
+// ---------------------------------------------------------------------------
+// Master inserts
+//
+// A separate chain from any track's, applied to the mix on its way out. The engine
+// keeps it in project.masterInserts, not on the Master track.
+// ---------------------------------------------------------------------------
+
+int nc_master_insert_count(NCEngine* engine);
+void nc_master_insert_name(NCEngine* engine, int slot, char* out, size_t outLen);
+bool nc_master_insert_bypassed(NCEngine* engine, int slot);
+void nc_master_insert_plugin_path(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_master_insert_plugin_format(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_master_insert_class_id(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_master_insert_class_name(NCEngine* engine, int slot, char* out, size_t outLen);
+
+bool nc_master_add_insert(NCEngine* engine, int pluginIndex);
+bool nc_master_remove_insert(NCEngine* engine, int slot);
+bool nc_master_set_insert_bypassed(NCEngine* engine, int slot, bool bypassed);
+/// -1 moves the insert earlier in the chain, +1 later. Returns the new slot, or -1.
+int nc_master_move_insert(NCEngine* engine, int slot, int direction);
+
+int nc_master_insert_param_count(NCEngine* engine, int slot);
+uint32_t nc_master_insert_param_id(NCEngine* engine, int slot, int paramIndex);
+double nc_master_insert_param_value(NCEngine* engine, int slot, int paramIndex);
+bool nc_master_set_vst3_parameter(NCEngine* engine, int slot, uint32_t parameterId,
+                                  const char* displayName, double normalizedValue);
+
 int nc_track_send_count(NCEngine* engine, int index);
 void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);

@@ -234,13 +234,59 @@ final class EngineController: ObservableObject {
 
     @Published private(set) var pluginMatchCount = 0
 
+    // MARK: Master inserts
+
+    /// The master chain is not the Master track's inserts; the engine keeps it apart.
+    /// The browser addresses it with this sentinel in place of a track id.
+    static let masterInsertTargetId = -1
+
+    @Published private(set) var masterInserts: [InsertSlot] = []
+
+    private func reloadMasterInserts() {
+        guard let handle else { return }
+        masterInserts = (0..<Int(nc_master_insert_count(handle))).map { slot in
+            let s = Int32(slot)
+            return InsertSlot(id: slot,
+                              name: readEngineString { nc_master_insert_name(handle, s, $0, $1) },
+                              bypassed: nc_master_insert_bypassed(handle, s),
+                              modeBadge: "")
+        }
+    }
+
+    func removeMasterInsert(slot: Int) {
+        guard let handle, nc_master_remove_insert(handle, Int32(slot)) else { return }
+        reloadMasterInserts()
+        refreshHistory()
+    }
+
+    func toggleMasterInsertBypass(slot: Int) {
+        guard let handle, slot < masterInserts.count else { return }
+        guard nc_master_set_insert_bypassed(handle, Int32(slot), !masterInserts[slot].bypassed) else { return }
+        reloadMasterInserts()
+        refreshHistory()
+    }
+
+    func moveMasterInsert(slot: Int, direction: Int) {
+        guard let handle, nc_master_move_insert(handle, Int32(slot), Int32(direction)) >= 0 else { return }
+        reloadMasterInserts()
+        refreshHistory()
+    }
+
     // MARK: Inserts
 
     /// An instrument dropped on an instrument track fills its instrument slot rather
     /// than an insert — an insert cannot turn MIDI notes into sound.
     func addInsert(_ pluginIndex: Int) {
-        guard let handle, let trackId = pluginTargetTrack,
-              let track = tracks.first(where: { $0.id == trackId }) else { return }
+        guard let handle, let trackId = pluginTargetTrack else { return }
+
+        if trackId == Self.masterInsertTargetId {
+            if nc_master_add_insert(handle, Int32(pluginIndex)) {
+                reloadMasterInserts()
+                refreshHistory()
+            }
+            return
+        }
+        guard let track = tracks.first(where: { $0.id == trackId }) else { return }
 
         let plugin = plugins.first { $0.id == pluginIndex }
         let loadsAsInstrument = track.kind == .instrument && plugin?.category == "Instrument"
@@ -312,7 +358,23 @@ final class EngineController: ObservableObject {
 
     /// Everything the out-of-process editor host needs to load the plug-in. nil for an empty slot.
     func insertDescriptor(trackId: Int, insertIndex: Int) -> InsertDescriptor? {
-        guard let handle, let track = tracks.first(where: { $0.id == trackId }) else { return nil }
+        guard let handle else { return nil }
+
+        if trackId == Self.masterInsertTargetId {
+            let s = Int32(insertIndex)
+            let path = readEngineString { nc_master_insert_plugin_path(handle, s, $0, $1) }
+            guard !path.isEmpty, insertIndex < masterInserts.count else { return nil }
+            return InsertDescriptor(
+                trackName: "Master",
+                name: masterInserts[insertIndex].name,
+                pluginPath: path,
+                format: readEngineString { nc_master_insert_plugin_format(handle, s, $0, $1) },
+                classId: readEngineString { nc_master_insert_class_id(handle, s, $0, $1) },
+                className: readEngineString { nc_master_insert_class_name(handle, s, $0, $1) },
+                observerShmName: "", observerMaxBlock: 0, observerSampleRate: 0)
+        }
+
+        guard let track = tracks.first(where: { $0.id == trackId }) else { return nil }
 
         if insertIndex == Self.instrumentSlotIndex {
             let i = Int32(trackId)
@@ -358,6 +420,14 @@ final class EngineController: ObservableObject {
 
     func storedVst3Parameters(trackId: Int, insertIndex: Int) -> [(id: UInt32, value: Double)] {
         guard let handle else { return [] }
+        if trackId == Self.masterInsertTargetId {
+            let s = Int32(insertIndex)
+            let count = Int(nc_master_insert_param_count(handle, s))
+            return (0..<count).map { p in
+                (id: nc_master_insert_param_id(handle, s, Int32(p)),
+                 value: nc_master_insert_param_value(handle, s, Int32(p)))
+            }
+        }
         let i = Int32(trackId), s = Int32(insertIndex)
         if insertIndex == Self.instrumentSlotIndex {
             let count = Int(nc_track_instrument_param_count(handle, i))
@@ -376,10 +446,15 @@ final class EngineController: ObservableObject {
     /// One knob turn is a stream of these, so it neither reloads tracks nor records undo.
     func setVst3Parameter(trackId: Int, insertIndex: Int, parameterId: UInt32, normalizedValue: Double) {
         guard let handle else { return }
-        let changed = insertIndex == Self.instrumentSlotIndex
-            ? nc_track_set_instrument_vst3_parameter(handle, Int32(trackId), parameterId, nil, normalizedValue)
-            : nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
-                                          parameterId, nil, normalizedValue)
+        let changed: Bool
+        if trackId == Self.masterInsertTargetId {
+            changed = nc_master_set_vst3_parameter(handle, Int32(insertIndex), parameterId, nil, normalizedValue)
+        } else if insertIndex == Self.instrumentSlotIndex {
+            changed = nc_track_set_instrument_vst3_parameter(handle, Int32(trackId), parameterId, nil, normalizedValue)
+        } else {
+            changed = nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
+                                                  parameterId, nil, normalizedValue)
+        }
         if changed {
             projectDirty = nc_project_dirty(handle)
         }
@@ -751,6 +826,8 @@ final class EngineController: ObservableObject {
                 }
             )
         }
+
+        reloadMasterInserts()
     }
 
     /// Mixer strips show every track; the master meter panel handles the master bus.
