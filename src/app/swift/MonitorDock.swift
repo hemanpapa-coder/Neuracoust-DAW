@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MonitorDock: View {
     @EnvironmentObject private var engine: EngineController
+    @EnvironmentObject private var listen: ListenRoomController
 
     var body: some View {
         VStack(spacing: 0) {
@@ -400,25 +401,109 @@ struct MonitorDock: View {
                     .font(Theme.Font.ui(10, .semibold))
                     .foregroundStyle(Theme.Palette.text)
                 Spacer()
-                Text("● Offer Ready")
+                Text(listenStatusLabel)
                     .font(Theme.Font.mono(7.5))
-                    .foregroundStyle(Theme.Palette.teal)
+                    .foregroundStyle(listenStatusTint)
             }
+
             HStack(spacing: Theme.Space.sm) {
-                stubButton("▶ 송출", tint: Theme.Palette.accent)
-                stubButton("⟳ Ping")
-                stubButton("⧉ 링크")
+                actionButton(listen.enabled ? "■ 중지" : "▶ 송출",
+                             tint: listen.enabled ? Theme.Palette.red : Theme.Palette.accent) {
+                    listen.toggle()
+                }
+                actionButton("⧉ 링크", enabled: listen.enabled) { listen.copyShareLink() }
             }
-            stubButton("💬 대화창 · 클라이언트", tint: Theme.Palette.amber)
-            Text("queued 0 · drops 0 · relay fallback 준비")
+
+            Button {
+                listen.chatOpen.toggle()
+                if listen.chatOpen { listen.markChatRead() }
+            } label: {
+                HStack(spacing: Theme.Space.sm) {
+                    Text("💬 대화창 · 클라이언트")
+                        .font(Theme.Font.ui(9))
+                        .foregroundStyle(Theme.Palette.amber)
+                    if listen.chatUnread > 0 {
+                        Text("\(listen.chatUnread)")
+                            .font(Theme.Font.mono(7, .semibold))
+                            .foregroundStyle(Theme.Palette.deepBorder)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.Palette.amber))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Space.md)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(Theme.Palette.divider, lineWidth: 1)
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+
+            Text(listenStatsLabel)
                 .font(Theme.Font.mono(7.5))
                 .foregroundStyle(Theme.Palette.textFainter)
+
+            if let error = listen.lastError {
+                Text("⚠︎ \(error)")
+                    .font(Theme.Font.mono(7.5))
+                    .foregroundStyle(Theme.Palette.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if listen.chatOpen {
+                ChatPanel()
+            }
         }
         .padding(Theme.Space.xl)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(Theme.Palette.background)
         )
+    }
+
+    private var listenStatusLabel: String {
+        if !listen.enabled { return "○ Idle" }
+        if listen.offerReady { return "● Offer Ready" }
+        if listen.relayReachable { return "● Relay 연결됨" }
+        return "◐ Relay 대기"
+    }
+
+    private var listenStatusTint: Color {
+        guard listen.enabled else { return Theme.Palette.textFaint }
+        return listen.relayReachable || listen.offerReady ? Theme.Palette.teal : Theme.Palette.amber
+    }
+
+    private var listenStatsLabel: String {
+        let mode = listen.transportMode.isEmpty ? "direct_fallback" : listen.transportMode
+        return "queued \(listen.packetsQueued) · drops \(listen.packetsDropped) · \(mode)"
+    }
+
+    private func actionButton(_ title: String,
+                              tint: Color = Theme.Palette.textSecondary,
+                              enabled: Bool = true,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.ui(9))
+                .foregroundStyle(enabled ? tint : Theme.Palette.textFainter)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Space.md)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(Theme.Palette.divider, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     private var remoteCore: some View {
@@ -453,23 +538,6 @@ struct MonitorDock: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(Theme.Palette.background)
         )
-    }
-
-    /// Listen Room is UI-only until its engine surface is wired.
-    private func stubButton(_ title: String, tint: Color = Theme.Palette.textSecondary) -> some View {
-        Text(title)
-            .font(Theme.Font.ui(9))
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Theme.Space.md)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.button)
-                    .fill(Theme.Palette.button)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.button)
-                            .stroke(Theme.Palette.divider, lineWidth: 1)
-                    )
-            )
     }
 
     private func sectionLabel(_ text: String) -> some View {

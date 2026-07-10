@@ -143,6 +143,55 @@ void nc_monitor_speaker_output(NCEngine* engine, int slot, char* out, size_t out
 float nc_monitor_speaker_sim_weight(NCEngine* engine, int slot);
 bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot);
 
+// ---------------------------------------------------------------------------
+// Listen Room
+//
+// The engine owns the sender (encode + push to the relay). The relay itself is a
+// separate Python process the app must launch; see ListenRoom.swift.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    bool enabled;
+    bool senderRunning;
+    bool relayReachable;
+    bool nativeWebRtcOfferReady;
+    bool nativeWebRtcConnected;
+    uint64_t packetsQueued;
+    uint64_t packetsSent;
+    uint64_t packetsDropped;
+    uint64_t sendFailures;
+    int queuedBlocks;
+    int latencyTargetMs;
+    int targetBitrateKbps;
+    char shareUrl[256];
+    char activeCodec[NC_TEXT_LEN];
+    char qualityLabel[NC_TEXT_LEN];
+    char transportMode[NC_TEXT_LEN];
+    char message[NC_TEXT_LEN];
+} NCListenStatus;
+
+void nc_listen_status(NCEngine* engine, NCListenStatus* out);
+
+bool nc_listen_enabled(NCEngine* engine);
+/// Enabling mints an access token if the project has none, then pushes settings
+/// to the engine. Launching the relay process is the caller's job.
+void nc_listen_set_enabled(NCEngine* engine, bool enabled);
+
+void nc_listen_session_name(NCEngine* engine, char* out, size_t outLen);
+void nc_listen_access_token(NCEngine* engine, char* out, size_t outLen);
+void nc_listen_relay_host(NCEngine* engine, char* out, size_t outLen);
+int nc_listen_relay_http_port(NCEngine* engine);
+int nc_listen_relay_tcp_ingest_port(NCEngine* engine);
+
+void nc_listen_quality(NCEngine* engine, char* out, size_t outLen);
+void nc_listen_set_quality(NCEngine* engine, const char* quality);
+void nc_listen_latency_mode(NCEngine* engine, char* out, size_t outLen);
+void nc_listen_set_latency_mode(NCEngine* engine, const char* mode);
+
+/// Share link for the local relay, and the token-bearing invite link.
+void nc_listen_share_url(NCEngine* engine, char* out, size_t outLen);
+void nc_listen_public_share_url(NCEngine* engine, char* out, size_t outLen);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

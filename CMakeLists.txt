@@ -282,6 +282,8 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/TransportBar.swift
         src/app/swift/MonitorControls.swift
         src/app/swift/MonitorDock.swift
+        src/app/swift/ListenRoom.swift
+        src/app/swift/ChatPanel.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 
@@ -329,6 +331,40 @@ if(NEURACOUST_BUILD_SWIFT_APP)
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust AU Editor Host"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/main.d")
+
+    # Listen Room streams through a Python relay that ships with the Neuracoust
+    # Listen project. Bundle it so the app can launch the relay without that
+    # source tree being present at runtime.
+    if(EXISTS "${NEURACOUST_LISTEN_SOURCE_DIR}/scripts/start-relay.sh")
+        add_custom_command(TARGET NeuracoustDAW POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/scripts/start-relay.sh"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/start-relay.sh"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/relay"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/listen_relay.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/listen_version.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/network_info.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/opus_transcode.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/protocol.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/qr_util.py"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/requirements.txt"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/relay/run.sh"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/relay"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/web"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/web/index.html"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/web/logo.png"
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/web/pcm-player-processor.js"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/web"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NEURACOUST_LISTEN_SOURCE_DIR}/ListenVersion.txt"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/ListenVersion.txt")
+    else()
+        message(STATUS "Listen relay assets not found at ${NEURACOUST_LISTEN_SOURCE_DIR} — Listen Room will report a missing relay at runtime.")
+    endif()
 else()
     message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
 endif()

@@ -1,5 +1,6 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
+#include "audio/ListenRoom.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
 #include "plugins/MonitorDspModules.h"
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -64,6 +66,25 @@ struct NCEngine {
 
     void pushModules() {
         engine.setMonitorDspModules(project.monitorModules, monitorDspEnabled);
+    }
+
+    neuracoust::daw::ListenRoomSettings listenSettings() const {
+        neuracoust::daw::ListenRoomSettings settings;
+        settings.enabled = project.listenRoomEnabled;
+        settings.sessionName = project.listenRoomSessionName.empty() ? "mix" : project.listenRoomSessionName;
+        settings.source = project.listenRoomSource.empty() ? "monitor" : project.listenRoomSource;
+        settings.quality = project.listenRoomQuality.empty() ? "opus_high" : project.listenRoomQuality;
+        settings.latencyMode = project.listenRoomLatencyMode.empty() ? "stable" : project.listenRoomLatencyMode;
+        settings.transportMode = project.listenRoomTransportMode.empty() ? "direct_fallback" : project.listenRoomTransportMode;
+        settings.relayHost = project.listenRoomRelayHost.empty() ? "127.0.0.1" : project.listenRoomRelayHost;
+        settings.accessToken = project.listenRoomAccessToken;
+        settings.relayHttpPort = project.listenRoomRelayHttpPort;
+        settings.relayTcpIngestPort = project.listenRoomRelayTcpIngestPort;
+        return neuracoust::daw::normalizedListenRoomSettings(settings);
+    }
+
+    void pushListenSettings() {
+        engine.setListenRoomSettings(listenSettings());
     }
 };
 
@@ -505,4 +526,118 @@ bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot) {
         case 2: return module->speakerRoomEqC;
         default: return module->speakerRoomEqA;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Listen Room
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Ambiguity-free alphabet: no O/0, no I/l/1.
+std::string generateListenAccessToken() {
+    static const char alphabet[] =
+        "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    std::string token;
+    token.reserve(18);
+    for (int index = 0; index < 18; ++index) {
+        token.push_back(alphabet[arc4random_uniform(static_cast<uint32_t>(sizeof(alphabet) - 1))]);
+    }
+    return token;
+}
+
+} // namespace
+
+void nc_listen_status(NCEngine* engine, NCListenStatus* out) {
+    if (out == nullptr) {
+        return;
+    }
+    std::memset(out, 0, sizeof(*out));
+    if (engine == nullptr) {
+        return;
+    }
+
+    const auto status = engine->engine.status().listenRoom;
+    out->enabled = status.enabled;
+    out->senderRunning = status.senderRunning;
+    out->relayReachable = status.relayReachable;
+    out->nativeWebRtcOfferReady = status.nativeWebRtcOfferReady;
+    out->nativeWebRtcConnected = status.nativeWebRtcConnected;
+    out->packetsQueued = status.packetsQueued;
+    out->packetsSent = status.packetsSent;
+    out->packetsDropped = status.packetsDropped;
+    out->sendFailures = status.sendFailures;
+    out->queuedBlocks = status.queuedBlocks;
+    out->latencyTargetMs = status.latencyTargetMs;
+    out->targetBitrateKbps = status.targetBitrateKbps;
+    copyText(out->shareUrl, sizeof(out->shareUrl), status.shareUrl);
+    copyText(out->activeCodec, NC_TEXT_LEN, status.activeCodec);
+    copyText(out->qualityLabel, NC_TEXT_LEN, status.qualityLabel);
+    copyText(out->transportMode, NC_TEXT_LEN, status.transportMode);
+    copyText(out->message, NC_TEXT_LEN, status.message);
+}
+
+bool nc_listen_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->project.listenRoomEnabled;
+}
+
+void nc_listen_set_enabled(NCEngine* engine, bool enabled) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->project.listenRoomEnabled = enabled;
+    if (enabled && engine->project.listenRoomAccessToken.empty()) {
+        engine->project.listenRoomAccessToken = generateListenAccessToken();
+    }
+    engine->pushListenSettings();
+}
+
+void nc_listen_session_name(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->listenSettings().sessionName : std::string{});
+}
+
+void nc_listen_access_token(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.listenRoomAccessToken : std::string{});
+}
+
+void nc_listen_relay_host(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->listenSettings().relayHost : std::string{});
+}
+
+int nc_listen_relay_http_port(NCEngine* engine) {
+    return engine != nullptr ? engine->listenSettings().relayHttpPort : 0;
+}
+
+int nc_listen_relay_tcp_ingest_port(NCEngine* engine) {
+    return engine != nullptr ? engine->listenSettings().relayTcpIngestPort : 0;
+}
+
+void nc_listen_quality(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->listenSettings().quality : std::string{});
+}
+
+void nc_listen_set_quality(NCEngine* engine, const char* quality) {
+    if (engine == nullptr || quality == nullptr) return;
+    engine->project.listenRoomQuality = quality;
+    engine->pushListenSettings();
+}
+
+void nc_listen_latency_mode(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->listenSettings().latencyMode : std::string{});
+}
+
+void nc_listen_set_latency_mode(NCEngine* engine, const char* mode) {
+    if (engine == nullptr || mode == nullptr) return;
+    engine->project.listenRoomLatencyMode = mode;
+    engine->pushListenSettings();
+}
+
+void nc_listen_share_url(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    copyText(out, outLen, neuracoust::daw::listenRoomShareUrl(engine->listenSettings()));
+}
+
+void nc_listen_public_share_url(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    copyText(out, outLen, neuracoust::daw::listenRoomPublicShareUrl(engine->listenSettings()));
 }

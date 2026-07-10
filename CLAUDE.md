@@ -31,7 +31,9 @@ Three things this tree forces, all of which cost time to rediscover:
 | Editor hosts (engine spawns these) | `src/app/macos/*EditorHostMain.mm` | Kept verbatim |
 | C facade for Swift | `src/bridge/NeuracoustEngineBridge.{h,cpp}` | Transport + status; grows per panel |
 | Design tokens | `src/app/swift/Theme.swift` | Complete — from `docs/design-tokens.md` |
-| SwiftUI shell | `src/app/swift/{NeuracoustApp,TransportBar,EngineController}.swift` | Titlebar, transport, status strip, Edit/Mix tabs, monitor dock stub |
+| SwiftUI shell | `src/app/swift/{NeuracoustApp,TransportBar,EngineController}.swift` | Titlebar, transport, status strip, Edit/Mix tabs |
+| Monitor dock | `src/app/swift/{MonitorDock,MonitorControls}.swift` | Level, listen modes, A/B/C sets, meters, DSP modules, remote core |
+| Listen Room | `src/app/swift/{ListenRoom,ChatPanel}.swift` | Relay process, ssh tunnel, chat over `/api/chat` |
 
 **SwiftUI shell + AppKit/Metal embeds** is the agreed architecture. VST3 plugin editors must embed a native window in an `NSView` using the Steinberg SDK directly, so pure SwiftUI is impossible; the timeline already has a Metal backdrop and a 3,000-line `drawRect`. Everything else (transport, inspector, mixer layout, panels, dialogs) is far faster to build in SwiftUI.
 
@@ -56,6 +58,14 @@ These exist **only** in `../DAW/src/app/macos/DawWindowController.mm`:
 1. Undo/redo stack + dirty tracking + the autosave trigger (`setProjectDirty:`)
 2. DSP execution-mode policy (native / internal / remote_internal / external)
 3. Plugin editor process lifecycle + the parameter bridge
+
+## Listen Room
+
+The engine encodes and pushes audio (`ListenRoomSender`); it does not run the relay. The relay is a Python daemon from the sibling **Neuracoust Listen** project, bundled into the app by CMake from `NEURACOUST_LISTEN_SOURCE_DIR`.
+
+- `start-relay.sh` is a **launcher**: it `nohup`s the daemon and exits 0 once the daemon answers `/api/stats`. The script exiting is normal — do not read it as the relay dying. A non-zero exit is the only failure signal; the log is at `/tmp/neuracoust-listen-relay.log`.
+- Because the daemon is detached, the app reaps it explicitly (`pkill -f listen_relay.py`) on stop and on `willTerminate`. Without that it outlives the app. The same applies to the reverse ssh tunnel.
+- Chat rides the relay's `/api/chat` endpoint: GET with `since=<lastId>` polled once a second, POST to send. `sender` is `studio` for us.
 
 ## Open design questions
 

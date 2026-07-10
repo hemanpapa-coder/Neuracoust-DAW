@@ -127,6 +127,19 @@ final class EngineController: ObservableObject {
     private nonisolated(unsafe) var handle: OpaquePointer?
     private var timer: Timer?
 
+    /// Listen Room drives its own relay process but reads engine state, so it
+    /// borrows the handle and rides this controller's tick.
+    weak var listenRoom: ListenRoomController?
+
+    var rawHandle: OpaquePointer? { handle }
+
+    func readEngineString(capacity: Int = Int(NC_TEXT_LEN),
+                          _ fill: (UnsafeMutablePointer<CChar>, Int) -> Void) -> String {
+        var buffer = [CChar](repeating: 0, count: capacity)
+        fill(&buffer, buffer.count)
+        return String(cString: buffer)
+    }
+
     private var transportWallClockStart: CFTimeInterval = 0
     private var transportWallClockBase: Double = 0
 
@@ -381,6 +394,7 @@ final class EngineController: ObservableObject {
         }
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        listenRoom?.refresh()
     }
 
     private func updatePlayhead(engineSeconds: Double) {

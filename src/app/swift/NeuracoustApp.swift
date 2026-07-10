@@ -2,14 +2,28 @@ import SwiftUI
 
 @main
 struct NeuracoustApp: App {
-    @StateObject private var engine = EngineController()
+    @StateObject private var engine: EngineController
+    @StateObject private var listen: ListenRoomController
+
+    init() {
+        let engine = EngineController()
+        let listen = ListenRoomController(engine: engine)
+        engine.listenRoom = listen
+        _engine = StateObject(wrappedValue: engine)
+        _listen = StateObject(wrappedValue: listen)
+    }
 
     var body: some Scene {
         Window("Neuracoust DAW", id: "main") {
             RootView()
                 .environmentObject(engine)
+                .environmentObject(listen)
                 .task { engine.start() }
-                .onDisappear { engine.shutdown() }
+                .onDisappear {
+                    // The relay is a child process; it must not outlive the window.
+                    listen.shutdown()
+                    engine.shutdown()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1600, height: 980)
