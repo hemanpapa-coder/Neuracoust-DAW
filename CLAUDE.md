@@ -280,6 +280,16 @@ clip made every trimmed or split clip show audio it would never play.
 `nc_waveform_duration_seconds` returns 0 until the file's peaks have been read; the
 view needs it to do the mapping at all.
 
+## Monitor DSP path
+
+Three modes, each a distinct engine value: **내부 DSP** `internal`, **외부 DSP**
+`remote_external`, **NDS** `nds`. The engine's `setMonitorDspPathMode` accepts
+`internal` / `external` / `nds` / `remote_external` / `auto` and falls back to
+`internal` for anything else — so the earlier two-way toggle, which sent
+`remote_internal`, silently resolved to internal and External and NDS were never
+actually reachable. Verified the engine renders under all three with the transport
+running.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.

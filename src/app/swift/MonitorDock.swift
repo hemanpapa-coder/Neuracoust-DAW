@@ -388,12 +388,21 @@ struct MonitorDock: View {
     // MARK: DSP source, listen room, remote core
 
     private var dspSource: some View {
+        // Three distinct engine modes, matching the old UI. The previous two-way toggle
+        // sent "remote_internal", which the engine does not accept and quietly treated
+        // as internal, so External and NDS were never actually selectable.
         SegmentedRow(
-            items: ["internal", "remote_internal"],
-            label: { $0 == "internal" ? "내부 DSP" : "EXT / NDS" },
+            items: ["internal", "remote_external", "nds"],
+            label: {
+                switch $0 {
+                case "remote_external": return "외부 DSP"
+                case "nds": return "NDS"
+                default: return "내부 DSP"
+                }
+            },
             isActive: { $0 == engine.monitorPathMode },
             action: { engine.setMonitorPathMode($0) },
-            fontSize: 10
+            fontSize: 9
         )
     }
 
