@@ -27,6 +27,24 @@ struct NeuracoustApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1600, height: 980)
+        // The shortcut is delivered by EngineController's NSEvent monitor, which
+        // matches on key code. SwiftUI's keyboardShortcut matches on characters and
+        // therefore never fires while a Korean input source is active.
+        .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("실행 취소\(engine.canUndo ? ": \(engine.undoStepName)" : "")") {
+                    engine.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!engine.canUndo)
+
+                Button("다시 실행\(engine.canRedo ? ": \(engine.redoStepName)" : "")") {
+                    engine.redo()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!engine.canRedo)
+            }
+        }
     }
 }
 

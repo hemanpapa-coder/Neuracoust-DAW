@@ -8,6 +8,7 @@
 #include "plugins/PluginScanner.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
+#include "project/ProjectHistory.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +45,36 @@ struct NCEngine {
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
     neuracoust::daw::PluginCandidateFilterOptions facets;
+
+    neuracoust::daw::ProjectHistory history;
+    std::string projectPath;     // empty until the document has a home on disk
+    std::string autosaveError;
+
+    /// Records a step for a discrete edit, and autosaves if the document moved.
+    /// Continuous edits (fader, pan) must not call this on every frame — the caller
+    /// records once when the gesture ends.
+    void recordStep(const std::string& stepName) {
+        if (!history.recordEdit(project, stepName)) {
+            return;
+        }
+        autosave();
+    }
+
+    void autosave() {
+        if (projectPath.empty()) {
+            return;
+        }
+        std::string error;
+        if (history.isDirty()) {
+            if (!neuracoust::daw::writeProjectAutosaveFile(project, projectPath, error)) {
+                autosaveError = error.empty() ? "autosave failed" : error;
+                return;
+            }
+        } else {
+            neuracoust::daw::removeProjectAutosaveFile(projectPath, error);
+        }
+        autosaveError.clear();
+    }
 
     /// Every insert edit reconciles into the engine the cheap way first.
     void reconcileProject() {
@@ -109,6 +140,7 @@ NCEngine* nc_engine_create(void) {
     if (engine->project.monitorModules.empty()) {
         engine->project.monitorModules = neuracoust::daw::defaultMonitorDspModules();
     }
+    engine->history.reset(engine->project);
     return engine;
 }
 
@@ -337,6 +369,7 @@ void nc_project_set_loop_enabled(NCEngine* engine, bool enabled) {
     if (!engine->engine.updateProject(engine->project, error)) {
         engine->engine.loadProject(engine->project, error);
     }
+    engine->recordStep(enabled ? "Enable loop" : "Disable loop");
 }
 
 double nc_project_loop_start(NCEngine* engine) {
@@ -446,6 +479,7 @@ void nc_track_set_volume_db(NCEngine* engine, int index, float db) {
     if (track == nullptr) return;
     neuracoust::daw::setTrackVolumeDb(engine->project, track->name, db);
     pushTrackMix(engine, *track);
+    // Continuous: the caller records one step when the drag ends.
 }
 
 void nc_track_set_pan(NCEngine* engine, int index, float pan) {
@@ -453,6 +487,7 @@ void nc_track_set_pan(NCEngine* engine, int index, float pan) {
     if (track == nullptr) return;
     neuracoust::daw::setTrackPan(engine->project, track->name, pan);
     pushTrackMix(engine, *track);
+    // Continuous: the caller records one step when the drag ends.
 }
 
 void nc_track_set_muted(NCEngine* engine, int index, bool muted) {
@@ -460,6 +495,7 @@ void nc_track_set_muted(NCEngine* engine, int index, bool muted) {
     if (track == nullptr) return;
     neuracoust::daw::setTrackMuted(engine->project, track->name, muted);
     pushTrackRealtimeState(engine, *track);
+    engine->recordStep("Mute");
 }
 
 void nc_track_set_solo(NCEngine* engine, int index, bool solo) {
@@ -469,6 +505,7 @@ void nc_track_set_solo(NCEngine* engine, int index, bool solo) {
     // refuses outright on protected tracks (Master, Monitor).
     neuracoust::daw::setTrackSolo(engine->project, track->name, solo);
     pushTrackRealtimeState(engine, *track);
+    engine->recordStep("Solo");
 }
 
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed) {
@@ -476,6 +513,7 @@ void nc_track_set_record_armed(NCEngine* engine, int index, bool armed) {
     if (track == nullptr) return;
     neuracoust::daw::setTrackRecordArmed(engine->project, track->name, armed);
     pushTrackRealtimeState(engine, *track);
+    engine->recordStep("Record arm");
 }
 
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring) {
@@ -483,6 +521,7 @@ void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring)
     if (track == nullptr) return;
     neuracoust::daw::setTrackInputMonitoring(engine->project, track->name, monitoring);
     pushTrackRealtimeState(engine, *track);
+    engine->recordStep("Input monitoring");
 }
 
 int nc_track_insert_count(NCEngine* engine, int index) {
@@ -514,6 +553,7 @@ void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool by
     }
     track->inserts[static_cast<size_t>(slot)].bypassed = bypassed;
     engine->engine.updateTrackInsertBypassState(track->name, static_cast<size_t>(slot), bypassed);
+    engine->recordStep(bypassed ? "Bypass insert" : "Enable insert");
 }
 
 int nc_track_send_count(NCEngine* engine, int index) {
@@ -536,6 +576,113 @@ float nc_track_send_gain_db(NCEngine* engine, int index, int slot) {
         return 0.0f;
     }
     return track->sends[static_cast<size_t>(slot)].gainDb;
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+bool nc_history_record_gesture(NCEngine* engine, const char* stepName) {
+    if (engine == nullptr) {
+        return false;
+    }
+    const bool recorded = engine->history.recordEdit(engine->project,
+                                                    stepName != nullptr ? stepName : "");
+    if (recorded) {
+        engine->autosave();
+    }
+    return recorded;
+}
+
+bool nc_history_can_undo(NCEngine* engine) {
+    return engine != nullptr && engine->history.canUndo();
+}
+
+bool nc_history_can_redo(NCEngine* engine) {
+    return engine != nullptr && engine->history.canRedo();
+}
+
+int nc_history_undo_depth(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->history.undoDepth()) : 0;
+}
+
+void nc_history_undo_step_name(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->history.undoStepName() : std::string{});
+}
+
+void nc_history_redo_step_name(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->history.redoStepName() : std::string{});
+}
+
+namespace {
+
+/// A restored document can differ structurally, so the monitor chain and station
+/// controls have to be pushed again alongside the graph reconcile.
+void applyRestoredProject(NCEngine* engine) {
+    engine->reconcileProject();
+    engine->pushModules();
+    engine->pushStationControls();
+    engine->pushListenSettings();
+    engine->autosave();
+}
+
+} // namespace
+
+bool nc_history_undo(NCEngine* engine) {
+    if (engine == nullptr) {
+        return false;
+    }
+    std::string error;
+    if (!engine->history.undo(engine->project, error)) {
+        return false;
+    }
+    applyRestoredProject(engine);
+    return true;
+}
+
+bool nc_history_redo(NCEngine* engine) {
+    if (engine == nullptr) {
+        return false;
+    }
+    std::string error;
+    if (!engine->history.redo(engine->project, error)) {
+        return false;
+    }
+    applyRestoredProject(engine);
+    return true;
+}
+
+void nc_history_reset(NCEngine* engine) {
+    if (engine != nullptr) {
+        engine->history.reset(engine->project);
+        engine->autosave();
+    }
+}
+
+void nc_history_mark_saved(NCEngine* engine) {
+    if (engine != nullptr) {
+        engine->history.markSaved(engine->project);
+        engine->autosave();
+    }
+}
+
+bool nc_project_dirty(NCEngine* engine) {
+    return engine != nullptr && engine->history.isDirty();
+}
+
+void nc_project_set_path(NCEngine* engine, const char* path) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->projectPath = path != nullptr ? path : "";
+}
+
+void nc_project_path(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->projectPath : std::string{});
+}
+
+void nc_project_autosave_error(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->autosaveError : std::string{});
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +851,7 @@ bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {
         return false;
     }
     engine->reconcileProject();
+    engine->recordStep("Add " + insert.pluginName);
     return true;
 }
 
@@ -717,6 +865,7 @@ bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot) {
         return false;
     }
     engine->reconcileProject();
+    engine->recordStep("Remove insert");
     return true;
 }
 
@@ -731,6 +880,7 @@ int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int directi
         return -1;
     }
     engine->reconcileProject();
+    engine->recordStep("Move insert");
     return moved;
 }
 

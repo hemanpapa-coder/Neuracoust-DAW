@@ -339,7 +339,10 @@ struct ChannelStrip: View {
                     .font(Theme.Font.mono(7.5, .medium))
                     .foregroundStyle(Theme.Palette.textDim)
             }
-            PanSlider(pan: track.pan, accent: accent) { engine.setTrackPan(track.id, $0) }
+            PanSlider(pan: track.pan,
+                      accent: accent,
+                      onChange: { engine.setTrackPan(track.id, $0) },
+                      onCommit: { engine.recordGesture("Pan " + track.name) })
         }
     }
 
@@ -391,10 +394,11 @@ struct ChannelStrip: View {
             FaderScaleMarks(capHeight: 26)
                 .frame(height: 132)
 
-            ChannelFader(volumeDb: track.volumeDb, accent: accent) {
-                engine.setTrackVolume(track.id, $0)
-            }
-            .frame(width: 34, height: 132)
+            ChannelFader(volumeDb: track.volumeDb,
+                         accent: accent,
+                         onChange: { engine.setTrackVolume(track.id, $0) },
+                         onCommit: { engine.recordGesture("Volume " + track.name) })
+                .frame(width: 34, height: 132)
 
             HStack(spacing: 2) {
                 VerticalMeter(peak: track.peakLeft)

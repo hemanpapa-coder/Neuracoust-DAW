@@ -54,13 +54,25 @@ Three things this tree forces, all of which cost time to rediscover:
 
 ## Not yet ported out of the old UI — do this before anyone deletes it
 
-These exist **only** in `../DAW/src/app/macos/DawWindowController.mm`:
-1. Undo/redo stack + dirty tracking + the autosave trigger (`setProjectDirty:`)
-2. Plugin editor process lifecycle + the parameter bridge
+One piece is left in `../DAW/src/app/macos/DawWindowController.mm`:
 
-~~DSP execution-mode policy~~ — ported to `src/plugins/InsertDspPolicy.{h,cpp}` and pinned by `tests/InsertDspPolicyTest.cpp`. It belongs to the engine, not the UI: the mode strings are persisted in the project model.
+1. Plugin editor process lifecycle + the parameter bridge
 
-**Do the timeline after undo, not before.** A clip editor with no undo is a trap, and the undo stack is item 1 above.
+Already ported:
+- ~~DSP execution-mode policy~~ → `src/plugins/InsertDspPolicy.{h,cpp}`, pinned by `tests/InsertDspPolicyTest.cpp`. The mode strings are persisted in the project model, so the rules belong to the engine.
+- ~~Undo/redo + dirty tracking + autosave~~ → `src/project/ProjectHistory.{h,cpp}`, pinned by `tests/ProjectHistoryTest.cpp`. Snapshot-based, capped at 100 steps. Autosave lives in the bridge, which owns the project path.
+
+## Keyboard shortcuts must match on key code, not characters
+
+This machine types Korean. With a Korean input source active, `charactersIgnoringModifiers` for the Z key is not `"z"`, so any shortcut compared against a character silently stops working — including SwiftUI's `.keyboardShortcut("z")`. Match `NSEvent.keyCode` instead (Z is 6). The old UI already knew this: all 308 of its `NSMenuItem`s carry an empty `keyEquivalent` and every shortcut runs through an `NSEvent` monitor.
+
+Menu items still declare ⌘Z so the shortcut is discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers it.
+
+**Note for verification:** the computer-use tool cannot press Z here. It maps the character `"z"` to a key code using the active layout, which under Korean input yields key code 0 (the A key). Shortcut behaviour has to be checked by hand.
+
+## Undo granularity
+
+Continuous gestures (fader, pan, monitor knob) must record **one** step, not one per frame. The bridge deliberately records no history for `nc_track_set_volume_db` / `nc_track_set_pan`; the view calls `nc_history_record_gesture` when the drag ends. Everything else records itself.
 
 ## Listen Room
 

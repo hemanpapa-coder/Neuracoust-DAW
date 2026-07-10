@@ -154,6 +154,47 @@ void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t 
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);
 
 // ---------------------------------------------------------------------------
+// History (undo / redo / dirty / autosave)
+//
+// Every mutating call in this facade records a step automatically, EXCEPT the
+// continuous ones — track volume and pan. A fader drag would otherwise push a
+// hundred steps. Those are recorded by nc_history_record_gesture once the gesture
+// ends, and the caller must call it.
+// ---------------------------------------------------------------------------
+
+/// Records the current document under `stepName` if it differs from the last
+/// snapshot. Returns true when a step was actually pushed. Also triggers autosave.
+bool nc_history_record_gesture(NCEngine* engine, const char* stepName);
+
+bool nc_history_can_undo(NCEngine* engine);
+bool nc_history_can_redo(NCEngine* engine);
+int nc_history_undo_depth(NCEngine* engine);
+void nc_history_undo_step_name(NCEngine* engine, char* out, size_t outLen);
+void nc_history_redo_step_name(NCEngine* engine, char* out, size_t outLen);
+
+/// Restores the document and reconciles it into the running engine.
+bool nc_history_undo(NCEngine* engine);
+bool nc_history_redo(NCEngine* engine);
+
+/// Forget all history and treat the current document as the saved state. Use on
+/// new-project and after opening a file.
+void nc_history_reset(NCEngine* engine);
+
+/// The document was written to disk: dirty goes false, history is kept.
+void nc_history_mark_saved(NCEngine* engine);
+
+bool nc_project_dirty(NCEngine* engine);
+
+/// Where autosave writes. Empty (the default) disables autosave entirely; the
+/// document still tracks dirty state. Mirrors the legacy behaviour of only
+/// autosaving projects that already have a path on disk.
+void nc_project_set_path(NCEngine* engine, const char* path);
+void nc_project_path(NCEngine* engine, char* out, size_t outLen);
+
+/// The last autosave error, or empty. Cleared on the next successful write.
+void nc_project_autosave_error(NCEngine* engine, char* out, size_t outLen);
+
+// ---------------------------------------------------------------------------
 // Plugin browser
 //
 // Scanning ~1000 plug-ins costs about 90 ms, so it runs once and caches. The

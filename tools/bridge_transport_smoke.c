@@ -207,6 +207,128 @@ int main(void) {
         }
     }
 
+    // ---- history + autosave ----
+    {
+        // Autosave only fires for a document that has a home on disk.
+        const char* projectPath = "/tmp/neuracoust-smoke-project.ndaw";
+        const char* autosavePath = "/tmp/neuracoust-smoke-project.ndaw.autosave";
+        remove(autosavePath);
+        nc_project_set_path(engine, projectPath);
+        // Earlier sections of this test edited the document; start from a clean slate.
+        nc_history_reset(engine);
+
+        if (nc_project_dirty(engine)) {
+            fprintf(stderr, "FAIL: a fresh document should not be dirty\n");
+            failures++;
+        }
+        if (nc_history_can_undo(engine)) {
+            fprintf(stderr, "FAIL: a fresh document should have no history\n");
+            failures++;
+        }
+
+        // A discrete edit records a step on its own.
+        nc_track_set_muted(engine, 0, true);
+        if (!nc_history_can_undo(engine) || !nc_project_dirty(engine)) {
+            fprintf(stderr, "FAIL: muting did not record a step\n");
+            failures++;
+        }
+        char stepName[128] = {0};
+        nc_history_undo_step_name(engine, stepName, sizeof(stepName));
+        printf("history: depth=%d step='%s' dirty=%d\n",
+               nc_history_undo_depth(engine), stepName, nc_project_dirty(engine));
+        if (strcmp(stepName, "Mute") != 0) {
+            fprintf(stderr, "FAIL: step name is '%s', expected 'Mute'\n", stepName);
+            failures++;
+        }
+
+        FILE* autosave = fopen(autosavePath, "r");
+        if (autosave == NULL) {
+            fprintf(stderr, "FAIL: no autosave file at %s\n", autosavePath);
+            failures++;
+        } else {
+            fclose(autosave);
+            printf("autosave written to %s\n", autosavePath);
+        }
+
+        // A fader drag is continuous: many set calls, then one recorded step.
+        const int depthBefore = nc_history_undo_depth(engine);
+        for (int frame = 0; frame < 30; ++frame) {
+            nc_track_set_volume_db(engine, 0, -1.0f * (float)frame);
+        }
+        if (nc_history_undo_depth(engine) != depthBefore) {
+            fprintf(stderr, "FAIL: dragging a fader recorded %d steps by itself\n",
+                    nc_history_undo_depth(engine) - depthBefore);
+            failures++;
+        }
+        if (!nc_history_record_gesture(engine, "Volume")) {
+            fprintf(stderr, "FAIL: the gesture recorded no step\n");
+            failures++;
+        }
+        if (nc_history_undo_depth(engine) != depthBefore + 1) {
+            fprintf(stderr, "FAIL: a drag should record exactly one step\n");
+            failures++;
+        }
+        // Recording again with nothing changed must not push an empty step.
+        if (nc_history_record_gesture(engine, "Volume")) {
+            fprintf(stderr, "FAIL: an unchanged document recorded a step\n");
+            failures++;
+        }
+
+        // Undo the volume, then the mute.
+        if (!nc_history_undo(engine) || nc_track_volume_db(engine, 0) != 0.0f) {
+            fprintf(stderr, "FAIL: undo did not restore the volume (%.2f)\n",
+                    nc_track_volume_db(engine, 0));
+            failures++;
+        }
+        if (!nc_history_undo(engine) || nc_track_muted(engine, 0)) {
+            fprintf(stderr, "FAIL: undo did not restore the mute\n");
+            failures++;
+        }
+        if (nc_project_dirty(engine)) {
+            fprintf(stderr, "FAIL: undoing back to the start should be clean\n");
+            failures++;
+        }
+        if (nc_history_can_undo(engine)) {
+            fprintf(stderr, "FAIL: the undo stack should be empty\n");
+            failures++;
+        }
+
+        // Redo replays them.
+        if (!nc_history_redo(engine) || !nc_track_muted(engine, 0)) {
+            fprintf(stderr, "FAIL: redo did not reapply the mute\n");
+            failures++;
+        }
+        if (!nc_history_redo(engine) || nc_track_volume_db(engine, 0) > -28.0f) {
+            fprintf(stderr, "FAIL: redo did not reapply the volume (%.2f)\n",
+                    nc_track_volume_db(engine, 0));
+            failures++;
+        }
+
+        // A new edit after undo discards the redo stack.
+        nc_history_undo(engine);
+        if (!nc_history_can_redo(engine)) {
+            fprintf(stderr, "FAIL: undo should enable redo\n");
+            failures++;
+        }
+        nc_track_set_solo(engine, 1, true);
+        if (nc_history_can_redo(engine)) {
+            fprintf(stderr, "FAIL: a new edit should discard the redo stack\n");
+            failures++;
+        }
+        nc_track_set_solo(engine, 1, false);
+
+        char autosaveError[128] = {0};
+        nc_project_autosave_error(engine, autosaveError, sizeof(autosaveError));
+        if (strlen(autosaveError) > 0) {
+            fprintf(stderr, "FAIL: autosave error '%s'\n", autosaveError);
+            failures++;
+        }
+
+        // Leave nothing behind.
+        nc_project_set_path(engine, "");
+        remove(autosavePath);
+    }
+
     // ---- monitor station ----
     const int moduleCount = nc_monitor_module_count(engine);
     printf("monitor modules: %d\n", moduleCount);

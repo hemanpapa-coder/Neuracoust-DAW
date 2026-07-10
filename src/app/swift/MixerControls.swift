@@ -73,6 +73,8 @@ struct ChannelFader: View {
     let volumeDb: Float
     let accent: Color
     let onChange: (Float) -> Void
+    /// Fires once when the drag ends, so one drag is one undo step.
+    var onCommit: () -> Void = {}
 
     @State private var dragStartDb: Float?
 
@@ -107,11 +109,17 @@ struct ChannelFader: View {
                         let position = FaderScale.position(forDb: start) + Double(delta)
                         onChange(FaderScale.db(forPosition: position))
                     }
-                    .onEnded { _ in dragStartDb = nil }
+                    .onEnded { _ in
+                        dragStartDb = nil
+                        onCommit()
+                    }
             )
             // A DragGesture with minimumDistance 0 swallows taps, so the reset has
             // to outrank it.
-            .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(0) })
+            .highPriorityGesture(TapGesture(count: 2).onEnded {
+                onChange(0)
+                onCommit()
+            })
         }
     }
 
@@ -148,6 +156,7 @@ struct PanSlider: View {
     let pan: Float
     let accent: Color
     let onChange: (Float) -> Void
+    var onCommit: () -> Void = {}
 
     var body: some View {
         GeometryReader { geo in
@@ -177,8 +186,12 @@ struct PanSlider: View {
                         if abs(value) < 0.05 { value = 0 }   // centre detent
                         onChange(value)
                     }
+                    .onEnded { _ in onCommit() }
             )
-            .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(0) })
+            .highPriorityGesture(TapGesture(count: 2).onEnded {
+                onChange(0)
+                onCommit()
+            })
         }
         .frame(height: 12)
     }

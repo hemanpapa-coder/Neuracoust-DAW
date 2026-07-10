@@ -7,6 +7,7 @@ struct RotaryKnob: View {
     let range: ClosedRange<Float>
     let resetValue: Float
     let onChange: (Float) -> Void
+    var onCommit: () -> Void = {}
 
     @State private var dragStartValue: Float?
 
@@ -63,10 +64,16 @@ struct RotaryKnob: View {
                     let delta = Float(-drag.translation.height / 120) * span
                     onChange(min(range.upperBound, max(range.lowerBound, start + delta)))
                 }
-                .onEnded { _ in dragStartValue = nil }
+                .onEnded { _ in
+                    dragStartValue = nil
+                    onCommit()
+                }
         )
         // The drag gesture would otherwise swallow the double-click.
-        .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(resetValue) })
+        .highPriorityGesture(TapGesture(count: 2).onEnded {
+            onChange(resetValue)
+            onCommit()
+        })
     }
 }
 

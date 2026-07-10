@@ -98,6 +98,7 @@ add_library(neuracoust_daw_core
     src/project/StemMagicBridge.cpp
     src/project/TimelineExport.cpp
     src/project/ProjectDocument.cpp
+    src/project/ProjectHistory.cpp
     src/ui/common/DawUiModel.cpp
     src/bridge/NeuracoustEngineBridge.cpp)
 
@@ -486,6 +487,11 @@ add_executable(neuracoust_daw_remote_dsp_tests tests/RemoteDspServerClientTest.c
 neuracoust_link_core(neuracoust_daw_remote_dsp_tests)
 neuracoust_enable_release_asserts(neuracoust_daw_remote_dsp_tests)
 add_test(NAME remote_dsp_server_client COMMAND neuracoust_daw_remote_dsp_tests)
+
+add_executable(neuracoust_project_history_tests tests/ProjectHistoryTest.cpp)
+neuracoust_link_core(neuracoust_project_history_tests)
+neuracoust_enable_release_asserts(neuracoust_project_history_tests)
+add_test(NAME project_history COMMAND neuracoust_project_history_tests)
 
 add_executable(neuracoust_insert_dsp_policy_tests tests/InsertDspPolicyTest.cpp)
 neuracoust_link_core(neuracoust_insert_dsp_policy_tests)

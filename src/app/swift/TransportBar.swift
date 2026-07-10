@@ -12,8 +12,9 @@ struct TitleBar: View {
                 Text("· \(engine.projectName).ndaw")
                     .font(Theme.Font.ui(11))
                     .foregroundStyle(Theme.Palette.textMuted)
+                // Amber only when there are unsaved changes.
                 Circle()
-                    .fill(Theme.Palette.amber)
+                    .fill(engine.projectDirty ? Theme.Palette.amber : Theme.Palette.textFainter)
                     .frame(width: 6, height: 6)
             }
 
@@ -288,6 +289,10 @@ struct StatusStrip: View {
 
             if engine.activeInsertCount > 0 {
                 stat("INSERTS", "\(engine.activeInsertCount)")
+            }
+
+            if engine.canUndo {
+                stat("UNDO", engine.undoStepName)
             }
 
             marker("◆", "MONITOR DSP", Theme.Palette.purple)

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -42,6 +43,13 @@ final class EngineController: ObservableObject {
 
     @Published private(set) var projectName = ""
     @Published private(set) var tempoBpm = 120
+
+    // MARK: History
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    @Published private(set) var undoStepName = ""
+    @Published private(set) var redoStepName = ""
+    @Published private(set) var projectDirty = false
     @Published private(set) var timeSignature = (numerator: 4, denominator: 4)
 
     // MARK: Tracks
@@ -225,6 +233,7 @@ final class EngineController: ObservableObject {
         guard let handle, let trackId = pluginTargetTrack else { return }
         if nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex)) {
             reloadTracks()
+            refreshHistory()
         }
     }
 
@@ -232,6 +241,7 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         if nc_track_remove_insert(handle, Int32(trackId), Int32(slot)) {
             reloadTracks()
+            refreshHistory()
         }
     }
 
@@ -239,6 +249,7 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         if nc_track_move_insert(handle, Int32(trackId), Int32(slot), Int32(direction)) >= 0 {
             reloadTracks()
+            refreshHistory()
         }
     }
 
@@ -248,6 +259,7 @@ final class EngineController: ObservableObject {
               slot < track.inserts.count else { return }
         nc_track_set_insert_bypassed(handle, Int32(trackId), Int32(slot), !track.inserts[slot].bypassed)
         reloadTracks()
+        refreshHistory()
     }
 
     // MARK: Monitor station
@@ -336,6 +348,7 @@ final class EngineController: ObservableObject {
     /// Marked nonisolated so `deinit` can free it; nothing else ever holds it.
     private nonisolated(unsafe) var handle: OpaquePointer?
     private var timer: Timer?
+    private var keyMonitor: Any?
 
     /// Listen Room drives its own relay process but reads engine state, so it
     /// borrows the handle and rides this controller's tick.
@@ -385,6 +398,9 @@ final class EngineController: ObservableObject {
         loopEnabled = nc_project_loop_enabled(handle)
         reloadTracks()
         reloadMonitorState()
+        nc_history_reset(handle)
+        refreshHistory()
+        installKeyMonitor()
 
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -393,7 +409,43 @@ final class EngineController: ObservableObject {
         self.timer = timer
     }
 
+    /// The old UI drove every shortcut from an NSEvent monitor rather than menu key
+    /// equivalents — all 308 of its menu items carry an empty keyEquivalent. Menu
+    /// shortcuts do not reach this window reliably, so do the same here.
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return MainActor.assumeIsolated { self.handleKeyDown(event) }
+        }
+    }
+
+    /// Hardware key code for Z on an ANSI layout. Matching on characters breaks the
+    /// moment a Korean input source is active: `charactersIgnoringModifiers` then
+    /// reports "ㅁ", not "z".
+    private static let keyCodeZ: UInt16 = 6
+
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        // Never steal keys while the user is typing.
+        if NSApp.keyWindow?.firstResponder is NSTextView {
+            return event
+        }
+        guard event.modifierFlags.contains(.command),
+              event.keyCode == Self.keyCodeZ else {
+            return event
+        }
+        if event.modifierFlags.contains(.shift) {
+            redo()
+        } else {
+            undo()
+        }
+        return nil
+    }
+
     func shutdown() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        keyMonitor = nil
         timer?.invalidate()
         timer = nil
         if let handle {
@@ -515,6 +567,8 @@ final class EngineController: ObservableObject {
     /// Mixer strips show every track; the master meter panel handles the master bus.
     var mixerTracks: [Track] { tracks.filter { $0.kind != .monitor } }
 
+    /// Volume and pan are continuous. The bridge records no history for them; the
+    /// view calls recordGesture once the drag ends, so one drag is one undo step.
     func setTrackVolume(_ id: Int, _ db: Float) {
         guard let handle else { return }
         nc_track_set_volume_db(handle, Int32(id), db)
@@ -527,10 +581,41 @@ final class EngineController: ObservableObject {
         syncTrack(id)
     }
 
+    func recordGesture(_ stepName: String) {
+        guard let handle else { return }
+        if nc_history_record_gesture(handle, stepName) {
+            refreshHistory()
+        }
+    }
+
+    func undo() {
+        guard let handle, nc_history_undo(handle) else { return }
+        reloadTracks()
+        reloadMonitorState()
+        refreshHistory()
+    }
+
+    func redo() {
+        guard let handle, nc_history_redo(handle) else { return }
+        reloadTracks()
+        reloadMonitorState()
+        refreshHistory()
+    }
+
+    private func refreshHistory() {
+        guard let handle else { return }
+        canUndo = nc_history_can_undo(handle)
+        canRedo = nc_history_can_redo(handle)
+        projectDirty = nc_project_dirty(handle)
+        undoStepName = readEngineString { nc_history_undo_step_name(handle, $0, $1) }
+        redoStepName = readEngineString { nc_history_redo_step_name(handle, $0, $1) }
+    }
+
     func toggleTrackMute(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
         nc_track_set_muted(handle, Int32(id), !track.muted)
         syncTrack(id)
+        refreshHistory()
     }
 
     /// Solo is additive here, the way the engine models it — several tracks can be
@@ -539,18 +624,21 @@ final class EngineController: ObservableObject {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
         nc_track_set_solo(handle, Int32(id), !track.solo)
         syncTrack(id)
+        refreshHistory()
     }
 
     func toggleTrackArm(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
         nc_track_set_record_armed(handle, Int32(id), !track.recordArmed)
         syncTrack(id)
+        refreshHistory()
     }
 
     func toggleTrackInputMonitoring(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
         nc_track_set_input_monitoring(handle, Int32(id), !track.inputMonitoring)
         syncTrack(id)
+        refreshHistory()
     }
 
     /// Re-read one track's mutable fields from the engine rather than assuming the
