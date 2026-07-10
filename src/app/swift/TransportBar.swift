@@ -88,10 +88,13 @@ struct TransportBar: View {
                 engine.togglePlay()
             }
             transportKey("stop.fill") { engine.stop() }
-            transportKey("circle.fill",
+            // Not a take recorder: it arms the input monitor path. Drawn hollow so it
+            // does not read as a transport that captures audio.
+            transportKey("circle",
                          tint: engine.recording ? Theme.Palette.red : Theme.Palette.textDim) {
                 engine.toggleRecording()
             }
+            .help("입력 모니터 경로 (녹음 아님)")
         }
     }
 

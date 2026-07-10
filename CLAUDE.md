@@ -117,6 +117,23 @@ A lane folds out from the "A" chip in its timeline header; the parameter name be
 it is also the parameter picker. Clicking empty space adds a point, dragging moves
 one (continuous — the view commits the gesture), double-clicking removes it.
 
+## There is no recording
+
+The transport's round button is **not** a take recorder. `nc_engine_set_recording` →
+`setTransportRecordingActive` only flips the monitor path for record-armed tracks;
+its own status message says so ("Tape record monitor path active"). Nothing in the
+engine writes captured audio to disk, and the old UI never did either.
+
+Input samples do reach the engine: the CoreAudio input **AudioQueue** hands them to
+`NeuracoustDspEngine::pushInputMonitorInterleaved`, which drops them unless input
+monitoring or talkback is on, and then only into a mutex-guarded monitor buffer.
+
+Real recording is therefore engine work, not UI work, and it is not a small change:
+the input arrives on an AudioQueue that is separate from the output AudioUnit's
+render callback, so captured frames carry no sample-accurate relationship to the
+playhead. Punch-in that lands where the picture says it does needs input on the
+render clock first.
+
 ## Markers
 
 Nothing in the audio path reads them. They already existed and nothing showed them:

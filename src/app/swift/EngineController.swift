@@ -619,10 +619,16 @@ final class EngineController: ObservableObject {
         transportWallClockStart = CACurrentMediaTime()
     }
 
+    /// This does **not** capture audio. `nc_engine_set_recording` switches the
+    /// monitor path for record-armed tracks — the engine has no input capture and
+    /// never writes a take to disk. Nothing here should suggest otherwise.
     func toggleRecording() {
         guard let handle else { return }
         recording.toggle()
         nc_engine_set_recording(handle, recording)
+        lastError = recording
+            ? "입력 모니터 경로만 전환합니다. 이 엔진은 아직 녹음을 디스크에 기록하지 않습니다."
+            : nil
     }
 
     func toggleLoop() {
