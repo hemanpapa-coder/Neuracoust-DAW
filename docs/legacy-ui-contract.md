@@ -265,7 +265,16 @@ listenRoomChatPollTimer_ = [NSTimer scheduledTimerWithTimeInterval:1.0 ...];
 - **행선지: 엔진.** 모드 **문자열**은 프로젝트 모델에 저장되지만 **판단 규칙**은 여기에만 있다.
   잃으면 코어 격리 / 아웃오브프로세스 플러그인 라우팅이 깨진다.
 
-### 3. 플러그인 에디터 프로세스 수명주기 + 파라미터 브리지 — 🟠 높음, 엔진에 없음
+### 3. 플러그인 에디터 프로세스 수명주기 + 파라미터 브리지 — ✅ 이식 완료
+> `src/app/swift/PluginEditor.swift` + 브리지의 `nc_track_set_vst3_parameter` /
+> `nc_track_insert_observer`. 트랙 인서트만 옮겼다 — 인스트루먼트 슬롯, 마스터 인서트,
+> 모니터 스피커 슬롯(아래의 인코딩된 인덱스 체계)과 Waves RS124 미러링은 아직 없다.
+> 프로토콜(실측): 호스트→앱 `READY`, `PARAM <id> <normalized>`, `HOST_STAGE`, `HOST_ERROR`;
+> 앱→호스트 `PARAM_SET <id> <normalized>`. 호스트는 `PARAM_SET` 으로 받은 값을
+> `lastPolledParameterValues_` 에 기록하므로 복원한 값이 `PARAM` 으로 되돌아오지 않는다(핑퐁 없음).
+
+<details><summary>원본 위치</summary>
+
 - 멤버: `nativeVst3Editors_` (19479), `nativeVst3HostTasks_` (19481),
   `mp4RenderTask_`, `stemMagicTasks_`, relay tasks (19482–19493)
 - 스폰/호스트 관리: AU 호스트 33754–33890, VST3 호스트 33898–34322
@@ -280,6 +289,7 @@ listenRoomChatPollTimer_ = [NSTimer scheduledTimerWithTimeInterval:1.0 ...];
 - **행선지: app/controller 레이어 (엔진 측 헬퍼 동반).**
   파라미터 *저장소*는 엔진 모델이지만 프로세스 수명주기, 인덱스 인코딩, 크래시 복구,
   Waves 미러링은 여기에만 있다. 잃으면 에디터가 안 열리고 파라미터 편집이 저장되지 않는다.
+</details>
 
 ### 4. 클립보드 버퍼 + 붙여넣기 정책 — 🟡 중상
 - 상태: `clipClipboard_` (ClipState), `rangeClipboard_` (vector<ClipState>), 유효 플래그 (19369–19371)
