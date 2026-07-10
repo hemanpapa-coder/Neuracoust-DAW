@@ -56,6 +56,11 @@ struct RootView: View {
         }
         .background(Theme.Palette.background)
         .preferredColorScheme(.dark)
+        .overlay {
+            if engine.pluginBrowserOpen {
+                PluginBrowser()
+            }
+        }
     }
 }
 

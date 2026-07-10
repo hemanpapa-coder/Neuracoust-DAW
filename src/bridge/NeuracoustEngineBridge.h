@@ -57,6 +57,13 @@ typedef struct {
     bool remoteDspMonitorActive;
     double remoteDspRoundTripMs;
 
+    // How many inserts the engine is actually running, and where. The only honest
+    // way to tell that a plug-in really loaded.
+    int activeRealtimeVst3TrackInserts;
+    int activeRealtimeVst3MasterInserts;
+    int activeRemoteDspTrackInserts;
+    int activeOfflineVst3TrackInserts;
+
     // Meters arrive as parallel arrays keyed by track name, not by track index.
     int trackMeterCount;
     char trackMeterNames[NC_MAX_TRACK_METERS][NC_NAME_LEN];
@@ -145,6 +152,55 @@ void nc_track_set_insert_bypassed(NCEngine* engine, int index, int slot, bool by
 int nc_track_send_count(NCEngine* engine, int index);
 void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);
+
+// ---------------------------------------------------------------------------
+// Plugin browser
+//
+// Scanning ~1000 plug-ins costs about 90 ms, so it runs once and caches. The
+// filtered view is recomputed by nc_plugin_apply_filter; every accessor below
+// indexes into that filtered list.
+// ---------------------------------------------------------------------------
+
+/// Scans installed plug-ins into the engine's cache. Returns the total found.
+int nc_plugin_scan(NCEngine* engine);
+
+/// Empty strings mean "no constraint". Returns the number of matches.
+int nc_plugin_apply_filter(NCEngine* engine,
+                           const char* text,
+                           const char* brand,
+                           const char* category,
+                           const char* format);
+
+int nc_plugin_count(NCEngine* engine);
+void nc_plugin_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_plugin_brand(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_plugin_category(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_plugin_format(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_plugin_path(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_plugin_exists(NCEngine* engine, int index);
+
+/// Facet kinds for the browser's filter columns.
+#define NC_FACET_BRAND 0
+#define NC_FACET_CATEGORY 1
+#define NC_FACET_FORMAT 2
+#define NC_FACET_SCOPE 3
+
+/// Facets describe the full scan, not the filtered view, so the columns stay stable.
+int nc_plugin_facet_count(NCEngine* engine, int kind);
+void nc_plugin_facet_name(NCEngine* engine, int kind, int index, char* out, size_t outLen);
+/// How many of the scanned plug-ins carry this facet value.
+int nc_plugin_facet_tally(NCEngine* engine, int kind, int index);
+
+/// Adds the filtered plug-in at `pluginIndex` to the first free insert slot on the
+/// track, appending a slot if needed. The slot's DSP execution mode comes from
+/// InsertDspPolicy. Returns false when the track refuses inserts or is full.
+bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex);
+bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot);
+/// direction is -1 (earlier in the chain) or +1. Returns the new slot index, or -1.
+int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction);
+
+/// "NAT", "INT", "RINT" or "EXT" — what the insert will actually run on.
+void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);
 
 // ---------------------------------------------------------------------------
 // Monitor station

@@ -56,8 +56,11 @@ Three things this tree forces, all of which cost time to rediscover:
 
 These exist **only** in `../DAW/src/app/macos/DawWindowController.mm`:
 1. Undo/redo stack + dirty tracking + the autosave trigger (`setProjectDirty:`)
-2. DSP execution-mode policy (native / internal / remote_internal / external)
-3. Plugin editor process lifecycle + the parameter bridge
+2. Plugin editor process lifecycle + the parameter bridge
+
+~~DSP execution-mode policy~~ — ported to `src/plugins/InsertDspPolicy.{h,cpp}` and pinned by `tests/InsertDspPolicyTest.cpp`. It belongs to the engine, not the UI: the mode strings are persisted in the project model.
+
+**Do the timeline after undo, not before.** A clip editor with no undo is a trap, and the undo stack is item 1 above.
 
 ## Listen Room
 

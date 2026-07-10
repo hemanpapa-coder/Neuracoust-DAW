@@ -217,6 +217,8 @@ struct VerticalMeter: View {
 struct SlotChip: View {
     let label: String
     let accent: Color
+    var bypassed = false
+    var badge: String = ""
     var action: (() -> Void)?
 
     var body: some View {
@@ -229,22 +231,33 @@ struct SlotChip: View {
                     )
             } else {
                 HStack(spacing: 0) {
-                    Rectangle().fill(accent).frame(width: 2)
+                    Rectangle().fill(bypassed ? Theme.Palette.textFainter : accent).frame(width: 2)
                     Text(label)
                         .font(Theme.Font.ui(8))
-                        .foregroundStyle(accent)
+                        .foregroundStyle(bypassed ? Theme.Palette.textFaint : accent)
+                        .strikethrough(bypassed)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .padding(.leading, 4)
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 2)
+                    // "INT" and "RINT" mean the plug-in runs off the audio thread.
+                    if !badge.isEmpty && badge != "NAT" && !bypassed {
+                        Text(badge)
+                            .font(Theme.Font.mono(6))
+                            .foregroundStyle(Theme.Palette.purple)
+                            .padding(.trailing, 3)
+                    }
                 }
                 .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(accent.opacity(0.12))
+                    RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                        .fill((bypassed ? Theme.Palette.textFainter : accent).opacity(0.12))
                 )
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
             }
         }
         .frame(height: 14)
+        // Without this an empty slot only responds on its dashed stroke.
+        .contentShape(Rectangle())
         .onTapGesture { action?() }
     }
 }

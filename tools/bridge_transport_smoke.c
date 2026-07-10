@@ -130,6 +130,83 @@ int main(void) {
     nc_track_set_solo(engine, 0, false);
     nc_track_set_solo(engine, 1, false);
 
+    // ---- plugin browser + inserts ----
+    const int scanned = nc_plugin_scan(engine);
+    printf("plugins scanned: %d\n", scanned);
+    if (scanned <= 0) {
+        printf("(no plug-ins installed — skipping insert checks)\n");
+    } else {
+        printf("facets: brands=%d categories=%d formats=%d\n",
+               nc_plugin_facet_count(engine, NC_FACET_BRAND),
+               nc_plugin_facet_count(engine, NC_FACET_CATEGORY),
+               nc_plugin_facet_count(engine, NC_FACET_FORMAT));
+
+        // Narrow to one VST3 so the insert we add is one the engine can host.
+        const int matches = nc_plugin_apply_filter(engine, "", "", "", "VST3");
+        printf("VST3 matches: %d\n", matches);
+        if (matches <= 0) {
+            fprintf(stderr, "FAIL: no VST3 plug-ins after filtering\n");
+            failures++;
+        } else {
+            char pluginName[128] = {0};
+            nc_plugin_name(engine, 0, pluginName, sizeof(pluginName));
+
+            const int before = nc_track_insert_count(engine, 0);
+            if (!nc_track_add_insert(engine, 0, 0)) {
+                fprintf(stderr, "FAIL: could not add '%s' to track 0\n", pluginName);
+                failures++;
+            } else {
+                const int after = nc_track_insert_count(engine, 0);
+                char slotName[128] = {0};
+                char badge[128] = {0};
+                nc_track_insert_name(engine, 0, 0, slotName, sizeof(slotName));
+                nc_track_insert_mode_badge(engine, 0, 0, badge, sizeof(badge));
+                printf("insert added: '%s' badge=%s  slots %d -> %d\n",
+                       slotName, badge, before, after);
+
+                if (strcmp(slotName, pluginName) != 0) {
+                    fprintf(stderr, "FAIL: slot holds '%s', expected '%s'\n", slotName, pluginName);
+                    failures++;
+                }
+                // Core isolation is on in the default project, so a loaded VST3
+                // must land on the isolated core rather than the audio thread.
+                if (strcmp(badge, "INT") != 0) {
+                    fprintf(stderr, "FAIL: badge is '%s', expected 'INT'\n", badge);
+                    failures++;
+                }
+
+                // Prove the engine really hosts it: roll the transport and ask how
+                // many inserts it is running.
+                nc_engine_set_transport_running(engine, true);
+                usleep(1500 * 1000);
+                nc_engine_status(engine, &status);
+                nc_engine_set_transport_running(engine, false);
+                printf("active inserts: realtime=%d remote=%d offline=%d\n",
+                       status.activeRealtimeVst3TrackInserts,
+                       status.activeRemoteDspTrackInserts,
+                       status.activeOfflineVst3TrackInserts);
+                const int hosted = status.activeRealtimeVst3TrackInserts +
+                                   status.activeRemoteDspTrackInserts +
+                                   status.activeOfflineVst3TrackInserts;
+                if (hosted < 1) {
+                    fprintf(stderr, "FAIL: engine hosts no insert after adding one\n");
+                    failures++;
+                }
+
+                nc_track_set_insert_bypassed(engine, 0, 0, true);
+                if (!nc_track_insert_bypassed(engine, 0, 0)) {
+                    fprintf(stderr, "FAIL: insert bypass did not latch\n");
+                    failures++;
+                }
+
+                if (!nc_track_remove_insert(engine, 0, 0)) {
+                    fprintf(stderr, "FAIL: could not remove the insert\n");
+                    failures++;
+                }
+            }
+        }
+    }
+
     // ---- monitor station ----
     const int moduleCount = nc_monitor_module_count(engine);
     printf("monitor modules: %d\n", moduleCount);

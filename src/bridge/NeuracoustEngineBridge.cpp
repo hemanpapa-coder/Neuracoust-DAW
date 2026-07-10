@@ -3,7 +3,9 @@
 #include "audio/ListenRoom.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
+#include "plugins/InsertDspPolicy.h"
 #include "plugins/MonitorDspModules.h"
+#include "plugins/PluginScanner.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
 
@@ -12,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using neuracoust::daw::AudioEngineSettings;
 using neuracoust::daw::AudioEngineStatus;
@@ -37,6 +40,19 @@ struct NCEngine {
     ProjectDocument project = neuracoust::daw::defaultProject();
     bool monitorDspEnabled = true;
     std::string monitorDspPathMode = "internal";
+
+    std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
+    std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
+    neuracoust::daw::PluginCandidateFilterOptions facets;
+
+    /// Every insert edit reconciles into the engine the cheap way first.
+    void reconcileProject() {
+        neuracoust::daw::normalizeProjectRouting(project);
+        std::string error;
+        if (!engine.updateProject(project, error)) {
+            engine.loadProject(project, error);
+        }
+    }
 
     MonitorDspModule* speakerSimulation() {
         for (auto& module : project.monitorModules) {
@@ -188,6 +204,10 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->realtimeLateWakeCount = s.realtimeLateWakeCount;
     out->remoteDspMonitorActive = s.remoteDspMonitorActive;
     out->remoteDspRoundTripMs = s.remoteDspRoundTripMs;
+    out->activeRealtimeVst3TrackInserts = s.activeRealtimeVst3TrackInsertCount;
+    out->activeRealtimeVst3MasterInserts = s.activeRealtimeVst3MasterInsertCount;
+    out->activeRemoteDspTrackInserts = s.activeRemoteDspTrackInsertCount;
+    out->activeOfflineVst3TrackInserts = s.activeOfflineVst3TrackInsertCount;
 
     const size_t meterCount = std::min({s.trackMeterNames.size(),
                                         s.trackPeakLeft.size(),
@@ -516,6 +536,213 @@ float nc_track_send_gain_db(NCEngine* engine, int index, int slot) {
         return 0.0f;
     }
     return track->sends[static_cast<size_t>(slot)].gainDb;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin browser
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const neuracoust::daw::PluginCandidate* pluginAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->filteredPlugins.size()) {
+        return nullptr;
+    }
+    return &engine->filteredPlugins[static_cast<size_t>(index)];
+}
+
+const std::vector<std::string>* facetList(NCEngine* engine, int kind) {
+    if (engine == nullptr) return nullptr;
+    switch (kind) {
+        case NC_FACET_BRAND: return &engine->facets.brands;
+        case NC_FACET_CATEGORY: return &engine->facets.categories;
+        case NC_FACET_FORMAT: return &engine->facets.formats;
+        case NC_FACET_SCOPE: return &engine->facets.scopes;
+        default: return nullptr;
+    }
+}
+
+std::string facetValueOf(const neuracoust::daw::PluginCandidate& candidate, int kind) {
+    switch (kind) {
+        case NC_FACET_BRAND: return candidate.brand;
+        case NC_FACET_CATEGORY: return candidate.category;
+        case NC_FACET_FORMAT: return candidate.format;
+        case NC_FACET_SCOPE: return candidate.scope;
+        default: return {};
+    }
+}
+
+} // namespace
+
+int nc_plugin_scan(NCEngine* engine) {
+    if (engine == nullptr) return 0;
+    engine->plugins = neuracoust::daw::scanKnownPluginLocations();
+    neuracoust::daw::sortPluginCandidatesForDisplay(engine->plugins);
+    engine->facets = neuracoust::daw::pluginCandidateFilterOptions(engine->plugins);
+    engine->filteredPlugins = engine->plugins;
+    return static_cast<int>(engine->plugins.size());
+}
+
+int nc_plugin_apply_filter(NCEngine* engine,
+                           const char* text,
+                           const char* brand,
+                           const char* category,
+                           const char* format) {
+    if (engine == nullptr) return 0;
+
+    neuracoust::daw::PluginCandidateFilterCriteria criteria;
+    criteria.text = text != nullptr ? text : "";
+    criteria.brand = brand != nullptr ? brand : "";
+    criteria.category = category != nullptr ? category : "";
+    criteria.format = format != nullptr ? format : "";
+    criteria.requireExisting = true;
+
+    engine->filteredPlugins = neuracoust::daw::filterPluginCandidates(engine->plugins, criteria);
+    return static_cast<int>(engine->filteredPlugins.size());
+}
+
+int nc_plugin_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->filteredPlugins.size()) : 0;
+}
+
+void nc_plugin_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = pluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->name : std::string{});
+}
+
+void nc_plugin_brand(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = pluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->brand : std::string{});
+}
+
+void nc_plugin_category(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = pluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->category : std::string{});
+}
+
+void nc_plugin_format(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = pluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->format : std::string{});
+}
+
+void nc_plugin_path(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = pluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->path : std::string{});
+}
+
+bool nc_plugin_exists(NCEngine* engine, int index) {
+    const auto* plugin = pluginAt(engine, index);
+    return plugin != nullptr && plugin->exists;
+}
+
+int nc_plugin_facet_count(NCEngine* engine, int kind) {
+    const auto* list = facetList(engine, kind);
+    return list != nullptr ? static_cast<int>(list->size()) : 0;
+}
+
+void nc_plugin_facet_name(NCEngine* engine, int kind, int index, char* out, size_t outLen) {
+    const auto* list = facetList(engine, kind);
+    if (list == nullptr || index < 0 || static_cast<size_t>(index) >= list->size()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    copyText(out, outLen, (*list)[static_cast<size_t>(index)]);
+}
+
+int nc_plugin_facet_tally(NCEngine* engine, int kind, int index) {
+    const auto* list = facetList(engine, kind);
+    if (list == nullptr || index < 0 || static_cast<size_t>(index) >= list->size()) {
+        return 0;
+    }
+    const std::string& value = (*list)[static_cast<size_t>(index)];
+    int tally = 0;
+    for (const auto& candidate : engine->plugins) {
+        if (facetValueOf(candidate, kind) == value) {
+            ++tally;
+        }
+    }
+    return tally;
+}
+
+bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    const auto* plugin = pluginAt(engine, pluginIndex);
+    if (track == nullptr || plugin == nullptr) {
+        return false;
+    }
+
+    const std::string trackName = track->name;
+
+    // First free slot, else append one. addTrackInsertSlot enforces the ceiling.
+    size_t slot = track->inserts.size();
+    for (size_t index = 0; index < track->inserts.size(); ++index) {
+        const auto& existing = track->inserts[index];
+        if (!existing.enabled || existing.pluginName.empty() || existing.pluginName == "No Insert") {
+            slot = index;
+            break;
+        }
+    }
+    if (slot >= track->inserts.size() &&
+        !neuracoust::daw::addTrackInsertSlot(engine->project, trackName)) {
+        return false;
+    }
+
+    neuracoust::daw::TrackInsertSlot insert;
+    insert.pluginName = plugin->name;
+    insert.pluginFormat = plugin->format.empty() ? "VST3" : plugin->format;
+    insert.pluginPath = plugin->path;
+    insert.pluginClassId = plugin->pluginClassId;
+    insert.pluginClassName = plugin->pluginClassName;
+    insert.bypassed = false;
+    insert.enabled = plugin->exists;
+    insert.dspAvailable = true;
+    insert.dspExecutionMode = neuracoust::daw::defaultPluginInsertDspExecutionMode(
+        engine->project, engine->monitorDspEnabled, insert);
+
+    if (!neuracoust::daw::setTrackInsertSlot(engine->project, trackName, slot, insert)) {
+        return false;
+    }
+    engine->reconcileProject();
+    return true;
+}
+
+bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slot < 0) {
+        return false;
+    }
+    if (!neuracoust::daw::removeTrackInsertSlot(engine->project, track->name,
+                                                static_cast<size_t>(slot))) {
+        return false;
+    }
+    engine->reconcileProject();
+    return true;
+}
+
+int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slot < 0) {
+        return -1;
+    }
+    const int moved = neuracoust::daw::moveTrackInsertSlot(engine->project, track->name,
+                                                           static_cast<size_t>(slot), direction);
+    if (moved < 0) {
+        return -1;
+    }
+    engine->reconcileProject();
+    return moved;
+}
+
+void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    copyText(out, outLen,
+             neuracoust::daw::effectiveInsertDspModeBadge(track->inserts[static_cast<size_t>(slot)],
+                                                          engine->project));
 }
 
 // ---------------------------------------------------------------------------

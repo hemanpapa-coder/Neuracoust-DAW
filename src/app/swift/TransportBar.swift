@@ -286,6 +286,10 @@ struct StatusStrip: View {
             stat("PDC", String(format: "%.2f ms", engine.delayCompensationMs))
             stat("RENDER", String(format: "%.1f ms", engine.maxRenderDurationUs / 1000.0))
 
+            if engine.activeInsertCount > 0 {
+                stat("INSERTS", "\(engine.activeInsertCount)")
+            }
+
             marker("◆", "MONITOR DSP", Theme.Palette.purple)
             marker("◇", "REMOTE CORE", Theme.Palette.teal)
 

@@ -86,6 +86,7 @@ add_library(neuracoust_daw_core
     src/license/LicenseAgentClient.cpp
     src/nuclust/NuclustDspManager.cpp
     src/plugins/MonitorDspModules.cpp
+    src/plugins/InsertDspPolicy.cpp
     src/plugins/Vst3SdkAdapter.cpp
     src/plugins/Vst3ModuleRuntime.cpp
     src/plugins/Vst3RealtimeBridge.cpp
@@ -286,6 +287,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/ChatPanel.swift
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift
+        src/app/swift/PluginBrowser.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 
@@ -484,6 +486,11 @@ add_executable(neuracoust_daw_remote_dsp_tests tests/RemoteDspServerClientTest.c
 neuracoust_link_core(neuracoust_daw_remote_dsp_tests)
 neuracoust_enable_release_asserts(neuracoust_daw_remote_dsp_tests)
 add_test(NAME remote_dsp_server_client COMMAND neuracoust_daw_remote_dsp_tests)
+
+add_executable(neuracoust_insert_dsp_policy_tests tests/InsertDspPolicyTest.cpp)
+neuracoust_link_core(neuracoust_insert_dsp_policy_tests)
+neuracoust_enable_release_asserts(neuracoust_insert_dsp_policy_tests)
+add_test(NAME insert_dsp_policy COMMAND neuracoust_insert_dsp_policy_tests)
 
 add_executable(neuracoust_dsp_manager_tests tests/NuclustDspManagerTest.cpp)
 neuracoust_link_core(neuracoust_dsp_manager_tests)

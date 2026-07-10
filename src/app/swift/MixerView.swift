@@ -197,7 +197,7 @@ struct ChannelStrip: View {
             header
 
             VStack(spacing: Theme.Space.md) {
-                if showInserts && track.kind.showsInserts { slotSection("인서트 A–E", track.inserts, accent) }
+                if showInserts && track.kind.showsInserts { insertSection }
                 if showSends && track.kind.showsSends { slotSection("센드 A–E", track.sends, Theme.Palette.teal) }
                 if showIO { ioSection }
                 panSection
@@ -261,6 +261,25 @@ struct ChannelStrip: View {
             .padding(.horizontal, Theme.Space.md)
             .frame(height: 18)
             .background(accent.opacity(0.13))
+        }
+    }
+
+    private var insertSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("인서트 A–E")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            ForEach(0..<5, id: \.self) { slot in
+                let insert = slot < track.inserts.count ? track.inserts[slot] : nil
+                SlotChip(
+                    label: (insert?.isEmpty ?? true) ? "" : insert!.name,
+                    accent: accent,
+                    bypassed: insert?.bypassed ?? false,
+                    badge: insert?.modeBadge ?? ""
+                ) {
+                    engine.openPluginBrowser(forTrack: track.id)
+                }
+            }
         }
     }
 

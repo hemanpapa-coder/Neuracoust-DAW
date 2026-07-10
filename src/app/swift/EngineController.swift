@@ -60,7 +60,7 @@ final class EngineController: ObservableObject {
         var solo: Bool
         var recordArmed: Bool
         var inputMonitoring: Bool
-        var inserts: [String]
+        var inserts: [InsertSlot]
         var sends: [String]
 
         var peakLeft: Float = 0
@@ -71,6 +71,16 @@ final class EngineController: ObservableObject {
             if value == 0 { return "C" }
             return pan < 0 ? "L\(value)" : "R\(value)"
         }
+    }
+
+    struct InsertSlot: Identifiable {
+        let id: Int
+        let name: String
+        var bypassed: Bool
+        /// "NAT", "INT", "RINT" or "EXT" — where this insert actually runs.
+        let modeBadge: String
+
+        var isEmpty: Bool { name.isEmpty || name == "No Insert" }
     }
 
     enum TrackKind: String {
@@ -115,6 +125,130 @@ final class EngineController: ObservableObject {
     }
 
     @Published private(set) var tracks: [Track] = []
+
+    // MARK: Plugin browser
+
+    struct PluginCandidate: Identifiable {
+        let id: Int
+        let name: String
+        let brand: String
+        let category: String
+        let format: String
+        let path: String
+    }
+
+    struct Facet: Identifiable {
+        let id: String
+        let name: String
+        let tally: Int
+    }
+
+    enum FacetKind: Int32 {
+        case brand = 0, category = 1, format = 2, scope = 3
+    }
+
+    /// Which track the browser will insert into. nil while it is closed.
+    @Published private(set) var pluginTargetTrack: Int?
+    @Published private(set) var plugins: [PluginCandidate] = []
+    @Published private(set) var brands: [Facet] = []
+    @Published private(set) var categories: [Facet] = []
+    @Published private(set) var formats: [Facet] = []
+    @Published private(set) var totalPluginCount = 0
+
+    @Published var pluginSearch = "" { didSet { applyPluginFilter() } }
+    @Published var pluginBrand = "" { didSet { applyPluginFilter() } }
+    @Published var pluginCategory = "" { didSet { applyPluginFilter() } }
+    @Published var pluginFormat = "" { didSet { applyPluginFilter() } }
+
+    var pluginBrowserOpen: Bool { pluginTargetTrack != nil }
+
+    /// The scan costs ~90 ms over a thousand plug-ins, so it runs once and is cached
+    /// in the engine. Reopening the browser reuses it.
+    func openPluginBrowser(forTrack trackId: Int) {
+        guard let handle else { return }
+        if totalPluginCount == 0 {
+            totalPluginCount = Int(nc_plugin_scan(handle))
+            reloadFacets()
+        }
+        pluginTargetTrack = trackId
+        applyPluginFilter()
+    }
+
+    func closePluginBrowser() {
+        pluginTargetTrack = nil
+    }
+
+    private func reloadFacets() {
+        guard let handle else { return }
+        func facets(_ kind: FacetKind) -> [Facet] {
+            (0..<Int(nc_plugin_facet_count(handle, kind.rawValue))).map { index in
+                let i = Int32(index)
+                return Facet(
+                    id: readEngineString { nc_plugin_facet_name(handle, kind.rawValue, i, $0, $1) },
+                    name: readEngineString { nc_plugin_facet_name(handle, kind.rawValue, i, $0, $1) },
+                    tally: Int(nc_plugin_facet_tally(handle, kind.rawValue, i))
+                )
+            }
+        }
+        brands = facets(.brand)
+        categories = facets(.category)
+        formats = facets(.format)
+    }
+
+    private func applyPluginFilter() {
+        guard let handle, totalPluginCount > 0 else { return }
+
+        let count = Int(nc_plugin_apply_filter(handle, pluginSearch, pluginBrand, pluginCategory, pluginFormat))
+
+        // A thousand rows of SwiftUI is fine in a LazyVStack, but building a thousand
+        // structs on every keystroke is not. Cap what the browser materialises.
+        let shown = min(count, 400)
+        plugins = (0..<shown).map { index in
+            let i = Int32(index)
+            return PluginCandidate(
+                id: index,
+                name: readEngineString { nc_plugin_name(handle, i, $0, $1) },
+                brand: readEngineString { nc_plugin_brand(handle, i, $0, $1) },
+                category: readEngineString { nc_plugin_category(handle, i, $0, $1) },
+                format: readEngineString { nc_plugin_format(handle, i, $0, $1) },
+                path: readEngineString { nc_plugin_path(handle, i, $0, $1) }
+            )
+        }
+        pluginMatchCount = count
+    }
+
+    @Published private(set) var pluginMatchCount = 0
+
+    // MARK: Inserts
+
+    func addInsert(_ pluginIndex: Int) {
+        guard let handle, let trackId = pluginTargetTrack else { return }
+        if nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex)) {
+            reloadTracks()
+        }
+    }
+
+    func removeInsert(track trackId: Int, slot: Int) {
+        guard let handle else { return }
+        if nc_track_remove_insert(handle, Int32(trackId), Int32(slot)) {
+            reloadTracks()
+        }
+    }
+
+    func moveInsert(track trackId: Int, slot: Int, direction: Int) {
+        guard let handle else { return }
+        if nc_track_move_insert(handle, Int32(trackId), Int32(slot), Int32(direction)) >= 0 {
+            reloadTracks()
+        }
+    }
+
+    func toggleInsertBypass(track trackId: Int, slot: Int) {
+        guard let handle,
+              let track = tracks.first(where: { $0.id == trackId }),
+              slot < track.inserts.count else { return }
+        nc_track_set_insert_bypassed(handle, Int32(trackId), Int32(slot), !track.inserts[slot].bypassed)
+        reloadTracks()
+    }
 
     // MARK: Monitor station
 
@@ -184,6 +318,10 @@ final class EngineController: ObservableObject {
     @Published private(set) var wakeJitterUs: Double = 0
     @Published private(set) var remoteDspActive = false
     @Published private(set) var remoteDspRoundTripMs: Double = 0
+
+    /// Inserts the engine is actually running, summed across paths. This is the
+    /// only honest signal that a plug-in loaded rather than merely being listed.
+    @Published private(set) var activeInsertCount = 0
 
     /// Fraction of the buffer period consumed by the worst recent render pass.
     /// This is render headroom, which is what actually predicts dropouts — raw
@@ -359,7 +497,13 @@ final class EngineController: ObservableObject {
                 recordArmed: nc_track_record_armed(handle, i),
                 inputMonitoring: nc_track_input_monitoring(handle, i),
                 inserts: (0..<insertCount).map { slot in
-                    readEngineString { nc_track_insert_name(handle, i, Int32(slot), $0, $1) }
+                    let s = Int32(slot)
+                    return InsertSlot(
+                        id: slot,
+                        name: readEngineString { nc_track_insert_name(handle, i, s, $0, $1) },
+                        bypassed: nc_track_insert_bypassed(handle, i, s),
+                        modeBadge: readEngineString { nc_track_insert_mode_badge(handle, i, s, $0, $1) }
+                    )
                 },
                 sends: (0..<sendCount).map { slot in
                     readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) }
@@ -572,6 +716,9 @@ final class EngineController: ObservableObject {
         wakeJitterUs = status.realtimeAverageWakeJitterUs
         remoteDspActive = status.remoteDspMonitorActive
         remoteDspRoundTripMs = status.remoteDspRoundTripMs
+        activeInsertCount = Int(status.activeRealtimeVst3TrackInserts)
+            + Int(status.activeRealtimeVst3MasterInserts)
+            + Int(status.activeRemoteDspTrackInserts)
 
         running = status.running
         transportRunning = status.transportRunning
