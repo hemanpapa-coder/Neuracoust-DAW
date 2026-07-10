@@ -117,6 +117,36 @@ A lane folds out from the "A" chip in its timeline header; the parameter name be
 it is also the parameter picker. Clicking empty space adds a point, dragging moves
 one (continuous — the view commits the gesture), double-clicking removes it.
 
+## VST3 parameters at load
+
+A freshly instantiated plug-in has two halves: the **controller** is initialised to
+whatever it means by "no preset loaded", and the **processor component** is not told
+about it. `Vst3RealtimeProcessor::prepare` now reads the controller once and sends
+its values in with the first process block; project-stored values override them.
+
+It has to be `controller->getParamNormalized(id)`, **not**
+`ParameterInfo::defaultNormalizedValue` — FabFilter declares 0 there and then
+initialises the controller to 0.7. Before this, every insert processed with every
+parameter at zero: a 1 kHz tone through FabFilter Micro came out at 0.0001 of its
+level, and FabFilter One as an instrument made no sound at all.
+
+`vst3_initial_parameters_smoke` guards it by measuring the tone. A test that read the
+parameters back would have agreed with the bug.
+
+## MIDI
+
+`midiRegions` go into the render plan verbatim — unlike audio clips there is no
+playlist to rebuild. Region times are seconds on the timeline; note times are beats
+from the region's start.
+
+A note only makes a sound if its track carries an **instrument plug-in**: the
+renderer turns notes into VST3 events and mixes whatever the instrument returns. A
+region on a bare midi track is silent by design. `nc_track_set_instrument` is what
+loads one.
+
+Both the realtime path and the offline bounce render instruments through the same
+`renderProjectAudioBlockWithStateAndMeters`, so a MIDI part that plays also exports.
+
 ## There is no recording
 
 The transport's round button is **not** a take recorder. `nc_engine_set_recording` →

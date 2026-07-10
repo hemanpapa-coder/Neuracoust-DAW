@@ -1490,6 +1490,209 @@ bool applyAutomationEdit(NCEngine* engine, bool changed, const char* stepName) {
 
 } // namespace
 
+namespace {
+
+const neuracoust::daw::MidiRegionState* midiRegionAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.midiRegions.size()) {
+        return nullptr;
+    }
+    return &engine->project.midiRegions[static_cast<size_t>(index)];
+}
+
+const neuracoust::daw::MidiRegionState* midiRegionById(NCEngine* engine, const char* regionId) {
+    if (engine == nullptr || regionId == nullptr) {
+        return nullptr;
+    }
+    for (const auto& region : engine->project.midiRegions) {
+        if (region.id == regionId) {
+            return &region;
+        }
+    }
+    return nullptr;
+}
+
+const neuracoust::daw::MidiNoteState* midiNoteAt(NCEngine* engine, const char* regionId, int noteIndex) {
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr || noteIndex < 0 ||
+        static_cast<size_t>(noteIndex) >= region->notes.size()) {
+        return nullptr;
+    }
+    return &region->notes[static_cast<size_t>(noteIndex)];
+}
+
+/// MIDI regions go into the render plan verbatim; there is no playlist to rebuild.
+bool applyMidiEdit(NCEngine* engine, bool changed, const char* stepName) {
+    if (!changed) {
+        return false;
+    }
+    engine->reconcileProject();
+    if (stepName != nullptr) {
+        engine->recordStep(stepName);
+    }
+    return true;
+}
+
+} // namespace
+
+int nc_midi_region_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.midiRegions.size());
+}
+
+void nc_midi_region_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* region = midiRegionAt(engine, index);
+    copyText(out, outLen, region != nullptr ? region->id : std::string{});
+}
+
+void nc_midi_region_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* region = midiRegionAt(engine, index);
+    copyText(out, outLen, region != nullptr ? region->name : std::string{});
+}
+
+void nc_midi_region_track(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* region = midiRegionAt(engine, index);
+    copyText(out, outLen, region != nullptr ? region->trackName : std::string{});
+}
+
+double nc_midi_region_start_seconds(NCEngine* engine, int index) {
+    const auto* region = midiRegionAt(engine, index);
+    return region != nullptr ? region->startSeconds : 0.0;
+}
+
+double nc_midi_region_duration_seconds(NCEngine* engine, int index) {
+    const auto* region = midiRegionAt(engine, index);
+    return region != nullptr ? region->durationSeconds : 0.0;
+}
+
+bool nc_midi_region_muted(NCEngine* engine, int index) {
+    const auto* region = midiRegionAt(engine, index);
+    return region != nullptr && region->muted;
+}
+
+bool nc_midi_region_add(NCEngine* engine, int trackIndex, double startSeconds,
+                        double durationSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) {
+        return false;
+    }
+    const std::string id = neuracoust::daw::addMidiRegion(engine->project, track->name,
+                                                          startSeconds, durationSeconds);
+    if (id.empty()) {
+        return false;
+    }
+    applyMidiEdit(engine, true, "Add MIDI region");
+    copyText(out, outLen, id);
+    return true;
+}
+
+bool nc_midi_region_move(NCEngine* engine, const char* regionId, int trackIndex, double startSeconds) {
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr) {
+        return false;
+    }
+    // The engine wants a destination track name; a negative index means "same track".
+    std::string trackName = region->trackName;
+    if (trackIndex >= 0) {
+        const auto* track = trackAt(engine, trackIndex);
+        if (track == nullptr) {
+            return false;
+        }
+        trackName = track->name;
+    }
+    return applyMidiEdit(engine,
+                         neuracoust::daw::moveMidiRegion(engine->project, regionId, trackName,
+                                                         std::max(0.0, startSeconds)),
+                         nullptr);
+}
+
+bool nc_midi_region_resize(NCEngine* engine, const char* regionId, double durationSeconds) {
+    if (engine == nullptr || regionId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::resizeMidiRegion(engine->project, regionId, durationSeconds),
+                         nullptr);
+}
+
+bool nc_midi_region_delete(NCEngine* engine, const char* regionId) {
+    if (engine == nullptr || regionId == nullptr) return false;
+    return applyMidiEdit(engine, neuracoust::daw::deleteMidiRegion(engine->project, regionId),
+                         "Delete MIDI region");
+}
+
+int nc_midi_note_count(NCEngine* engine, const char* regionId) {
+    const auto* region = midiRegionById(engine, regionId);
+    return region != nullptr ? static_cast<int>(region->notes.size()) : 0;
+}
+
+void nc_midi_note_id(NCEngine* engine, const char* regionId, int noteIndex, char* out, size_t outLen) {
+    const auto* note = midiNoteAt(engine, regionId, noteIndex);
+    copyText(out, outLen, note != nullptr ? note->id : std::string{});
+}
+
+int nc_midi_note_pitch(NCEngine* engine, const char* regionId, int noteIndex) {
+    const auto* note = midiNoteAt(engine, regionId, noteIndex);
+    return note != nullptr ? note->pitch : 0;
+}
+
+double nc_midi_note_start_beats(NCEngine* engine, const char* regionId, int noteIndex) {
+    const auto* note = midiNoteAt(engine, regionId, noteIndex);
+    return note != nullptr ? note->startBeats : 0.0;
+}
+
+double nc_midi_note_duration_beats(NCEngine* engine, const char* regionId, int noteIndex) {
+    const auto* note = midiNoteAt(engine, regionId, noteIndex);
+    return note != nullptr ? note->durationBeats : 0.0;
+}
+
+int nc_midi_note_velocity(NCEngine* engine, const char* regionId, int noteIndex) {
+    const auto* note = midiNoteAt(engine, regionId, noteIndex);
+    return note != nullptr ? note->velocity : 0;
+}
+
+bool nc_midi_note_add(NCEngine* engine, const char* regionId, int pitch, double startBeats,
+                      double durationBeats, int velocity, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || regionId == nullptr) return false;
+    const std::string id = neuracoust::daw::addMidiNote(engine->project, regionId, pitch,
+                                                        startBeats, durationBeats, velocity);
+    if (id.empty()) {
+        return false;
+    }
+    applyMidiEdit(engine, true, "Add note");
+    copyText(out, outLen, id);
+    return true;
+}
+
+bool nc_midi_note_move(NCEngine* engine, const char* regionId, const char* noteId,
+                       int pitch, double startBeats) {
+    if (engine == nullptr || regionId == nullptr || noteId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::moveMidiNote(engine->project, regionId, noteId,
+                                                       pitch, startBeats),
+                         nullptr);
+}
+
+bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* noteId, double durationBeats) {
+    if (engine == nullptr || regionId == nullptr || noteId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::resizeMidiNote(engine->project, regionId, noteId, durationBeats),
+                         nullptr);
+}
+
+bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity) {
+    if (engine == nullptr || regionId == nullptr || noteId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::setMidiNoteVelocity(engine->project, regionId, noteId, velocity),
+                         "Note velocity");
+}
+
+bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId) {
+    if (engine == nullptr || regionId == nullptr || noteId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::deleteMidiNote(engine->project, regionId, noteId),
+                         "Delete note");
+}
+
 int nc_marker_count(NCEngine* engine) {
     return engine == nullptr ? 0 : static_cast<int>(engine->project.markers.size());
 }
@@ -2081,6 +2284,36 @@ int nc_plugin_facet_tally(NCEngine* engine, int kind, int index) {
         }
     }
     return tally;
+}
+
+bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    const auto* plugin = pluginAt(engine, pluginIndex);
+    if (track == nullptr || plugin == nullptr) {
+        return false;
+    }
+
+    neuracoust::daw::InstrumentSlotState instrument;
+    instrument.pluginName = plugin->name;
+    instrument.pluginFormat = plugin->format.empty() ? "VST3" : plugin->format;
+    instrument.pluginPath = plugin->path;
+    instrument.pluginClassId = plugin->pluginClassId;
+    instrument.pluginClassName = plugin->pluginClassName;
+    instrument.enabled = plugin->exists;
+    instrument.bypassed = false;
+
+    const std::string trackName = track->name;
+    if (!neuracoust::daw::setTrackInstrumentSlot(engine->project, trackName, instrument)) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Load " + instrument.pluginName);
+    return true;
+}
+
+void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    copyText(out, outLen, track != nullptr ? track->instrument.pluginName : std::string{});
 }
 
 bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {

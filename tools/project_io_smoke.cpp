@@ -868,6 +868,73 @@ int main() {
             check(!nc_marker_delete(engine, 20.0, 0.2), "nothing to delete out at 20 s");
         }
 
+        // --- a MIDI note must reach the instrument and make a sound ---------------
+        {
+            nc_project_new(engine);
+            const int instrumentTrack = nc_track_add_instrument(engine);
+            check(instrumentTrack >= 0, "added an instrument track");
+
+            // FabFilter One is a synth; without an instrument a region is silent by design.
+            nc_plugin_scan(engine);
+            const int instruments = nc_plugin_apply_filter(engine, "", "", "Instrument", "VST3");
+            if (instruments <= 0) {
+                printf("(no instrument plug-ins installed — skipping the MIDI sound check)\n");
+            } else {
+                char instrumentName[128] = {0};
+                nc_plugin_name(engine, 0, instrumentName, sizeof(instrumentName));
+                check(nc_track_set_instrument(engine, instrumentTrack, 0), "load the instrument");
+                char loaded[128] = {0};
+                nc_track_instrument_name(engine, instrumentTrack, loaded, sizeof(loaded));
+                printf("instrument: %s\n", loaded);
+                check(strcmp(loaded, instrumentName) == 0, "the instrument slot holds it");
+
+                char regionId[128] = {0};
+                check(nc_midi_region_add(engine, instrumentTrack, 1.0, 2.0, regionId, sizeof(regionId)),
+                      "add a 2 s region at 1 s");
+                check(nc_midi_region_count(engine) == 1, "one region");
+                check(std::abs(nc_midi_region_start_seconds(engine, 0) - 1.0) < 0.001, "it starts at 1 s");
+
+                // One beat in from the region start, one beat long, at 120 bpm: 1.5-2.0 s.
+                char noteId[128] = {0};
+                check(nc_midi_note_add(engine, regionId, 60, 1.0, 1.0, 100, noteId, sizeof(noteId)),
+                      "add a middle-C note");
+                check(nc_midi_note_count(engine, regionId) == 1, "one note");
+                check(nc_midi_note_pitch(engine, regionId, 0) == 60, "it is middle C");
+
+                char midiProject[256] = "/tmp/neuracoust-io-smoke/Midi.ndaw";
+                check(nc_project_save_as(engine, midiProject, error, sizeof(error)), "save the MIDI project");
+                neuracoust::daw::ProjectDocument midiDocument;
+                std::string midiError;
+                std::string midiText;
+                if (FILE* file = fopen(midiProject, "rb")) {
+                    char buffer[8192];
+                    size_t read = 0;
+                    while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) midiText.append(buffer, read);
+                    fclose(file);
+                }
+                check(neuracoust::daw::deserializeProjectForPath(midiText, midiProject, midiDocument, midiError),
+                      "parse it");
+                check(midiDocument.midiRegions.size() == 1 && midiDocument.midiRegions[0].notes.size() == 1,
+                      "the note survived the round trip");
+
+                const std::string midiBounce = "/tmp/neuracoust-io-smoke/midi.wav";
+                check(neuracoust::daw::bounceProjectToWav(midiDocument, midiBounce).ok, "bounce it");
+                const double midiAudibleAt = firstAudibleSecond(midiBounce);
+                const float beforeNote = peakBetween(midiBounce, 0.0, 1.4);
+                const float duringNote = peakBetween(midiBounce, 1.5, 2.0);
+                printf("midi note: first audible %.3f s (expect ~1.500), peak before %.4f during %.4f\n",
+                       midiAudibleAt, beforeNote, duringNote);
+                check(duringNote > 0.001f, "the instrument played the note");
+                check(beforeNote < duringNote * 0.05f, "and nothing sounded before it");
+                check(std::abs(midiAudibleAt - 1.5) < 0.05, "the note landed a beat into the region");
+
+                check(nc_midi_note_delete(engine, regionId, noteId), "delete the note");
+                check(nc_midi_note_count(engine, regionId) == 0, "no notes left");
+                check(nc_midi_region_delete(engine, regionId), "delete the region");
+                check(nc_midi_region_count(engine) == 0, "no regions left");
+            }
+        }
+
         // --- bounce through the bridge, and time it -------------------------------
         {
             nc_project_new(engine);

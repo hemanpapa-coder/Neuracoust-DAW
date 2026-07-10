@@ -147,6 +147,11 @@ void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring)
 /// New tracks land at the end of the list. Returns the new track's index, or -1.
 int nc_track_add_audio(NCEngine* engine);
 int nc_track_add_instrument(NCEngine* engine);
+
+/// Loads a scanned plug-in into the track's instrument slot — the thing that turns
+/// its MIDI notes into sound. `pluginIndex` addresses the filtered browser list.
+bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex);
+void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen);
 int nc_track_add_midi(NCEngine* engine);
 
 /// Deletes the track and, when `removeClips` is true, everything on it. Refuses on
@@ -346,6 +351,50 @@ bool nc_clip_copy_many(NCEngine* engine, const char* const* clipIds, int count);
 int nc_clip_cut_many(NCEngine* engine, const char* const* clipIds, int count);
 int nc_clipboard_clip_count(NCEngine* engine);
 int nc_clip_paste_all(NCEngine* engine, double startSeconds);
+
+// ---------------------------------------------------------------------------
+// MIDI regions and notes
+//
+// A region sits on an instrument or midi track and holds notes. Region times are
+// **seconds** on the timeline; note times are **beats from the region's start**.
+// A note only makes a sound if its track carries an instrument plug-in — the
+// renderer turns notes into VST3 events and mixes whatever the instrument returns.
+// A region on a bare midi track is silent by design.
+//
+// The renderer copies `midiRegions` straight into its plan, so unlike audio clips
+// there is no playlist to rebuild.
+// ---------------------------------------------------------------------------
+
+int nc_midi_region_count(NCEngine* engine);
+void nc_midi_region_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_midi_region_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_midi_region_track(NCEngine* engine, int index, char* out, size_t outLen);
+double nc_midi_region_start_seconds(NCEngine* engine, int index);
+double nc_midi_region_duration_seconds(NCEngine* engine, int index);
+bool nc_midi_region_muted(NCEngine* engine, int index);
+
+bool nc_midi_region_add(NCEngine* engine, int trackIndex, double startSeconds,
+                        double durationSeconds, char* out, size_t outLen);
+/// Continuous, like a clip drag: records nothing. Pass trackIndex < 0 to stay put.
+bool nc_midi_region_move(NCEngine* engine, const char* regionId, int trackIndex, double startSeconds);
+bool nc_midi_region_resize(NCEngine* engine, const char* regionId, double durationSeconds);
+bool nc_midi_region_delete(NCEngine* engine, const char* regionId);
+
+int nc_midi_note_count(NCEngine* engine, const char* regionId);
+void nc_midi_note_id(NCEngine* engine, const char* regionId, int noteIndex, char* out, size_t outLen);
+int nc_midi_note_pitch(NCEngine* engine, const char* regionId, int noteIndex);
+double nc_midi_note_start_beats(NCEngine* engine, const char* regionId, int noteIndex);
+double nc_midi_note_duration_beats(NCEngine* engine, const char* regionId, int noteIndex);
+int nc_midi_note_velocity(NCEngine* engine, const char* regionId, int noteIndex);
+
+bool nc_midi_note_add(NCEngine* engine, const char* regionId, int pitch, double startBeats,
+                      double durationBeats, int velocity, char* out, size_t outLen);
+/// Continuous: dragging a note across the grid records nothing.
+bool nc_midi_note_move(NCEngine* engine, const char* regionId, const char* noteId,
+                       int pitch, double startBeats);
+bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* noteId, double durationBeats);
+bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity);
+bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId);
 
 // ---------------------------------------------------------------------------
 // Markers
