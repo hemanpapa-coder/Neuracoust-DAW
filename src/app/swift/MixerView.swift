@@ -273,10 +273,14 @@ struct ChannelStrip: View {
         VStack(alignment: .leading, spacing: 2) {
             // An instrument track's sound starts here, not in an insert.
             if !track.instrumentName.isEmpty {
+                let slot = PluginEditorHost.Slot(trackId: track.id,
+                                                 insertIndex: EngineController.instrumentSlotIndex)
                 Text("악기")
                     .font(Theme.Font.mono(6.5))
                     .foregroundStyle(Theme.Palette.textFaint)
-                SlotChip(label: track.instrumentName, accent: accent)
+                SlotChip(label: track.instrumentName, accent: accent, lit: editors.isOpen(slot)) {
+                    editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
+                }
             }
             Text("인서트 A–E")
                 .font(Theme.Font.mono(6.5))

@@ -781,6 +781,94 @@ bool nc_track_set_vst3_parameter(NCEngine* engine, int index, int slot,
     return true;
 }
 
+namespace {
+
+const neuracoust::daw::InstrumentSlotState* loadedInstrument(NCEngine* engine, int index) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || track->instrument.pluginPath.empty() ||
+        track->instrument.pluginName == "No Instrument") {
+        return nullptr;
+    }
+    return &track->instrument;
+}
+
+} // namespace
+
+void nc_track_instrument_plugin_path(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* instrument = loadedInstrument(engine, index);
+    copyText(out, outLen, instrument != nullptr ? instrument->pluginPath : std::string{});
+}
+
+void nc_track_instrument_plugin_format(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* instrument = loadedInstrument(engine, index);
+    copyText(out, outLen, instrument != nullptr ? instrument->pluginFormat : std::string{});
+}
+
+void nc_track_instrument_class_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* instrument = loadedInstrument(engine, index);
+    copyText(out, outLen, instrument != nullptr ? instrument->pluginClassId : std::string{});
+}
+
+void nc_track_instrument_class_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* instrument = loadedInstrument(engine, index);
+    copyText(out, outLen, instrument != nullptr ? instrument->pluginClassName : std::string{});
+}
+
+int nc_track_instrument_param_count(NCEngine* engine, int index) {
+    const auto* instrument = loadedInstrument(engine, index);
+    return instrument != nullptr ? static_cast<int>(instrument->parameters.size()) : 0;
+}
+
+uint32_t nc_track_instrument_param_id(NCEngine* engine, int index, int paramIndex) {
+    const auto* instrument = loadedInstrument(engine, index);
+    if (instrument == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= instrument->parameters.size()) {
+        return 0;
+    }
+    return instrument->parameters[static_cast<size_t>(paramIndex)].parameterId;
+}
+
+double nc_track_instrument_param_value(NCEngine* engine, int index, int paramIndex) {
+    const auto* instrument = loadedInstrument(engine, index);
+    if (instrument == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= instrument->parameters.size()) {
+        return 0.0;
+    }
+    return instrument->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
+}
+
+bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
+                                            const char* displayName, double normalizedValue) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || loadedInstrument(engine, index) == nullptr) {
+        return false;
+    }
+
+    const double clamped = std::max(0.0, std::min(1.0, normalizedValue));
+    const std::string name = displayName != nullptr ? displayName : "";
+
+    auto& parameters = track->instrument.parameters;
+    auto found = std::find_if(parameters.begin(), parameters.end(),
+                              [&](const neuracoust::daw::Vst3ParameterValueState& parameter) {
+                                  return parameter.parameterId == parameterId;
+                              });
+    if (found != parameters.end()) {
+        found->normalizedValue = clamped;
+        if (!name.empty()) {
+            found->displayName = name;
+        }
+    } else {
+        parameters.push_back({parameterId,
+                              name.empty() ? "Param " + std::to_string(parameterId) : name,
+                              clamped});
+    }
+
+    // The instrument's parameters live in the render plan, not in a live insert
+    // chain, so the graph has to be reconciled for a knob turn to be heard.
+    engine->reconcileProject();
+    return true;
+}
+
 int nc_track_send_count(NCEngine* engine, int index) {
     const auto* track = trackAt(engine, index);
     return track != nullptr ? static_cast<int>(track->sends.size()) : 0;

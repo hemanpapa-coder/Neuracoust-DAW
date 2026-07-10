@@ -928,6 +928,25 @@ int main() {
                 check(beforeNote < duringNote * 0.05f, "and nothing sounded before it");
                 check(std::abs(midiAudibleAt - 1.5) < 0.05, "the note landed a beat into the region");
 
+                // The editor host talks to an instrument slot the same way it talks to
+                // an insert, through a different door in the bridge.
+                char instrumentPath[512] = {0};
+                nc_track_instrument_plugin_path(engine, instrumentTrack, instrumentPath,
+                                                sizeof(instrumentPath));
+                check(strlen(instrumentPath) > 0, "the instrument slot has a plug-in path");
+                check(nc_track_instrument_param_count(engine, instrumentTrack) == 0,
+                      "and no stored parameters yet");
+                check(nc_track_set_instrument_vst3_parameter(engine, instrumentTrack, 24, "Volume", 0.9),
+                      "an editor edit lands on the instrument");
+                check(nc_track_instrument_param_count(engine, instrumentTrack) == 1, "one parameter");
+                check(nc_track_instrument_param_id(engine, instrumentTrack, 0) == 24, "by id");
+                check(nc_track_instrument_param_value(engine, instrumentTrack, 0) == 0.9, "and value");
+                nc_track_set_instrument_vst3_parameter(engine, instrumentTrack, 24, "Volume", 4.0);
+                check(nc_track_instrument_param_value(engine, instrumentTrack, 0) == 1.0,
+                      "out-of-range values are clamped");
+                check(!nc_track_set_instrument_vst3_parameter(engine, 0, 1, "None", 0.5),
+                      "a track with no instrument refuses");
+
                 check(nc_midi_note_delete(engine, regionId, noteId), "delete the note");
                 check(nc_midi_note_count(engine, regionId) == 0, "no notes left");
                 check(nc_midi_region_delete(engine, regionId), "delete the region");

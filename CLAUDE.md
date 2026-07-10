@@ -153,7 +153,12 @@ right edge resizes it, a double-click deletes it. A click that lands just short 
 existing note does **not** stack a second note on top of it.
 
 An instrument dropped on an instrument track from the plug-in browser fills its
-instrument slot rather than an insert.
+instrument slot rather than an insert, and clicking its chip opens its editor — the
+editor host addresses the instrument slot as insert index `-1`.
+
+An insert's parameters are pushed into the live chain (`updateTrackVst3Parameter`);
+an instrument's live in the render plan, so a knob turn there reconciles the project
+instead. There is no fine-grained push for instruments.
 
 ## There is no recording
 

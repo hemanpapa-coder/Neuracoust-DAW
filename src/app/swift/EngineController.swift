@@ -307,11 +307,30 @@ final class EngineController: ObservableObject {
         let observerSampleRate: Double
     }
 
+    /// A slot index of -1 addresses the track's instrument rather than an insert.
+    static let instrumentSlotIndex = -1
+
     /// Everything the out-of-process editor host needs to load the plug-in. nil for an empty slot.
     func insertDescriptor(trackId: Int, insertIndex: Int) -> InsertDescriptor? {
-        guard let handle,
-              let track = tracks.first(where: { $0.id == trackId }),
-              insertIndex < track.inserts.count,
+        guard let handle, let track = tracks.first(where: { $0.id == trackId }) else { return nil }
+
+        if insertIndex == Self.instrumentSlotIndex {
+            let i = Int32(trackId)
+            let path = readEngineString { nc_track_instrument_plugin_path(handle, i, $0, $1) }
+            guard !path.isEmpty else { return nil }
+            // An instrument runs in the render plan, never in the sandbox bridge, so it
+            // has no shared-memory observer to point its editor at.
+            return InsertDescriptor(
+                trackName: track.name,
+                name: track.instrumentName,
+                pluginPath: path,
+                format: readEngineString { nc_track_instrument_plugin_format(handle, i, $0, $1) },
+                classId: readEngineString { nc_track_instrument_class_id(handle, i, $0, $1) },
+                className: readEngineString { nc_track_instrument_class_name(handle, i, $0, $1) },
+                observerShmName: "", observerMaxBlock: 0, observerSampleRate: 0)
+        }
+
+        guard insertIndex >= 0, insertIndex < track.inserts.count,
               !track.inserts[insertIndex].isEmpty else { return nil }
         let i = Int32(trackId), s = Int32(insertIndex)
         let path = readEngineString { nc_track_insert_plugin_path(handle, i, s, $0, $1) }
@@ -340,6 +359,13 @@ final class EngineController: ObservableObject {
     func storedVst3Parameters(trackId: Int, insertIndex: Int) -> [(id: UInt32, value: Double)] {
         guard let handle else { return [] }
         let i = Int32(trackId), s = Int32(insertIndex)
+        if insertIndex == Self.instrumentSlotIndex {
+            let count = Int(nc_track_instrument_param_count(handle, i))
+            return (0..<count).map { p in
+                (id: nc_track_instrument_param_id(handle, i, Int32(p)),
+                 value: nc_track_instrument_param_value(handle, i, Int32(p)))
+            }
+        }
         let count = Int(nc_track_insert_param_count(handle, i, s))
         return (0..<count).map { p in
             (id: nc_track_insert_param_id(handle, i, s, Int32(p)),
@@ -350,8 +376,11 @@ final class EngineController: ObservableObject {
     /// One knob turn is a stream of these, so it neither reloads tracks nor records undo.
     func setVst3Parameter(trackId: Int, insertIndex: Int, parameterId: UInt32, normalizedValue: Double) {
         guard let handle else { return }
-        if nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
-                                       parameterId, nil, normalizedValue) {
+        let changed = insertIndex == Self.instrumentSlotIndex
+            ? nc_track_set_instrument_vst3_parameter(handle, Int32(trackId), parameterId, nil, normalizedValue)
+            : nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
+                                          parameterId, nil, normalizedValue)
+        if changed {
             projectDirty = nc_project_dirty(handle)
         }
     }

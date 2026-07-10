@@ -194,6 +194,23 @@ bool nc_track_set_vst3_parameter(NCEngine* engine, int index, int slot,
                                  uint32_t parameterId, const char* displayName,
                                  double normalizedValue);
 
+/// The instrument slot, addressed the way the inserts are. A track has at most one,
+/// and it is what turns its MIDI notes into sound — so its editor matters as much as
+/// any insert's.
+void nc_track_instrument_plugin_path(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_instrument_plugin_format(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_instrument_class_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_instrument_class_name(NCEngine* engine, int index, char* out, size_t outLen);
+
+int nc_track_instrument_param_count(NCEngine* engine, int index);
+uint32_t nc_track_instrument_param_id(NCEngine* engine, int index, int paramIndex);
+double nc_track_instrument_param_value(NCEngine* engine, int index, int paramIndex);
+
+/// Unlike an insert, the renderer reads an instrument's parameters straight out of
+/// the plan, so this reconciles the project rather than pushing into a live chain.
+bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
+                                            const char* displayName, double normalizedValue);
+
 int nc_track_send_count(NCEngine* engine, int index);
 void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);
