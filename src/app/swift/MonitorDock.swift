@@ -75,15 +75,18 @@ struct MonitorDock: View {
             }
 
             VStack(spacing: Theme.Space.sm) {
-                SegmentedRow(
-                    items: EngineController.ListenMode.allCases,
-                    label: \.label,
-                    isActive: { $0 == engine.listenMode },
-                    action: { engine.setListenMode($0) }
-                )
+                // The listen buttons cycle rather than select, matching the old UI:
+                // Stereo → Left → Right, Mono → L → R, M/S toggle, Ø phase cycle.
+                let listen = engine.monitorListen
                 HStack(spacing: Theme.Space.sm) {
+                    dimButton(listen.stereoTitle, listen.stereoActive, Theme.Palette.accent) { engine.cycleStereo() }
+                    dimButton(listen.monoTitle, listen.monoActive, Theme.Palette.accent) { engine.cycleMono() }
+                    dimButton("M/S", listen.midSide, Theme.Palette.accent) { engine.toggleMidSide() }
+                    dimButton(listen.phaseTitle, listen.phaseActive, Theme.Palette.purple) { engine.cyclePhase() }
+                }
+                HStack(spacing: Theme.Space.sm) {
+                    dimButton("Mute", engine.monitorMute, Theme.Palette.orange) { engine.toggleMonitorMute() }
                     dimButton("Dim", engine.monitorDim, Theme.Palette.orange) { engine.toggleDim() }
-                    dimButton("Mono", engine.monitorMono, Theme.Palette.accent) { engine.toggleMonitorMono() }
                     dimButton("Talk", engine.monitorTalkback, Theme.Palette.red) { engine.toggleTalkback() }
                 }
             }

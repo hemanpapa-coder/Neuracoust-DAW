@@ -85,6 +85,22 @@ The app also accepts files from Finder (`application(_:open:)`): a `.ndaw` opens
 
 New, Open and Quit all prompt before discarding unsaved work (`confirmDiscardingChanges`). Autosave is a safety net, not a save.
 
+## Monitor listen buttons
+
+The monitor station's listen buttons are **cycles, not exclusive modes**, ported from
+the old UI's `monitorStationButtonChanged:`. The engine keeps a listen-mode string
+("LR"/"L"/"R"/"M"/"S"), a mono flag, and independent L/R phase inverts;
+`normalizeMonitorStationProjectState` keeps them consistent. The bridge owns the state
+machine (`nc_monitor_cycle_stereo` / `_cycle_mono` / `_toggle_mid_side` / `_cycle_phase`)
+because it manipulates the project model:
+- **Stereo** cycles Stereo → Left-only → Right-only (Mid in M/S).
+- **Mono** cycles Mono → L-into-both → R-into-both (Side in M/S).
+- **M/S** toggles Mid/Side monitoring.
+- **Ø** cycles phase Off → ØL → ØR → ØLR.
+
+The earlier `ListenMode` enum modelled these as four exclusive segments, which did not
+match the engine and dropped phase and the L/R solos entirely.
+
 ## Keyboard shortcuts must match on key code, not characters
 
 This machine types Korean. With a Korean input source active, `charactersIgnoringModifiers` for the Z key is not `"z"`, so any shortcut compared against a character silently stops working — including SwiftUI's `.keyboardShortcut("z")`. Match `NSEvent.keyCode` instead (Z is 6). The old UI already knew this: all 308 of its `NSMenuItem`s carry an empty `keyEquivalent` and every shortcut runs through an `NSEvent` monitor.

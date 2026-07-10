@@ -486,32 +486,55 @@ final class EngineController: ObservableObject {
         var displayModel: String { stripSlotPrefix(model) }
     }
 
-    enum ListenMode: String, CaseIterable, Identifiable {
-        case stereo = "LR"
-        case mono = "MONO"
-        case midSide = "MS"
-        case polarity = "POL"
+    enum OutputMode { case speaker, headphone }
 
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .stereo: return "Stereo"
-            case .mono: return "Mono"
-            case .midSide: return "M/S"
-            case .polarity: return "Ø"
+    /// The monitor listen state, mirroring the engine's `monitorStationListenMode`
+    /// ("LR"/"L"/"R"/"M"/"S") plus mono and phase inverts. Not four exclusive modes:
+    /// the buttons cycle, the way the old UI's monitor station did.
+    struct MonitorListen: Equatable {
+        var listenMode = "LR"
+        var mono = false
+        var midSide = false
+        var invertLeft = false
+        var invertRight = false
+
+        /// What the Stereo button reads: Mid in M/S, Left/Right when soloed, else Stereo.
+        var stereoTitle: String {
+            if midSide { return "Mid" }
+            if !mono && listenMode == "L" { return "Left" }
+            if !mono && listenMode == "R" { return "Right" }
+            return "Stereo"
+        }
+        var stereoActive: Bool { midSide ? listenMode == "M" : !mono }
+
+        /// What the Mono button reads: Side in M/S, Left/Right when mono-soloed, else Mono.
+        var monoTitle: String {
+            if midSide { return "Side" }
+            if mono && listenMode == "L" { return "Left" }
+            if mono && listenMode == "R" { return "Right" }
+            return "Mono"
+        }
+        var monoActive: Bool { midSide ? listenMode == "S" : mono }
+
+        var phaseTitle: String {
+            switch (invertLeft, invertRight) {
+            case (true, true): return "ØLR"
+            case (true, false): return "ØL"
+            case (false, true): return "ØR"
+            default: return "Ø"
             }
         }
+        var phaseActive: Bool { invertLeft || invertRight }
     }
-
-    enum OutputMode { case speaker, headphone }
 
     @Published private(set) var monitorModules: [MonitorModule] = []
     @Published private(set) var speakerSets: [SpeakerSet] = []
     @Published private(set) var activeSpeakerSlot = 0
     @Published private(set) var monitorVolumeDb: Float = -6
-    @Published private(set) var listenMode: ListenMode = .stereo
+    @Published private(set) var monitorListen = MonitorListen()
     @Published private(set) var monitorDim = false
     @Published private(set) var monitorMono = false
+    @Published private(set) var monitorMute = false
     @Published private(set) var monitorTalkback = false
     @Published private(set) var monitorDspEnabled = true
     @Published private(set) var monitorPathMode = "internal"
@@ -1998,10 +2021,22 @@ final class EngineController: ObservableObject {
         monitorVolumeDb = nc_monitor_volume_db(handle)
         monitorDim = nc_monitor_dim(handle)
         monitorMono = nc_monitor_mono(handle)
+        monitorMute = nc_monitor_mute(handle)
         monitorTalkback = nc_monitor_talkback(handle)
         monitorDspEnabled = nc_monitor_dsp_enabled(handle)
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
-        listenMode = ListenMode(rawValue: readString { nc_monitor_listen_mode(handle, $0, $1) }) ?? .stereo
+        reloadMonitorListen()
+    }
+
+    private func reloadMonitorListen() {
+        guard let handle else { return }
+        monitorListen = MonitorListen(
+            listenMode: readString { nc_monitor_listen_mode(handle, $0, $1) },
+            mono: nc_monitor_mono(handle),
+            midSide: nc_monitor_mid_side(handle),
+            invertLeft: nc_monitor_invert_left(handle),
+            invertRight: nc_monitor_invert_right(handle))
+        monitorMono = monitorListen.mono
     }
 
     var activeSpeakerSet: SpeakerSet? {
@@ -2014,14 +2049,10 @@ final class EngineController: ObservableObject {
         monitorVolumeDb = nc_monitor_volume_db(handle)
     }
 
-    func setListenMode(_ mode: ListenMode) {
-        guard let handle else { return }
-        // Mono is its own engine flag; the other three are listen-mode strings.
-        nc_monitor_set_mono(handle, mode == .mono)
-        nc_monitor_set_listen_mode(handle, mode.rawValue)
-        listenMode = mode
-        monitorMono = nc_monitor_mono(handle)
-    }
+    func cycleStereo() { guard let handle else { return }; nc_monitor_cycle_stereo(handle); reloadMonitorListen() }
+    func cycleMono() { guard let handle else { return }; nc_monitor_cycle_mono(handle); reloadMonitorListen() }
+    func toggleMidSide() { guard let handle else { return }; nc_monitor_toggle_mid_side(handle); reloadMonitorListen() }
+    func cyclePhase() { guard let handle else { return }; nc_monitor_cycle_phase(handle); reloadMonitorListen() }
 
     func toggleDim() {
         guard let handle else { return }
@@ -2029,10 +2060,11 @@ final class EngineController: ObservableObject {
         monitorDim = nc_monitor_dim(handle)
     }
 
-    func toggleMonitorMono() {
+    /// Mute: the old UI's monitor station mute, distinct from the mono listen button.
+    func toggleMonitorMute() {
         guard let handle else { return }
-        nc_monitor_set_mono(handle, !monitorMono)
-        monitorMono = nc_monitor_mono(handle)
+        nc_monitor_set_mute(handle, !monitorMute)
+        monitorMute = nc_monitor_mute(handle)
     }
 
     func toggleTalkback() {

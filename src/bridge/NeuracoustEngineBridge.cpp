@@ -2922,6 +2922,105 @@ void nc_monitor_set_listen_mode(NCEngine* engine, const char* mode) {
     engine->pushStationControls();
 }
 
+namespace {
+
+// The exact state machine from the old UI's monitorStationButtonChanged:, kept next
+// to the engine because it manipulates the same project model.
+bool isMidSide(const neuracoust::daw::ProjectDocument& p) {
+    return p.monitorStationListenMode == "M" || p.monitorStationListenMode == "S";
+}
+
+void applyStationChange(NCEngine* engine) {
+    neuracoust::daw::normalizeMonitorStationProjectState(engine->project);
+    engine->pushStationControls();
+}
+
+} // namespace
+
+void nc_monitor_cycle_stereo(NCEngine* engine) {
+    if (engine == nullptr) return;
+    auto& p = engine->project;
+    if (isMidSide(p)) {
+        p.monitorStationMono = false;
+        p.monitorStationListenMode = "M";
+        p.monitorStationSwapLeftRight = false;
+    } else if (p.monitorStationMono) {
+        p.monitorStationMono = false;
+        p.monitorStationListenMode = "LR";
+    } else if (p.monitorStationListenMode == "LR") {
+        p.monitorStationListenMode = "L";
+    } else if (p.monitorStationListenMode == "L") {
+        p.monitorStationListenMode = "R";
+    } else {
+        p.monitorStationListenMode = "LR";
+    }
+    applyStationChange(engine);
+}
+
+void nc_monitor_cycle_mono(NCEngine* engine) {
+    if (engine == nullptr) return;
+    auto& p = engine->project;
+    if (isMidSide(p)) {
+        p.monitorStationMono = false;
+        p.monitorStationListenMode = "S";
+        p.monitorStationSwapLeftRight = false;
+    } else if (p.monitorStationMono && p.monitorStationListenMode == "L") {
+        p.monitorStationMono = true;
+        p.monitorStationListenMode = "R";
+    } else if (p.monitorStationMono && p.monitorStationListenMode == "R") {
+        p.monitorStationMono = true;
+        p.monitorStationListenMode = "LR";
+    } else if (p.monitorStationMono) {
+        p.monitorStationMono = true;
+        p.monitorStationListenMode = "L";
+    } else {
+        p.monitorStationMono = true;
+        p.monitorStationListenMode = "LR";
+    }
+    applyStationChange(engine);
+}
+
+void nc_monitor_toggle_mid_side(NCEngine* engine) {
+    if (engine == nullptr) return;
+    auto& p = engine->project;
+    p.monitorStationMono = false;
+    p.monitorStationSwapLeftRight = false;
+    p.monitorStationListenMode = isMidSide(p) ? "LR" : "M";
+    applyStationChange(engine);
+}
+
+void nc_monitor_cycle_phase(NCEngine* engine) {
+    if (engine == nullptr) return;
+    auto& p = engine->project;
+    const bool l = p.monitorStationInvertLeft;
+    const bool r = p.monitorStationInvertRight;
+    if (!l && !r) {
+        p.monitorStationInvertLeft = true;
+    } else if (l && !r) {
+        p.monitorStationInvertLeft = false;
+        p.monitorStationInvertRight = true;
+    } else if (!l && r) {
+        p.monitorStationInvertLeft = true;
+        p.monitorStationInvertRight = true;
+    } else {
+        p.monitorStationInvertLeft = false;
+        p.monitorStationInvertRight = false;
+    }
+    applyStationChange(engine);
+}
+
+bool nc_monitor_mid_side(NCEngine* engine) {
+    return engine != nullptr && isMidSide(engine->project);
+}
+
+bool nc_monitor_invert_left(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationInvertLeft;
+}
+
+bool nc_monitor_invert_right(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationInvertRight;
+}
+
 int nc_monitor_active_speaker_slot(NCEngine* engine) {
     if (engine == nullptr) return 0;
     const MonitorDspModule* module = engine->speakerSimulation();

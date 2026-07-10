@@ -669,9 +669,23 @@ void nc_monitor_set_mute(NCEngine* engine, bool on);
 void nc_monitor_set_dim(NCEngine* engine, bool on);
 void nc_monitor_set_talkback(NCEngine* engine, bool on);
 
-// "LR", "MS", "L", "R" — mirrors ProjectDocument::monitorStationListenMode.
+// The monitor listen state, ported whole from the old UI. It is not four exclusive
+// modes: it is a listen mode string ("LR"/"L"/"R"/"M"/"S"), a separate mono flag, and
+// independent L/R phase inverts, kept consistent by normalizeMonitorStationProjectState.
+//
+//   Stereo button — cycles Stereo -> Left-only -> Right-only (or Mid, in M/S mode)
+//   Mono button   — cycles Mono -> L-into-both -> R-into-both (or Side, in M/S mode)
+//   M/S button    — toggles Mid/Side monitoring
+//   Ø button      — cycles phase invert Off -> ØL -> ØR -> ØLR
 void nc_monitor_listen_mode(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_listen_mode(NCEngine* engine, const char* mode);
+void nc_monitor_cycle_stereo(NCEngine* engine);
+void nc_monitor_cycle_mono(NCEngine* engine);
+void nc_monitor_toggle_mid_side(NCEngine* engine);
+void nc_monitor_cycle_phase(NCEngine* engine);
+bool nc_monitor_mid_side(NCEngine* engine);
+bool nc_monitor_invert_left(NCEngine* engine);
+bool nc_monitor_invert_right(NCEngine* engine);
 
 // A/B/C speaker sets live on the "speaker-simulation" module. Slot is 0, 1 or 2.
 int nc_monitor_active_speaker_slot(NCEngine* engine);

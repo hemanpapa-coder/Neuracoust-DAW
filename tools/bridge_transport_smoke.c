@@ -444,6 +444,51 @@ int main(void) {
     }
     nc_monitor_set_active_speaker_slot(engine, 0);
 
+    // --- monitor listen state: the cycles ported from the old UI ---------------
+    {
+        char mode[16] = {0};
+        // Stereo button cycles Stereo -> Left -> Right -> Stereo.
+        nc_monitor_set_listen_mode(engine, "LR");
+        nc_monitor_cycle_stereo(engine);
+        nc_monitor_listen_mode(engine, mode, sizeof(mode));
+        if (strcmp(mode, "L") != 0) { fprintf(stderr, "FAIL: stereo cycle LR->%s, expected L\n", mode); failures++; }
+        nc_monitor_cycle_stereo(engine);
+        nc_monitor_listen_mode(engine, mode, sizeof(mode));
+        if (strcmp(mode, "R") != 0) { fprintf(stderr, "FAIL: stereo cycle L->%s, expected R\n", mode); failures++; }
+        nc_monitor_cycle_stereo(engine);
+        nc_monitor_listen_mode(engine, mode, sizeof(mode));
+        if (strcmp(mode, "LR") != 0) { fprintf(stderr, "FAIL: stereo cycle R->%s, expected LR\n", mode); failures++; }
+
+        // Mono button turns mono on and cycles the summed side.
+        nc_monitor_cycle_mono(engine);
+        if (!nc_monitor_mono(engine)) { fprintf(stderr, "FAIL: mono cycle did not engage mono\n"); failures++; }
+
+        // M/S toggle: on gives Mid, and the Stereo/Mono buttons then pick Mid/Side.
+        nc_monitor_set_listen_mode(engine, "LR");
+        nc_monitor_set_mono(engine, 0);
+        nc_monitor_toggle_mid_side(engine);
+        if (!nc_monitor_mid_side(engine)) { fprintf(stderr, "FAIL: M/S toggle did not engage\n"); failures++; }
+        nc_monitor_listen_mode(engine, mode, sizeof(mode));
+        if (strcmp(mode, "M") != 0) { fprintf(stderr, "FAIL: M/S on gave %s, expected M\n", mode); failures++; }
+        nc_monitor_cycle_mono(engine);   // in M/S, the mono button selects Side
+        nc_monitor_listen_mode(engine, mode, sizeof(mode));
+        if (strcmp(mode, "S") != 0) { fprintf(stderr, "FAIL: M/S mono button gave %s, expected S\n", mode); failures++; }
+        nc_monitor_toggle_mid_side(engine);  // off returns to stereo
+        if (nc_monitor_mid_side(engine)) { fprintf(stderr, "FAIL: M/S toggle off still M/S\n"); failures++; }
+
+        // Phase button cycles Off -> ØL -> ØR -> ØLR -> Off.
+        while (nc_monitor_invert_left(engine) || nc_monitor_invert_right(engine)) nc_monitor_cycle_phase(engine);
+        nc_monitor_cycle_phase(engine);
+        if (!nc_monitor_invert_left(engine) || nc_monitor_invert_right(engine)) { fprintf(stderr, "FAIL: phase step 1 not ØL\n"); failures++; }
+        nc_monitor_cycle_phase(engine);
+        if (nc_monitor_invert_left(engine) || !nc_monitor_invert_right(engine)) { fprintf(stderr, "FAIL: phase step 2 not ØR\n"); failures++; }
+        nc_monitor_cycle_phase(engine);
+        if (!nc_monitor_invert_left(engine) || !nc_monitor_invert_right(engine)) { fprintf(stderr, "FAIL: phase step 3 not ØLR\n"); failures++; }
+        nc_monitor_cycle_phase(engine);
+        if (nc_monitor_invert_left(engine) || nc_monitor_invert_right(engine)) { fprintf(stderr, "FAIL: phase step 4 not Off\n"); failures++; }
+        printf("monitor listen state cycles OK\n");
+    }
+
     nc_engine_stop(engine);
     nc_engine_destroy(engine);
 
