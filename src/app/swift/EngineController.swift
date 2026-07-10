@@ -44,6 +44,22 @@ final class EngineController: ObservableObject {
     @Published var snapEnabled = true
     @Published var recording = false
 
+    /// The Pro-Tools-style record mode chosen from the record button's context menu.
+    /// It is the configuration the recording engine will use — the engine does not yet
+    /// capture input to disk, so choosing a mode stages it rather than arming a take.
+    enum RecordMode: String, CaseIterable, Identifiable {
+        case newTake, loop, punch
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .newTake: return "새 테이크"
+            case .loop: return "루프 레코딩"
+            case .punch: return "펀치 레코딩"
+            }
+        }
+    }
+    @Published var recordMode: RecordMode = .newTake
+
     @Published private(set) var projectName = ""
     @Published private(set) var tempoBpm = 120
 
@@ -780,9 +796,20 @@ final class EngineController: ObservableObject {
     }
 
     func toggleLoop() {
-        guard let handle else { return }
-        loopEnabled.toggle()
+        setLoop(!loopEnabled)
+    }
+
+    func setLoop(_ enabled: Bool) {
+        guard let handle, enabled != loopEnabled else { return }
+        loopEnabled = enabled
         nc_project_set_loop_enabled(handle, loopEnabled)
+    }
+
+    /// Loop record needs the loop on; punch reads its range from the loop/edit range.
+    /// Selecting loop record turns the loop on so the two agree.
+    func setRecordMode(_ mode: RecordMode) {
+        recordMode = mode
+        if mode == .loop { setLoop(true) }
     }
 
     func toggleClick() {

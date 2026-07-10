@@ -675,14 +675,24 @@ final class TimelineNSView: NSView {
         CATransaction.commit()
     }
 
+    /// The lane a drop lands on and where in time. A drop over the track header — the
+    /// name column, left of the lanes — lands at 0 s, so dragging a file onto the
+    /// track drops it at the start of the timeline.
+    private func dropTarget(at point: NSPoint) -> (lane: Int, seconds: Double)? {
+        guard let lane = laneIndex(at: point) else { return nil }
+        let seconds = point.x < lanesRect.minX ? 0 : max(0, seconds(atX: point.x))
+        return (lane, seconds)
+    }
+
     private func updateDropTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
         let point = convert(sender.draggingLocation, from: nil)
-        guard point.x >= lanesRect.minX, let lane = laneIndex(at: point), !audioURLs(from: sender).isEmpty else {
+        guard let target = dropTarget(at: point), !audioURLs(from: sender).isEmpty else {
             hideDropTarget()
             return []
         }
+        let lane = target.lane
         dropLaneIndex = lane
-        dropSeconds = max(0, seconds(atX: point.x))
+        dropSeconds = target.seconds
         let top = laneTop(lane)
         let dropX = x(forSeconds: max(0, snapped(dropSeconds)))
         // The backing layer of a flipped view is geometry-flipped by AppKit, so the
@@ -713,10 +723,10 @@ final class TimelineNSView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let point = convert(sender.draggingLocation, from: nil)
         defer { hideDropTarget() }
-        guard let lane = laneIndex(at: point) else { return false }
+        guard let target = dropTarget(at: point) else { return false }
         let urls = audioURLs(from: sender)
         guard !urls.isEmpty else { return false }
-        onDropAudio?(lane, max(0, seconds(atX: point.x)), urls)
+        onDropAudio?(target.lane, target.seconds, urls)
         return true
     }
 

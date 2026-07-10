@@ -87,14 +87,47 @@ struct TransportBar: View {
                          tint: engine.transportRunning ? Theme.Palette.green : Theme.Palette.text) {
                 engine.togglePlay()
             }
+            // Right-click for the playback mode, the way Pro Tools does. Loop playback
+            // is the loop toggle, so the two always agree.
+            .contextMenu {
+                Text("재생 모드").font(.caption)
+                transportModeItem("일반 재생", selected: !engine.loopEnabled) { engine.setLoop(false) }
+                transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
+            }
             transportKey("stop.fill") { engine.stop() }
-            // Not a take recorder: it arms the input monitor path. Drawn hollow so it
-            // does not read as a transport that captures audio.
+            // Not a take recorder yet: it arms the input monitor path. Drawn hollow so
+            // it does not read as a transport that captures audio. Right-click picks the
+            // record mode the capture engine will use once it exists.
             transportKey("circle",
                          tint: engine.recording ? Theme.Palette.red : Theme.Palette.textDim) {
                 engine.toggleRecording()
             }
-            .help("입력 모니터 경로 (녹음 아님)")
+            .help("입력 모니터 경로 (녹음 아님) · 우클릭으로 레코드 모드")
+            .contextMenu {
+                Text("레코드 모드").font(.caption)
+                ForEach(EngineController.RecordMode.allCases) { mode in
+                    transportModeItem(mode.label, selected: engine.recordMode == mode) {
+                        engine.setRecordMode(mode)
+                    }
+                }
+                Divider()
+                Text("펀치/루프 범위는 루프 구간을 사용합니다")
+                Text("입력 캡처는 아직 구현되지 않았습니다 — 모드만 설정됩니다")
+            }
+        }
+    }
+
+    /// A flat context-menu item that shows a checkmark when selected — the Pro Tools
+    /// layout, rather than a nested submenu.
+    @ViewBuilder
+    private func transportModeItem(_ title: String, selected: Bool,
+                                   _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if selected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
     }
 

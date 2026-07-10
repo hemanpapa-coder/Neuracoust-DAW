@@ -243,6 +243,13 @@ Input samples do reach the engine: the CoreAudio input **AudioQueue** hands them
 `NeuracoustDspEngine::pushInputMonitorInterleaved`, which drops them unless input
 monitoring or talkback is on, and then only into a mutex-guarded monitor buffer.
 
+The transport buttons carry Pro-Tools-style right-click menus: **Play** picks the
+playback mode (일반 / 루프 재생 — the loop is the existing loop toggle, so the two
+always agree), **Record** picks the record mode (새 테이크 / 루프 / 펀치 레코딩,
+stored in `EngineController.recordMode`). Loop record turns the loop on; punch reads
+its range from the loop range. The record modes are staged configuration only — the
+menu says so — because there is no capture engine yet:
+
 Real recording is therefore engine work, not UI work, and it is not a small change:
 the input arrives on an AudioQueue that is separate from the output AudioUnit's
 render callback, so captured frames carry no sample-accurate relationship to the
