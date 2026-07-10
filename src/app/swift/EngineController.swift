@@ -652,10 +652,17 @@ final class EngineController: ObservableObject {
         // Timeline edits carry no modifier, the way every DAW does it.
         if !event.modifierFlags.contains(.command) {
             switch event.keyCode {
+            case KeyCode.b where selectedRegionId != nil:
+                splitRegionAtPlayhead(selectedRegionId!)
+                return nil
             case KeyCode.b where !selectedClipIds.isEmpty:
                 splitSelectedClipsAtPlayhead()
                 return nil
             case KeyCode.delete, KeyCode.forwardDelete:
+                if let regionId = selectedRegionId {
+                    deleteMidiRegion(regionId)
+                    return nil
+                }
                 guard !selectedClipIds.isEmpty else { return event }
                 deleteSelectedClips()
                 return nil
@@ -685,6 +692,8 @@ final class EngineController: ObservableObject {
             cutSelectedClips()
         case KeyCode.v where clipboardClipName != nil:
             pasteClipsAtPlayhead()
+        case KeyCode.d where selectedRegionId != nil:
+            duplicateRegion(selectedRegionId!)
         case KeyCode.d where !selectedClipIds.isEmpty:
             duplicateSelectedClips()
         case KeyCode.m:
@@ -1073,8 +1082,11 @@ final class EngineController: ObservableObject {
     /// Fades and clip gain edit one clip at a time; they hide on a multi-selection.
     var selectedClipId: String? { selectedClipIds.count == 1 ? selectedClipIds.first : nil }
 
+    /// Also clears any region selection — clicking a clip, or empty space, means
+    /// the Delete key no longer points at a region.
     func selectClip(_ clipId: String?) {
         selectedClipIds = clipId.map { [$0] } ?? []
+        selectedRegionId = nil
     }
 
     /// Shift-click: add a clip to the selection, or take it back out.
@@ -1168,6 +1180,7 @@ final class EngineController: ObservableObject {
                     durationSeconds: region.durationSeconds,
                     muted: region.muted,
                     editing: region.id == editingRegionId,
+                    selected: region.id == selectedRegionId,
                     noteSketch: notes(inRegion: region.id).map { note in
                         TimelineModel.MidiRegion.Sketch(
                             startSeconds: region.startSeconds + note.startBeats * secondsPerBeat,
@@ -1460,6 +1473,13 @@ final class EngineController: ObservableObject {
     @Published private(set) var midiRegions: [MidiRegion] = []
     /// The region open in the piano roll, or nil while it is closed.
     @Published var editingRegionId: String?
+    /// Selecting a region is exclusive with selecting clips: one Delete key, one target.
+    @Published private(set) var selectedRegionId: String?
+
+    func selectRegion(_ regionId: String?) {
+        selectedRegionId = regionId
+        if regionId != nil { selectedClipIds = [] }
+    }
 
     var editingRegion: MidiRegion? {
         midiRegions.first { $0.id == editingRegionId }
@@ -1478,6 +1498,9 @@ final class EngineController: ObservableObject {
         }
         if let editing = editingRegionId, !midiRegions.contains(where: { $0.id == editing }) {
             editingRegionId = nil
+        }
+        if let selected = selectedRegionId, !midiRegions.contains(where: { $0.id == selected }) {
+            selectedRegionId = nil
         }
     }
 
@@ -1522,6 +1545,7 @@ final class EngineController: ObservableObject {
 
     func deleteMidiRegion(_ regionId: String) {
         guard let handle, nc_midi_region_delete(handle, regionId) else { return }
+        if selectedRegionId == regionId { selectedRegionId = nil }
         reloadMidiRegions()
         refreshHistory()
     }
@@ -1571,6 +1595,45 @@ final class EngineController: ObservableObject {
               nc_midi_note_delete(handle, regionId, noteId) else { return }
         refreshHistory()
         objectWillChange.send()
+    }
+
+    // MARK: MIDI region tools
+
+    /// Beats. A sixteenth is 0.25.
+    func quantizeRegion(_ regionId: String, beatQuantum: Double) {
+        guard let handle, nc_midi_region_quantize(handle, regionId, beatQuantum) > 0 else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    func transposeRegion(_ regionId: String, semitones: Int) {
+        guard let handle, nc_midi_region_transpose(handle, regionId, Int32(semitones)) > 0 else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    /// The seed makes it repeatable, which is the only way to test it.
+    func humanizeRegion(_ regionId: String, seed: UInt32 = 12345) {
+        guard let handle, nc_midi_region_humanize(handle, regionId, 0.03, 12, seed) > 0 else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    func duplicateRegion(_ regionId: String) {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_midi_region_duplicate(handle, regionId, &buffer, buffer.count) else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    /// Splits at the playhead. A playhead outside the region does nothing.
+    func splitRegionAtPlayhead(_ regionId: String) {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_midi_region_split(handle, regionId, playheadSeconds, &buffer, buffer.count) else { return }
+        reloadMidiRegions()
+        refreshHistory()
     }
 
     // MARK: Markers

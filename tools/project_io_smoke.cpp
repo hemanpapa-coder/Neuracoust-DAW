@@ -989,6 +989,59 @@ int main() {
                     check(noteOnVelocity == 20, "the renderer's note-on carries the new velocity");
                 }
 
+                // --- region tools -------------------------------------------------
+                {
+                    // A note a hair off the sixteenth grid, and one on it.
+                    char offGrid[128] = {0};
+                    check(nc_midi_note_add(engine, regionId, 64, 0.31, 0.25, 80, offGrid, sizeof(offGrid)),
+                          "a note at 0.31 beats");
+                    check(nc_midi_region_quantize(engine, regionId, 0.25) > 0, "quantize to sixteenths");
+
+                    // Find it again: quantize keeps ids.
+                    double quantizedStart = -1.0;
+                    for (int n = 0; n < nc_midi_note_count(engine, regionId); ++n) {
+                        char id[128] = {0};
+                        nc_midi_note_id(engine, regionId, n, id, sizeof(id));
+                        if (strcmp(id, offGrid) == 0) quantizedStart = nc_midi_note_start_beats(engine, regionId, n);
+                    }
+                    printf("quantize: 0.31 beats snapped to %.3f (expect 0.250)\n", quantizedStart);
+                    check(std::abs(quantizedStart - 0.25) < 0.001, "it landed on the grid");
+
+                    const int pitchBefore = nc_midi_note_pitch(engine, regionId, 0);
+                    check(nc_midi_region_transpose(engine, regionId, 12) > 0, "transpose an octave up");
+                    check(nc_midi_note_pitch(engine, regionId, 0) == pitchBefore + 12, "every note rose");
+                    check(nc_midi_region_transpose(engine, regionId, -12) > 0, "and back down");
+                    check(nc_midi_note_pitch(engine, regionId, 0) == pitchBefore, "to where it was");
+
+                    // Humanize takes a seed, so the same call twice gives the same answer.
+                    check(nc_midi_region_humanize(engine, regionId, 0.05, 8, 12345) > 0, "humanize it");
+
+                    const int notesBefore = nc_midi_note_count(engine, regionId);
+                    char copyId[128] = {0};
+                    check(nc_midi_region_duplicate(engine, regionId, copyId, sizeof(copyId)),
+                          "duplicate the region");
+                    check(nc_midi_region_count(engine) == 2, "two regions now");
+                    check(nc_midi_note_count(engine, copyId) == notesBefore, "the copy carries the notes");
+                    // It lands right after the original rather than on top of it.
+                    check(std::abs(nc_midi_region_start_seconds(engine, 1) -
+                                   (nc_midi_region_start_seconds(engine, 0) +
+                                    nc_midi_region_duration_seconds(engine, 0))) < 0.001,
+                          "and sits after it");
+                    check(nc_midi_region_delete(engine, copyId), "drop the copy");
+
+                    // A split at 2 s of a region that starts at 1 s and runs 2 s.
+                    char halfId[128] = {0};
+                    check(nc_midi_region_split(engine, regionId, 2.0, halfId, sizeof(halfId)),
+                          "split the region at 2 s");
+                    check(nc_midi_region_count(engine) == 2, "it became two");
+                    // Its own buffer: a refused split clears the one it is handed.
+                    char noSplit[128] = {0};
+                    check(!nc_midi_region_split(engine, regionId, 99.0, noSplit, sizeof(noSplit)),
+                          "a split outside the region is refused");
+                    check(nc_midi_region_delete(engine, halfId), "drop the tail");
+                    check(nc_midi_note_delete(engine, regionId, offGrid), "drop the extra note");
+                }
+
                 check(nc_midi_note_delete(engine, regionId, noteId), "delete the note");
                 check(nc_midi_note_count(engine, regionId) == 0, "no notes left");
                 check(nc_midi_region_delete(engine, regionId), "delete the region");

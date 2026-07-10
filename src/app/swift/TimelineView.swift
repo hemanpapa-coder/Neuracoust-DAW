@@ -66,6 +66,7 @@ struct TimelineModel: Equatable {
         let durationSeconds: Double
         let muted: Bool
         let editing: Bool
+        let selected: Bool
         /// (start seconds, duration seconds, pitch) — already in timeline time.
         let noteSketch: [Sketch]
 
@@ -113,6 +114,7 @@ final class TimelineNSView: NSView {
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
+    var onSelectRegion: ((String?) -> Void)?
     var onOpenRegion: ((String) -> Void)?
     var onMoveRegion: ((String, Int, Double) -> Void)?   // (id, lane, start) — continuous
     var onResizeRegion: ((String, Double) -> Void)?      // (id, duration) — continuous
@@ -168,6 +170,10 @@ final class TimelineNSView: NSView {
 
     private var drag = Drag.none
 
+    /// The lanes scroll under a fixed ruler. An NSScrollView would carry the ruler
+    /// away with them, so the view owns the offset itself.
+    private var scrollY: CGFloat = 0
+
     static let rulerHeight: CGFloat = 30
     /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
     static let rangeStripHeight: CGFloat = 12
@@ -213,7 +219,7 @@ final class TimelineNSView: NSView {
     /// Lanes are no longer a uniform stack: an open automation lane adds to the one
     /// above it, so every vertical position has to be accumulated.
     private func laneTop(_ index: Int) -> CGFloat {
-        var top = Self.rulerHeight
+        var top = Self.rulerHeight - scrollY
         for lane in model.lanes.prefix(index) {
             top += Self.laneHeight
             if lane.automation != nil { top += Self.automationHeight }
@@ -221,14 +227,19 @@ final class TimelineNSView: NSView {
         return top
     }
 
+    /// How far the lanes reach below the ruler, at scroll offset zero.
+    private var contentHeight: CGFloat {
+        model.lanes.reduce(0) { $0 + Self.laneHeight + ($1.automation != nil ? Self.automationHeight : 0) }
+    }
+
+    private var maximumScrollY: CGFloat {
+        max(0, contentHeight - (bounds.height - Self.rulerHeight))
+    }
+
     private func automationRect(_ index: Int) -> NSRect? {
         guard index < model.lanes.count, model.lanes[index].automation != nil else { return nil }
         return NSRect(x: 0, y: laneTop(index) + Self.laneHeight,
                       width: bounds.width, height: Self.automationHeight)
-    }
-
-    var totalLaneHeight: CGFloat {
-        laneTop(model.lanes.count) - Self.rulerHeight
     }
 
     private func clipRect(_ clip: TimelineModel.Clip) -> NSRect {
@@ -295,6 +306,9 @@ final class TimelineNSView: NSView {
 
             if region.editing {
                 NSColor(hex: 0xe6a23c).setStroke()
+                body.lineWidth = 2
+            } else if region.selected {
+                NSColor(hex: 0xd8c8ff).setStroke()
                 body.lineWidth = 2
             } else {
                 accent.withAlphaComponent(0.8).setStroke()
@@ -385,6 +399,7 @@ final class TimelineNSView: NSView {
 
         if let region = region(at: point) {
             let rect = regionRect(region)
+            onSelectRegion?(region.id)
             if event.clickCount >= 2 {
                 onOpenRegion?(region.id)
             } else if rect.maxX - point.x <= Self.trimHandleWidth {
@@ -602,11 +617,19 @@ final class TimelineNSView: NSView {
         let secondsPerPoint = model.visibleDuration / Double(max(1, lanesRect.width))
         let start = max(0, model.visibleStart + Double(event.scrollingDeltaX) * -secondsPerPoint)
         onZoom?(start, model.visibleDuration)
+
+        // Vertical wheel scrolls the lanes under the fixed ruler.
+        guard maximumScrollY > 0, event.scrollingDeltaY != 0 else { return }
+        let next = min(maximumScrollY, max(0, scrollY - event.scrollingDeltaY))
+        guard next != scrollY else { return }
+        scrollY = next
+        needsDisplay = true
     }
 
     // MARK: Drawing
 
     override func layout() {
+        scrollY = min(scrollY, maximumScrollY)
         super.layout()
         layoutPlayhead()
     }
@@ -729,6 +752,10 @@ final class TimelineNSView: NSView {
             .foregroundColor: NSColor(hex: 0xe8e1d5),
         ]
 
+        context.saveGState()
+        context.clip(to: NSRect(x: 0, y: Self.rulerHeight,
+                                width: bounds.width, height: bounds.height - Self.rulerHeight))
+
         for (index, lane) in model.lanes.enumerated() {
             let rect = NSRect(x: 0,
                               y: laneTop(index),
@@ -757,6 +784,7 @@ final class TimelineNSView: NSView {
             NSColor(hex: 0x1b1611).setFill()
             NSRect(x: 0, y: rect.maxY - 1, width: bounds.width, height: 1).fill()
         }
+        context.restoreGState()
     }
 
     /// Markers live in the ruler below the range strip; they must not eat the scrub.
@@ -802,6 +830,7 @@ final class TimelineNSView: NSView {
     private func automationToggleRect(_ index: Int) -> NSRect {
         NSRect(x: Self.headerWidth - 26, y: laneTop(index) + 10, width: 18, height: 14)
     }
+
 
     /// Value axis: the top of the row is the parameter's maximum.
     private func automationY(_ value: Float, in rect: NSRect, _ automation: TimelineModel.Automation) -> CGFloat {
@@ -849,8 +878,10 @@ final class TimelineNSView: NSView {
                 ])
 
             context.saveGState()
+            // A scrolled automation row can reach up under the ruler.
             context.clip(to: NSRect(x: lanesRect.minX, y: rect.minY,
-                                    width: lanesRect.width, height: rect.height))
+                                    width: lanesRect.width, height: rect.height)
+                             .intersection(lanesRect))
 
             // The line the curve falls back to when there are no points at all.
             NSColor(hex: 0x453d34).setStroke()
@@ -1103,6 +1134,7 @@ struct TimelineView: NSViewRepresentable {
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
     let onSetRange: (Double, Double) -> Void
+    let onSelectRegion: (String?) -> Void
     let onOpenRegion: (String) -> Void
     let onMoveRegion: (String, Int, Double) -> Void
     let onResizeRegion: (String, Double) -> Void
@@ -1148,6 +1180,7 @@ struct TimelineView: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange
+        view.onSelectRegion = onSelectRegion
         view.onOpenRegion = onOpenRegion
         view.onMoveRegion = onMoveRegion
         view.onResizeRegion = onResizeRegion

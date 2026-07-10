@@ -162,6 +162,7 @@ private struct EditView: View {
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
                     onSelect: { engine.selectClip($0) },
                     onSetRange: { engine.setLoopRange(start: $0, end: $1) },
+                    onSelectRegion: { engine.selectRegion($0) },
                     onOpenRegion: { engine.editingRegionId = $0 },
                     onMoveRegion: { engine.moveMidiRegion($0, laneIndex: $1, startSeconds: $2) },
                     onResizeRegion: { engine.resizeMidiRegion($0, durationSeconds: $1) },

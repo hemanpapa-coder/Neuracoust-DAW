@@ -38,10 +38,10 @@ final class PianoRollNSView: NSView {
     var onDeleteNote: ((String) -> Void)?
     var onCommitEdit: ((String) -> Void)?
 
-    /// C1 to C7 — the range a part is realistically written in, and enough that the
-    /// view never needs to scroll.
-    private static let lowestPitch = 24
-    private static let highestPitch = 96
+    /// The whole MIDI range. A narrower window would hide notes rather than clamp
+    /// them: transposing an octave up used to move a note off the top of the view.
+    private static let lowestPitch = 0
+    private static let highestPitch = 127
     private static let keyboardWidth: CGFloat = 44
     private static let rowHeight: CGFloat = 10
     private static let resizeHandleWidth: CGFloat = 6
@@ -93,6 +93,32 @@ final class PianoRollNSView: NSView {
     private func pitch(atY pointY: CGFloat) -> Int {
         let row = Int(pointY / Self.rowHeight)
         return max(Self.lowestPitch, min(Self.highestPitch, Self.highestPitch - row))
+    }
+
+    private var lastPitchRange: ClosedRange<Int>?
+
+    /// Where to scroll so the notes are on screen, or nil to leave the view alone.
+    ///
+    /// Only follows when the part's pitch range *changes* — a transpose that walks
+    /// the notes off the top. Scrolling every update would drag the view back from
+    /// wherever the user had put it.
+    func scrollTarget(visible: NSRect) -> CGFloat? {
+        let pitches = model.notes.map(\.pitch)
+        guard let lowest = pitches.min(), let highest = pitches.max() else {
+            lastPitchRange = nil
+            return nil
+        }
+        let range = lowest...highest
+        defer { lastPitchRange = range }
+        guard lastPitchRange != range else { return nil }
+
+        let top = y(forPitch: highest)
+        let bottom = y(forPitch: lowest) + Self.rowHeight
+        if top >= visible.minY && bottom <= visible.maxY {
+            return nil
+        }
+        let centre = (top + bottom) / 2 - visible.height / 2
+        return max(0, min(idealHeight - visible.height, centre))
     }
 
     private func snapped(_ beats: Double) -> Double {
@@ -377,6 +403,13 @@ struct PianoRoll: NSViewRepresentable {
         roll.frame = NSRect(x: 0, y: 0,
                             width: scroll.contentSize.width,
                             height: roll.idealHeight)
+
+        // 128 rows is mostly silence. Centre on the notes the first time they appear,
+        // and follow them when a transpose walks them off the visible rows.
+        if let focus = roll.scrollTarget(visible: scroll.contentView.bounds) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: focus))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
     }
 }
 
@@ -418,6 +451,18 @@ struct PianoRollPanel: View {
                 .font(Theme.Font.mono(8))
                 .foregroundStyle(Theme.Palette.textFaint)
 
+            Divider().frame(height: 12)
+
+            tool("퀀타이즈 1/16") { engine.quantizeRegion(region.id, beatQuantum: 0.25) }
+            tool("퀀타이즈 1/8") { engine.quantizeRegion(region.id, beatQuantum: 0.5) }
+            tool("+8ve") { engine.transposeRegion(region.id, semitones: 12) }
+            tool("−8ve") { engine.transposeRegion(region.id, semitones: -12) }
+            tool("+1") { engine.transposeRegion(region.id, semitones: 1) }
+            tool("−1") { engine.transposeRegion(region.id, semitones: -1) }
+            tool("휴머나이즈") { engine.humanizeRegion(region.id) }
+            tool("복제") { engine.duplicateRegion(region.id) }
+            tool("분할") { engine.splitRegionAtPlayhead(region.id) }
+
             Spacer()
 
             Text("클릭 = 노트 추가 · 더블클릭 = 삭제 · 오른쪽 끝 = 길이 · VEL 레인 = 세기")
@@ -437,6 +482,20 @@ struct PianoRollPanel: View {
         .padding(.horizontal, Theme.Space.md)
         .padding(.vertical, 6)
         .background(Theme.Palette.toolbar)
+    }
+
+    private func tool(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Theme.Font.mono(8))
+                .foregroundStyle(Theme.Palette.textDim)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(Theme.Palette.button)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func model(for region: EngineController.MidiRegion) -> PianoRollModel {

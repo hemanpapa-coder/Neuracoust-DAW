@@ -88,6 +88,13 @@ Menu items still declare their shortcuts so they are discoverable; the `NSEvent`
 
 `nc_bounce_to_wav` renders the engine's document and blocks — about 25x realtime with no plug-ins, so a three-minute song would freeze the UI for seconds. The app instead serializes the document (`nc_project_serialize`) and renders that snapshot on a background task through `nc_bounce_snapshot_to_wav`, which touches no shared state. `project_io_smoke` proves the two paths are sample-for-sample identical; if they ever diverge, a background export would be quietly lying.
 
+## The timeline scrolls itself
+
+Lanes scroll under a fixed ruler, so the view owns the offset rather than sitting in
+an NSScrollView — a scroll view would carry the ruler and the marker strip away with
+the lanes. `laneTop()` accumulates the offset; everything that hit-tests or draws a
+lane goes through it.
+
 ## Selection and range editing
 
 Two selections, and they do different work:
@@ -151,6 +158,32 @@ Double-click an instrument lane to make a region, double-click the region to ope
 piano roll under the timeline. In the roll a click adds a note, a drag moves it, the
 right edge resizes it, a double-click deletes it. A click that lands just short of an
 existing note does **not** stack a second note on top of it.
+
+The roll draws all 128 MIDI pitches, not a comfortable middle range: transposing an
+octave up used to walk a note off the top of the view, where it kept playing unseen.
+It scrolls to follow the part, but only when the part's **pitch range changes** —
+scrolling on every update would drag the view back from wherever the user left it.
+
+Region tools (quantize, transpose, humanize, duplicate, split) sit in the roll's
+header and each records one undo step for the whole region. Humanize takes a seed, so
+the same call twice gives the same answer; a random result could not be tested.
+
+A MIDI region is selected by clicking it, and then Delete, ⌘D and B act on it instead
+of on the clip selection — the two selections are exclusive, so one Delete key always
+has exactly one target.
+
+The roll draws all 128 MIDI pitches, not a comfortable middle range: transposing an
+octave up used to walk a note off the top of the view, where it kept playing unseen.
+It scrolls to follow the part, but only when the part's **pitch range changes** —
+scrolling on every update would drag the view back from wherever the user left it.
+
+Region tools (quantize, transpose, humanize, duplicate, split) sit in the roll's
+header and each records one undo step for the whole region. Humanize takes a seed, so
+the same call twice gives the same answer; a random result could not be tested.
+
+A MIDI region is selected by clicking it, and then Delete, ⌘D and B act on it instead
+of on the clip selection — the two selections are exclusive, so one Delete key always
+has exactly one target.
 
 The velocity lane is pinned under the roll rather than scrolling with the keyboard —
 inside the scroll view it sat 730 pt down and was never on screen. Dragging a bar is

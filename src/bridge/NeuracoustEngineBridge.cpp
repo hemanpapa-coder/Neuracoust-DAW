@@ -1713,6 +1713,67 @@ bool nc_midi_region_delete(NCEngine* engine, const char* regionId) {
                          "Delete MIDI region");
 }
 
+int nc_midi_region_quantize(NCEngine* engine, const char* regionId, double beatQuantum) {
+    if (engine == nullptr || regionId == nullptr) return 0;
+    std::vector<std::string> changed;
+    if (!neuracoust::daw::quantizeMidiRegion(engine->project, regionId, beatQuantum, changed)) {
+        return 0;
+    }
+    applyMidiEdit(engine, true, "Quantize region");
+    return static_cast<int>(changed.size());
+}
+
+int nc_midi_region_transpose(NCEngine* engine, const char* regionId, int semitones) {
+    if (engine == nullptr || regionId == nullptr) return 0;
+    std::vector<std::string> changed;
+    if (!neuracoust::daw::transposeMidiRegion(engine->project, regionId, semitones, changed)) {
+        return 0;
+    }
+    applyMidiEdit(engine, true, "Transpose region");
+    return static_cast<int>(changed.size());
+}
+
+int nc_midi_region_humanize(NCEngine* engine, const char* regionId, double maxTimingBeats,
+                            int maxVelocityDelta, unsigned int seed) {
+    if (engine == nullptr || regionId == nullptr) return 0;
+    std::vector<std::string> changed;
+    if (!neuracoust::daw::humanizeMidiRegion(engine->project, regionId, maxTimingBeats,
+                                             maxVelocityDelta, seed, changed)) {
+        return 0;
+    }
+    applyMidiEdit(engine, true, "Humanize region");
+    return static_cast<int>(changed.size());
+}
+
+bool nc_midi_region_split(NCEngine* engine, const char* regionId, double splitSeconds,
+                          char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || regionId == nullptr) return false;
+    std::string newRegionId;
+    if (!neuracoust::daw::splitMidiRegion(engine->project, regionId, splitSeconds, newRegionId)) {
+        return false;
+    }
+    applyMidiEdit(engine, true, "Split MIDI region");
+    copyText(out, outLen, newRegionId);
+    return true;
+}
+
+bool nc_midi_region_duplicate(NCEngine* engine, const char* regionId, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr) return false;
+
+    // Land the copy immediately after the original, the way a clip duplicate does.
+    const double newStart = region->startSeconds + region->durationSeconds;
+    std::string newRegionId;
+    if (!neuracoust::daw::duplicateMidiRegion(engine->project, regionId, newStart, newRegionId)) {
+        return false;
+    }
+    applyMidiEdit(engine, true, "Duplicate MIDI region");
+    copyText(out, outLen, newRegionId);
+    return true;
+}
+
 int nc_midi_note_count(NCEngine* engine, const char* regionId) {
     const auto* region = midiRegionById(engine, regionId);
     return region != nullptr ? static_cast<int>(region->notes.size()) : 0;

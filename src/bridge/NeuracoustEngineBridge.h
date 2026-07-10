@@ -426,6 +426,17 @@ bool nc_midi_region_move(NCEngine* engine, const char* regionId, int trackIndex,
 bool nc_midi_region_resize(NCEngine* engine, const char* regionId, double durationSeconds);
 bool nc_midi_region_delete(NCEngine* engine, const char* regionId);
 
+/// Region tools. Each records one step for the whole region. `beatQuantum` is in
+/// beats: 0.25 is a sixteenth. Humanize takes a seed so the same call twice gives the
+/// same result — a random result could not be tested.
+int nc_midi_region_quantize(NCEngine* engine, const char* regionId, double beatQuantum);
+int nc_midi_region_transpose(NCEngine* engine, const char* regionId, int semitones);
+int nc_midi_region_humanize(NCEngine* engine, const char* regionId, double maxTimingBeats,
+                            int maxVelocityDelta, unsigned int seed);
+bool nc_midi_region_split(NCEngine* engine, const char* regionId, double splitSeconds,
+                          char* out, size_t outLen);
+bool nc_midi_region_duplicate(NCEngine* engine, const char* regionId, char* out, size_t outLen);
+
 int nc_midi_note_count(NCEngine* engine, const char* regionId);
 void nc_midi_note_id(NCEngine* engine, const char* regionId, int noteIndex, char* out, size_t outLen);
 int nc_midi_note_pitch(NCEngine* engine, const char* regionId, int noteIndex);
