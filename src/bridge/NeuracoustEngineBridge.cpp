@@ -999,6 +999,23 @@ bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
     return applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
 }
 
+double nc_clip_fade_in(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->fadeInSeconds : 0.0;
+}
+
+double nc_clip_fade_out(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->fadeOutSeconds : 0.0;
+}
+
+bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, double fadeOut) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::setClipFades(engine->project, clipId,
+                                                               std::max(0.0, fadeIn),
+                                                               std::max(0.0, fadeOut)));
+}
+
 namespace {
 
 const neuracoust::daw::ClipState* findClipById(NCEngine* engine, const std::string& clipId) {

@@ -330,6 +330,67 @@ int main() {
             check(nc_clip_count(engine) == 2, "duplicate made a second clip");
         }
 
+        // --- fades and clip gain must reach the render, not just the picture ----
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "import for fades");
+            char fadeClip[128] = {0};
+            nc_clip_id(engine, 0, fadeClip, sizeof(fadeClip));
+
+            check(nc_clip_fade_in(engine, 0) == 0.0, "a fresh clip has no fade in");
+            check(nc_clip_set_fades(engine, fadeClip, 1.0, 0.5), "set a 1 s fade in");
+            check(std::abs(nc_clip_fade_in(engine, 0) - 1.0) < 0.001, "the fade in stuck");
+            check(std::abs(nc_clip_fade_out(engine, 0) - 0.5) < 0.001, "the fade out stuck");
+
+            check(nc_clip_set_gain_db(engine, fadeClip, -12.0f), "set clip gain");
+            check(std::abs(nc_clip_gain_db(engine, 0) + 12.0f) < 0.01f, "the gain stuck");
+
+            char fadeProject[256] = "/tmp/neuracoust-io-smoke/Faded.ndaw";
+            check(nc_project_save_as(engine, fadeProject, error, sizeof(error)), "save the fade");
+
+            neuracoust::daw::ProjectDocument fadedProject;
+            std::string fadeParseError;
+            FILE* fadeFile = fopen(fadeProject, "rb");
+            std::string fadeText;
+            if (fadeFile != nullptr) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), fadeFile)) > 0) fadeText.append(buffer, read);
+                fclose(fadeFile);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(fadeText, fadeProject,
+                                                             fadedProject, fadeParseError),
+                  "parse the faded project");
+
+            const std::string fadeBounce = "/tmp/neuracoust-io-smoke/faded.wav";
+            check(neuracoust::daw::bounceProjectToWav(fadedProject, fadeBounce).ok, "bounce the fade");
+
+            // Read the rendered peak in the first 100 ms and around the middle of
+            // the fade. A 1 s fade in must leave the start far quieter than 0.5 s in.
+            neuracoust::daw::WavAudioData rendered;
+            std::string readError;
+            check(neuracoust::daw::readPcmWavFile(fadeBounce, rendered, readError), "read the bounce");
+            if (rendered.channels > 0 && rendered.sampleRate > 0) {
+                auto peakBetween = [&](double from, double to) {
+                    float peak = 0.0f;
+                    const int64_t begin = static_cast<int64_t>(from * rendered.sampleRate);
+                    const int64_t end = std::min<int64_t>(rendered.frameCount(),
+                                                          static_cast<int64_t>(to * rendered.sampleRate));
+                    for (int64_t frame = begin; frame < end; ++frame) {
+                        for (int channel = 0; channel < rendered.channels; ++channel) {
+                            peak = std::max(peak, std::abs(rendered.interleavedSamples[frame * rendered.channels + channel]));
+                        }
+                    }
+                    return peak;
+                };
+                const float early = peakBetween(0.0, 0.1);
+                const float late = peakBetween(0.85, 0.95);
+                printf("fade in: peak 0-100ms = %.4f, peak 850-950ms = %.4f\n", early, late);
+                check(early < late * 0.3f, "a fade in really attenuates the start");
+                check(late > 0.001f, "and the clip is audible once the fade completes");
+            }
+        }
+
         // snapProjectTime always snaps — it does not consult a "snap enabled" flag.
         // The default project's grid unit is 1 s, so 1.234 lands on 1.0. Whether to
         // snap at all is the caller's decision.

@@ -18,6 +18,9 @@ struct TimelineModel: Equatable {
         let durationSeconds: Double
         let sourcePath: String
         let selected: Bool
+        let fadeInSeconds: Double
+        let fadeOutSeconds: Double
+        let gainDb: Float
     }
 
     var lanes: [Lane] = []
@@ -60,6 +63,8 @@ final class TimelineNSView: NSView {
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
+    var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
+    var onSetGain: ((String, Float) -> Void)?
     var onCommitEdit: ((String) -> Void)?                // step name
     var snap: ((Double) -> Double)?
 
@@ -72,7 +77,14 @@ final class TimelineNSView: NSView {
         case moving(clipId: String, grabOffsetSeconds: Double)
         case trimmingStart(clipId: String)
         case trimmingEnd(clipId: String)
+        case fadingIn(clip: TimelineModel.Clip)
+        case fadingOut(clip: TimelineModel.Clip)
+        case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
     }
+
+    /// Clip gain is drawn as a horizontal line across this dB span.
+    private static let gainRange: ClosedRange<Float> = -24...12
+    private static let fadeHandleSize: CGFloat = 9
 
     private var drag = Drag.none
 
@@ -148,6 +160,32 @@ final class TimelineNSView: NSView {
         onSelect?(hit.id)
 
         let rect = clipRect(hit)
+
+        // Fade handles sit on the clip's top corners, offset by the current fade.
+        if point.y - rect.minY <= Self.fadeHandleSize + 13 {
+            let inX = x(forSeconds: hit.startSeconds + hit.fadeInSeconds)
+            let outX = x(forSeconds: hit.startSeconds + hit.durationSeconds - hit.fadeOutSeconds)
+            if abs(point.x - inX) <= Self.fadeHandleSize {
+                drag = .fadingIn(clip: hit)
+                return
+            }
+            if abs(point.x - outX) <= Self.fadeHandleSize {
+                drag = .fadingOut(clip: hit)
+                return
+            }
+        }
+
+        // The gain line is grabbable only on a selected clip, away from the edges.
+        if hit.selected {
+            let lineY = gainLineY(hit, in: rect)
+            if abs(point.y - lineY) <= 4,
+               point.x - rect.minX > Self.trimHandleWidth,
+               rect.maxX - point.x > Self.trimHandleWidth {
+                drag = .gaining(clip: hit, grabY: point.y, startGainDb: hit.gainDb)
+                return
+            }
+        }
+
         if point.x - rect.minX <= Self.trimHandleWidth {
             drag = .trimmingStart(clipId: hit.id)
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
@@ -172,6 +210,19 @@ final class TimelineNSView: NSView {
             onTrimStart?(clipId, snapped(time))
         case .trimmingEnd(let clipId):
             onTrimEnd?(clipId, snapped(time))
+        case .fadingIn(let clip):
+            let fade = min(clip.durationSeconds, max(0, time - clip.startSeconds))
+            onSetFades?(clip.id, fade, clip.fadeOutSeconds)
+        case .fadingOut(let clip):
+            let end = clip.startSeconds + clip.durationSeconds
+            let fade = min(clip.durationSeconds, max(0, end - time))
+            onSetFades?(clip.id, clip.fadeInSeconds, fade)
+        case .gaining(let clip, let grabY, let startGainDb):
+            // The full clip height spans the gain range; dragging up is louder.
+            let span = Self.gainRange.upperBound - Self.gainRange.lowerBound
+            let perPoint = span / Float(max(1, Self.laneHeight - 12))
+            let value = startGainDb - Float(point.y - grabY) * perPoint
+            onSetGain?(clip.id, min(Self.gainRange.upperBound, max(Self.gainRange.lowerBound, value)))
         }
     }
 
@@ -181,6 +232,10 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Move clip")
         case .trimmingStart, .trimmingEnd:
             onCommitEdit?("Trim clip")
+        case .fadingIn, .fadingOut:
+            onCommitEdit?("Clip fade")
+        case .gaining:
+            onCommitEdit?("Clip gain")
         case .none, .seeking:
             break
         }
@@ -367,6 +422,8 @@ final class TimelineNSView: NSView {
             body.fill()
 
             drawWaveform(clip, in: rect.insetBy(dx: 2, dy: 14), accent: lane.accent)
+            drawFades(clip, in: rect)
+            drawGainLine(clip, in: rect)
 
             // Name plate along the top of the clip.
             NSColor(hex: 0x0b0806).withAlphaComponent(0.55).setFill()
@@ -394,6 +451,65 @@ final class TimelineNSView: NSView {
         }
 
         context.restoreGState()
+    }
+
+    private func gainLineY(_ clip: TimelineModel.Clip, in rect: NSRect) -> CGFloat {
+        let span = Self.gainRange.upperBound - Self.gainRange.lowerBound
+        let fraction = (clip.gainDb - Self.gainRange.lowerBound) / span
+        return rect.maxY - CGFloat(fraction) * rect.height
+    }
+
+    /// Fades are drawn as the region the clip loses: a wedge from silence up to
+    /// full level. Handles ride the top edge where the fade ends.
+    private func drawFades(_ clip: TimelineModel.Clip, in rect: NSRect) {
+        NSColor(hex: 0x0b0806).withAlphaComponent(0.55).setFill()
+
+        if clip.fadeInSeconds > 0 {
+            let end = x(forSeconds: clip.startSeconds + clip.fadeInSeconds)
+            let wedge = NSBezierPath()
+            wedge.move(to: NSPoint(x: rect.minX, y: rect.minY))
+            wedge.line(to: NSPoint(x: min(end, rect.maxX), y: rect.minY))
+            wedge.line(to: NSPoint(x: rect.minX, y: rect.maxY))
+            wedge.close()
+            wedge.fill()
+        }
+        if clip.fadeOutSeconds > 0 {
+            let begin = x(forSeconds: clip.startSeconds + clip.durationSeconds - clip.fadeOutSeconds)
+            let wedge = NSBezierPath()
+            wedge.move(to: NSPoint(x: max(begin, rect.minX), y: rect.minY))
+            wedge.line(to: NSPoint(x: rect.maxX, y: rect.minY))
+            wedge.line(to: NSPoint(x: rect.maxX, y: rect.maxY))
+            wedge.close()
+            wedge.fill()
+        }
+
+        guard clip.selected else { return }
+        NSColor(hex: 0xe6a23c).setFill()
+        for position in [x(forSeconds: clip.startSeconds + clip.fadeInSeconds),
+                         x(forSeconds: clip.startSeconds + clip.durationSeconds - clip.fadeOutSeconds)] {
+            guard position >= rect.minX, position <= rect.maxX else { continue }
+            NSBezierPath(ovalIn: NSRect(x: position - 3, y: rect.minY + 14, width: 6, height: 6)).fill()
+        }
+    }
+
+    /// Only the selected clip shows its gain line; otherwise the lane is noisy.
+    private func drawGainLine(_ clip: TimelineModel.Clip, in rect: NSRect) {
+        guard clip.selected else { return }
+        let lineY = gainLineY(clip, in: rect)
+
+        NSColor(hex: 0xe6a23c).withAlphaComponent(0.8).setStroke()
+        let line = NSBezierPath()
+        line.move(to: NSPoint(x: rect.minX + 2, y: lineY))
+        line.line(to: NSPoint(x: rect.maxX - 2, y: lineY))
+        line.lineWidth = 1
+        line.stroke()
+
+        let label = String(format: "%+.1f dB", clip.gainDb) as NSString
+        label.draw(at: NSPoint(x: rect.minX + 6, y: lineY - 12),
+                   withAttributes: [
+                       .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .medium),
+                       .foregroundColor: NSColor(hex: 0xe6a23c),
+                   ])
     }
 
     /// Resamples the cached peak buckets onto the clip's on-screen width. Only the
@@ -460,6 +576,8 @@ struct TimelineView: NSViewRepresentable {
     let onMoveClip: (String, Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
+    let onSetFades: (String, Double, Double) -> Void
+    let onSetGain: (String, Float) -> Void
     let onCommitEdit: (String) -> Void
     let snap: (Double) -> Double
 
@@ -485,6 +603,8 @@ struct TimelineView: NSViewRepresentable {
         view.onMoveClip = onMoveClip
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd
+        view.onSetFades = onSetFades
+        view.onSetGain = onSetGain
         view.onCommitEdit = onCommitEdit
         view.snap = snap
     }

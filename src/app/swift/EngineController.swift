@@ -827,6 +827,9 @@ final class EngineController: ObservableObject {
         let sourcePath: String
         let startSeconds: Double
         let durationSeconds: Double
+        let fadeInSeconds: Double
+        let fadeOutSeconds: Double
+        let gainDb: Float
     }
 
     @Published private(set) var clips: [Clip] = []
@@ -879,7 +882,10 @@ final class EngineController: ObservableObject {
                                           startSeconds: clip.startSeconds,
                                           durationSeconds: clip.durationSeconds,
                                           sourcePath: clip.sourcePath,
-                                          selected: clip.id == selectedClipId)
+                                          selected: clip.id == selectedClipId,
+                                          fadeInSeconds: clip.fadeInSeconds,
+                                          fadeOutSeconds: clip.fadeOutSeconds,
+                                          gainDb: clip.gainDb)
             },
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
@@ -910,6 +916,16 @@ final class EngineController: ObservableObject {
     func trimClipEnd(_ clipId: String, to endSeconds: Double) {
         guard let handle else { return }
         if nc_clip_trim_end(handle, clipId, endSeconds) { reloadClips() }
+    }
+
+    func setClipFades(_ clipId: String, fadeIn: Double, fadeOut: Double) {
+        guard let handle else { return }
+        if nc_clip_set_fades(handle, clipId, fadeIn, fadeOut) { reloadClips() }
+    }
+
+    func setClipGain(_ clipId: String, _ gainDb: Float) {
+        guard let handle else { return }
+        if nc_clip_set_gain_db(handle, clipId, gainDb) { reloadClips() }
     }
 
     func commitClipGesture(_ stepName: String) {
@@ -997,7 +1013,10 @@ final class EngineController: ObservableObject {
                 trackName: readEngineString { nc_clip_track(handle, i, $0, $1) },
                 sourcePath: readEngineString(capacity: 1024) { nc_clip_source_path(handle, i, $0, $1) },
                 startSeconds: nc_clip_start_seconds(handle, i),
-                durationSeconds: nc_clip_duration_seconds(handle, i)
+                durationSeconds: nc_clip_duration_seconds(handle, i),
+                fadeInSeconds: nc_clip_fade_in(handle, i),
+                fadeOutSeconds: nc_clip_fade_out(handle, i),
+                gainDb: nc_clip_gain_db(handle, i)
             )
         }
         loadWaveforms()

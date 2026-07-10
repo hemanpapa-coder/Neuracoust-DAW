@@ -260,6 +260,11 @@ bool nc_clip_delete(NCEngine* engine, const char* clipId);
 float nc_clip_gain_db(NCEngine* engine, int index);
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
 
+/// Fades, in seconds from each end. Continuous, like move and trim.
+double nc_clip_fade_in(NCEngine* engine, int index);
+double nc_clip_fade_out(NCEngine* engine, int index);
+bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, double fadeOut);
+
 /// Clipboard. Copy stores the clip; paste places a copy at `startSeconds` on the
 /// clip's original track. Cut copies then deletes. All record their own step.
 bool nc_clip_copy(NCEngine* engine, const char* clipId);

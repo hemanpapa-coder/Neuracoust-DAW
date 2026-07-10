@@ -148,6 +148,8 @@ private struct EditView: View {
                     onMoveClip: { engine.moveClip($0, to: $1) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },
+                    onSetFades: { engine.setClipFades($0, fadeIn: $1, fadeOut: $2) },
+                    onSetGain: { engine.setClipGain($0, $1) },
                     onCommitEdit: { engine.commitClipGesture($0) },
                     snap: { engine.snap($0) }
                 )
