@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+trap "" INT TERM TSTP
+
+while true; do
+  clear
+
+  host=$(hostname)
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  dsp=$(systemctl is-active neuracoust-rt-dsp.service 2>/dev/null || true)
+  if ss -lunpt 2>/dev/null | grep -q ':20000 '; then
+    port=open
+  else
+    port=closed
+  fi
+  now=$(date '+%Y-%m-%d %H:%M:%S %Z')
+  up=$(uptime -p 2>/dev/null | sed 's/^up //')
+
+  printf '\n'
+  printf '  누라쿠스트 DSP 서버\n'
+  printf '  ========================\n\n'
+
+  if [ "$dsp" = active ] && [ "$port" = open ]; then
+    printf '  STATUS : STANDBY / READY\n'
+  else
+    printf '  STATUS : CHECK SERVICE\n'
+  fi
+
+  printf '  HOST   : %s\n' "$host"
+  printf '  IP     : %s\n' "${ip:-not-ready}"
+  printf '  DSP    : %s\n' "${dsp:-unknown}"
+  printf '  UDP    : 20000/%s\n' "$port"
+  printf '  UPTIME : %s\n' "$up"
+  printf '  TIME   : %s\n\n' "$now"
+  printf '  Remote control: SSH / 누라쿠스트 DAW\n'
+  printf '  Local login is disabled on this display.\n\n'
+
+  sleep 5
+done

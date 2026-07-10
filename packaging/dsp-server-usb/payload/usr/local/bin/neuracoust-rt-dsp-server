@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/neuracoust-rt-dsp/server.conf}"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/neuracoust/rt_engine}"
+MODULE_PATH="${MODULE_PATH:-${INSTALL_DIR}/modules/na_4001e.so}"
+NA_RT_AUDIO_PORT="${NA_RT_AUDIO_PORT:-20000}"
+NA_RT_MONITOR_PORT="${NA_RT_MONITOR_PORT:-20001}"
+DSP_CPU_MASK="${DSP_CPU_MASK:-2,3}"
+
+auto_cpu_mask() {
+  local configured="$1"
+  local cpu_count
+  cpu_count="$(nproc 2>/dev/null || echo 1)"
+  if taskset -c "$configured" true >/dev/null 2>&1; then
+    printf '%s\n' "$configured"
+    return
+  fi
+  if (( cpu_count >= 4 )); then
+    printf '%s,%s\n' "$((cpu_count - 2))" "$((cpu_count - 1))"
+  elif (( cpu_count >= 2 )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+case "${1:-start}" in
+  start)
+    DSP_CPU_MASK="$(auto_cpu_mask "$DSP_CPU_MASK")"
+    exec taskset -c "$DSP_CPU_MASK" "$INSTALL_DIR/neuracoust-rt-engine" \
+      --module "$MODULE_PATH" \
+      --port "$NA_RT_AUDIO_PORT" \
+      --monitor-port "$NA_RT_MONITOR_PORT"
+    ;;
+  self-test)
+    exec "$INSTALL_DIR/neuracoust-rt-engine" --module "$MODULE_PATH" --self-test
+    ;;
+  *)
+    echo "Usage: $0 {start|self-test}" >&2
+    exit 2
+    ;;
+esac

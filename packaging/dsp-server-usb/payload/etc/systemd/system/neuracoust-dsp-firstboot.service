@@ -1,0 +1,15 @@
+[Unit]
+Description=Neuracoust DSP Server first boot hardware probe and SSD install
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/neuracoust/dsp-server/bin/neuracoust-dsp-firstboot.sh
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/neuracoust-dsp-server/install.conf
+Environment=NEURACOUST_CONFIRM_ERASE=ERASE
+ExecStart=/opt/neuracoust/dsp-server/bin/neuracoust-dsp-firstboot.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

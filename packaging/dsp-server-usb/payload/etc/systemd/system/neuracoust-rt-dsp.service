@@ -1,0 +1,28 @@
+[Unit]
+Description=Neuracoust RT DSP Server (UDP Engine)
+After=network-online.target neuracoust-cpu-performance.service neuracoust-net-rt.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=audio
+Environment=CONFIG_FILE=/etc/neuracoust-rt-dsp/server.conf
+ExecStart=/usr/local/bin/neuracoust-rt-dsp-server start
+Restart=always
+RestartSec=2
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+LimitNICE=-20
+LimitRTTIME=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=90
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+NoNewPrivileges=false
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=neuracoust-rt-dsp
+
+[Install]
+WantedBy=multi-user.target

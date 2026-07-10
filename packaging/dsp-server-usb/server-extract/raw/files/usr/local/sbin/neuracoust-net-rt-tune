@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+IFACE=enp3s0
+ETHTOOL=/usr/sbin/ethtool
+IP=/usr/sbin/ip
+SYSCTL=/usr/sbin/sysctl
+[ -x "$ETHTOOL" ] && "$ETHTOOL" --set-eee "$IFACE" eee off 2>/dev/null || true
+[ -x "$ETHTOOL" ] && "$ETHTOOL" -K "$IFACE" gro off gso off tso off 2>/dev/null || true
+[ -x "$ETHTOOL" ] && "$ETHTOOL" -s "$IFACE" wol d 2>/dev/null || true
+[ -x "$IP" ] && "$IP" link set dev "$IFACE" txqueuelen 256 2>/dev/null || true
+[ -x "$SYSCTL" ] && "$SYSCTL" -w net.core.rmem_max=8388608 net.core.wmem_max=8388608 2>/dev/null || true
+[ -x "$SYSCTL" ] && "$SYSCTL" -w net.ipv4.udp_rmem_min=262144 net.ipv4.udp_wmem_min=262144 2>/dev/null || true
+exit 0

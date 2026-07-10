@@ -1,0 +1,10 @@
+[Unit]
+Description=Neuracoust DSP Server firmware/runtime update check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/neuracoust-dsp-server/update.conf
+ExecStart=/opt/neuracoust/dsp-server/bin/neuracoust-dsp-update.sh --scheduled
+

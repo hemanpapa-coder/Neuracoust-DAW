@@ -1,0 +1,46 @@
+{
+  "productName": "Neuracoust DSP Server",
+  "mediaName": "Neuracoust DSP Server Appliance USB",
+  "versionFormat": "YYMMDD.HHMM",
+  "supportedWriteHosts": ["macOS", "Windows-over-SSH"],
+  "baseOs": "Debian stable minimal live appliance",
+  "defaultSuite": "bookworm",
+  "candidateSuite": "trixie",
+  "kernelPackage": "linux-image-rt-amd64",
+  "targetBootMode": "UEFI",
+  "targetInstallMode": "run-live-now-copy-live-root-to-internal-ssd",
+  "firmwareUpdate": {
+    "mode": "manifest-plus-package",
+    "stateDirectory": "/var/lib/neuracoust/dsp-server/update",
+    "config": "/etc/neuracoust-dsp-server/update.conf",
+    "manualCommand": "/opt/neuracoust/dsp-server/bin/neuracoust-dsp-update.sh",
+    "systemdTimer": "neuracoust-dsp-update.timer",
+    "defaultChannel": "stable",
+    "controllers": [
+      "license-agent",
+      "daw",
+      "standalone-updater",
+      "local-usb",
+      "self-scheduled"
+    ],
+    "packageContract": {
+      "manifest": "latest.json",
+      "fields": ["version", "channel", "packageUrl", "sha256", "minInstalledVersion", "releaseNotesUrl"],
+      "archive": "tar.gz containing manifest.json and install.sh"
+    }
+  },
+  "targetDiskPolicy": {
+    "allowTransports": ["nvme", "sata", "ata", "scsi"],
+    "minimumBytes": 32000000000,
+    "denyRemovable": true,
+    "denyHotplug": true,
+    "denyUsbBus": true,
+    "excludeCurrentBootDisk": true,
+    "requireConfirmationEnvironment": "NEURACOUST_CONFIRM_ERASE=ERASE",
+    "candidateLog": "/var/log/neuracoust/dsp-server/install-candidate-disks.log"
+  },
+  "reports": {
+    "hardware": "/var/log/neuracoust/dsp-server/hardware.json",
+    "install": "/var/log/neuracoust/dsp-server/install-report.json"
+  }
+}

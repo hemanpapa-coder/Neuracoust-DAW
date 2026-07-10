@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.neuracoust.remote-core</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REMOTE_CORE_BIN__</string>
+        <string>--bind</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>20000</string>
+        <string>--status-port</string>
+        <string>20001</string>
+        <string>--module-id</string>
+        <string>na.neuracoust.4001e</string>
+        <string>--module-name</string>
+        <string>Neuracoust 4001E Remote Core</string>
+        <string>--gain</string>
+        <string>1.0</string>
+        <string>--sample-rate</string>
+        <string>48000</string>
+__REMOTE_CORE_VST3_ARGS__
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/remote-core.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/remote-core.err.log</string>
+    <key>WorkingDirectory</key>
+    <string>__REMOTE_CORE_DIR__</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>Nice</key>
+    <integer>-5</integer>
+</dict>
+</plist>

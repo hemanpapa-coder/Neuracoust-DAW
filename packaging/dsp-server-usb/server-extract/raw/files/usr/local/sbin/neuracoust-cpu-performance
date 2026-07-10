@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+for governor in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+  [[ -f "$governor" ]] && echo performance > "$governor" || true
+done
+for latency in /dev/cpu_dma_latency; do
+  [[ -e "$latency" ]] && exec 9>"$latency" && printf '\x00\x00\x00\x00' >&9 || true
+done

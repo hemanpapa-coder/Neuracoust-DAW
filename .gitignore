@@ -1,0 +1,24 @@
+.DS_Store
+
+# Build outputs
+build/
+dist/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Local Codex/work artifacts
+.codex_tmp/
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS and packaging leftovers
+*.dSYM/
+*.dmg
+*.pkg
+*.zip

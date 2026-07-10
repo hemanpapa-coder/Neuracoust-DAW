@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+ETHTOOL=/usr/sbin/ethtool
+IP=/usr/sbin/ip
+SYSCTL=/usr/sbin/sysctl
+
+primary_iface() {
+  $IP route show default 2>/dev/null | awk '/ default / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+IFACE="${NEURACOUST_NET_IFACE:-$(primary_iface)}"
+if [ -z "$IFACE" ]; then
+  IFACE="$(ls /sys/class/net 2>/dev/null | grep -v '^lo$' | head -1 || true)"
+fi
+[ -n "$IFACE" ] || exit 0
+
+[ -x "$ETHTOOL" ] && "$ETHTOOL" --set-eee "$IFACE" eee off 2>/dev/null || true
+[ -x "$ETHTOOL" ] && "$ETHTOOL" -K "$IFACE" gro off gso off tso off 2>/dev/null || true
+[ -x "$IP" ] && "$IP" link set dev "$IFACE" txqueuelen 256 2>/dev/null || true
+[ -x "$SYSCTL" ] && "$SYSCTL" -w net.core.rmem_max=8388608 net.core.wmem_max=8388608 2>/dev/null || true
+[ -x "$SYSCTL" ] && "$SYSCTL" -w net.ipv4.udp_rmem_min=262144 net.ipv4.udp_wmem_min=262144 2>/dev/null || true
+exit 0

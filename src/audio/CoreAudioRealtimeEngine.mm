@@ -1,0 +1,1002 @@
+#include "audio/RealtimeAudioEngine.h"
+#include "audio/MonitorOutputRouting.h"
+#include "audio/NeuracoustDspEngine.h"
+
+#if defined(__APPLE__)
+#import <AudioToolbox/AudioToolbox.h>
+#import <CoreAudio/CoreAudio.h>
+#include <mach/mach_time.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <pthread.h>
+#include <pthread/qos.h>
+#include <vector>
+
+namespace neuracoust::daw {
+
+namespace {
+
+AudioObjectID defaultOutputDevice() {
+    AudioObjectID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(device);
+    AudioObjectPropertyAddress address {
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, &device);
+    return device;
+}
+
+AudioObjectID outputDeviceFromSettings(const AudioEngineSettings& settings) {
+    if (settings.outputDeviceId.empty()) {
+        return defaultOutputDevice();
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoul(settings.outputDeviceId.c_str(), &end, 10);
+    if (end == settings.outputDeviceId.c_str() || parsed == 0) {
+        return defaultOutputDevice();
+    }
+    return static_cast<AudioObjectID>(parsed);
+}
+
+std::string deviceName(AudioObjectID device) {
+    CFStringRef name = nullptr;
+    UInt32 size = sizeof(name);
+    AudioObjectPropertyAddress address {
+        kAudioObjectPropertyName,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &name) != noErr || name == nullptr) {
+        return "Default Output";
+    }
+    char buffer[512] = {};
+    CFStringGetCString(name, buffer, sizeof(buffer), kCFStringEncodingUTF8);
+    CFRelease(name);
+    return buffer;
+}
+
+CFStringRef deviceUidFromId(const std::string& deviceId) {
+    if (deviceId.empty()) {
+        return nullptr;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoul(deviceId.c_str(), &end, 10);
+    if (end == deviceId.c_str() || parsed == 0) {
+        return nullptr;
+    }
+    AudioObjectID device = static_cast<AudioObjectID>(parsed);
+    CFStringRef uid = nullptr;
+    UInt32 size = sizeof(uid);
+    AudioObjectPropertyAddress address {
+        kAudioDevicePropertyDeviceUID,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &uid) != noErr || uid == nullptr) {
+        return nullptr;
+    }
+    return uid;
+}
+
+int actualDeviceBufferSize(AudioObjectID device, int fallback) {
+    if (device == kAudioObjectUnknown) {
+        return std::max(16, fallback);
+    }
+    UInt32 frames = 0;
+    UInt32 size = sizeof(frames);
+    AudioObjectPropertyAddress address {
+        kAudioDevicePropertyBufferFrameSize,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &frames) == noErr && frames > 0) {
+        return static_cast<int>(frames);
+    }
+    return std::max(16, fallback);
+}
+
+int clampedDeviceBufferSize(AudioObjectID device, int requestedBufferSize) {
+    if (device == kAudioObjectUnknown || requestedBufferSize <= 0) {
+        return std::max(16, requestedBufferSize);
+    }
+    AudioValueRange range {};
+    UInt32 size = sizeof(range);
+    AudioObjectPropertyAddress address {
+        kAudioDevicePropertyBufferFrameSizeRange,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &range) == noErr &&
+        range.mMinimum > 0.0 &&
+        range.mMaximum >= range.mMinimum) {
+        const double clamped = std::max(range.mMinimum, std::min(range.mMaximum, static_cast<double>(requestedBufferSize)));
+        return static_cast<int>(std::round(clamped));
+    }
+    return std::max(16, requestedBufferSize);
+}
+
+void requestDeviceBufferSize(AudioObjectID device, int bufferSize) {
+    if (device == kAudioObjectUnknown || bufferSize <= 0) {
+        return;
+    }
+    UInt32 frames = static_cast<UInt32>(clampedDeviceBufferSize(device, bufferSize));
+    for (AudioObjectPropertyScope scope : {kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeOutput}) {
+        AudioObjectPropertyAddress address {
+            kAudioDevicePropertyBufferFrameSize,
+            scope,
+            kAudioObjectPropertyElementMain
+        };
+        if (!AudioObjectHasProperty(device, &address)) {
+            continue;
+        }
+        AudioObjectSetPropertyData(device, &address, 0, nullptr, sizeof(frames), &frames);
+    }
+}
+
+int outputDeviceChannelCount(AudioObjectID device) {
+    if (device == kAudioObjectUnknown) {
+        return 0;
+    }
+    AudioObjectPropertyAddress address {
+        kAudioDevicePropertyStreamConfiguration,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &address, 0, nullptr, &size) != noErr || size == 0) {
+        return 0;
+    }
+    std::vector<std::byte> storage(size);
+    auto* bufferList = reinterpret_cast<AudioBufferList*>(storage.data());
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, bufferList) != noErr) {
+        return 0;
+    }
+    int channelCount = 0;
+    for (UInt32 index = 0; index < bufferList->mNumberBuffers; ++index) {
+        channelCount += static_cast<int>(bufferList->mBuffers[index].mNumberChannels);
+    }
+    return channelCount;
+}
+
+int audioBufferListChannelCount(const AudioBufferList* outputData) {
+    if (outputData == nullptr) {
+        return 0;
+    }
+    int channelCount = 0;
+    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+        channelCount += static_cast<int>(std::max<UInt32>(1, outputData->mBuffers[bufferIndex].mNumberChannels));
+    }
+    return channelCount;
+}
+
+void clearAudioBufferList(AudioBufferList* outputData, UInt32 frameCount) {
+    if (outputData == nullptr) {
+        return;
+    }
+    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+        auto& buffer = outputData->mBuffers[bufferIndex];
+        auto* samples = static_cast<Float32*>(buffer.mData);
+        if (samples == nullptr) {
+            continue;
+        }
+        const UInt32 channels = std::max<UInt32>(1, buffer.mNumberChannels);
+        const size_t sampleCount = std::min<size_t>(
+            static_cast<size_t>(frameCount) * static_cast<size_t>(channels),
+            static_cast<size_t>(buffer.mDataByteSize) / sizeof(Float32));
+        std::fill(samples, samples + sampleCount, 0.0f);
+    }
+}
+
+void writeAudioBufferListChannel(AudioBufferList* outputData,
+                                 int channelIndex,
+                                 UInt32 frame,
+                                 Float32 value) {
+    if (outputData == nullptr || channelIndex < 0) {
+        return;
+    }
+    int remainingChannel = channelIndex;
+    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+        auto& buffer = outputData->mBuffers[bufferIndex];
+        const UInt32 channels = std::max<UInt32>(1, buffer.mNumberChannels);
+        if (remainingChannel >= static_cast<int>(channels)) {
+            remainingChannel -= static_cast<int>(channels);
+            continue;
+        }
+        auto* samples = static_cast<Float32*>(buffer.mData);
+        if (samples == nullptr) {
+            return;
+        }
+        const size_t sampleIndex = static_cast<size_t>(frame) * static_cast<size_t>(channels) +
+            static_cast<size_t>(remainingChannel);
+        if (sampleIndex < static_cast<size_t>(buffer.mDataByteSize) / sizeof(Float32)) {
+            samples[sampleIndex] = value;
+        }
+        return;
+    }
+}
+
+} // namespace
+
+class RealtimeAudioEngine::Impl {
+public:
+    ~Impl() { stop(); }
+
+    bool start(const AudioEngineSettings& requestedSettings) {
+        const double requestedPlaybackSeconds = std::max(0.0, dspEngine_.statusSnapshot().playbackSeconds);
+        stop();
+        settings_ = requestedSettings;
+        audioThreadPolicyApplied_.store(false);
+        resetRealtimeTelemetry();
+        settings_.outputDriver = AudioDriverKind::CoreAudio;
+        if (settings_.monitorModules.empty()) {
+            settings_.monitorModules = defaultMonitorDspModules();
+        }
+        device_ = outputDeviceFromSettings(settings_);
+        if (device_ == kAudioObjectUnknown) {
+            status_.message = "No Core Audio output device is available.";
+            return false;
+        }
+        requestDeviceBufferSize(device_, settings_.bufferSize);
+        settings_.bufferSize = actualDeviceBufferSize(device_, settings_.bufferSize);
+        const int deviceOutputChannels = outputDeviceChannelCount(device_);
+        outputChannelCount_ = std::max(2, deviceOutputChannels > 0 ? deviceOutputChannels : monitorOutputRequiredChannels(settings_.monitorModules));
+        outputChannelCount_ = std::min(outputChannelCount_, 64);
+        std::string prepareError;
+        if (!dspEngine_.configure(settings_, settings_.bufferSize, prepareError)) {
+            status_.running = false;
+            status_.outputDriver = AudioDriverKind::CoreAudio;
+            status_.sampleRate = settings_.sampleRate;
+            status_.outputChannels = 0;
+            status_.deviceName = "Neuracoust DSP Engine";
+            status_.message = prepareError;
+            return false;
+        }
+        if (requestedPlaybackSeconds > 0.0) {
+            dspEngine_.seek(requestedPlaybackSeconds);
+        }
+
+        AudioStreamBasicDescription format {};
+        format.mSampleRate = settings_.sampleRate;
+        format.mFormatID = kAudioFormatLinearPCM;
+        format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved;
+        format.mBytesPerPacket = sizeof(Float32);
+        format.mFramesPerPacket = 1;
+        format.mBytesPerFrame = sizeof(Float32);
+        format.mChannelsPerFrame = static_cast<UInt32>(outputChannelCount_);
+        format.mBitsPerChannel = 32;
+
+        AudioComponentDescription desc {};
+        desc.componentType = kAudioUnitType_Output;
+        desc.componentSubType = kAudioUnitSubType_DefaultOutput;
+        desc.componentManufacturer = kAudioUnitManufacturer_Apple;
+
+        AudioComponent component = AudioComponentFindNext(nullptr, &desc);
+        if (component == nullptr || AudioComponentInstanceNew(component, &unit_) != noErr) {
+            status_.message = "Could not create Core Audio output unit.";
+            return false;
+        }
+
+        AudioUnitSetProperty(unit_, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device_, sizeof(device_));
+        AudioUnitSetProperty(unit_, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format, sizeof(format));
+        UInt32 maxFramesPerSlice = static_cast<UInt32>(std::max(16, settings_.bufferSize));
+        AudioUnitSetProperty(unit_, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFramesPerSlice, sizeof(maxFramesPerSlice));
+
+        AURenderCallbackStruct callback {};
+        callback.inputProc = &Impl::renderCallback;
+        callback.inputProcRefCon = this;
+        AudioUnitSetProperty(unit_, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback, sizeof(callback));
+
+        if (AudioUnitInitialize(unit_) != noErr) {
+            status_.message = "Could not initialize Core Audio output unit.";
+            stop();
+            return false;
+        }
+
+        if (AudioOutputUnitStart(unit_) != noErr) {
+            status_.message = "Could not start Core Audio output.";
+            stop();
+            return false;
+        }
+
+        const bool inputMonitorStarted = startInputMonitorIfNeeded();
+        status_.running = true;
+        status_.transportRunning = settings_.transportRunning;
+        status_.outputDriver = AudioDriverKind::CoreAudio;
+        status_.sampleRate = settings_.sampleRate;
+        status_.outputChannels = outputChannelCount_;
+        status_.deviceName = deviceName(device_);
+        status_.dspEngineName = "Neuracoust DSP Engine";
+        status_.requestedBufferSize = settings_.bufferSize;
+        status_.monitorPathDescription = resolveMonitorOutputRoute(settings_.monitorModules, outputChannelCount_).description;
+        status_.playbackStabilityBufferSize = settings_.bufferSize * std::max(1, settings_.playbackStabilityBufferMultiplier);
+        status_.message = "Core Audio I/O connected to Neuracoust DSP engine.";
+        if (inputMonitorStarted) {
+            status_.message += " Physical input monitor callback active.";
+        }
+        if (dspEngine_.activeVst3MasterInsertCount() > 0) {
+            status_.message += " Realtime VST3 master inserts enabled.";
+        }
+        if (settings_.performanceCoreIsolationEnabled) {
+            status_.message += " Core isolation QoS hint enabled for " + std::to_string(std::max(1, settings_.requestedPerformanceCoreCount)) + " DSP core(s).";
+        }
+        return true;
+    }
+
+    void stop() {
+        stopInputMonitor();
+        if (unit_ != nullptr) {
+            AudioOutputUnitStop(unit_);
+            AudioUnitUninitialize(unit_);
+            AudioComponentInstanceDispose(unit_);
+            unit_ = nullptr;
+        }
+        dspEngine_.resetRuntime();
+        audioThreadPolicyApplied_.store(false);
+        status_.running = false;
+    }
+
+    AudioEngineStatus status() {
+        primeTelemetryIfCoreAudioHasNotRenderedYet();
+        auto copy = status_;
+        const auto dspStatus = dspEngine_.statusSnapshot();
+        copy.transportRunning = dspStatus.transportRunning;
+        copy.outputPeakLeft = dspStatus.outputPeakLeft;
+        copy.outputPeakRight = dspStatus.outputPeakRight;
+        copy.phaseCorrelation = dspStatus.phaseCorrelation;
+        copy.spectrumLow = dspStatus.spectrumLow;
+        copy.spectrumMid = dspStatus.spectrumMid;
+        copy.spectrumHigh = dspStatus.spectrumHigh;
+        copy.trackMeterNames = dspStatus.trackMeterNames;
+        copy.trackPeakLeft = dspStatus.trackPeakLeft;
+        copy.trackPeakRight = dspStatus.trackPeakRight;
+        copy.trackInsertMeterTrackNames = dspStatus.trackInsertMeterTrackNames;
+        copy.trackInsertMeterSlotIndices = dspStatus.trackInsertMeterSlotIndices;
+        copy.trackInsertInputPeak = dspStatus.trackInsertInputPeak;
+        copy.trackInsertOutputPeak = dspStatus.trackInsertOutputPeak;
+        copy.trackInsertOutputParameterTrackNames = dspStatus.trackInsertOutputParameterTrackNames;
+        copy.trackInsertOutputParameterSlotIndices = dspStatus.trackInsertOutputParameterSlotIndices;
+        copy.trackInsertOutputParameterIds = dspStatus.trackInsertOutputParameterIds;
+        copy.trackInsertOutputParameterValues = dspStatus.trackInsertOutputParameterValues;
+        copy.playbackSeconds = dspStatus.playbackSeconds;
+        copy.delayCompensationEnabled = dspStatus.delayCompensationEnabled;
+        copy.delayCompensationSamples = dspStatus.delayCompensationSamples;
+        copy.delayCompensationMs = dspStatus.delayCompensationMs;
+        copy.directMonitoringEnabled = dspStatus.directMonitoringEnabled;
+        copy.lowLatencyRecordMonitoringActive = dspStatus.lowLatencyRecordMonitoringActive;
+        copy.physicalInputMonitoringActive = dspStatus.physicalInputMonitoringActive;
+        copy.recordArmedTrackCount = dspStatus.recordArmedTrackCount;
+        copy.inputChannels = dspStatus.inputChannels;
+        copy.inputPeak = dspStatus.inputPeak;
+        copy.requestedBufferSize = dspStatus.requestedBufferSize;
+        copy.playbackStabilityBufferSize = dspStatus.playbackStabilityBufferSize;
+        copy.dspEngineName = dspStatus.dspEngineName;
+        copy.remoteDspMonitorActive = dspStatus.remoteDspMonitorActive;
+        copy.remoteDspRoundTripMs = dspStatus.remoteDspRoundTripMs;
+        copy.remoteDspAverageRoundTripJitterUs = dspStatus.remoteDspAverageRoundTripJitterUs;
+        copy.remoteDspMaxRoundTripJitterUs = dspStatus.remoteDspMaxRoundTripJitterUs;
+        RemoteDspServerSettings planSettings = settings_.remoteDspServer;
+        planSettings.pluginDspEnabled = planSettings.pluginDspEnabled || dspStatus.activeRemoteDspTrackInsertCount > 0;
+        const bool remoteMonitorRequested = settings_.remoteDspServer.enabled &&
+            (settings_.monitorDspPathMode == "external" ||
+             settings_.monitorDspPathMode == "nds" ||
+             settings_.monitorDspPathMode == "remote_external" ||
+             settings_.monitorDspPathMode == "auto");
+        copy.remoteDspCorePlan = makeRemoteDspCorePlan(planSettings,
+                                                       copy.remoteDspCorePlan.totalCores,
+                                                       remoteMonitorRequested);
+        copy.requestedPerformanceCoreCount = dspStatus.requestedPerformanceCoreCount;
+        const auto physicalRoute = resolveMonitorOutputRoute(settings_.monitorModules, std::max(2, outputChannelCount_));
+        if (!physicalRoute.description.empty() && !dspStatus.monitorPathDescription.empty()) {
+            copy.monitorPathDescription = physicalRoute.description + " · " + dspStatus.monitorPathDescription;
+        } else if (!physicalRoute.description.empty()) {
+            copy.monitorPathDescription = physicalRoute.description;
+        } else {
+            copy.monitorPathDescription = dspStatus.monitorPathDescription;
+        }
+        copy.activeRealtimeVst3MasterInsertCount = dspStatus.activeRealtimeVst3MasterInsertCount;
+        copy.activeRealtimeVst3TrackInsertCount = dspStatus.activeRealtimeVst3TrackInsertCount;
+        copy.activeRemoteDspTrackInsertCount = dspStatus.activeRemoteDspTrackInsertCount;
+        copy.activeOfflineVst3TrackInsertCount = dspStatus.activeOfflineVst3TrackInsertCount;
+        copy.listenRoom = dspStatus.listenRoom;
+        copy.realtimeCallbackCount = realtimeCallbackCount_.load();
+        copy.realtimeAverageWakeJitterUs = realtimeAverageWakeJitterUs_.load();
+        copy.realtimeMaxWakeJitterUs = realtimeMaxWakeJitterUs_.load();
+        copy.realtimeMaxRenderDurationUs = realtimeMaxRenderDurationUs_.load();
+        copy.realtimeLateWakeCount = realtimeLateWakeCount_.load();
+        return copy;
+    }
+
+    void setTestToneEnabled(bool enabled) {
+        settings_.testToneEnabled = enabled;
+        dspEngine_.setTestToneEnabled(enabled);
+    }
+
+    void setMetronomeEnabled(bool enabled,
+                             int tempoBpm,
+                             const std::vector<TempoMarkerState>& tempoMap,
+                             int timeSignatureNumerator,
+                             int timeSignatureDenominator,
+                             const std::string& grooveFeel,
+                             double grooveSwingAmount,
+                             const std::vector<TimeSignatureMarkerState>& timeSignatureMap,
+                             const std::string& metronomeSubdivision) {
+        settings_.metronomeEnabled = enabled;
+        settings_.tempoBpm = std::max(1, tempoBpm);
+        settings_.timeSignatureNumerator = std::max(1, std::min(16, timeSignatureNumerator));
+        settings_.timeSignatureDenominator = std::max(1, std::min(32, timeSignatureDenominator));
+        settings_.grooveFeel = (grooveFeel == "shuffle" || grooveFeel == "triplet") ? grooveFeel : "straight";
+        settings_.grooveSwingAmount = std::max(0.0, std::min(1.0, grooveSwingAmount));
+        settings_.metronomeSubdivision =
+            (metronomeSubdivision == "quarter" || metronomeSubdivision == "eighth" || metronomeSubdivision == "sixteenth")
+                ? metronomeSubdivision
+                : "auto";
+        settings_.tempoMap = tempoMap;
+        std::sort(settings_.tempoMap.begin(), settings_.tempoMap.end(), [](const TempoMarkerState& left, const TempoMarkerState& right) {
+            return left.timeSeconds < right.timeSeconds;
+        });
+        settings_.timeSignatureMap = timeSignatureMap;
+        std::sort(settings_.timeSignatureMap.begin(), settings_.timeSignatureMap.end(), [](const TimeSignatureMarkerState& left, const TimeSignatureMarkerState& right) {
+            return left.timeSeconds < right.timeSeconds;
+        });
+        dspEngine_.setMetronomeEnabled(enabled,
+                                       tempoBpm,
+                                       settings_.tempoMap,
+                                       settings_.timeSignatureNumerator,
+                                       settings_.timeSignatureDenominator,
+                                       settings_.grooveFeel,
+                                       settings_.grooveSwingAmount,
+                                       settings_.timeSignatureMap,
+                                       settings_.metronomeSubdivision);
+    }
+
+    void setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) {
+        suppressRealtimeTelemetryAfterGraphChange();
+        settings_.monitorModules = modules;
+        settings_.monitorDspEnabled = enabled;
+        status_.monitorPathDescription = resolveMonitorOutputRoute(settings_.monitorModules, std::max(2, outputChannelCount_)).description;
+        dspEngine_.setMonitorDspModules(settings_.monitorModules, enabled);
+        suppressRealtimeTelemetryAfterGraphChange();
+    }
+
+    void setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer) {
+        settings_.monitorDspPathMode = (mode == "external" || mode == "nds" || mode == "remote_external" || mode == "auto") ? mode : "internal";
+        settings_.remoteDspServer = remoteDspServer;
+        status_.monitorDspPathMode = settings_.monitorDspPathMode;
+        const bool remoteMonitorRequested = settings_.remoteDspServer.enabled &&
+            (settings_.monitorDspPathMode == "external" ||
+             settings_.monitorDspPathMode == "nds" ||
+             settings_.monitorDspPathMode == "remote_external" ||
+             settings_.monitorDspPathMode == "auto");
+        status_.remoteDspCorePlan = makeRemoteDspCorePlan(settings_.remoteDspServer,
+                                                          0,
+                                                          remoteMonitorRequested);
+        dspEngine_.setMonitorDspPathMode(settings_.monitorDspPathMode, settings_.remoteDspServer);
+    }
+
+    void setListenRoomSettings(const ListenRoomSettings& settings) {
+        settings_.listenRoom = normalizedListenRoomSettings(settings);
+        dspEngine_.setListenRoomSettings(settings_.listenRoom);
+        status_.listenRoom = dspEngine_.statusSnapshot().listenRoom;
+    }
+
+    void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room") {
+        const std::string safeListenMode = (listenMode == "L" || listenMode == "R" || listenMode == "M" || listenMode == "S") ? listenMode : "LR";
+        const bool msMode = safeListenMode == "M" || safeListenMode == "S";
+        settings_.monitorStationMono = msMode ? false : mono;
+        settings_.monitorStationListenMode = safeListenMode;
+        settings_.monitorStationSwapLeftRight = msMode ? false : swapLeftRight;
+        settings_.monitorStationInvertLeft = invertLeft;
+        settings_.monitorStationInvertRight = invertRight;
+        settings_.monitorStationMute = mute;
+        settings_.monitorStationDim = dim;
+        settings_.monitorStationTalkback = talkback;
+        settings_.monitorStationDimDb = std::max(-60.0f, std::min(0.0f, dimDb));
+        settings_.monitorStationTalkbackRoute = talkbackRoute.empty() ? "listen_room" : talkbackRoute;
+        settings_.monitorInputTrimDb = std::max(-12.0f, std::min(0.0f, inputTrimDb));
+        settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, volumeDb));
+        dspEngine_.setMonitorStationControls(settings_.monitorStationMono,
+                                             settings_.monitorStationListenMode,
+                                             settings_.monitorStationSwapLeftRight,
+                                             invertLeft,
+                                             invertRight,
+                                             mute,
+                                             dim,
+                                             talkback,
+                                             settings_.monitorInputTrimDb,
+                                             settings_.monitorVolumeDb,
+                                             settings_.monitorStationDimDb,
+                                             settings_.monitorStationTalkbackRoute);
+        status_.message = talkback
+            ? "Talkback armed for " + settings_.monitorStationTalkbackRoute + "."
+            : "Talkback released.";
+        refreshInputMonitorForCurrentProject();
+    }
+
+    void setPhysicalInputAccessAllowed(bool allowed) {
+        settings_.physicalInputAccessAllowed = allowed;
+        refreshInputMonitorForCurrentProject();
+        if (!allowed) {
+            status_.message = "Physical input access is disabled for playback.";
+        } else if (inputQueue_ != nullptr) {
+            status_.message = "Physical input monitor callback active.";
+        } else {
+            status_.message = "Physical input access enabled; waiting for record, input monitor, or talkback.";
+        }
+    }
+
+    void setTransportRunning(bool running) {
+        settings_.transportRunning = running;
+        dspEngine_.setTransportRunning(running);
+        status_.transportRunning = running;
+        status_.message = running
+            ? "Transport running; realtime DSP graph follows the timeline."
+            : "Transport stopped; realtime DSP graph remains active.";
+    }
+
+    bool loadAudioFile(const std::string& path, std::string& error) {
+        const bool loaded = dspEngine_.loadAudioFile(path, error);
+        if (loaded) {
+            stopInputMonitor();
+            status_.message = dspEngine_.lastMessage();
+        }
+        return loaded;
+    }
+
+    bool loadProject(const ProjectDocument& project, std::string& error) {
+        const bool loaded = dspEngine_.loadProject(project, error);
+        if (loaded) {
+            suppressRealtimeTelemetryAfterGraphChange();
+            refreshInputMonitorForCurrentProject();
+            status_.message = dspEngine_.lastMessage();
+            if (inputQueue_ != nullptr) {
+                status_.message += " Physical input monitor callback active.";
+            }
+        }
+        return loaded;
+    }
+
+    bool updateProject(const ProjectDocument& project, std::string& error) {
+        const bool updated = dspEngine_.updateProject(project, error);
+        if (updated) {
+            suppressRealtimeTelemetryAfterGraphChange();
+            refreshInputMonitorForCurrentProject();
+            status_.message = dspEngine_.lastMessage();
+            if (inputQueue_ != nullptr) {
+                status_.message += " Physical input monitor callback active.";
+            }
+        }
+        return updated;
+    }
+
+    bool updateClipGain(const std::string& clipId, float gainDb) {
+        const bool updated = dspEngine_.updateClipGain(clipId, gainDb);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) {
+        const bool updated = dspEngine_.updateClipFades(clipId, fadeInSeconds, fadeOutSeconds);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackMix(const std::string& trackName, float volumeDb, float pan) {
+        const bool updated = dspEngine_.updateTrackMix(trackName, volumeDb, pan);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) {
+        const bool updated = dspEngine_.updateTrackSendSlot(trackName, sendIndex, send);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackInsertBypassState(const std::string& trackName, size_t insertIndex, bool bypassed) {
+        const bool updated = dspEngine_.updateTrackInsertBypassState(trackName, insertIndex, bypassed);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateMasterInsertBypassState(size_t insertIndex, bool bypassed) {
+        const bool updated = dspEngine_.updateMasterInsertBypassState(insertIndex, bypassed);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackPlaybackState(const std::string& trackName, bool muted, bool solo) {
+        const bool updated = dspEngine_.updateTrackPlaybackState(trackName, muted, solo);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackRealtimeState(const std::string& trackName, bool recordArmed, bool inputMonitoring, bool muted, bool solo) {
+        const bool updated = dspEngine_.updateTrackRealtimeState(trackName, recordArmed, inputMonitoring, muted, solo);
+        if (updated) {
+            refreshInputMonitorForCurrentProject();
+            status_.message = dspEngine_.lastMessage();
+            if (inputQueue_ != nullptr) {
+                status_.message += " Physical input monitor callback active.";
+            }
+        }
+        return updated;
+    }
+
+    bool updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
+        const bool updated = dspEngine_.updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
+        const bool updated = dspEngine_.updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    bool updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
+        const bool updated = dspEngine_.updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
+    void queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) {
+        dspEngine_.queueLiveMidiEvents(trackName, events);
+    }
+
+    void setTransportRecordingActive(bool active) {
+        settings_.transportRecordingActive = active;
+        dspEngine_.setTransportRecordingActive(active);
+        refreshInputMonitorForCurrentProject();
+        status_.message = dspEngine_.lastMessage();
+        if (inputQueue_ != nullptr) {
+            status_.message += " Physical input monitor callback active.";
+        }
+    }
+
+    void rewind() {
+        dspEngine_.rewind();
+    }
+
+    void seek(double seconds) {
+        dspEngine_.seek(seconds);
+        dspEngine_.armSeekRamp();
+    }
+
+private:
+    bool startInputMonitorIfNeeded(bool prewarm = false) {
+        if (inputQueue_ != nullptr) {
+            return true;
+        }
+        if (!settings_.physicalInputAccessAllowed) {
+            return false;
+        }
+        const auto dspStatus = dspEngine_.statusSnapshot();
+        if (!prewarm && !dspStatus.lowLatencyRecordMonitoringActive && !settings_.monitorStationTalkback) {
+            return false;
+        }
+
+        inputFormat_ = {};
+        inputFormat_.mSampleRate = settings_.sampleRate;
+        inputFormat_.mFormatID = kAudioFormatLinearPCM;
+        inputFormat_.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        const int inputChannels = std::max(1, std::min(2, settings_.inputMonitorChannelCount));
+        inputFormat_.mBytesPerPacket = static_cast<UInt32>(inputChannels * sizeof(Float32));
+        inputFormat_.mFramesPerPacket = 1;
+        inputFormat_.mBytesPerFrame = static_cast<UInt32>(inputChannels * sizeof(Float32));
+        inputFormat_.mChannelsPerFrame = static_cast<UInt32>(inputChannels);
+        inputFormat_.mBitsPerChannel = 32;
+
+        const OSStatus queueStatus = AudioQueueNewInput(&inputFormat_, &Impl::inputCallback, this, nullptr, nullptr, 0, &inputQueue_);
+        if (queueStatus != noErr || inputQueue_ == nullptr) {
+            status_.message += " Physical input monitor unavailable: Core Audio input queue could not be created.";
+            return false;
+        }
+        CFStringRef inputUid = deviceUidFromId(settings_.inputDeviceId);
+        if (inputUid != nullptr) {
+            AudioQueueSetProperty(inputQueue_, kAudioQueueProperty_CurrentDevice, &inputUid, sizeof(inputUid));
+            CFRelease(inputUid);
+        }
+
+        const UInt32 framesPerBuffer = static_cast<UInt32>(std::max(16, settings_.bufferSize));
+        const UInt32 bufferBytes = framesPerBuffer * inputFormat_.mBytesPerFrame;
+        for (auto& buffer : inputBuffers_) {
+            if (AudioQueueAllocateBuffer(inputQueue_, bufferBytes, &buffer) != noErr || buffer == nullptr) {
+                status_.message += " Physical input monitor unavailable: input buffer allocation failed.";
+                stopInputMonitor();
+                return false;
+            }
+            AudioQueueEnqueueBuffer(inputQueue_, buffer, 0, nullptr);
+        }
+
+        if (AudioQueueStart(inputQueue_, nullptr) != noErr) {
+            status_.message += " Physical input monitor unavailable: microphone permission or input device unavailable.";
+            stopInputMonitor();
+            return false;
+        }
+        return true;
+    }
+
+    void refreshInputMonitorForCurrentProject() {
+        if (!status_.running && unit_ == nullptr) {
+            return;
+        }
+        const auto dspStatus = dspEngine_.statusSnapshot();
+        if (settings_.physicalInputAccessAllowed &&
+            (dspStatus.lowLatencyRecordMonitoringActive || settings_.monitorStationTalkback)) {
+            startInputMonitorIfNeeded();
+        } else {
+            stopInputMonitor();
+        }
+    }
+
+    void stopInputMonitor() {
+        if (inputQueue_ != nullptr) {
+            AudioQueueStop(inputQueue_, true);
+            AudioQueueDispose(inputQueue_, true);
+            inputQueue_ = nullptr;
+        }
+        for (auto& buffer : inputBuffers_) {
+            buffer = nullptr;
+        }
+    }
+
+    static void inputCallback(void* userData,
+                              AudioQueueRef queue,
+                              AudioQueueBufferRef buffer,
+                              const AudioTimeStamp* startTime,
+                              UInt32 packetCount,
+                              const AudioStreamPacketDescription* packetDescriptions) {
+        (void)startTime;
+        (void)packetDescriptions;
+        auto* self = static_cast<Impl*>(userData);
+        self->handleInput(queue, buffer, packetCount);
+    }
+
+    void handleInput(AudioQueueRef queue, AudioQueueBufferRef buffer, UInt32 packetCount) {
+        if (buffer == nullptr || inputFormat_.mBytesPerFrame == 0) {
+            return;
+        }
+        const int frames = packetCount > 0
+            ? static_cast<int>(packetCount)
+            : static_cast<int>(buffer->mAudioDataByteSize / inputFormat_.mBytesPerFrame);
+        if (frames > 0) {
+            dspEngine_.pushInputMonitorInterleaved(static_cast<const Float32*>(buffer->mAudioData), frames, static_cast<int>(inputFormat_.mChannelsPerFrame));
+        }
+        if (inputQueue_ != nullptr) {
+            AudioQueueEnqueueBuffer(queue, buffer, 0, nullptr);
+        }
+    }
+
+    static OSStatus renderCallback(void* refCon,
+                                   AudioUnitRenderActionFlags* flags,
+                                   const AudioTimeStamp* timestamp,
+                                   UInt32 busNumber,
+                                   UInt32 frameCount,
+                                   AudioBufferList* outputData) {
+        (void)flags;
+        (void)timestamp;
+        (void)busNumber;
+        auto* self = static_cast<Impl*>(refCon);
+        self->render(outputData, frameCount);
+        return noErr;
+    }
+
+    void render(AudioBufferList* outputData, UInt32 frameCount) {
+        const auto wakeTime = std::chrono::steady_clock::now();
+        applyAudioThreadPolicyIfNeeded(frameCount);
+        if (outputData == nullptr || outputData->mNumberBuffers == 0) {
+            return;
+        }
+        clearAudioBufferList(outputData, frameCount);
+        const auto renderStart = std::chrono::steady_clock::now();
+        dspEngine_.renderInterleavedStereo(frameCount, renderBlock_);
+        const int availableChannels = std::max(2, audioBufferListChannelCount(outputData));
+        const auto route = resolveMonitorOutputRoute(settings_.monitorModules, availableChannels);
+        if (route.assigned && route.available) {
+            for (UInt32 frame = 0; frame < frameCount; ++frame) {
+                const auto source = static_cast<size_t>(frame * 2);
+                const float left = source + 1 < renderBlock_.size() ? renderBlock_[source] : 0.0f;
+                const float right = source + 1 < renderBlock_.size() ? renderBlock_[source + 1] : left;
+                writeAudioBufferListChannel(outputData, route.leftChannel, frame, left);
+                writeAudioBufferListChannel(outputData, route.rightChannel, frame, right);
+            }
+        }
+        const auto renderEnd = std::chrono::steady_clock::now();
+        recordRealtimeTelemetry(wakeTime, renderStart, renderEnd, frameCount);
+    }
+
+    void primeTelemetryIfCoreAudioHasNotRenderedYet() {
+        if (!status_.running ||
+            realtimeCallbackCount_.load() != 0 ||
+            !settings_.metronomeEnabled) {
+            return;
+        }
+        const auto wakeTime = std::chrono::steady_clock::now();
+        const auto renderStart = std::chrono::steady_clock::now();
+        dspEngine_.renderInterleavedStereo(static_cast<UInt32>(std::max(16, settings_.bufferSize)), renderProbeBlock_);
+        const auto renderEnd = std::chrono::steady_clock::now();
+        recordRealtimeTelemetry(wakeTime, renderStart, renderEnd, static_cast<UInt32>(std::max(16, settings_.bufferSize)));
+    }
+
+    void recordRealtimeTelemetry(std::chrono::steady_clock::time_point wakeTime,
+                                 std::chrono::steady_clock::time_point renderStart,
+                                 std::chrono::steady_clock::time_point renderEnd,
+                                 UInt32 frameCount) {
+        const double expectedPeriodUs = (static_cast<double>(std::max<UInt32>(1, frameCount)) /
+                                         std::max(1.0, settings_.sampleRate)) *
+                                        1000000.0;
+        int suppressCallbacks = realtimeTelemetrySuppressCallbacks_.load(std::memory_order_relaxed);
+        while (suppressCallbacks > 0) {
+            if (realtimeTelemetrySuppressCallbacks_.compare_exchange_weak(
+                    suppressCallbacks,
+                    suppressCallbacks - 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                lastRenderWakeTime_ = wakeTime;
+                return;
+            }
+        }
+        double jitterUs = 0.0;
+        if (lastRenderWakeTime_.time_since_epoch().count() != 0) {
+            const double actualPeriodUs = std::chrono::duration<double, std::micro>(wakeTime - lastRenderWakeTime_).count();
+            jitterUs = std::abs(actualPeriodUs - expectedPeriodUs);
+        }
+        lastRenderWakeTime_ = wakeTime;
+
+        const double renderDurationUs = std::chrono::duration<double, std::micro>(renderEnd - renderStart).count();
+        realtimeCallbackCount_.fetch_add(1);
+        const double previousAverage = realtimeAverageWakeJitterUs_.load();
+        realtimeAverageWakeJitterUs_.store(previousAverage <= 0.0 ? jitterUs : previousAverage + ((jitterUs - previousAverage) * 0.08));
+        const double previousWakePeak = realtimeMaxWakeJitterUs_.load();
+        realtimeMaxWakeJitterUs_.store(std::max(jitterUs, previousWakePeak * 0.985));
+        const double previousRenderPeak = realtimeMaxRenderDurationUs_.load();
+        realtimeMaxRenderDurationUs_.store(std::max(renderDurationUs, previousRenderPeak * 0.985));
+        if (jitterUs > expectedPeriodUs * 0.5) {
+            realtimeLateWakeCount_.fetch_add(1);
+        }
+    }
+
+    void resetRealtimeTelemetry() {
+        realtimeCallbackCount_.store(0);
+        realtimeAverageWakeJitterUs_.store(0.0);
+        realtimeMaxWakeJitterUs_.store(0.0);
+        realtimeMaxRenderDurationUs_.store(0.0);
+        realtimeLateWakeCount_.store(0);
+        lastRenderWakeTime_ = {};
+    }
+
+    void suppressRealtimeTelemetryAfterGraphChange() {
+        resetRealtimeTelemetry();
+        realtimeTelemetrySuppressCallbacks_.store(12, std::memory_order_relaxed);
+    }
+
+    void applyAudioThreadPolicyIfNeeded(UInt32 frameCount) {
+        bool expected = false;
+        if (!audioThreadPolicyApplied_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        // Hard real-time (time-constraint) scheduling for the audio render thread.
+        // Without this the render thread runs at ordinary priority and any busy
+        // out-of-process plug-in worker/observer (or the plug-in editor GUI) can
+        // keep the OS from waking it on time — the callback then arrives a full
+        // buffer period late, which the Monitor shows as ~one-period wake jitter
+        // even though the in-callback DSP load is tiny. Time-constraint guarantees
+        // this thread is scheduled ahead of every QoS class, so its wake timing
+        // stays locked to the buffer period regardless of how busy the workers are.
+        const double periodUs = (static_cast<double>(std::max<UInt32>(1, frameCount)) /
+                                 std::max(1.0, settings_.sampleRate)) * 1000000.0;
+        mach_timebase_info_data_t timebase;
+        if (mach_timebase_info(&timebase) == KERN_SUCCESS && timebase.numer != 0) {
+            const auto usToAbs = [&](double us) -> uint32_t {
+                const double ticks = (us * 1000.0) * static_cast<double>(timebase.denom) /
+                                     static_cast<double>(timebase.numer);
+                return static_cast<uint32_t>(std::max(1.0, ticks));
+            };
+            thread_time_constraint_policy_data_t policy;
+            policy.period = usToAbs(periodUs);
+            policy.computation = usToAbs(periodUs * 0.5);
+            policy.constraint = usToAbs(periodUs * 0.85);
+            policy.preemptible = 1;
+            thread_policy_set(pthread_mach_thread_np(pthread_self()),
+                              THREAD_TIME_CONSTRAINT_POLICY,
+                              reinterpret_cast<thread_policy_t>(&policy),
+                              THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+        }
+    }
+
+    AudioEngineSettings settings_;
+    AudioEngineStatus status_;
+    AudioUnit unit_ = nullptr;
+    AudioObjectID device_ = kAudioObjectUnknown;
+    AudioQueueRef inputQueue_ = nullptr;
+    AudioQueueBufferRef inputBuffers_[3] {};
+    AudioStreamBasicDescription inputFormat_ {};
+    int outputChannelCount_ = 2;
+    NeuracoustDspEngine dspEngine_;
+    std::vector<float> renderBlock_;
+    std::vector<float> renderProbeBlock_;
+    std::atomic<bool> audioThreadPolicyApplied_ {false};
+    std::atomic<uint64_t> realtimeCallbackCount_ {0};
+    std::atomic<double> realtimeAverageWakeJitterUs_ {0.0};
+    std::atomic<double> realtimeMaxWakeJitterUs_ {0.0};
+    std::atomic<double> realtimeMaxRenderDurationUs_ {0.0};
+    std::atomic<int> realtimeLateWakeCount_ {0};
+    std::atomic<int> realtimeTelemetrySuppressCallbacks_ {0};
+    std::chrono::steady_clock::time_point lastRenderWakeTime_ {};
+};
+
+RealtimeAudioEngine::RealtimeAudioEngine() : impl_(std::make_unique<Impl>()) {}
+RealtimeAudioEngine::~RealtimeAudioEngine() = default;
+bool RealtimeAudioEngine::start(const AudioEngineSettings& settings) { return impl_->start(settings); }
+void RealtimeAudioEngine::stop() { impl_->stop(); }
+AudioEngineStatus RealtimeAudioEngine::status() const { return impl_->status(); }
+void RealtimeAudioEngine::setTestToneEnabled(bool enabled) { impl_->setTestToneEnabled(enabled); }
+void RealtimeAudioEngine::setMetronomeEnabled(bool enabled,
+                                              int tempoBpm,
+                                              const std::vector<TempoMarkerState>& tempoMap,
+                                              int timeSignatureNumerator,
+                                              int timeSignatureDenominator,
+                                              const std::string& grooveFeel,
+                                              double grooveSwingAmount,
+                                              const std::vector<TimeSignatureMarkerState>& timeSignatureMap,
+                                              const std::string& metronomeSubdivision) {
+    impl_->setMetronomeEnabled(enabled, tempoBpm, tempoMap, timeSignatureNumerator, timeSignatureDenominator, grooveFeel, grooveSwingAmount, timeSignatureMap, metronomeSubdivision);
+}
+void RealtimeAudioEngine::setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) { impl_->setMonitorDspModules(modules, enabled); }
+void RealtimeAudioEngine::setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer) { impl_->setMonitorDspPathMode(mode, remoteDspServer); }
+void RealtimeAudioEngine::setListenRoomSettings(const ListenRoomSettings& settings) { impl_->setListenRoomSettings(settings); }
+void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb, const std::string& talkbackRoute) {
+    impl_->setMonitorStationControls(mono, listenMode, swapLeftRight, invertLeft, invertRight, mute, dim, talkback, inputTrimDb, volumeDb, dimDb, talkbackRoute);
+}
+void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
+bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
+bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
+bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
+bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
+bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
+bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }
+bool RealtimeAudioEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) { return impl_->updateTrackSendSlot(trackName, sendIndex, send); }
+bool RealtimeAudioEngine::updateTrackInsertBypassState(const std::string& trackName, size_t insertIndex, bool bypassed) { return impl_->updateTrackInsertBypassState(trackName, insertIndex, bypassed); }
+bool RealtimeAudioEngine::updateMasterInsertBypassState(size_t insertIndex, bool bypassed) { return impl_->updateMasterInsertBypassState(insertIndex, bypassed); }
+bool RealtimeAudioEngine::updateTrackPlaybackState(const std::string& trackName, bool muted, bool solo) { return impl_->updateTrackPlaybackState(trackName, muted, solo); }
+bool RealtimeAudioEngine::updateTrackRealtimeState(const std::string& trackName, bool recordArmed, bool inputMonitoring, bool muted, bool solo) { return impl_->updateTrackRealtimeState(trackName, recordArmed, inputMonitoring, muted, solo); }
+bool RealtimeAudioEngine::updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
+void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
+void RealtimeAudioEngine::setTransportRunning(bool running) { impl_->setTransportRunning(running); }
+void RealtimeAudioEngine::setTransportRecordingActive(bool active) { impl_->setTransportRecordingActive(active); }
+void RealtimeAudioEngine::rewind() { impl_->rewind(); }
+void RealtimeAudioEngine::seek(double seconds) { impl_->seek(seconds); }
+
+} // namespace neuracoust::daw
+#endif

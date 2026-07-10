@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== Neuracoust RT Audio Check ==="
+echo
+
+echo "[Identity]"
+hostnamectl 2>/dev/null || hostname
+echo
+
+echo "[Kernel]"
+uname -a
+echo "cmdline: $(cat /proc/cmdline)"
+if uname -a | grep -Eqi 'preempt_rt|rt-amd64| PREEMPT_RT'; then
+  echo "rt-kernel: yes"
+else
+  echo "rt-kernel: not detected"
+fi
+echo
+
+echo "[CPU]"
+lscpu | sed -n '1,32p'
+echo "isolated: $(cat /sys/devices/system/cpu/isolated 2>/dev/null || true)"
+for governor in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+  [[ -f "$governor" ]] && echo "$governor=$(cat "$governor")"
+done
+echo
+
+echo "[Realtime Limits]"
+ulimit -r || true
+ulimit -l || true
+echo
+
+echo "[Audio Packages]"
+dpkg -l linux-image-rt-amd64 jackd2 2>/dev/null | sed -n '1,80p' || true
+echo
+
+echo "[Service]"
+systemctl --no-pager --full status neuracoust-rt-audio.service 2>/dev/null | sed -n '1,80p' || true
+echo
+
+echo "[JACK]"
+pgrep -a jackd || true
+sudo jack_bufsize 2>/dev/null || jack_bufsize 2>/dev/null || true
+sudo jack_lsp 2>/dev/null | sed -n '1,40p' || jack_lsp 2>/dev/null | sed -n '1,40p' || true
+echo
+
+echo "[Network]"
+ip -br addr
+ss -lunpt 2>/dev/null | grep -E '19000|20000|20001|20009|20010' || true
+echo
+
+echo "[Recent Logs]"
+journalctl -u neuracoust-rt-audio.service -n 80 --no-pager 2>/dev/null || true

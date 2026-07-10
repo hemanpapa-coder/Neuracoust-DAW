@@ -1,0 +1,13 @@
+[Unit]
+Description=Neuracoust RT network tuning
+After=network-online.target
+Wants=network-online.target
+Before=neuracoust-rt-dsp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/neuracoust-net-rt-tune
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

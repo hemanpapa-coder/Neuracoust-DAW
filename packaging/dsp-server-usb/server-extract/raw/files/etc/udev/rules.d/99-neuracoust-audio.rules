@@ -1,0 +1,3 @@
+SUBSYSTEM=="sound", GROUP="audio", MODE="0660"
+KERNEL=="rtc0", GROUP="audio", MODE="0660"
+KERNEL=="hpet", GROUP="audio", MODE="0660"

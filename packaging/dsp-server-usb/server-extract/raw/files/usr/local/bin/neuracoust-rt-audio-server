@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_DIR="${STATE_DIR:-/run/neuracoust-rt-audio}"
+LOG_DIR="${LOG_DIR:-/var/log/neuracoust-rt-audio}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/neuracoust-rt-audio/server.conf}"
+
+mkdir -p "$STATE_DIR" "$LOG_DIR"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+SAMPLE_RATE="${SAMPLE_RATE:-48000}"
+PERIOD_SIZE="${PERIOD_SIZE:-128}"
+NET_BUFFER="${NET_BUFFER:-3}"
+NETJACK_PORT="${NETJACK_PORT:-19000}"
+NETJACK_MCAST="${NETJACK_MCAST:-225.3.19.154}"
+CHANNELS="${CHANNELS:-64}"
+DSP_CPU_MASK="${DSP_CPU_MASK:-2,3}"
+PRIORITY="${PRIORITY:-95}"
+
+stop_existing() {
+  pkill -x jackd 2>/dev/null || true
+  sleep 0.5
+}
+
+case "${1:-start}" in
+  start)
+    stop_existing
+    echo "Starting Neuracoust RT Audio Server: ${SAMPLE_RATE}Hz/${PERIOD_SIZE}, channels=${CHANNELS}, cpu=${DSP_CPU_MASK}"
+    taskset -c "$DSP_CPU_MASK" jackd \
+      -R -P "$PRIORITY" \
+      -d dummy \
+      -r "$SAMPLE_RATE" \
+      -p "$PERIOD_SIZE" \
+      -C "$CHANNELS" \
+      -P "$CHANNELS" \
+      -m &
+    JACKD_PID=$!
+    echo "$JACKD_PID" > "$STATE_DIR/jackd.pid"
+    jack_wait -w -t 5 >/dev/null 2>&1 || true
+    export JACK_NETJACK_MULTICAST="$NETJACK_MCAST"
+    export JACK_NETJACK_PORT="$NETJACK_PORT"
+    jack_load netmanager >/dev/null 2>&1 || true
+    wait "$JACKD_PID"
+    ;;
+  status)
+    pgrep -a jackd || exit 1
+    jack_bufsize 2>/dev/null || true
+    ;;
+  stop)
+    stop_existing
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|status}" >&2
+    exit 2
+    ;;
+esac

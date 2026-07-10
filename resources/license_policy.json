@@ -1,0 +1,8 @@
+{
+  "appId": "neuracoust-daw",
+  "productName": "Neuracoust DAW",
+  "distribution": "free-authenticated",
+  "allowedTiers": ["Free", "Demo", "Trial", "Pro", "Studio", "Signal"],
+  "licenseAgentBaseUrl": "http://127.0.0.1:48173",
+  "requiresAuthorization": true
+}

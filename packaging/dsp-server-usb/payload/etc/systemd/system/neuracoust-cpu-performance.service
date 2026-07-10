@@ -1,0 +1,13 @@
+[Unit]
+Description=Neuracoust CPU performance tuning
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target neuracoust-rt-dsp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/neuracoust-cpu-performance
+
+[Install]
+WantedBy=multi-user.target

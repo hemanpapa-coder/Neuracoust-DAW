@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+iface="${NEURACOUST_NET_IFACE:-}"
+if [[ -z "$iface" ]]; then
+  iface="$(ip route show default 2>/dev/null | awk '/ default / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+fi
+if [[ -z "$iface" ]]; then
+  iface="$(ls /sys/class/net 2>/dev/null | grep -v '^lo$' | head -1 || true)"
+fi
+[[ -n "$iface" ]] || exit 0
+
+if command -v ethtool >/dev/null 2>&1; then
+  ethtool -s "$iface" wol g 2>/dev/null || true
+fi

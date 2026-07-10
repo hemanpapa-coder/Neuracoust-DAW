@@ -1,0 +1,16 @@
+{
+  "format": "neuracoust-daw-bundled-plugins-v1",
+  "plugins": [
+    {"name": "Neuracoust 4001E", "appId": "neuracoust-4001e", "kind": "channel-strip", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Auto Record Leveler", "appId": "neuracoust-auto-record-leveler", "kind": "leveler", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Mirage 991", "appId": "neuracoust-mirage-991", "kind": "reverb", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Compressor 99", "appId": "neuracoust-compressor-99", "kind": "compressor", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Compressor 201", "appId": "neuracoust-compressor-201", "kind": "compressor", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Gate/Expander 99", "appId": "neuracoust-gate-expander-99", "kind": "dynamics", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Compressor 340", "appId": "neuracoust-comp-limiter-340", "kind": "compressor-limiter", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust EQ QF2D", "appId": "neuracoust-eq-qf2d", "kind": "equalizer", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Compressor DM2C", "appId": "neuracoust-compressor-dm2c", "kind": "compressor", "formats": ["VST3", "Audio Unit"]},
+    {"name": "Neuracoust Stem Magic", "appId": "neuracoust-stem-magic", "kind": "stem-utility", "formats": ["Standalone", "Plugin"]},
+    {"name": "Neuracoust Mac Stats", "appId": "neuracoust-mac-stats", "kind": "utility", "formats": ["Standalone"]}
+  ]
+}

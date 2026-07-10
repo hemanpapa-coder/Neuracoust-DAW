@@ -1,0 +1,12 @@
+[Unit]
+Description=Compatibility alias for Neuracoust RT DSP Server
+After=neuracoust-rt-dsp.service
+Wants=neuracoust-rt-dsp.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Enable Wake-on-LAN for Neuracoust DSP Server
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/neuracoust-enable-wol
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
