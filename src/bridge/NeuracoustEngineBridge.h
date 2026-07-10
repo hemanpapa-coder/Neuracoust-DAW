@@ -652,6 +652,20 @@ void nc_monitor_set_module_enabled(NCEngine* engine, int index, bool enabled);
 bool nc_monitor_dsp_enabled(NCEngine* engine);
 void nc_monitor_set_dsp_enabled(NCEngine* engine, bool enabled);
 
+// ---------------------------------------------------------------------------
+// DSP core allocation
+//
+// The engine reserves performance cores for its realtime DSP as a QoS hint. The
+// count defaults to 4 and is clamped to 1..16; with isolation on the engine keeps a
+// floor of 4. These are read when the audio engine starts, so changing them restarts
+// it — a brief dropout, the way a buffer-size change would.
+// ---------------------------------------------------------------------------
+
+bool nc_dsp_core_isolation(NCEngine* engine);
+void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
+int nc_dsp_core_count(NCEngine* engine);
+void nc_dsp_set_core_count(NCEngine* engine, int count);
+
 void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_path_mode(NCEngine* engine, const char* mode);
 

@@ -175,19 +175,9 @@ void nc_engine_destroy(NCEngine* engine) {
     delete engine;
 }
 
-bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen) {
-    if (engine == nullptr) {
-        copyText(error, errorLen, "engine is null");
-        return false;
-    }
+namespace {
 
-    std::string loadError;
-    neuracoust::daw::normalizeProjectRouting(engine->project);
-    if (!engine->engine.loadProject(engine->project, loadError)) {
-        copyText(error, errorLen, loadError.empty() ? "loadProject failed" : loadError);
-        return false;
-    }
-
+AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     AudioEngineSettings settings;
     settings.sampleRate = engine->project.sampleRate;
     settings.bufferSize = engine->project.defaultBufferSize;
@@ -206,7 +196,29 @@ bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen) {
     settings.monitorStationDimDb = engine->project.monitorStationDimDb;
     settings.monitorInputTrimDb = engine->project.monitorInputTrimDb;
     settings.monitorVolumeDb = engine->project.monitorVolumeDb;
+    // The core isolation QoS hint the engine applies to its realtime thread.
+    settings.performanceCoreIsolationEnabled = engine->project.appleSiliconCoreIsolationEnabled;
+    settings.requestedPerformanceCoreCount =
+        std::max(1, std::min(16, engine->project.requestedDspCoreCount));
+    return settings;
+}
 
+} // namespace
+
+bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen) {
+    if (engine == nullptr) {
+        copyText(error, errorLen, "engine is null");
+        return false;
+    }
+
+    std::string loadError;
+    neuracoust::daw::normalizeProjectRouting(engine->project);
+    if (!engine->engine.loadProject(engine->project, loadError)) {
+        copyText(error, errorLen, loadError.empty() ? "loadProject failed" : loadError);
+        return false;
+    }
+
+    const AudioEngineSettings settings = buildEngineSettings(engine);
     if (!engine->engine.start(settings)) {
         const AudioEngineStatus status = engine->engine.status();
         copyText(error, errorLen, status.message.empty() ? "audio device did not open" : status.message);
@@ -2847,6 +2859,60 @@ void nc_monitor_set_dsp_enabled(NCEngine* engine, bool enabled) {
     }
     engine->monitorDspEnabled = enabled;
     engine->pushModules();
+}
+
+namespace {
+
+/// Re-applies engine settings that only take effect at start() (the core hint) by
+/// restarting the audio engine if it is running. A stopped engine just keeps the new
+/// project values for its next start.
+void restartEngineForSettings(NCEngine* engine) {
+    if (!engine->engine.status().running) {
+        return;
+    }
+    engine->engine.stop();
+    std::string loadError;
+    engine->engine.loadProject(engine->project, loadError);
+    engine->engine.start(buildEngineSettings(engine));
+    // start() builds a fresh DSP engine; only loadProject seeds its meter arrays.
+    engine->engine.loadProject(engine->project, loadError);
+}
+
+} // namespace
+
+bool nc_dsp_core_isolation(NCEngine* engine) {
+    return engine != nullptr && engine->project.appleSiliconCoreIsolationEnabled;
+}
+
+void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->project.appleSiliconCoreIsolationEnabled == enabled) {
+        return;
+    }
+    engine->project.appleSiliconCoreIsolationEnabled = enabled;
+    // The old UI keeps a floor of 4 cores whenever isolation is on.
+    if (enabled && engine->project.requestedDspCoreCount < 4) {
+        engine->project.requestedDspCoreCount = 4;
+    }
+    engine->recordStep(enabled ? "Enable core isolation" : "Disable core isolation");
+    restartEngineForSettings(engine);
+}
+
+int nc_dsp_core_count(NCEngine* engine) {
+    return engine != nullptr ? std::max(1, std::min(16, engine->project.requestedDspCoreCount)) : 0;
+}
+
+void nc_dsp_set_core_count(NCEngine* engine, int count) {
+    if (engine == nullptr) return;
+    int clamped = std::max(1, std::min(16, count));
+    if (engine->project.appleSiliconCoreIsolationEnabled) {
+        clamped = std::max(4, clamped);
+    }
+    if (clamped == engine->project.requestedDspCoreCount) {
+        return;
+    }
+    engine->project.requestedDspCoreCount = clamped;
+    engine->recordStep("Set DSP core count");
+    restartEngineForSettings(engine);
 }
 
 void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen) {

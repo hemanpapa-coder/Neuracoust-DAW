@@ -287,6 +287,21 @@ clip made every trimmed or split clip show audio it would never play.
 `nc_waveform_duration_seconds` returns 0 until the file's peaks have been read; the
 view needs it to do the mapping at all.
 
+## DSP core allocation
+
+The engine reserves performance cores for its realtime DSP as a QoS hint applied to
+the render thread at `start()` — `AudioEngineSettings.performanceCoreIsolationEnabled`
+and `.requestedPerformanceCoreCount`, fed from the project's
+`appleSiliconCoreIsolationEnabled` / `requestedDspCoreCount` (default 4, clamped 1–16,
+floored at 4 while isolation is on). The bridge wires these in `buildEngineSettings`;
+`nc_dsp_set_core_count` / `nc_dsp_set_core_isolation` change the project value and
+**restart the audio engine** to apply, since the hint is only read at start — a brief
+dropout, the way a buffer-size change is. The dock's Remote Core / DSP section carries
+the isolation toggle and a − / count / + stepper.
+
+The external DSP core count (the networked DSP Manager) is a separate reserve in the
+remote-DSP plan and is not yet exposed here.
+
 ## Monitor DSP path
 
 Three modes, each a distinct engine value: **내부 DSP** `internal`, **외부 DSP**

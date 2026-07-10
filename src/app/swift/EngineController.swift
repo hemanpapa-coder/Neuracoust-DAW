@@ -566,6 +566,10 @@ final class EngineController: ObservableObject {
     @Published private(set) var spectrumHigh: Float = 0
     @Published private(set) var wakeJitterUs: Double = 0
     @Published private(set) var remoteDspActive = false
+
+    // DSP core allocation (a QoS hint the engine applies to its realtime thread).
+    @Published private(set) var coreIsolationEnabled = true
+    @Published private(set) var dspCoreCount = 4
     @Published private(set) var remoteDspRoundTripMs: Double = 0
 
     /// Inserts the engine is actually running, summed across paths. This is the
@@ -2052,6 +2056,8 @@ final class EngineController: ObservableObject {
         monitorTalkback = nc_monitor_talkback(handle)
         monitorDspEnabled = nc_monitor_dsp_enabled(handle)
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
+        coreIsolationEnabled = nc_dsp_core_isolation(handle)
+        dspCoreCount = Int(nc_dsp_core_count(handle))
         reloadMonitorListen()
     }
 
@@ -2075,6 +2081,25 @@ final class EngineController: ObservableObject {
         nc_monitor_set_volume_db(handle, db)
         monitorVolumeDb = nc_monitor_volume_db(handle)
     }
+
+    /// Changing the core allocation restarts the audio engine to apply the QoS hint.
+    func setCoreIsolation(_ enabled: Bool) {
+        guard let handle else { return }
+        nc_dsp_set_core_isolation(handle, enabled)
+        coreIsolationEnabled = nc_dsp_core_isolation(handle)
+        dspCoreCount = Int(nc_dsp_core_count(handle))
+        refreshHistory()
+    }
+
+    func setDspCoreCount(_ count: Int) {
+        guard let handle else { return }
+        nc_dsp_set_core_count(handle, Int32(count))
+        dspCoreCount = Int(nc_dsp_core_count(handle))
+        refreshHistory()
+    }
+
+    /// Isolation keeps a floor of 4 cores, matching the engine.
+    var minDspCoreCount: Int { coreIsolationEnabled ? 4 : 1 }
 
     func cycleStereo() { guard let handle else { return }; nc_monitor_cycle_stereo(handle); reloadMonitorListen() }
     func cycleMono() { guard let handle else { return }; nc_monitor_cycle_mono(handle); reloadMonitorListen() }

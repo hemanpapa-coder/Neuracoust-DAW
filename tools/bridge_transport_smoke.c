@@ -489,6 +489,32 @@ int main(void) {
         printf("monitor listen state cycles OK\n");
     }
 
+    // --- DSP core allocation ---------------------------------------------------
+    {
+        // Default: isolation on, 4 cores.
+        if (!nc_dsp_core_isolation(engine)) { fprintf(stderr, "FAIL: core isolation off by default\n"); failures++; }
+        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: default core count %d, expected 4\n", nc_dsp_core_count(engine)); failures++; }
+
+        nc_dsp_set_core_count(engine, 8);
+        if (nc_dsp_core_count(engine) != 8) { fprintf(stderr, "FAIL: set 8 -> %d\n", nc_dsp_core_count(engine)); failures++; }
+        nc_dsp_set_core_count(engine, 99);
+        if (nc_dsp_core_count(engine) != 16) { fprintf(stderr, "FAIL: 99 not clamped to 16 (%d)\n", nc_dsp_core_count(engine)); failures++; }
+
+        // With isolation on, the count floors at 4.
+        nc_dsp_set_core_count(engine, 1);
+        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: isolation floor not 4 (%d)\n", nc_dsp_core_count(engine)); failures++; }
+
+        // Off, it can go to 1.
+        nc_dsp_set_core_isolation(engine, false);
+        nc_dsp_set_core_count(engine, 1);
+        if (nc_dsp_core_count(engine) != 1) { fprintf(stderr, "FAIL: isolation off floor (%d)\n", nc_dsp_core_count(engine)); failures++; }
+
+        // Re-enabling isolation lifts the count back to the floor.
+        nc_dsp_set_core_isolation(engine, true);
+        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: re-enable did not floor to 4 (%d)\n", nc_dsp_core_count(engine)); failures++; }
+        printf("dsp core allocation OK\n");
+    }
+
     nc_engine_stop(engine);
     nc_engine_destroy(engine);
 

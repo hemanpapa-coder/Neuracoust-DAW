@@ -539,6 +539,32 @@ struct MonitorDock: View {
         .disabled(!enabled)
     }
 
+    /// − / count / + for the DSP core count, floored by isolation.
+    private var coreStepper: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Button { engine.setDspCoreCount(engine.dspCoreCount - 1) } label: {
+                Text("−").font(Theme.Font.ui(12, .bold)).frame(width: 20, height: 18)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(engine.dspCoreCount > engine.minDspCoreCount
+                             ? Theme.Palette.text : Theme.Palette.textFainter)
+            .disabled(engine.dspCoreCount <= engine.minDspCoreCount)
+
+            Text("\(engine.dspCoreCount)")
+                .font(Theme.Font.mono(11, .semibold))
+                .foregroundStyle(Theme.Palette.text)
+                .frame(minWidth: 20)
+            Text("코어").font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textFaint)
+
+            Button { engine.setDspCoreCount(engine.dspCoreCount + 1) } label: {
+                Text("+").font(Theme.Font.ui(12, .bold)).frame(width: 20, height: 18)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(engine.dspCoreCount < 16 ? Theme.Palette.text : Theme.Palette.textFainter)
+            .disabled(engine.dspCoreCount >= 16)
+        }
+    }
+
     private var remoteCore: some View {
         VStack(alignment: .leading, spacing: Theme.Space.lg) {
             HStack(spacing: Theme.Space.md) {
@@ -564,6 +590,29 @@ struct MonitorDock: View {
                 Text(engine.remoteDspActive ? "● Connected" : "○ Idle")
                     .font(Theme.Font.mono(7.5))
                     .foregroundStyle(engine.remoteDspActive ? Theme.Palette.teal : Theme.Palette.textFaint)
+            }
+
+            Divider().overlay(Theme.Palette.divider)
+
+            // Internal DSP core allocation. Isolation keeps a floor of 4.
+            HStack {
+                Toggle("", isOn: Binding(
+                    get: { engine.coreIsolationEnabled },
+                    set: { engine.setCoreIsolation($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .frame(width: 34)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("코어 격리")
+                        .font(Theme.Font.ui(9, .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Text(engine.coreIsolationEnabled ? "DSP 우선 배정" : "Native 실행")
+                        .font(Theme.Font.mono(7))
+                        .foregroundStyle(Theme.Palette.textFaint)
+                }
+                Spacer()
+                coreStepper
             }
         }
         .padding(Theme.Space.xl)
