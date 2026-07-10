@@ -104,6 +104,16 @@ static float peakBetween(const std::string& path, double fromSeconds, double toS
     return peak;
 }
 
+/// Name of the step a Cmd-Z would undo, or "" when the history is empty.
+static std::string topUndoStep(NCEngine* engine) {
+    if (!nc_history_can_undo(engine)) {
+        return {};
+    }
+    char name[256] = {0};
+    nc_history_undo_step_name(engine, name, sizeof(name));
+    return name;
+}
+
 /// Where a clip sits now, by id. Batch edits renumber the index order.
 static double startOfClip(NCEngine* engine, const char* clipId) {
     for (int index = 0; index < nc_clip_count(engine); ++index) {
@@ -117,6 +127,10 @@ static double startOfClip(NCEngine* engine, const char* clipId) {
 }
 
 /// Undo until the history is empty, counting; then redo back to where we were.
+///
+/// Destructive to a gesture in progress: undo/redo restore snapshots, so any
+/// continuous edit that has not been committed with nc_history_record_gesture is
+/// wiped. Only call this when nothing is mid-drag.
 static int countUndoSteps(NCEngine* engine) {
     int steps = 0;
     while (nc_history_can_undo(engine) && nc_history_undo(engine)) {
@@ -793,6 +807,65 @@ int main() {
             check(nc_track_automation_count(engine, 0, "track.pan") == 2, "two pan points");
             check(nc_track_automation_clear_range(engine, 0, "track.pan", -0.1, 3.0) == 2,
                   "clearing the range took both");
+        }
+
+        // --- markers: navigation only, but they have to survive a save ------------
+        {
+            nc_project_new(engine);
+            check(nc_marker_count(engine) == 0, "a new project has no markers");
+
+            char firstId[128] = {0};
+            check(nc_marker_add(engine, 4.0, firstId, sizeof(firstId)), "add a marker at 4 s");
+            check(strlen(firstId) > 0, "it got an id");
+            char secondId[128] = {0};
+            check(nc_marker_add(engine, 1.0, secondId, sizeof(secondId)), "add a marker at 1 s");
+            check(nc_marker_count(engine) == 2, "two markers");
+
+            // The engine keeps them sorted, so index 0 is the earlier one.
+            check(std::abs(nc_marker_time(engine, 0) - 1.0) < 0.001, "markers come back sorted");
+            check(std::abs(nc_marker_time(engine, 1) - 4.0) < 0.001, "the later marker is second");
+
+            check(nc_marker_rename(engine, 1.0, 0.2, "Verse"), "rename the marker at 1 s");
+            char markerName[128] = {0};
+            nc_marker_name(engine, 0, markerName, sizeof(markerName));
+            check(strcmp(markerName, "Verse") == 0, "the rename stuck");
+            check(!nc_marker_rename(engine, 9.0, 0.2, "Nope"), "no marker near 9 s to rename");
+
+            // The range between the markers around 2 s is 1 s to 4 s.
+            double rangeStart = -1.0;
+            double rangeEnd = -1.0;
+            check(nc_marker_surrounding_range(engine, 2.0, &rangeStart, &rangeEnd),
+                  "the markers around 2 s bound a range");
+            printf("marker range around 2 s: %.3f-%.3f (expect 1.000-4.000)\n", rangeStart, rangeEnd);
+            check(std::abs(rangeStart - 1.0) < 0.001 && std::abs(rangeEnd - 4.0) < 0.001,
+                  "it is the stretch between them");
+
+            // Dragging is continuous: it must not pile steps into the history. The
+            // step count cannot be used to check that — undo/redo would restore a
+            // snapshot and throw the uncommitted drag away — so read the top step.
+            check(topUndoStep(engine) == "Rename marker", "the rename is the last step");
+            check(nc_marker_move(engine, 1.0, 0.2, 1.5), "drag the marker");
+            check(nc_marker_move(engine, 1.5, 0.2, 2.0), "keep dragging it");
+            check(std::abs(nc_marker_time(engine, 0) - 2.0) < 0.001, "it landed at 2 s");
+            check(topUndoStep(engine) == "Rename marker", "the drag recorded nothing on its own");
+
+            check(nc_history_record_gesture(engine, "Move marker"), "the gesture records one step");
+            check(topUndoStep(engine) == "Move marker", "and it is the whole drag");
+            check(nc_history_undo(engine), "undo the drag");
+            check(std::abs(nc_marker_time(engine, 0) - 1.0) < 0.001, "one undo took it all the way back");
+            check(nc_history_redo(engine), "redo it");
+
+            char markerProject[256] = "/tmp/neuracoust-io-smoke/Markers.ndaw";
+            check(nc_project_save_as(engine, markerProject, error, sizeof(error)), "save the markers");
+            check(nc_project_open(engine, markerProject, false, error, sizeof(error)), "reopen it");
+            check(nc_marker_count(engine) == 2, "both markers came back");
+            nc_marker_name(engine, 0, markerName, sizeof(markerName));
+            check(strcmp(markerName, "Verse") == 0, "with their names");
+            check(std::abs(nc_marker_time(engine, 0) - 2.0) < 0.001, "and where the drag left them");
+
+            check(nc_marker_delete(engine, 2.0, 0.2), "delete the first marker");
+            check(nc_marker_count(engine) == 1, "one left");
+            check(!nc_marker_delete(engine, 20.0, 0.2), "nothing to delete out at 20 s");
         }
 
         // --- bounce through the bridge, and time it -------------------------------

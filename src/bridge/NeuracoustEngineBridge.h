@@ -348,6 +348,29 @@ int nc_clipboard_clip_count(NCEngine* engine);
 int nc_clip_paste_all(NCEngine* engine, double startSeconds);
 
 // ---------------------------------------------------------------------------
+// Markers
+//
+// Navigation only: nothing in the audio path reads them. They stay sorted by time,
+// so an index is only good until the next edit. The engine addresses a marker by
+// the time you clicked, within a tolerance — which is what a UI has anyway.
+// ---------------------------------------------------------------------------
+
+int nc_marker_count(NCEngine* engine);
+double nc_marker_time(NCEngine* engine, int index);
+void nc_marker_name(NCEngine* engine, int index, char* out, size_t outLen);
+
+bool nc_marker_add(NCEngine* engine, double timeSeconds, char* out, size_t outLen);
+bool nc_marker_rename(NCEngine* engine, double timeSeconds, double toleranceSeconds, const char* name);
+/// Continuous, for dragging a marker: records nothing. Pass the marker's *current*
+/// time each frame, not the time the drag started from.
+bool nc_marker_move(NCEngine* engine, double fromSeconds, double toleranceSeconds, double toSeconds);
+bool nc_marker_delete(NCEngine* engine, double timeSeconds, double toleranceSeconds);
+
+/// The stretch between the markers on either side of `seconds`, for setting the
+/// edit range from a marker.
+bool nc_marker_surrounding_range(NCEngine* engine, double seconds, double* start, double* end);
+
+// ---------------------------------------------------------------------------
 // Automation
 //
 // The renderer honours exactly two parameters, and both the realtime mixer and the

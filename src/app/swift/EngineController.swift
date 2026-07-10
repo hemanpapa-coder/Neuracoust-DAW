@@ -523,6 +523,7 @@ final class EngineController: ObservableObject {
         static let x: UInt16 = 7
         static let v: UInt16 = 9
         static let d: UInt16 = 2
+        static let m: UInt16 = 46
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
     }
@@ -570,6 +571,8 @@ final class EngineController: ObservableObject {
             pasteClipsAtPlayhead()
         case KeyCode.d where !selectedClipIds.isEmpty:
             duplicateSelectedClips()
+        case KeyCode.m:
+            addMarkerAtPlayhead()
         default:
             return event
         }
@@ -727,6 +730,7 @@ final class EngineController: ObservableObject {
         guard let handle, nc_history_undo(handle) else { return }
         reloadTracks()
         reloadClips()
+        reloadMarkers()
         reloadMonitorState()
         refreshHistory()
     }
@@ -735,6 +739,7 @@ final class EngineController: ObservableObject {
         guard let handle, nc_history_redo(handle) else { return }
         reloadTracks()
         reloadClips()
+        reloadMarkers()
         reloadMonitorState()
         refreshHistory()
     }
@@ -903,6 +908,7 @@ final class EngineController: ObservableObject {
         loopEndSeconds = nc_project_loop_end(handle)
         reloadTracks()
         reloadClips()
+        reloadMarkers()
         reloadMonitorState()
         refreshHistory()
         lastError = nil
@@ -1015,6 +1021,7 @@ final class EngineController: ObservableObject {
             beatsPerBar: timeSignature.numerator,
             visibleStart: visibleStart,
             visibleDuration: visibleDuration,
+            markers: markers.map { TimelineModel.Marker(name: $0.name, timeSeconds: $0.timeSeconds) },
             rangeStart: loopStartSeconds,
             rangeEnd: loopEndSeconds,
             loopEnabled: loopEnabled
@@ -1276,6 +1283,65 @@ final class EngineController: ObservableObject {
         selectedClipIds = []
         reloadClips()
         refreshHistory()
+    }
+
+    // MARK: Markers
+
+    struct Marker: Equatable {
+        let name: String
+        let timeSeconds: Double
+    }
+
+    @Published private(set) var markers: [Marker] = []
+
+    /// How near a click has to land. The engine addresses markers by time, so this
+    /// is the grab radius, in seconds at the current zoom.
+    private var markerTolerance: Double { visibleDuration * 0.006 }
+
+    private func reloadMarkers() {
+        guard let handle else { return }
+        markers = (0..<Int(nc_marker_count(handle))).map { index in
+            Marker(name: readEngineString { nc_marker_name(handle, Int32(index), $0, $1) },
+                   timeSeconds: nc_marker_time(handle, Int32(index)))
+        }
+    }
+
+    func addMarkerAtPlayhead() {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_marker_add(handle, playheadSeconds, &buffer, buffer.count) else { return }
+        reloadMarkers()
+        refreshHistory()
+    }
+
+    func renameMarker(at timeSeconds: Double, to name: String) {
+        guard let handle else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              nc_marker_rename(handle, timeSeconds, markerTolerance, trimmed) else { return }
+        reloadMarkers()
+        refreshHistory()
+    }
+
+    /// Continuous. `fromSeconds` is where the marker sits now, not where the drag began.
+    func moveMarker(from fromSeconds: Double, to toSeconds: Double) {
+        guard let handle, nc_marker_move(handle, fromSeconds, markerTolerance, toSeconds) else { return }
+        reloadMarkers()
+    }
+
+    func deleteMarker(at timeSeconds: Double) {
+        guard let handle, nc_marker_delete(handle, timeSeconds, markerTolerance) else { return }
+        reloadMarkers()
+        refreshHistory()
+    }
+
+    /// Sets the edit range to the stretch between the markers around `seconds`.
+    func selectBetweenMarkers(around seconds: Double) {
+        guard let handle else { return }
+        var start = 0.0
+        var end = 0.0
+        guard nc_marker_surrounding_range(handle, seconds, &start, &end) else { return }
+        setLoopRange(start: start, end: end)
     }
 
     // MARK: Automation

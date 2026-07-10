@@ -1490,6 +1490,81 @@ bool applyAutomationEdit(NCEngine* engine, bool changed, const char* stepName) {
 
 } // namespace
 
+int nc_marker_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.markers.size());
+}
+
+namespace {
+
+const neuracoust::daw::MarkerState* markerAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.markers.size()) {
+        return nullptr;
+    }
+    return &engine->project.markers[static_cast<size_t>(index)];
+}
+
+} // namespace
+
+double nc_marker_time(NCEngine* engine, int index) {
+    const auto* marker = markerAt(engine, index);
+    return marker != nullptr ? marker->timeSeconds : 0.0;
+}
+
+void nc_marker_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* marker = markerAt(engine, index);
+    copyText(out, outLen, marker != nullptr ? marker->name : std::string{});
+}
+
+bool nc_marker_add(NCEngine* engine, double timeSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr) return false;
+    const std::string id = neuracoust::daw::addMarkerAt(engine->project, timeSeconds);
+    if (id.empty()) {
+        return false;
+    }
+    // Markers touch no audio, so there is nothing to reconcile into the engine.
+    engine->recordStep("Add marker");
+    copyText(out, outLen, id);
+    return true;
+}
+
+bool nc_marker_rename(NCEngine* engine, double timeSeconds, double toleranceSeconds, const char* name) {
+    if (engine == nullptr || name == nullptr || *name == '\0') return false;
+    if (!neuracoust::daw::renameNearestMarker(engine->project, timeSeconds, toleranceSeconds, name)) {
+        return false;
+    }
+    engine->recordStep("Rename marker");
+    return true;
+}
+
+bool nc_marker_move(NCEngine* engine, double fromSeconds, double toleranceSeconds, double toSeconds) {
+    if (engine == nullptr) return false;
+    return neuracoust::daw::moveNearestMarker(engine->project, fromSeconds, toleranceSeconds, toSeconds);
+}
+
+bool nc_marker_delete(NCEngine* engine, double timeSeconds, double toleranceSeconds) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::deleteNearestMarker(engine->project, timeSeconds, toleranceSeconds)) {
+        return false;
+    }
+    engine->recordStep("Delete marker");
+    return true;
+}
+
+bool nc_marker_surrounding_range(NCEngine* engine, double seconds, double* start, double* end) {
+    if (engine == nullptr || start == nullptr || end == nullptr) return false;
+    double rangeStart = 0.0;
+    double rangeEnd = 0.0;
+    if (!neuracoust::daw::setEditSelectionToSurroundingMarkers(engine->project, seconds,
+                                                               rangeStart, rangeEnd)) {
+        return false;
+    }
+    *start = rangeStart;
+    *end = rangeEnd;
+    return true;
+}
+
 bool nc_automation_parameter_supported(const char* parameterId) {
     return isVolumeParameter(parameterId) || isPanParameter(parameterId);
 }

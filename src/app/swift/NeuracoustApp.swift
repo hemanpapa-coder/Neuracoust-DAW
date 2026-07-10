@@ -91,6 +91,12 @@ struct NeuracoustApp: App {
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!engine.canRedo)
             }
+
+            // Declared so it is discoverable; the NSEvent monitor is what delivers it.
+            CommandGroup(after: .undoRedo) {
+                Button("마커 추가") { engine.addMarkerAtPlayhead() }
+                    .keyboardShortcut("m", modifiers: .command)
+            }
         }
     }
 }
@@ -156,6 +162,9 @@ private struct EditView: View {
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
                     onSelect: { engine.selectClip($0) },
                     onSetRange: { engine.setLoopRange(start: $0, end: $1) },
+                    onMoveMarker: { engine.moveMarker(from: $0, to: $1) },
+                    onDeleteMarker: { engine.deleteMarker(at: $0) },
+                    onSelectBetweenMarkers: { engine.selectBetweenMarkers(around: $0) },
                     onToggleAutomation: { engine.toggleAutomation(laneIndex: $0) },
                     onCycleAutomationParameter: { engine.cycleAutomationParameter(laneIndex: $0) },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
@@ -201,6 +210,10 @@ private struct EditView: View {
             zoomButton("잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
             zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
             zoomButton("복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
+
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            zoomButton("마커 (⌘M)") { engine.addMarkerAtPlayhead() }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 

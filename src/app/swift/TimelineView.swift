@@ -51,6 +51,13 @@ struct TimelineModel: Equatable {
     var visibleStart: Double = 0
     var visibleDuration: Double = 30
 
+    struct Marker: Equatable {
+        let name: String
+        let timeSeconds: Double
+    }
+
+    var markers: [Marker] = []
+
     /// The loop range, which is also the range every range edit acts on.
     var rangeStart: Double = 0
     var rangeEnd: Double = 0
@@ -85,6 +92,9 @@ final class TimelineNSView: NSView {
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
+    var onMoveMarker: ((Double, Double) -> Void)?        // (from, to) — continuous
+    var onDeleteMarker: ((Double) -> Void)?
+    var onSelectBetweenMarkers: ((Double) -> Void)?
     var onToggleAutomation: ((Int) -> Void)?             // lane index
     var onCycleAutomationParameter: ((Int) -> Void)?     // lane index
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
@@ -112,6 +122,7 @@ final class TimelineNSView: NSView {
         case marquee(origin: NSPoint, current: NSPoint)
         case rangingFrom(seconds: Double)
         case movingAutomationPoint(laneIndex: Int, pointIndex: Int)
+        case movingMarker(fromSeconds: Double)
         case moving(clipId: String, grabOffsetSeconds: Double)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
@@ -268,8 +279,18 @@ final class TimelineNSView: NSView {
             return
         }
 
-        // The rest of the ruler is for scrubbing, not for grabbing clips.
+        // The rest of the ruler carries the markers, and otherwise scrubs.
         if point.y < Self.rulerHeight {
+            if let hit = marker(at: point) {
+                if event.clickCount >= 2 {
+                    onDeleteMarker?(hit.timeSeconds)
+                } else if event.modifierFlags.contains(.shift) {
+                    onSelectBetweenMarkers?(hit.timeSeconds + 0.001)
+                } else {
+                    drag = .movingMarker(fromSeconds: hit.timeSeconds)
+                }
+                return
+            }
             drag = .seeking
             onSeek?(max(0, seconds(atX: point.x)))
             return
@@ -343,6 +364,11 @@ final class TimelineNSView: NSView {
             break
         case .seeking:
             onSeek?(time)
+        case .movingMarker(let from):
+            let target = max(0, snapped(time))
+            // The engine finds the marker by where it sits now, so follow it.
+            onMoveMarker?(from, target)
+            drag = .movingMarker(fromSeconds: target)
         case .rangingFrom(let origin):
             onSetRange?(origin, max(0, snapped(time)))
         case .movingAutomationPoint(let lane, let pointIndex):
@@ -412,6 +438,8 @@ final class TimelineNSView: NSView {
             needsDisplay = true
         case .movingAutomationPoint:
             onCommitEdit?("Automation point")
+        case .movingMarker:
+            onCommitEdit?("Move marker")
         case .none, .seeking, .rangingFrom:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -488,6 +516,8 @@ final class TimelineNSView: NSView {
         drawGrid(context)
         drawClips(context)
         drawAutomation(context)
+        // Last, so a marker's hairline is not painted over by the clips it lines up with.
+        drawMarkers(context)
 
         // The lane header column sits above the grid but below the playhead.
         NSColor(hex: 0x0b0806).setFill()
@@ -609,6 +639,46 @@ final class TimelineNSView: NSView {
             NSColor(hex: 0x1b1611).setFill()
             NSRect(x: 0, y: rect.maxY - 1, width: bounds.width, height: 1).fill()
         }
+    }
+
+    /// Markers live in the ruler below the range strip; they must not eat the scrub.
+    private static let markerFlagWidth: CGFloat = 7
+
+    private func markerFlagRect(_ marker: TimelineModel.Marker) -> NSRect {
+        NSRect(x: x(forSeconds: marker.timeSeconds), y: Self.rangeStripHeight,
+               width: Self.markerFlagWidth, height: Self.rulerHeight - Self.rangeStripHeight)
+    }
+
+    private func marker(at point: NSPoint) -> TimelineModel.Marker? {
+        model.markers.last { markerFlagRect($0).insetBy(dx: -2, dy: 0).contains(point) }
+    }
+
+    private func drawMarkers(_ context: CGContext) {
+        guard !model.markers.isEmpty else { return }
+        context.saveGState()
+        context.clip(to: NSRect(x: lanesRect.minX, y: 0,
+                                width: lanesRect.width, height: bounds.height))
+
+        for marker in model.markers {
+            let position = x(forSeconds: marker.timeSeconds)
+
+            // A hairline all the way down, so a marker can be lined up with a clip.
+            NSColor(hex: 0xe6a23c).withAlphaComponent(0.22).setFill()
+            NSRect(x: position, y: Self.rulerHeight, width: 1,
+                   height: bounds.height - Self.rulerHeight).fill()
+
+            let flag = markerFlagRect(marker)
+            NSColor(hex: 0xe6a23c).setFill()
+            flag.fill()
+
+            (marker.name as NSString).draw(
+                at: NSPoint(x: flag.maxX + 3, y: flag.minY + 2),
+                withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                    .foregroundColor: NSColor(hex: 0xe6a23c),
+                ])
+        }
+        context.restoreGState()
     }
 
     private func automationToggleRect(_ index: Int) -> NSRect {
@@ -909,6 +979,9 @@ struct TimelineView: NSViewRepresentable {
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
     let onSetRange: (Double, Double) -> Void
+    let onMoveMarker: (Double, Double) -> Void
+    let onDeleteMarker: (Double) -> Void
+    let onSelectBetweenMarkers: (Double) -> Void
     let onToggleAutomation: (Int) -> Void
     let onCycleAutomationParameter: (Int) -> Void
     let onAddAutomationPoint: (Int, Double, Float) -> Void
@@ -947,6 +1020,9 @@ struct TimelineView: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange
+        view.onMoveMarker = onMoveMarker
+        view.onDeleteMarker = onDeleteMarker
+        view.onSelectBetweenMarkers = onSelectBetweenMarkers
         view.onToggleAutomation = onToggleAutomation
         view.onCycleAutomationParameter = onCycleAutomationParameter
         view.onAddAutomationPoint = onAddAutomationPoint
