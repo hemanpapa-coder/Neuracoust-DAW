@@ -205,6 +205,17 @@ The engine addresses a marker by *time within a tolerance*, not by index — the
 re-sorts on every move. A drag therefore has to pass the marker's current time each
 frame, not the time the drag started from.
 
+## Waveforms
+
+`nc_waveform_peaks` returns 2048 buckets spanning the **whole source file**, cached by
+path. A clip plays a window of that file — `sourceOffsetSeconds` to
+`sourceOffsetSeconds + durationSeconds` — so the timeline maps each on-screen column
+into the window, not into the file. Drawing the file across the clip made every
+trimmed or split clip show audio it would never play.
+
+`nc_waveform_duration_seconds` returns 0 until the file's peaks have been read; the
+view needs it to do the mapping at all.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.

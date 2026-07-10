@@ -60,6 +60,7 @@ struct NCEngine {
     struct WaveformPeaks {
         std::vector<float> mins;
         std::vector<float> maxs;
+        double durationSeconds = 0.0;
     };
     std::map<std::string, WaveformPeaks> waveformCache;
 
@@ -1195,6 +1196,11 @@ void nc_clip_track(NCEngine* engine, int index, char* out, size_t outLen) {
     copyText(out, outLen, clip != nullptr ? clip->trackName : std::string{});
 }
 
+double nc_clip_source_offset_seconds(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->sourceOffsetSeconds : 0.0;
+}
+
 void nc_clip_source_path(NCEngine* engine, int index, char* out, size_t outLen) {
     const auto* clip = clipAt(engine, index);
     copyText(out, outLen, clip != nullptr ? clip->sourcePath : std::string{});
@@ -2217,6 +2223,9 @@ bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* m
         NCEngine::WaveformPeaks peaks;
         peaks.mins.assign(NC_WAVEFORM_BUCKETS, 0.0f);
         peaks.maxs.assign(NC_WAVEFORM_BUCKETS, 0.0f);
+        peaks.durationSeconds = audio.sampleRate > 0
+            ? static_cast<double>(audio.frameCount()) / audio.sampleRate
+            : 0.0;
 
         const int64_t frames = audio.frameCount();
         const int channels = audio.channels;
@@ -2246,6 +2255,14 @@ bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* m
     std::memcpy(mins, cached->second.mins.data(), NC_WAVEFORM_BUCKETS * sizeof(float));
     std::memcpy(maxs, cached->second.maxs.data(), NC_WAVEFORM_BUCKETS * sizeof(float));
     return true;
+}
+
+double nc_waveform_duration_seconds(NCEngine* engine, const char* path) {
+    if (engine == nullptr || path == nullptr) {
+        return 0.0;
+    }
+    const auto cached = engine->waveformCache.find(path);
+    return cached != engine->waveformCache.end() ? cached->second.durationSeconds : 0.0;
 }
 
 // ---------------------------------------------------------------------------

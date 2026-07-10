@@ -1054,6 +1054,8 @@ final class EngineController: ObservableObject {
         let sourcePath: String
         let startSeconds: Double
         let durationSeconds: Double
+        /// Where the clip's audio begins inside its source file.
+        let sourceOffsetSeconds: Double
         let fadeInSeconds: Double
         let fadeOutSeconds: Double
         let gainDb: Float
@@ -1062,7 +1064,7 @@ final class EngineController: ObservableObject {
     @Published private(set) var clips: [Clip] = []
 
     /// Peak envelopes keyed by source path, fetched once per file from the engine.
-    @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float])] = [:]
+    @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)] = [:]
 
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
     @Published var selectedClipIds: Set<String> = []
@@ -1143,6 +1145,7 @@ final class EngineController: ObservableObject {
                                           startSeconds: clip.startSeconds,
                                           durationSeconds: clip.durationSeconds,
                                           sourcePath: clip.sourcePath,
+                                          sourceOffsetSeconds: clip.sourceOffsetSeconds,
                                           selected: selectedClipIds.contains(clip.id),
                                           fadeInSeconds: clip.fadeInSeconds,
                                           fadeOutSeconds: clip.fadeOutSeconds,
@@ -1764,7 +1767,8 @@ final class EngineController: ObservableObject {
             var mins = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
             var maxs = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
             if nc_waveform_peaks(handle, clip.sourcePath, &mins, &maxs) {
-                waveforms[clip.sourcePath] = (mins, maxs)
+                waveforms[clip.sourcePath] = (mins, maxs,
+                                              nc_waveform_duration_seconds(handle, clip.sourcePath))
             }
         }
     }
@@ -1780,6 +1784,7 @@ final class EngineController: ObservableObject {
                 sourcePath: readEngineString(capacity: 1024) { nc_clip_source_path(handle, i, $0, $1) },
                 startSeconds: nc_clip_start_seconds(handle, i),
                 durationSeconds: nc_clip_duration_seconds(handle, i),
+                sourceOffsetSeconds: nc_clip_source_offset_seconds(handle, i),
                 fadeInSeconds: nc_clip_fade_in(handle, i),
                 fadeOutSeconds: nc_clip_fade_out(handle, i),
                 gainDb: nc_clip_gain_db(handle, i)

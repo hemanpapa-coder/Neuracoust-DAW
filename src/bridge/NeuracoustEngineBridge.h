@@ -323,6 +323,8 @@ void nc_clip_track(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_clip_source_path(NCEngine* engine, int index, char* out, size_t outLen);
 double nc_clip_start_seconds(NCEngine* engine, int index);
 double nc_clip_duration_seconds(NCEngine* engine, int index);
+/// Where inside its source file the clip's audio begins. Trimming moves this.
+double nc_clip_source_offset_seconds(NCEngine* engine, int index);
 void nc_clip_color(NCEngine* engine, int index, char* out, size_t outLen);
 
 // ---------------------------------------------------------------------------
@@ -566,6 +568,10 @@ bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBoun
 /// each of `mins` and `maxs`, both in -1…1. Returns false when the file cannot be
 /// read. Channels are summed to mono.
 bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs);
+/// The whole file's length. The buckets span the file, not the clip, so a trimmed
+/// clip has to know where inside the file its own audio starts and ends.
+/// Zero until `nc_waveform_peaks` has read the file.
+double nc_waveform_duration_seconds(NCEngine* engine, const char* path);
 
 // ---------------------------------------------------------------------------
 // Plugin browser

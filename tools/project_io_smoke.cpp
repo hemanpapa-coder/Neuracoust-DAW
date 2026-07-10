@@ -1050,6 +1050,40 @@ int main() {
             }
         }
 
+        // --- a trimmed clip's waveform must not be the whole file's ---------------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "a 2 s tone at 0 s");
+            char clipId[128] = {0};
+            nc_clip_id(engine, 0, clipId, sizeof(clipId));
+
+            check(nc_clip_source_offset_seconds(engine, 0) == 0.0, "a fresh clip starts at the file's head");
+
+            // The peaks span the file; the view needs the file's length to map a clip
+            // window onto them. It is only known once the file has been read.
+            float mins[NC_WAVEFORM_BUCKETS] = {0};
+            float maxs[NC_WAVEFORM_BUCKETS] = {0};
+            char clipSource[1024] = {0};
+            nc_clip_source_path(engine, 0, clipSource, sizeof(clipSource));
+            check(nc_waveform_duration_seconds(engine, clipSource) == 0.0,
+                  "the file's length is unknown before its peaks are read");
+            check(nc_waveform_peaks(engine, clipSource, mins, maxs), "read the peaks");
+            const double fileSeconds = nc_waveform_duration_seconds(engine, clipSource);
+            printf("waveform: the source file is %.3f s long\n", fileSeconds);
+            check(fileSeconds > 1.9 && fileSeconds < 2.1, "and now it is the 2 s fixture");
+
+            // Trimming half a second off the head moves the clip's window into the file.
+            check(nc_clip_trim_start(engine, clipId, 0.5), "trim 0.5 s off the head");
+            check(std::abs(nc_clip_source_offset_seconds(engine, 0) - 0.5) < 0.001,
+                  "the clip now starts half a second into the file");
+            check(std::abs(nc_clip_duration_seconds(engine, 0) - 1.5) < 0.01, "and is 1.5 s long");
+            // Drawing the whole file across that clip would show 2 s of audio in a 1.5 s
+            // box — the picture would disagree with what plays.
+            check(nc_clip_source_offset_seconds(engine, 0) + nc_clip_duration_seconds(engine, 0)
+                      <= fileSeconds + 0.01,
+                  "the clip's window fits inside the file");
+        }
+
         // --- bounce through the bridge, and time it -------------------------------
         {
             nc_project_new(engine);

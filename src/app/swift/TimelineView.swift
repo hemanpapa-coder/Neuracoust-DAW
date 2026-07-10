@@ -36,6 +36,7 @@ struct TimelineModel: Equatable {
         let startSeconds: Double
         let durationSeconds: Double
         let sourcePath: String
+        let sourceOffsetSeconds: Double
         let selected: Bool
         let fadeInSeconds: Double
         let fadeOutSeconds: Double
@@ -104,7 +105,7 @@ final class TimelineNSView: NSView {
     }
 
     /// Peaks by source path, supplied by the owner. Decoding lives in the engine.
-    var waveforms: [String: (mins: [Float], maxs: [Float])] = [:] {
+    var waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)] = [:] {
         didSet { needsDisplay = true }
     }
 
@@ -1052,8 +1053,14 @@ final class TimelineNSView: NSView {
         let lastColumn = Int(min(rect.width, lanesRect.maxX - rect.minX))
         guard lastColumn > firstColumn else { return }
 
+        // The buckets span the whole file. A trimmed or split clip plays a window of
+        // it, so map each on-screen column into that window rather than the file.
+        let fileDuration = peaks.durationSeconds
+        let windowStart = fileDuration > 0 ? clip.sourceOffsetSeconds / fileDuration : 0
+        let windowSpan = fileDuration > 0 ? clip.durationSeconds / fileDuration : 1
+
         for column in firstColumn..<lastColumn {
-            let fraction = Double(column) / Double(rect.width)
+            let fraction = windowStart + Double(column) / Double(rect.width) * windowSpan
             let bucket = min(buckets - 1, max(0, Int(fraction * Double(buckets))))
 
             let low = CGFloat(peaks.mins[bucket])
@@ -1091,7 +1098,7 @@ extension NSColor {
 struct TimelineView: NSViewRepresentable {
     let model: TimelineModel
     let playheadSeconds: Double
-    let waveforms: [String: (mins: [Float], maxs: [Float])]
+    let waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)]
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
