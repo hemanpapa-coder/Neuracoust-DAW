@@ -36,7 +36,7 @@ Three things this tree forces, all of which cost time to rediscover:
 | Listen Room | `src/app/swift/{ListenRoom,ChatPanel}.swift` | Relay process, ssh tunnel, chat over `/api/chat` |
 | Mixer | `src/app/swift/{MixerView,MixerControls}.swift` | Strips, faders, meters, inserts, master meter |
 | Plugin browser | `src/app/swift/PluginBrowser.swift` | Facets, search, insert chain |
-| Timeline | `src/app/swift/TimelineView.swift` | AppKit NSView: ruler, grid, clips, waveforms, playhead |
+| Timeline | `src/app/swift/TimelineView.swift` | AppKit NSView: ruler, grid, clips, waveforms, playhead, select/move/trim/split/delete |
 
 **SwiftUI shell + AppKit/Metal embeds** is the agreed architecture. VST3 plugin editors must embed a native window in an `NSView` using the Steinberg SDK directly, so pure SwiftUI is impossible; the timeline already has a Metal backdrop and a 3,000-line `drawRect`. Everything else (transport, inspector, mixer layout, panels, dialogs) is far faster to build in SwiftUI.
 
@@ -80,6 +80,10 @@ This machine types Korean. With a Korean input source active, `charactersIgnorin
 Menu items still declare their shortcuts so they are discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers all of them (⌘Z, ⌘⇧Z, ⌘N, ⌘O, ⌘S, ⌘⇧S, ⌘I).
 
 **Note for verification:** the computer-use tool cannot press Z here. It maps the character `"z"` to a key code using the active layout, which under Korean input yields key code 0 (the A key). Shortcut behaviour has to be checked by hand.
+
+## Snapping
+
+`snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.
 
 ## Undo granularity
 

@@ -432,6 +432,9 @@ final class EngineController: ObservableObject {
         static let o: UInt16 = 31
         static let n: UInt16 = 45
         static let i: UInt16 = 34
+        static let b: UInt16 = 11
+        static let delete: UInt16 = 51
+        static let forwardDelete: UInt16 = 117
     }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -439,9 +442,21 @@ final class EngineController: ObservableObject {
         if NSApp.keyWindow?.firstResponder is NSTextView {
             return event
         }
-        guard event.modifierFlags.contains(.command) else {
-            return event
+        // Timeline edits carry no modifier, the way every DAW does it.
+        if !event.modifierFlags.contains(.command) {
+            switch event.keyCode {
+            case KeyCode.b where selectedClipId != nil:
+                splitSelectedClipAtPlayhead()
+                return nil
+            case KeyCode.delete, KeyCode.forwardDelete:
+                guard selectedClipId != nil else { return event }
+                deleteSelectedClip()
+                return nil
+            default:
+                return event
+            }
         }
+
         let shift = event.modifierFlags.contains(.shift)
 
         switch event.keyCode {
@@ -807,6 +822,9 @@ final class EngineController: ObservableObject {
     /// Peak envelopes keyed by source path, fetched once per file from the engine.
     @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float])] = [:]
 
+    /// Timeline selection. Purely a view concept; the engine has no notion of it.
+    @Published var selectedClipId: String?
+
     // Timeline viewport, in seconds.
     @Published private(set) var visibleStart: Double = 0
     @Published private(set) var visibleDuration: Double = 30
@@ -848,13 +866,59 @@ final class EngineController: ObservableObject {
                                           laneIndex: lane,
                                           startSeconds: clip.startSeconds,
                                           durationSeconds: clip.durationSeconds,
-                                          sourcePath: clip.sourcePath)
+                                          sourcePath: clip.sourcePath,
+                                          selected: clip.id == selectedClipId)
             },
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
             visibleStart: visibleStart,
             visibleDuration: visibleDuration
         )
+    }
+
+    // MARK: - Clip editing
+
+    /// Snapping is the caller's choice: `nc_project_snap_time` always snaps.
+    func snap(_ seconds: Double) -> Double {
+        guard let handle, snapEnabled else { return seconds }
+        return nc_project_snap_time(handle, seconds)
+    }
+
+    /// Continuous. Records nothing; call `commitClipGesture` when the drag ends.
+    func moveClip(_ clipId: String, to startSeconds: Double) {
+        guard let handle else { return }
+        if nc_clip_move(handle, clipId, startSeconds) { reloadClips() }
+    }
+
+    func trimClipStart(_ clipId: String, to startSeconds: Double) {
+        guard let handle else { return }
+        if nc_clip_trim_start(handle, clipId, startSeconds) { reloadClips() }
+    }
+
+    func trimClipEnd(_ clipId: String, to endSeconds: Double) {
+        guard let handle else { return }
+        if nc_clip_trim_end(handle, clipId, endSeconds) { reloadClips() }
+    }
+
+    func commitClipGesture(_ stepName: String) {
+        recordGesture(stepName)
+    }
+
+    func splitSelectedClipAtPlayhead() {
+        guard let handle, let clipId = selectedClipId else { return }
+        if nc_clip_split(handle, clipId, playheadSeconds) {
+            reloadClips()
+            refreshHistory()
+        }
+    }
+
+    func deleteSelectedClip() {
+        guard let handle, let clipId = selectedClipId else { return }
+        if nc_clip_delete(handle, clipId) {
+            selectedClipId = nil
+            reloadClips()
+            refreshHistory()
+        }
     }
 
     private func loadWaveforms() {

@@ -914,6 +914,78 @@ void nc_clip_color(NCEngine* engine, int index, char* out, size_t outLen) {
     copyText(out, outLen, clip != nullptr ? clip->colorHex : std::string{});
 }
 
+// ---------------------------------------------------------------------------
+// Clip editing
+// ---------------------------------------------------------------------------
+
+double nc_project_snap_time(NCEngine* engine, double seconds) {
+    if (engine == nullptr) {
+        return seconds;
+    }
+    return neuracoust::daw::snapProjectTime(engine->project, seconds);
+}
+
+namespace {
+
+/// Every clip edit reshapes the render graph, so reconcile — cheaply first.
+bool applyClipEdit(NCEngine* engine, bool changed) {
+    if (!changed) {
+        return false;
+    }
+    engine->reconcileProject();
+    return true;
+}
+
+} // namespace
+
+bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::moveClip(engine->project, clipId,
+                                                           std::max(0.0, newStartSeconds)));
+}
+
+bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::trimClipStart(engine->project, clipId,
+                                                                std::max(0.0, newStartSeconds)));
+}
+
+bool nc_clip_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::trimClipEnd(engine->project, clipId, newEndSeconds));
+}
+
+bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    std::string newClipId;
+    if (!neuracoust::daw::splitClip(engine->project, clipId, seconds, newClipId)) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Split clip");
+    return true;
+}
+
+bool nc_clip_delete(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Delete clip");
+    return true;
+}
+
+float nc_clip_gain_db(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr ? clip->gainDb : 0.0f;
+}
+
+bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
+}
+
 bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs) {
     if (engine == nullptr || path == nullptr || mins == nullptr || maxs == nullptr) {
         return false;

@@ -237,6 +237,30 @@ double nc_clip_duration_seconds(NCEngine* engine, int index);
 void nc_clip_color(NCEngine* engine, int index, char* out, size_t outLen);
 
 // ---------------------------------------------------------------------------
+// Clip editing
+//
+// Move and trim are continuous: they push the model and the graph but record no
+// history. The caller records one step with nc_history_record_gesture when the
+// drag ends. Split and delete are discrete and record themselves.
+// ---------------------------------------------------------------------------
+
+/// Snaps `seconds` to the project's grid. It always snaps — there is no "snap
+/// enabled" flag inside. Decide whether to call it.
+double nc_project_snap_time(NCEngine* engine, double seconds);
+
+bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds);
+bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds);
+bool nc_clip_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds);
+
+/// Splits at `seconds`; the right-hand piece gets a new id. Records a step.
+bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds);
+bool nc_clip_delete(NCEngine* engine, const char* clipId);
+
+/// -60…+12 dB. Continuous, like move and trim.
+float nc_clip_gain_db(NCEngine* engine, int index);
+bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
+
+// ---------------------------------------------------------------------------
 // Waveform peaks
 //
 // Decoding a WAV costs real time, so the engine caches one peak set per file at a

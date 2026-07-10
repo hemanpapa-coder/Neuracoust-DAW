@@ -17,6 +17,7 @@ struct TimelineModel: Equatable {
         let startSeconds: Double
         let durationSeconds: Double
         let sourcePath: String
+        let selected: Bool
     }
 
     var lanes: [Lane] = []
@@ -39,6 +40,7 @@ final class TimelineNSView: NSView {
         didSet {
             guard model != oldValue else { return }
             needsDisplay = true
+            window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -54,6 +56,25 @@ final class TimelineNSView: NSView {
 
     var onSeek: ((Double) -> Void)?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
+    var onSelect: ((String?) -> Void)?
+    var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
+    var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
+    var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
+    var onCommitEdit: ((String) -> Void)?                // step name
+    var snap: ((Double) -> Double)?
+
+    /// Grab zone at each end of a clip.
+    private static let trimHandleWidth: CGFloat = 8
+
+    private enum Drag {
+        case none
+        case seeking
+        case moving(clipId: String, grabOffsetSeconds: Double)
+        case trimmingStart(clipId: String)
+        case trimmingEnd(clipId: String)
+    }
+
+    private var drag = Drag.none
 
     static let rulerHeight: CGFloat = 30
     static let laneHeight: CGFloat = 78
@@ -94,10 +115,95 @@ final class TimelineNSView: NSView {
 
     // MARK: Interaction
 
+    private func clipRect(_ clip: TimelineModel.Clip) -> NSRect {
+        let left = x(forSeconds: clip.startSeconds)
+        let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
+        let top = Self.rulerHeight + CGFloat(clip.laneIndex) * Self.laneHeight + 6
+        return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+    }
+
+    /// Topmost clip under the point, searched back to front.
+    private func clip(at point: NSPoint) -> TimelineModel.Clip? {
+        model.clips.reversed().first { clipRect($0).contains(point) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard point.x >= lanesRect.minX else { return }
-        onSeek?(max(0, seconds(atX: point.x)))
+
+        // The ruler is for scrubbing, not for grabbing clips.
+        if point.y < Self.rulerHeight {
+            drag = .seeking
+            onSeek?(max(0, seconds(atX: point.x)))
+            return
+        }
+
+        guard let hit = clip(at: point) else {
+            onSelect?(nil)
+            drag = .seeking
+            onSeek?(max(0, seconds(atX: point.x)))
+            return
+        }
+
+        onSelect?(hit.id)
+
+        let rect = clipRect(hit)
+        if point.x - rect.minX <= Self.trimHandleWidth {
+            drag = .trimmingStart(clipId: hit.id)
+        } else if rect.maxX - point.x <= Self.trimHandleWidth {
+            drag = .trimmingEnd(clipId: hit.id)
+        } else {
+            drag = .moving(clipId: hit.id, grabOffsetSeconds: seconds(atX: point.x) - hit.startSeconds)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let time = max(0, seconds(atX: point.x))
+
+        switch drag {
+        case .none:
+            break
+        case .seeking:
+            onSeek?(time)
+        case .moving(let clipId, let grabOffset):
+            onMoveClip?(clipId, snapped(time - grabOffset))
+        case .trimmingStart(let clipId):
+            onTrimStart?(clipId, snapped(time))
+        case .trimmingEnd(let clipId):
+            onTrimEnd?(clipId, snapped(time))
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        switch drag {
+        case .moving:
+            onCommitEdit?("Move clip")
+        case .trimmingStart, .trimmingEnd:
+            onCommitEdit?("Trim clip")
+        case .none, .seeking:
+            break
+        }
+        drag = .none
+    }
+
+    private func snapped(_ seconds: Double) -> Double {
+        max(0, snap?(seconds) ?? seconds)
+    }
+
+    /// A resize cursor over the trim handles tells the user they are there.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for clip in model.clips {
+            let rect = clipRect(clip)
+            guard rect.width > Self.trimHandleWidth * 2 else { continue }
+            addCursorRect(NSRect(x: rect.minX, y: rect.minY,
+                                 width: Self.trimHandleWidth, height: rect.height),
+                          cursor: .resizeLeftRight)
+            addCursorRect(NSRect(x: rect.maxX - Self.trimHandleWidth, y: rect.minY,
+                                 width: Self.trimHandleWidth, height: rect.height),
+                          cursor: .resizeLeftRight)
+        }
     }
 
     /// Scroll pans; ⌘-scroll (or a pinch) zooms about the pointer.
@@ -257,7 +363,7 @@ final class TimelineNSView: NSView {
             let rect = NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
 
             let body = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-            NSColor(hex: 0x1e3140).setFill()
+            NSColor(hex: clip.selected ? 0x2a4356 : 0x1e3140).setFill()
             body.fill()
 
             drawWaveform(clip, in: rect.insetBy(dx: 2, dy: 14), accent: lane.accent)
@@ -277,8 +383,13 @@ final class TimelineNSView: NSView {
             )
             context.restoreGState()
 
-            lane.accent.withAlphaComponent(0.7).setStroke()
-            body.lineWidth = 1
+            if clip.selected {
+                NSColor(hex: 0xe6a23c).setStroke()
+                body.lineWidth = 2
+            } else {
+                lane.accent.withAlphaComponent(0.7).setStroke()
+                body.lineWidth = 1
+            }
             body.stroke()
         }
 
@@ -345,21 +456,36 @@ struct TimelineView: NSViewRepresentable {
     let waveforms: [String: (mins: [Float], maxs: [Float])]
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
+    let onSelect: (String?) -> Void
+    let onMoveClip: (String, Double) -> Void
+    let onTrimStart: (String, Double) -> Void
+    let onTrimEnd: (String, Double) -> Void
+    let onCommitEdit: (String) -> Void
+    let snap: (Double) -> Double
 
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
-        view.onSeek = onSeek
-        view.onZoom = onZoom
+        wire(view)
         return view
     }
 
     func updateNSView(_ view: TimelineNSView, context: Context) {
-        view.onSeek = onSeek
-        view.onZoom = onZoom
+        wire(view)
         if view.waveforms.keys != waveforms.keys {
             view.waveforms = waveforms
         }
         view.model = model
         view.playheadSeconds = playheadSeconds
+    }
+
+    private func wire(_ view: TimelineNSView) {
+        view.onSeek = onSeek
+        view.onZoom = onZoom
+        view.onSelect = onSelect
+        view.onMoveClip = onMoveClip
+        view.onTrimStart = onTrimStart
+        view.onTrimEnd = onTrimEnd
+        view.onCommitEdit = onCommitEdit
+        view.snap = snap
     }
 }

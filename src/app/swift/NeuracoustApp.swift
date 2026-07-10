@@ -143,7 +143,13 @@ private struct EditView: View {
                     playheadSeconds: engine.playheadSeconds,
                     waveforms: engine.waveforms,
                     onSeek: { engine.seek($0) },
-                    onZoom: { engine.setViewport(start: $0, duration: $1) }
+                    onZoom: { engine.setViewport(start: $0, duration: $1) },
+                    onSelect: { engine.selectedClipId = $0 },
+                    onMoveClip: { engine.moveClip($0, to: $1) },
+                    onTrimStart: { engine.trimClipStart($0, to: $1) },
+                    onTrimEnd: { engine.trimClipEnd($0, to: $1) },
+                    onCommitEdit: { engine.commitClipGesture($0) },
+                    snap: { engine.snap($0) }
                 )
             }
         }
@@ -155,7 +161,16 @@ private struct EditView: View {
             zoomButton("맞춤") { engine.fitTimeline() }
             zoomButton("줌+") { engine.zoomTimeline(by: 1 / 1.5) }
 
-            Text(String(format: "%.1f s 표시 · 스크롤: 이동 · ⌘스크롤: 확대 · 클릭: 이동", engine.visibleDuration))
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            zoomButton("분할 (B)", enabled: engine.selectedClipId != nil) {
+                engine.splitSelectedClipAtPlayhead()
+            }
+            zoomButton("삭제", enabled: engine.selectedClipId != nil) {
+                engine.deleteSelectedClip()
+            }
+
+            Text(String(format: "%.1f s 표시 · 드래그: 이동 · 가장자리: 트림 · B: 분할 · Delete: 삭제", engine.visibleDuration))
                 .font(Theme.Font.mono(8))
                 .foregroundStyle(Theme.Palette.textFainter)
 
@@ -170,11 +185,13 @@ private struct EditView: View {
         }
     }
 
-    private func zoomButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func zoomButton(_ title: String,
+                            enabled: Bool = true,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(Theme.Font.ui(9, .medium))
-                .foregroundStyle(Theme.Palette.textSecondary)
+                .foregroundStyle(enabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
                 .padding(.horizontal, Theme.Space.lg)
                 .frame(height: 20)
                 .background(
@@ -187,6 +204,7 @@ private struct EditView: View {
                 )
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 }
 

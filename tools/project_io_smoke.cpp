@@ -166,6 +166,60 @@ int main() {
     check(nc_track_muted(engine, 0), "the recovered document has the unsaved mute");
     check(!nc_project_autosave_is_newer(projectPath), "the autosave was cleared after recovery");
 
+    // --- clip editing ---------------------------------------------------------
+    {
+        nc_project_new(engine);
+        check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "import for editing");
+        check(nc_clip_count(engine) == 1, "one clip to edit");
+
+        char clipId[128] = {0};
+        nc_clip_id(engine, 0, clipId, sizeof(clipId));
+        const double originalDuration = nc_clip_duration_seconds(engine, 0);
+
+        // Move is continuous: no step until the caller records the gesture.
+        nc_history_reset(engine);
+        for (int frame = 0; frame < 20; ++frame) {
+            nc_clip_move(engine, clipId, 0.05 * frame);
+        }
+        check(nc_history_undo_depth(engine) == 0, "dragging a clip records nothing by itself");
+        check(nc_clip_start_seconds(engine, 0) > 0.9, "the clip actually moved");
+        check(nc_history_record_gesture(engine, "Move clip"), "the gesture records one step");
+        check(nc_history_undo_depth(engine) == 1, "exactly one step for the drag");
+
+        // Trimming the start shortens the clip and leaves the end where it was.
+        const double startBefore = nc_clip_start_seconds(engine, 0);
+        const double endBefore = startBefore + nc_clip_duration_seconds(engine, 0);
+        check(nc_clip_trim_start(engine, clipId, startBefore + 0.5), "trim start");
+        const double endAfter = nc_clip_start_seconds(engine, 0) + nc_clip_duration_seconds(engine, 0);
+        check(std::abs(endAfter - endBefore) < 0.01, "trimming the start keeps the end in place");
+        check(nc_clip_duration_seconds(engine, 0) < originalDuration, "and shortens the clip");
+
+        // Split is discrete: it records itself and yields two clips.
+        const int depthBeforeSplit = nc_history_undo_depth(engine);
+        const double splitAt = nc_clip_start_seconds(engine, 0) + 0.4;
+        check(nc_clip_split(engine, clipId, splitAt), "split the clip");
+        check(nc_clip_count(engine) == 2, "split produced two clips");
+        check(nc_history_undo_depth(engine) == depthBeforeSplit + 1, "split recorded one step");
+
+        check(nc_history_undo(engine), "undo the split");
+        check(nc_clip_count(engine) == 1, "undo rejoined the clip");
+
+        // Delete records itself too.
+        nc_clip_id(engine, 0, clipId, sizeof(clipId));
+        check(nc_clip_delete(engine, clipId), "delete the clip");
+        check(nc_clip_count(engine) == 0, "the clip is gone");
+        check(nc_history_undo(engine), "undo the delete");
+        check(nc_clip_count(engine) == 1, "the clip came back");
+
+        // snapProjectTime always snaps — it does not consult a "snap enabled" flag.
+        // The default project's grid unit is 1 s, so 1.234 lands on 1.0. Whether to
+        // snap at all is the caller's decision.
+        // The default project's timeline quantum is 0.1 s, so 1.234 lands on 1.2.
+        const double snapped = nc_project_snap_time(engine, 1.234);
+        printf("snap(1.234) = %.3f\n", snapped);
+        check(std::abs(snapped - 1.2) < 0.0001, "snapping lands on the default 0.1 s quantum");
+    }
+
     // --- waveform peaks -------------------------------------------------------
     {
         std::vector<float> mins(NC_WAVEFORM_BUCKETS, 0.0f);
