@@ -290,6 +290,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift
         src/app/swift/PluginBrowser.swift
+        src/app/swift/TimelineView.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 

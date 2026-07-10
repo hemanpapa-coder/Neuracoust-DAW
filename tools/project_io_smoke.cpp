@@ -7,8 +7,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 static int failures = 0;
 
@@ -162,6 +165,43 @@ int main() {
           "reopen preferring the autosave");
     check(nc_track_muted(engine, 0), "the recovered document has the unsaved mute");
     check(!nc_project_autosave_is_newer(projectPath), "the autosave was cleared after recovery");
+
+    // --- waveform peaks -------------------------------------------------------
+    {
+        std::vector<float> mins(NC_WAVEFORM_BUCKETS, 0.0f);
+        std::vector<float> maxs(NC_WAVEFORM_BUCKETS, 0.0f);
+        check(!nc_waveform_peaks(engine, "/tmp/definitely-not-audio.wav", mins.data(), maxs.data()),
+              "peaks fail on a missing file");
+
+        check(nc_waveform_peaks(engine, wavPath, mins.data(), maxs.data()), "peaks read from a wav");
+
+        float lowest = 0.0f;
+        float highest = 0.0f;
+        int silentBuckets = 0;
+        for (int bucket = 0; bucket < NC_WAVEFORM_BUCKETS; ++bucket) {
+            lowest = std::min(lowest, mins[bucket]);
+            highest = std::max(highest, maxs[bucket]);
+            if (maxs[bucket] - mins[bucket] < 0.01f) {
+                ++silentBuckets;
+            }
+        }
+        printf("waveform: min=%.3f max=%.3f silent buckets=%d/%d\n",
+               lowest, highest, silentBuckets, NC_WAVEFORM_BUCKETS);
+
+        // writeTestToneWavFile emits about -21 dBFS; the point is that the envelope
+        // is present, full and symmetric, not that it is loud.
+        check(highest > 0.05f, "the tone reaches a real positive peak");
+        check(lowest < -0.05f, "and a real negative peak");
+        check(silentBuckets == 0, "no bucket of a continuous tone is silent");
+        check(std::abs(highest + lowest) < 0.05f, "the envelope is symmetric");
+
+        // The second read must come from the cache and agree exactly.
+        std::vector<float> mins2(NC_WAVEFORM_BUCKETS, 0.0f);
+        std::vector<float> maxs2(NC_WAVEFORM_BUCKETS, 0.0f);
+        check(nc_waveform_peaks(engine, wavPath, mins2.data(), maxs2.data()), "peaks read again");
+        check(std::equal(mins.begin(), mins.end(), mins2.begin()), "cached mins match");
+        check(std::equal(maxs.begin(), maxs.end(), maxs2.begin()), "cached maxs match");
+    }
 
     nc_engine_destroy(engine);
 

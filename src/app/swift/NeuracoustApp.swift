@@ -92,7 +92,7 @@ struct RootView: View {
             HStack(spacing: 0) {
                 Group {
                     switch engine.viewTab {
-                    case .edit: EditViewPlaceholder()
+                    case .edit: EditView()
                     case .mix: MixerView()
                     }
                 }
@@ -118,9 +118,7 @@ struct RootView: View {
 // specifies so the shell can be verified against a running engine before the
 // heavy AppKit/Metal views land inside them.
 
-/// The timeline itself is still to come. Until then this lists what the document
-/// actually holds, so imports can be verified without a renderer.
-private struct EditViewPlaceholder: View {
+private struct EditView: View {
     @EnvironmentObject private var engine: EngineController
 
     var body: some View {
@@ -129,47 +127,58 @@ private struct EditViewPlaceholder: View {
                 .fill(Theme.Palette.rail)
                 .frame(width: Theme.toolRailWidth)
 
-            ZStack {
-                Theme.Palette.surface
+            VStack(spacing: 0) {
+                toolbar
 
-                if engine.clips.isEmpty {
-                    PlaceholderLabel("Edit — 타임라인 (AppKit/Metal 예정) · ⌘I 로 오디오 가져오기")
-                } else {
-                    VStack(alignment: .leading, spacing: Theme.Space.md) {
-                        Text("클립 \(engine.clips.count)개 · 타임라인 렌더러는 아직 없습니다")
-                            .font(Theme.Font.ui(9))
-                            .foregroundStyle(Theme.Palette.textFaint)
-
-                        ForEach(engine.clips) { clip in
-                            HStack(spacing: Theme.Space.xl) {
-                                Text(clip.trackName)
-                                    .font(Theme.Font.mono(9))
-                                    .foregroundStyle(Theme.Palette.accent)
-                                    .frame(width: 70, alignment: .leading)
-                                Text(clip.name)
-                                    .font(Theme.Font.ui(10, .medium))
-                                    .foregroundStyle(Theme.Palette.text)
-                                Spacer()
-                                Text(String(format: "%.2f s → %.2f s",
-                                            clip.startSeconds,
-                                            clip.startSeconds + clip.durationSeconds))
-                                    .font(Theme.Font.mono(9))
-                                    .foregroundStyle(Theme.Palette.textDim)
-                            }
-                            .padding(.horizontal, Theme.Space.xl)
-                            .padding(.vertical, Theme.Space.md)
-                            .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                                    .fill(Theme.Palette.accent.opacity(0.10))
-                            )
-                        }
-                        Spacer()
-                    }
-                    .padding(Theme.Space.xxl)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
+                TimelineView(
+                    model: engine.timelineModel,
+                    playheadSeconds: engine.playheadSeconds,
+                    waveforms: engine.waveforms,
+                    onSeek: { engine.seek($0) },
+                    onZoom: { engine.setViewport(start: $0, duration: $1) }
+                )
             }
         }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: Theme.Space.sm) {
+            zoomButton("줌-") { engine.zoomTimeline(by: 1.5) }
+            zoomButton("맞춤") { engine.fitTimeline() }
+            zoomButton("줌+") { engine.zoomTimeline(by: 1 / 1.5) }
+
+            Text(String(format: "%.1f s 표시 · 스크롤: 이동 · ⌘스크롤: 확대 · 클릭: 이동", engine.visibleDuration))
+                .font(Theme.Font.mono(8))
+                .foregroundStyle(Theme.Palette.textFainter)
+
+            Spacer()
+        }
+        .padding(.horizontal, Theme.Space.xxl)
+        .frame(height: 30)
+        .frame(maxWidth: .infinity)
+        .background(Theme.Palette.ruler)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.Palette.border).frame(height: 1)
+        }
+    }
+
+    private func zoomButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.ui(9, .medium))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .padding(.horizontal, Theme.Space.lg)
+                .frame(height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(Theme.Palette.divider, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 

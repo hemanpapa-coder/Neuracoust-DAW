@@ -777,6 +777,70 @@ final class EngineController: ObservableObject {
 
     @Published private(set) var clips: [Clip] = []
 
+    /// Peak envelopes keyed by source path, fetched once per file from the engine.
+    @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float])] = [:]
+
+    // Timeline viewport, in seconds.
+    @Published private(set) var visibleStart: Double = 0
+    @Published private(set) var visibleDuration: Double = 30
+
+    func setViewport(start: Double, duration: Double) {
+        visibleStart = max(0, start)
+        visibleDuration = min(600, max(0.25, duration))
+    }
+
+    /// Zooms about the middle of the view, which is what a button press implies.
+    func zoomTimeline(by factor: Double) {
+        let centre = visibleStart + visibleDuration / 2
+        let duration = min(600, max(0.25, visibleDuration * factor))
+        setViewport(start: centre - duration / 2, duration: duration)
+    }
+
+    /// Frames every clip, with a little air after the last one.
+    func fitTimeline() {
+        let end = clips.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
+        setViewport(start: 0, duration: end > 0 ? end * 1.05 : 30)
+    }
+
+    /// Lanes come from the tracks the timeline can hold clips on; Master and
+    /// Monitor are buses, not lanes.
+    var timelineModel: TimelineModel {
+        let lanes = tracks.filter { !$0.kind.isMasterish }
+        let laneIndex = Dictionary(uniqueKeysWithValues: lanes.enumerated().map { ($1.name, $0) })
+
+        return TimelineModel(
+            lanes: lanes.map {
+                TimelineModel.Lane(name: $0.name,
+                                   accent: NSColor.from($0.kind.accent),
+                                   muted: $0.muted)
+            },
+            clips: clips.compactMap { clip in
+                guard let lane = laneIndex[clip.trackName] else { return nil }
+                return TimelineModel.Clip(id: clip.id,
+                                          name: clip.name,
+                                          laneIndex: lane,
+                                          startSeconds: clip.startSeconds,
+                                          durationSeconds: clip.durationSeconds,
+                                          sourcePath: clip.sourcePath)
+            },
+            tempoBpm: tempoBpm,
+            beatsPerBar: timeSignature.numerator,
+            visibleStart: visibleStart,
+            visibleDuration: visibleDuration
+        )
+    }
+
+    private func loadWaveforms() {
+        guard let handle else { return }
+        for clip in clips where waveforms[clip.sourcePath] == nil {
+            var mins = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
+            var maxs = [Float](repeating: 0, count: Int(NC_WAVEFORM_BUCKETS))
+            if nc_waveform_peaks(handle, clip.sourcePath, &mins, &maxs) {
+                waveforms[clip.sourcePath] = (mins, maxs)
+            }
+        }
+    }
+
     private func reloadClips() {
         guard let handle else { return }
         clips = (0..<Int(nc_clip_count(handle))).map { index in
@@ -790,6 +854,7 @@ final class EngineController: ObservableObject {
                 durationSeconds: nc_clip_duration_seconds(handle, i)
             )
         }
+        loadWaveforms()
     }
 
     private func refreshHistory() {

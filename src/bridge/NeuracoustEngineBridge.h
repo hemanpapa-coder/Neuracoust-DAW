@@ -234,6 +234,22 @@ void nc_clip_track(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_clip_source_path(NCEngine* engine, int index, char* out, size_t outLen);
 double nc_clip_start_seconds(NCEngine* engine, int index);
 double nc_clip_duration_seconds(NCEngine* engine, int index);
+void nc_clip_color(NCEngine* engine, int index, char* out, size_t outLen);
+
+// ---------------------------------------------------------------------------
+// Waveform peaks
+//
+// Decoding a WAV costs real time, so the engine caches one peak set per file at a
+// fixed bucket count. The timeline resamples that cache when it zooms rather than
+// re-reading the file.
+// ---------------------------------------------------------------------------
+
+#define NC_WAVEFORM_BUCKETS 2048
+
+/// Reads (or reuses) the peaks for `path`, writing NC_WAVEFORM_BUCKETS values into
+/// each of `mins` and `maxs`, both in -1…1. Returns false when the file cannot be
+/// read. Channels are summed to mono.
+bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs);
 
 // ---------------------------------------------------------------------------
 // Plugin browser
