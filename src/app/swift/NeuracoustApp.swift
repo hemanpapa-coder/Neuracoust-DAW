@@ -36,7 +36,7 @@ struct RootView: View {
 
                 Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
 
-                MonitorDockPlaceholder()
+                MonitorDock()
                     .frame(width: Theme.monitorDockWidth)
             }
         }
@@ -68,34 +68,6 @@ private struct MixViewPlaceholder: View {
         ZStack {
             Theme.Palette.surface
             PlaceholderLabel("Mix — 채널 스트립 (예정)")
-        }
-    }
-}
-
-private struct MonitorDockPlaceholder: View {
-    @EnvironmentObject private var engine: EngineController
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: Theme.Space.md) {
-                Circle().fill(Theme.Palette.purple).frame(width: 6, height: 6)
-                Text("모니터 스테이션")
-                    .font(Theme.Font.ui(11, .bold))
-                    .foregroundStyle(Theme.Palette.textBright)
-                Text("· 상시 표시")
-                    .font(Theme.Font.ui(8.5))
-                    .foregroundStyle(Theme.Palette.textFaint)
-                Spacer()
-            }
-            .padding(.horizontal, Theme.Space.xxl)
-            .frame(height: 40)
-            .frame(maxWidth: .infinity)
-            .background(Theme.Gradient.monitorHeader)
-
-            ZStack {
-                Theme.Palette.panel
-                PlaceholderLabel("모니터 독 (예정)")
-            }
         }
     }
 }

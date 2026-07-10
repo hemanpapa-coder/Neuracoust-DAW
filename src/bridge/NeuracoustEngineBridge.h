@@ -99,6 +99,50 @@ void nc_project_set_loop_enabled(NCEngine* engine, bool enabled);
 double nc_project_loop_start(NCEngine* engine);
 double nc_project_loop_end(NCEngine* engine);
 
+// ---------------------------------------------------------------------------
+// Monitor station
+// ---------------------------------------------------------------------------
+
+// Monitor DSP module chain, seeded from defaultMonitorDspModules().
+int nc_monitor_module_count(NCEngine* engine);
+void nc_monitor_module_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_monitor_module_detail(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_monitor_module_stage(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_monitor_module_enabled(NCEngine* engine, int index);
+void nc_monitor_set_module_enabled(NCEngine* engine, int index, bool enabled);
+
+bool nc_monitor_dsp_enabled(NCEngine* engine);
+void nc_monitor_set_dsp_enabled(NCEngine* engine, bool enabled);
+
+void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_path_mode(NCEngine* engine, const char* mode);
+
+// Station controls. Every setter re-pushes the whole control set to the engine,
+// which is the only entry point it offers.
+float nc_monitor_volume_db(NCEngine* engine);
+void nc_monitor_set_volume_db(NCEngine* engine, float db);
+
+bool nc_monitor_mono(NCEngine* engine);
+bool nc_monitor_mute(NCEngine* engine);
+bool nc_monitor_dim(NCEngine* engine);
+bool nc_monitor_talkback(NCEngine* engine);
+void nc_monitor_set_mono(NCEngine* engine, bool on);
+void nc_monitor_set_mute(NCEngine* engine, bool on);
+void nc_monitor_set_dim(NCEngine* engine, bool on);
+void nc_monitor_set_talkback(NCEngine* engine, bool on);
+
+// "LR", "MS", "L", "R" — mirrors ProjectDocument::monitorStationListenMode.
+void nc_monitor_listen_mode(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_listen_mode(NCEngine* engine, const char* mode);
+
+// A/B/C speaker sets live on the "speaker-simulation" module. Slot is 0, 1 or 2.
+int nc_monitor_active_speaker_slot(NCEngine* engine);
+void nc_monitor_set_active_speaker_slot(NCEngine* engine, int slot);
+void nc_monitor_speaker_model(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_monitor_speaker_output(NCEngine* engine, int slot, char* out, size_t outLen);
+float nc_monitor_speaker_sim_weight(NCEngine* engine, int slot);
+bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

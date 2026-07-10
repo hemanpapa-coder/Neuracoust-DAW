@@ -1,6 +1,8 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
 #include "audio/RealtimeAudioEngine.h"
+#include "audio/RemoteDspServerClient.h"
+#include "plugins/MonitorDspModules.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
 
@@ -11,6 +13,7 @@
 
 using neuracoust::daw::AudioEngineSettings;
 using neuracoust::daw::AudioEngineStatus;
+using neuracoust::daw::MonitorDspModule;
 using neuracoust::daw::ProjectDocument;
 using neuracoust::daw::RealtimeAudioEngine;
 
@@ -30,10 +33,46 @@ void copyText(char* dst, size_t dstLen, const std::string& src) {
 struct NCEngine {
     RealtimeAudioEngine engine;
     ProjectDocument project = neuracoust::daw::defaultProject();
+    bool monitorDspEnabled = true;
+    std::string monitorDspPathMode = "internal";
+
+    MonitorDspModule* speakerSimulation() {
+        for (auto& module : project.monitorModules) {
+            if (module.id == "speaker-simulation") {
+                return &module;
+            }
+        }
+        return nullptr;
+    }
+
+    // The engine has no "apply this monitor state" entry point; controls go in as
+    // one call and the module chain as another.
+    void pushStationControls() {
+        engine.setMonitorStationControls(project.monitorStationMono,
+                                         project.monitorStationListenMode,
+                                         project.monitorStationSwapLeftRight,
+                                         project.monitorStationInvertLeft,
+                                         project.monitorStationInvertRight,
+                                         project.monitorStationMute,
+                                         project.monitorStationDim,
+                                         project.monitorStationTalkback,
+                                         project.monitorInputTrimDb,
+                                         project.monitorVolumeDb,
+                                         project.monitorStationDimDb,
+                                         project.monitorStationTalkbackRoute);
+    }
+
+    void pushModules() {
+        engine.setMonitorDspModules(project.monitorModules, monitorDspEnabled);
+    }
 };
 
 NCEngine* nc_engine_create(void) {
-    return new NCEngine();
+    NCEngine* engine = new NCEngine();
+    if (engine->project.monitorModules.empty()) {
+        engine->project.monitorModules = neuracoust::daw::defaultMonitorDspModules();
+    }
+    return engine;
 }
 
 void nc_engine_destroy(NCEngine* engine) {
@@ -61,6 +100,16 @@ bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen) {
     settings.timeSignatureDenominator = engine->project.timeSignatureDenominator;
     settings.transportRunning = false;
     settings.metronomeEnabled = false;
+    settings.monitorDspEnabled = engine->monitorDspEnabled;
+    settings.monitorDspPathMode = engine->monitorDspPathMode;
+    settings.monitorModules = engine->project.monitorModules;
+    settings.monitorStationMono = engine->project.monitorStationMono;
+    settings.monitorStationListenMode = engine->project.monitorStationListenMode;
+    settings.monitorStationMute = engine->project.monitorStationMute;
+    settings.monitorStationDim = engine->project.monitorStationDim;
+    settings.monitorStationDimDb = engine->project.monitorStationDimDb;
+    settings.monitorInputTrimDb = engine->project.monitorInputTrimDb;
+    settings.monitorVolumeDb = engine->project.monitorVolumeDb;
 
     if (!engine->engine.start(settings)) {
         const AudioEngineStatus status = engine->engine.status();
@@ -247,4 +296,213 @@ double nc_project_loop_start(NCEngine* engine) {
 
 double nc_project_loop_end(NCEngine* engine) {
     return engine != nullptr ? engine->project.loopEndSeconds : 0.0;
+}
+
+// ---------------------------------------------------------------------------
+// Monitor station
+// ---------------------------------------------------------------------------
+
+namespace {
+
+MonitorDspModule* moduleAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.monitorModules.size()) {
+        return nullptr;
+    }
+    return &engine->project.monitorModules[static_cast<size_t>(index)];
+}
+
+/// Per-slot accessors on the speaker-simulation module, which stores A/B/C as
+/// three parallel fields rather than an array.
+const std::string& speakerModelForSlot(const MonitorDspModule& module, int slot) {
+    switch (slot) {
+        case 1: return module.targetModelB;
+        case 2: return module.targetModelC;
+        default: return module.targetModelA;
+    }
+}
+
+const std::string& speakerOutputForSlot(const MonitorDspModule& module, int slot) {
+    switch (slot) {
+        case 1: return module.speakerOutputB;
+        case 2: return module.speakerOutputC;
+        default: return module.speakerOutputA;
+    }
+}
+
+} // namespace
+
+int nc_monitor_module_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->project.monitorModules.size()) : 0;
+}
+
+void nc_monitor_module_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const MonitorDspModule* module = moduleAt(engine, index);
+    copyText(out, outLen, module != nullptr ? module->displayName : std::string{});
+}
+
+void nc_monitor_module_detail(NCEngine* engine, int index, char* out, size_t outLen) {
+    const MonitorDspModule* module = moduleAt(engine, index);
+    if (module == nullptr) {
+        copyText(out, outLen, "");
+        return;
+    }
+    // Only the simulation modules carry a model string; the rest describe themselves
+    // by stage.
+    const std::string& model = speakerModelForSlot(*module, module->activeTargetSlot);
+    copyText(out, outLen, model.empty() ? module->stage : model);
+}
+
+void nc_monitor_module_stage(NCEngine* engine, int index, char* out, size_t outLen) {
+    const MonitorDspModule* module = moduleAt(engine, index);
+    copyText(out, outLen, module != nullptr ? module->stage : std::string{});
+}
+
+bool nc_monitor_module_enabled(NCEngine* engine, int index) {
+    const MonitorDspModule* module = moduleAt(engine, index);
+    return module != nullptr && module->enabled;
+}
+
+void nc_monitor_set_module_enabled(NCEngine* engine, int index, bool enabled) {
+    MonitorDspModule* module = moduleAt(engine, index);
+    if (module == nullptr || module->enabled == enabled) {
+        return;
+    }
+    module->enabled = enabled;
+    engine->pushModules();
+}
+
+bool nc_monitor_dsp_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->monitorDspEnabled;
+}
+
+void nc_monitor_set_dsp_enabled(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->monitorDspEnabled == enabled) {
+        return;
+    }
+    engine->monitorDspEnabled = enabled;
+    engine->pushModules();
+}
+
+void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->monitorDspPathMode : std::string{});
+}
+
+void nc_monitor_set_path_mode(NCEngine* engine, const char* mode) {
+    if (engine == nullptr || mode == nullptr) {
+        return;
+    }
+    engine->monitorDspPathMode = mode;
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
+                                         neuracoust::daw::defaultRemoteDspServerSettings());
+}
+
+float nc_monitor_volume_db(NCEngine* engine) {
+    return engine != nullptr ? engine->project.monitorVolumeDb : 0.0f;
+}
+
+void nc_monitor_set_volume_db(NCEngine* engine, float db) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->project.monitorVolumeDb = std::max(-60.0f, std::min(6.0f, db));
+    engine->pushStationControls();
+}
+
+bool nc_monitor_mono(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationMono;
+}
+
+bool nc_monitor_mute(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationMute;
+}
+
+bool nc_monitor_dim(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationDim;
+}
+
+bool nc_monitor_talkback(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationTalkback;
+}
+
+void nc_monitor_set_mono(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->project.monitorStationMono = on;
+    engine->pushStationControls();
+}
+
+void nc_monitor_set_mute(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->project.monitorStationMute = on;
+    engine->pushStationControls();
+}
+
+void nc_monitor_set_dim(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->project.monitorStationDim = on;
+    engine->pushStationControls();
+}
+
+void nc_monitor_set_talkback(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->project.monitorStationTalkback = on;
+    engine->pushStationControls();
+}
+
+void nc_monitor_listen_mode(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.monitorStationListenMode : std::string{});
+}
+
+void nc_monitor_set_listen_mode(NCEngine* engine, const char* mode) {
+    if (engine == nullptr || mode == nullptr) return;
+    engine->project.monitorStationListenMode = mode;
+    engine->pushStationControls();
+}
+
+int nc_monitor_active_speaker_slot(NCEngine* engine) {
+    if (engine == nullptr) return 0;
+    const MonitorDspModule* module = engine->speakerSimulation();
+    return module != nullptr ? module->activeTargetSlot : 0;
+}
+
+void nc_monitor_set_active_speaker_slot(NCEngine* engine, int slot) {
+    if (engine == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr || module->activeTargetSlot == slot) return;
+    module->activeTargetSlot = slot;
+    engine->pushModules();
+}
+
+void nc_monitor_speaker_model(NCEngine* engine, int slot, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const MonitorDspModule* module = engine->speakerSimulation();
+    copyText(out, outLen, module != nullptr ? speakerModelForSlot(*module, slot) : std::string{});
+}
+
+void nc_monitor_speaker_output(NCEngine* engine, int slot, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const MonitorDspModule* module = engine->speakerSimulation();
+    copyText(out, outLen, module != nullptr ? speakerOutputForSlot(*module, slot) : std::string{});
+}
+
+float nc_monitor_speaker_sim_weight(NCEngine* engine, int slot) {
+    if (engine == nullptr) return 0.0f;
+    const MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return 0.0f;
+    switch (slot) {
+        case 1: return module->speakerSimulationWeightB;
+        case 2: return module->speakerSimulationWeightC;
+        default: return module->speakerSimulationWeightA;
+    }
+}
+
+bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot) {
+    if (engine == nullptr) return false;
+    const MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return false;
+    switch (slot) {
+        case 1: return module->speakerRoomEqB;
+        case 2: return module->speakerRoomEqC;
+        default: return module->speakerRoomEqA;
+    }
 }

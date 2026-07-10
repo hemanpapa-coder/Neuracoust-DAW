@@ -280,6 +280,8 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/NeuracoustApp.swift
         src/app/swift/Theme.swift
         src/app/swift/TransportBar.swift
+        src/app/swift/MonitorControls.swift
+        src/app/swift/MonitorDock.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 

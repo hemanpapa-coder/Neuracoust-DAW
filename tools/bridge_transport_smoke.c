@@ -70,6 +70,67 @@ int main(void) {
         failures++;
     }
 
+    // ---- monitor station ----
+    const int moduleCount = nc_monitor_module_count(engine);
+    printf("monitor modules: %d\n", moduleCount);
+    if (moduleCount < 1) {
+        fprintf(stderr, "FAIL: monitor module chain is empty\n");
+        failures++;
+    }
+
+    char moduleName[128] = {0};
+    nc_monitor_module_name(engine, 0, moduleName, sizeof(moduleName));
+    if (strcmp(moduleName, "Speaker Simulation") != 0) {
+        fprintf(stderr, "FAIL: module 0 is '%s', expected 'Speaker Simulation'\n", moduleName);
+        failures++;
+    }
+
+    const bool wasEnabled = nc_monitor_module_enabled(engine, 0);
+    nc_monitor_set_module_enabled(engine, 0, !wasEnabled);
+    if (nc_monitor_module_enabled(engine, 0) == wasEnabled) {
+        fprintf(stderr, "FAIL: module enable did not toggle\n");
+        failures++;
+    }
+    nc_monitor_set_module_enabled(engine, 0, wasEnabled);
+
+    nc_monitor_set_volume_db(engine, -18.0f);
+    if (nc_monitor_volume_db(engine) < -18.5f || nc_monitor_volume_db(engine) > -17.5f) {
+        fprintf(stderr, "FAIL: monitor volume readback %.2f, expected -18\n", nc_monitor_volume_db(engine));
+        failures++;
+    }
+    // Clamped to the -60…+6 dB range the station accepts.
+    nc_monitor_set_volume_db(engine, 999.0f);
+    if (nc_monitor_volume_db(engine) > 6.0f) {
+        fprintf(stderr, "FAIL: monitor volume not clamped (%.2f)\n", nc_monitor_volume_db(engine));
+        failures++;
+    }
+    nc_monitor_set_volume_db(engine, -6.0f);
+
+    nc_monitor_set_dim(engine, true);
+    if (!nc_monitor_dim(engine)) {
+        fprintf(stderr, "FAIL: dim did not latch\n");
+        failures++;
+    }
+    nc_monitor_set_dim(engine, false);
+
+    // Switching the active speaker set must change the model the module reports.
+    char modelA[128] = {0};
+    char modelB[128] = {0};
+    nc_monitor_set_active_speaker_slot(engine, 0);
+    nc_monitor_module_detail(engine, 0, modelA, sizeof(modelA));
+    nc_monitor_set_active_speaker_slot(engine, 1);
+    nc_monitor_module_detail(engine, 0, modelB, sizeof(modelB));
+    printf("speaker A detail='%s'  B detail='%s'\n", modelA, modelB);
+    if (nc_monitor_active_speaker_slot(engine) != 1) {
+        fprintf(stderr, "FAIL: active speaker slot did not change\n");
+        failures++;
+    }
+    if (strcmp(modelA, modelB) == 0) {
+        fprintf(stderr, "FAIL: module detail did not follow the active speaker slot\n");
+        failures++;
+    }
+    nc_monitor_set_active_speaker_slot(engine, 0);
+
     nc_engine_stop(engine);
     nc_engine_destroy(engine);
 
@@ -77,6 +138,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    printf("bridge transport smoke OK\n");
+    printf("bridge transport + monitor smoke OK\n");
     return 0;
 }
