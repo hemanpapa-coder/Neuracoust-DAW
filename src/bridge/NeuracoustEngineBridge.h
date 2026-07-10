@@ -322,6 +322,31 @@ void nc_clipboard_clip_name(NCEngine* engine, char* out, size_t outLen);
 bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outLen);
 bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t outLen);
 
+/// Batch edits over a timeline selection. Each records exactly one undo step for
+/// the whole selection — a five-clip delete is one ⌘Z, not five.
+///
+/// Ids that name no clip are skipped; the return value says how many clips the
+/// edit actually touched. Clips created by an edit are read back with
+/// `nc_result_count` / `nc_result_id`, which the next batch call overwrites.
+int nc_result_count(NCEngine* engine);
+void nc_result_id(NCEngine* engine, int index, char* out, size_t outLen);
+
+/// Continuous, like `nc_clip_move`: records nothing. If the selection would cross
+/// zero the whole thing is held back so their spacing survives the drag.
+int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, double deltaSeconds);
+
+int nc_clip_delete_many(NCEngine* engine, const char* const* clipIds, int count);
+int nc_clip_split_many(NCEngine* engine, const char* const* clipIds, int count, double seconds);
+/// Places the copies one selection-width to the right, so they do not overlap.
+int nc_clip_duplicate_many(NCEngine* engine, const char* const* clipIds, int count);
+
+/// The clipboard holds a whole selection. Paste lands the earliest clip at
+/// `startSeconds` and keeps the others' offsets from it.
+bool nc_clip_copy_many(NCEngine* engine, const char* const* clipIds, int count);
+int nc_clip_cut_many(NCEngine* engine, const char* const* clipIds, int count);
+int nc_clipboard_clip_count(NCEngine* engine);
+int nc_clip_paste_all(NCEngine* engine, double startSeconds);
+
 // ---------------------------------------------------------------------------
 // Bounce (offline export)
 //

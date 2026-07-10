@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -63,7 +64,11 @@ struct NCEngine {
     std::map<std::string, WaveformPeaks> waveformCache;
 
     /// One clip, the way the old UI's clipClipboard_ held one.
-    std::optional<neuracoust::daw::ClipState> clipboard;
+    /// A whole selection, with start times relative to the earliest clip — that is
+    /// the shape pasteClipRange wants.
+    std::vector<neuracoust::daw::ClipState> clipboard;
+    /// Ids created by the last batch edit, for the caller to reselect.
+    std::vector<std::string> lastResultIds;
 
     neuracoust::daw::ProjectHistory history;
     std::string projectPath;     // empty until the document has a home on disk
@@ -1271,60 +1276,248 @@ bool nc_clip_move_to_track(NCEngine* engine, const char* clipId, int trackIndex,
     return true;
 }
 
-bool nc_clip_copy(NCEngine* engine, const char* clipId) {
-    if (engine == nullptr || clipId == nullptr) return false;
-    const auto* clip = findClipById(engine, clipId);
-    if (clip == nullptr) return false;
-    engine->clipboard = *clip;
-    return true;
-}
+namespace {
 
-bool nc_clip_cut(NCEngine* engine, const char* clipId) {
-    if (!nc_clip_copy(engine, clipId)) {
-        return false;
+/// Resolves ids to clips, dropping ones that name nothing.
+std::vector<const neuracoust::daw::ClipState*> resolveClips(NCEngine* engine,
+                                                            const char* const* clipIds, int count) {
+    std::vector<const neuracoust::daw::ClipState*> clips;
+    if (engine == nullptr || clipIds == nullptr || count <= 0) {
+        return clips;
     }
-    if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
-        return false;
+    for (int index = 0; index < count; ++index) {
+        if (clipIds[index] == nullptr) continue;
+        if (const auto* clip = findClipById(engine, clipIds[index])) {
+            clips.push_back(clip);
+        }
     }
-    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
-    engine->reconcileProject();
-    engine->recordStep("Cut clip");
-    return true;
+    return clips;
 }
 
-bool nc_clipboard_has_clip(NCEngine* engine) {
-    return engine != nullptr && engine->clipboard.has_value();
+/// Ids first, because every batch edit invalidates the pointers into project.clips.
+std::vector<std::string> resolveClipIds(NCEngine* engine, const char* const* clipIds, int count) {
+    std::vector<std::string> ids;
+    for (const auto* clip : resolveClips(engine, clipIds, count)) {
+        ids.push_back(clip->id);
+    }
+    return ids;
 }
 
-void nc_clipboard_clip_name(NCEngine* engine, char* out, size_t outLen) {
-    if (engine == nullptr || !engine->clipboard.has_value()) {
+double earliestStart(const std::vector<const neuracoust::daw::ClipState*>& clips) {
+    double earliest = std::numeric_limits<double>::max();
+    for (const auto* clip : clips) {
+        earliest = std::min(earliest, clip->startSeconds);
+    }
+    return clips.empty() ? 0.0 : earliest;
+}
+
+} // namespace
+
+int nc_result_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->lastResultIds.size());
+}
+
+void nc_result_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->lastResultIds.size()) {
         copyText(out, outLen, "");
         return;
     }
-    const auto& clip = *engine->clipboard;
+    copyText(out, outLen, engine->lastResultIds[static_cast<size_t>(index)]);
+}
+
+bool nc_clip_copy_many(NCEngine* engine, const char* const* clipIds, int count) {
+    const auto clips = resolveClips(engine, clipIds, count);
+    if (clips.empty()) {
+        return false;
+    }
+    // pasteClipRange adds startSeconds to whatever it finds, so store offsets.
+    const double anchor = earliestStart(clips);
+    engine->clipboard.clear();
+    for (const auto* clip : clips) {
+        neuracoust::daw::ClipState copy = *clip;
+        copy.startSeconds = clip->startSeconds - anchor;
+        engine->clipboard.push_back(copy);
+    }
+    return true;
+}
+
+bool nc_clip_copy(NCEngine* engine, const char* clipId) {
+    return nc_clip_copy_many(engine, &clipId, 1);
+}
+
+int nc_clip_cut_many(NCEngine* engine, const char* const* clipIds, int count) {
+    if (!nc_clip_copy_many(engine, clipIds, count)) {
+        return 0;
+    }
+    int cut = 0;
+    for (const auto& id : resolveClipIds(engine, clipIds, count)) {
+        if (neuracoust::daw::deleteClip(engine->project, id)) {
+            ++cut;
+        }
+    }
+    if (cut == 0) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep(cut == 1 ? "Cut clip" : "Cut " + std::to_string(cut) + " clips");
+    return cut;
+}
+
+bool nc_clip_cut(NCEngine* engine, const char* clipId) {
+    return nc_clip_cut_many(engine, &clipId, 1) == 1;
+}
+
+bool nc_clipboard_has_clip(NCEngine* engine) {
+    return engine != nullptr && !engine->clipboard.empty();
+}
+
+int nc_clipboard_clip_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->clipboard.size());
+}
+
+void nc_clipboard_clip_name(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr || engine->clipboard.empty()) {
+        copyText(out, outLen, "");
+        return;
+    }
+    const auto& clip = engine->clipboard.front();
     copyText(out, outLen, clip.regionName.empty()
                               ? std::filesystem::path(clip.sourcePath).filename().string()
                               : clip.regionName);
 }
 
-bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outLen) {
-    copyText(out, outLen, "");
-    if (engine == nullptr || !engine->clipboard.has_value()) {
-        return false;
+int nc_clip_paste_all(NCEngine* engine, double startSeconds) {
+    if (engine == nullptr) return 0;
+    engine->lastResultIds.clear();
+    if (engine->clipboard.empty()) {
+        return 0;
     }
 
-    std::string newClipId;
-    if (!neuracoust::daw::pasteClip(engine->project, *engine->clipboard,
-                                    std::max(0.0, startSeconds), newClipId)) {
-        return false;
+    std::vector<std::string> newClipIds;
+    if (!neuracoust::daw::pasteClipRange(engine->project, engine->clipboard,
+                                         std::max(0.0, startSeconds), newClipIds)) {
+        return 0;
     }
-    // pasteClip pushes onto project.clips and stops there — the placements would
-    // stay stale and the pasted clip would play silent.
+    // pasteClipRange pushes onto project.clips and stops there — the placements
+    // would stay stale and the pasted clips would play silent.
     neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
     engine->reconcileProject();
-    engine->recordStep("Paste clip");
-    copyText(out, outLen, newClipId);
+    engine->recordStep(newClipIds.size() == 1
+                           ? "Paste clip"
+                           : "Paste " + std::to_string(newClipIds.size()) + " clips");
+    engine->lastResultIds = newClipIds;
+    return static_cast<int>(newClipIds.size());
+}
+
+bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (nc_clip_paste_all(engine, startSeconds) == 0) {
+        return false;
+    }
+    copyText(out, outLen, engine->lastResultIds.front());
     return true;
+}
+
+int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, double deltaSeconds) {
+    const auto clips = resolveClips(engine, clipIds, count);
+    if (clips.empty() || !std::isfinite(deltaSeconds)) {
+        return 0;
+    }
+    // Clamping each clip on its own would collapse the selection against zero.
+    const double delta = std::max(deltaSeconds, -earliestStart(clips));
+
+    std::vector<std::pair<std::string, double>> targets;
+    targets.reserve(clips.size());
+    for (const auto* clip : clips) {
+        targets.emplace_back(clip->id, clip->startSeconds + delta);
+    }
+
+    int moved = 0;
+    for (const auto& [id, start] : targets) {
+        if (neuracoust::daw::moveClip(engine->project, id, start)) {
+            ++moved;
+        }
+    }
+    return applyClipEdit(engine, moved > 0) ? moved : 0;
+}
+
+int nc_clip_delete_many(NCEngine* engine, const char* const* clipIds, int count) {
+    int deleted = 0;
+    for (const auto& id : resolveClipIds(engine, clipIds, count)) {
+        if (neuracoust::daw::deleteClip(engine->project, id)) {
+            ++deleted;
+        }
+    }
+    if (deleted == 0) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep(deleted == 1 ? "Delete clip"
+                                    : "Delete " + std::to_string(deleted) + " clips");
+    return deleted;
+}
+
+int nc_clip_split_many(NCEngine* engine, const char* const* clipIds, int count, double seconds) {
+    if (engine == nullptr) return 0;
+    engine->lastResultIds.clear();
+
+    int split = 0;
+    for (const auto& id : resolveClipIds(engine, clipIds, count)) {
+        std::string newClipId;
+        // A clip the playhead misses simply does not split.
+        if (neuracoust::daw::splitClip(engine->project, id, seconds, newClipId)) {
+            engine->lastResultIds.push_back(newClipId);
+            ++split;
+        }
+    }
+    if (split == 0) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep(split == 1 ? "Split clip" : "Split " + std::to_string(split) + " clips");
+    return split;
+}
+
+int nc_clip_duplicate_many(NCEngine* engine, const char* const* clipIds, int count) {
+    if (engine == nullptr) return 0;
+    engine->lastResultIds.clear();
+
+    const auto clips = resolveClips(engine, clipIds, count);
+    if (clips.empty()) {
+        return 0;
+    }
+    // Shift by the whole selection's width, or the copies land on the originals.
+    double latestEnd = 0.0;
+    for (const auto* clip : clips) {
+        latestEnd = std::max(latestEnd, clip->startSeconds + clip->durationSeconds);
+    }
+    const double span = latestEnd - earliestStart(clips);
+
+    std::vector<std::pair<std::string, double>> targets;
+    targets.reserve(clips.size());
+    for (const auto* clip : clips) {
+        targets.emplace_back(clip->id, clip->startSeconds + span);
+    }
+
+    for (const auto& [id, start] : targets) {
+        std::string newClipId;
+        if (neuracoust::daw::duplicateClip(engine->project, id, start, newClipId)) {
+            engine->lastResultIds.push_back(newClipId);
+        }
+    }
+    if (engine->lastResultIds.empty()) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    const size_t made = engine->lastResultIds.size();
+    engine->recordStep(made == 1 ? "Duplicate clip"
+                                 : "Duplicate " + std::to_string(made) + " clips");
+    return static_cast<int>(made);
 }
 
 bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t outLen) {

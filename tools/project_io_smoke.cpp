@@ -65,6 +65,30 @@ static double firstAudibleSecond(const std::string& path) {
     return -1;
 }
 
+/// Where a clip sits now, by id. Batch edits renumber the index order.
+static double startOfClip(NCEngine* engine, const char* clipId) {
+    for (int index = 0; index < nc_clip_count(engine); ++index) {
+        char id[128] = {0};
+        nc_clip_id(engine, index, id, sizeof(id));
+        if (strcmp(id, clipId) == 0) {
+            return nc_clip_start_seconds(engine, index);
+        }
+    }
+    return -1.0;
+}
+
+/// Undo until the history is empty, counting; then redo back to where we were.
+static int countUndoSteps(NCEngine* engine) {
+    int steps = 0;
+    while (nc_history_can_undo(engine) && nc_history_undo(engine)) {
+        ++steps;
+    }
+    for (int index = 0; index < steps; ++index) {
+        nc_history_redo(engine);
+    }
+    return steps;
+}
+
 int main() {
     std::string wavFixture;
     std::string m4aFixture;
@@ -479,6 +503,91 @@ int main() {
             const double audibleAt = firstAudibleSecond(crossBounce);
             printf("cross-track move: audio starts at %.3f s (expect 2.000)\n", audibleAt);
             check(std::abs(audibleAt - 2.0) < 0.05, "the relocated clip is audible on its new track");
+        }
+
+        // --- batch edits: one undo step, and the selection keeps its spacing -------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 1.0, error, sizeof(error)), "clip at 1 s");
+            check(nc_audio_import(engine, 1, wavPath, 3.0, error, sizeof(error)), "clip at 3 s");
+            check(nc_clip_count(engine) == 2, "two clips to select");
+
+            char idA[128] = {0};
+            char idB[128] = {0};
+            for (int index = 0; index < 2; ++index) {
+                if (nc_clip_start_seconds(engine, index) < 2.0) nc_clip_id(engine, index, idA, sizeof(idA));
+                else nc_clip_id(engine, index, idB, sizeof(idB));
+            }
+            const char* selection[2] = {idA, idB};
+
+            // Moving the selection right shifts both by the same amount.
+            check(nc_clip_move_many(engine, selection, 2, 1.5) == 2, "moved both clips");
+            check(startOfClip(engine, idA) > 2.49 && startOfClip(engine, idA) < 2.51, "clip A at 2.5 s");
+            check(startOfClip(engine, idB) > 4.49 && startOfClip(engine, idB) < 4.51, "clip B at 4.5 s");
+
+            // Dragging past zero holds the whole selection back rather than piling
+            // the clips onto each other at 0 s.
+            check(nc_clip_move_many(engine, selection, 2, -99.0) == 2, "moved both clips against zero");
+            check(startOfClip(engine, idA) < 0.001, "clip A stopped at 0 s");
+            check(std::abs(startOfClip(engine, idB) - 2.0) < 0.01, "clip B kept its 2 s spacing");
+
+            // move_many is continuous, like a drag: nothing is undoable until the
+            // gesture ends. Without this the delete below would undo to 1 s / 3 s.
+            check(nc_history_record_gesture(engine, "Move clips"), "the drag recorded one step");
+
+            // A batch delete is a single undo step, not one per clip.
+            const int stepsBefore = countUndoSteps(engine);
+            check(nc_clip_delete_many(engine, selection, 2) == 2, "deleted both clips");
+            check(nc_clip_count(engine) == 0, "both clips gone");
+            check(countUndoSteps(engine) == stepsBefore + 1, "the batch delete recorded one step");
+            check(nc_history_undo(engine), "undo the batch delete");
+            check(nc_clip_count(engine) == 2, "one undo brought both clips back");
+
+            // Copy the pair, paste it at 6 s: the earliest lands there, the other
+            // keeps its offset.
+            char freshA[128] = {0};
+            char freshB[128] = {0};
+            for (int index = 0; index < 2; ++index) {
+                if (nc_clip_start_seconds(engine, index) < 1.0) nc_clip_id(engine, index, freshA, sizeof(freshA));
+                else nc_clip_id(engine, index, freshB, sizeof(freshB));
+            }
+            const char* restored[2] = {freshA, freshB};
+            check(nc_clip_copy_many(engine, restored, 2), "copied the selection");
+            check(nc_clipboard_clip_count(engine) == 2, "the clipboard holds two clips");
+            check(nc_clip_paste_all(engine, 6.0) == 2, "pasted two clips");
+            check(nc_result_count(engine) == 2, "the paste reported two new ids");
+
+            char pastedA[128] = {0};
+            nc_result_id(engine, 0, pastedA, sizeof(pastedA));
+            char pastedB[128] = {0};
+            nc_result_id(engine, 1, pastedB, sizeof(pastedB));
+            printf("paste selection: %.3f s and %.3f s (expect 6.000 and 8.000)\n",
+                   startOfClip(engine, pastedA), startOfClip(engine, pastedB));
+            check(std::abs(startOfClip(engine, pastedA) - 6.0) < 0.01, "the earliest pasted clip is at 6 s");
+            check(std::abs(startOfClip(engine, pastedB) - 8.0) < 0.01, "the other kept its 2 s offset");
+
+            // And the pasted pair is audible where it looks, not silent.
+            char batchProject[256] = "/tmp/neuracoust-io-smoke/Batch.ndaw";
+            check(nc_project_save_as(engine, batchProject, error, sizeof(error)), "save the batch edit");
+            check(nc_clip_delete_many(engine, restored, 2) == 2, "delete the originals");
+            check(nc_project_save(engine, error, sizeof(error)), "save again with only the paste");
+
+            neuracoust::daw::ProjectDocument batched;
+            std::string batchError;
+            std::string batchText;
+            if (FILE* file = fopen(batchProject, "rb")) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) batchText.append(buffer, read);
+                fclose(file);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(batchText, batchProject, batched, batchError),
+                  "parse the batch project");
+            const std::string batchBounce = "/tmp/neuracoust-io-smoke/batch.wav";
+            check(neuracoust::daw::bounceProjectToWav(batched, batchBounce).ok, "bounce the batch project");
+            const double batchAudibleAt = firstAudibleSecond(batchBounce);
+            printf("pasted selection: audio starts at %.3f s (expect 6.000)\n", batchAudibleAt);
+            check(std::abs(batchAudibleAt - 6.0) < 0.05, "the pasted selection is audible at 6 s");
         }
 
         // --- bounce through the bridge, and time it -------------------------------

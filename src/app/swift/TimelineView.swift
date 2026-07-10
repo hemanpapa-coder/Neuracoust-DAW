@@ -61,7 +61,10 @@ final class TimelineNSView: NSView {
     var onSeek: ((Double) -> Void)?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
+    var onToggleSelect: ((String) -> Void)?              // shift-click
+    var onSelectMany: (([String]) -> Void)?              // marquee
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
+    var onMoveSelection: ((Double) -> Void)?             // delta seconds
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
@@ -77,7 +80,12 @@ final class TimelineNSView: NSView {
     private enum Drag {
         case none
         case seeking
+        case marquee(origin: NSPoint, current: NSPoint)
         case moving(clipId: String, grabOffsetSeconds: Double)
+        /// Dragging one clip of a multi-selection drags all of them. The anchor's
+        /// live start is read back from the model each frame, so a clamp at zero
+        /// simply stops the whole selection instead of drifting it apart.
+        case movingSelection(anchorId: String, grabOffsetSeconds: Double)
         case trimmingStart(clipId: String)
         case trimmingEnd(clipId: String)
         case fadingIn(clip: TimelineModel.Clip)
@@ -142,6 +150,13 @@ final class TimelineNSView: NSView {
         model.clips.reversed().first { clipRect($0).contains(point) }
     }
 
+    private var selectionCount: Int { model.clips.reduce(0) { $1.selected ? $0 + 1 : $0 } }
+
+    /// Every clip the marquee touches, however slightly.
+    private func clipsIntersecting(_ rect: NSRect) -> [String] {
+        model.clips.filter { clipRect($0).intersects(rect) }.map(\.id)
+    }
+
     /// Which lane a point falls in, or nil above/below the lanes.
     private func laneIndex(at point: NSPoint) -> Int? {
         guard point.y >= Self.rulerHeight else { return nil }
@@ -167,14 +182,24 @@ final class TimelineNSView: NSView {
             return
         }
 
+        // Dragging from empty lane space sweeps a selection rectangle.
         guard let hit = clip(at: point) else {
-            onSelect?(nil)
-            drag = .seeking
-            onSeek?(max(0, seconds(atX: point.x)))
+            if !event.modifierFlags.contains(.shift) {
+                onSelect?(nil)
+            }
+            drag = .marquee(origin: point, current: point)
+            needsDisplay = true
             return
         }
 
-        onSelect?(hit.id)
+        if event.modifierFlags.contains(.shift) {
+            onToggleSelect?(hit.id)
+            return
+        }
+        // Clicking inside a multi-selection keeps it, so it can be dragged whole.
+        if !hit.selected {
+            onSelect?(hit.id)
+        }
 
         let rect = clipRect(hit)
 
@@ -192,8 +217,8 @@ final class TimelineNSView: NSView {
             }
         }
 
-        // The gain line is grabbable only on a selected clip, away from the edges.
-        if hit.selected {
+        // The gain line is grabbable only on a lone selected clip, away from the edges.
+        if hit.selected, selectionCount == 1 {
             let lineY = gainLineY(hit, in: rect)
             if abs(point.y - lineY) <= 4,
                point.x - rect.minX > Self.trimHandleWidth,
@@ -203,12 +228,16 @@ final class TimelineNSView: NSView {
             }
         }
 
-        if point.x - rect.minX <= Self.trimHandleWidth {
+        let grabOffset = seconds(atX: point.x) - hit.startSeconds
+        if hit.selected, selectionCount > 1 {
+            // Trimming a whole selection has no obvious meaning; a drag moves it.
+            drag = .movingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset)
+        } else if point.x - rect.minX <= Self.trimHandleWidth {
             drag = .trimmingStart(clipId: hit.id)
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
             drag = .trimmingEnd(clipId: hit.id)
         } else {
-            drag = .moving(clipId: hit.id, grabOffsetSeconds: seconds(atX: point.x) - hit.startSeconds)
+            drag = .moving(clipId: hit.id, grabOffsetSeconds: grabOffset)
         }
     }
 
@@ -221,8 +250,14 @@ final class TimelineNSView: NSView {
             break
         case .seeking:
             onSeek?(time)
+        case .marquee(let origin, _):
+            drag = .marquee(origin: origin, current: point)
+            needsDisplay = true
         case .moving(let clipId, let grabOffset):
             onMoveClip?(clipId, snapped(time - grabOffset))
+        case .movingSelection(let anchorId, let grabOffset):
+            guard let anchor = model.clips.first(where: { $0.id == anchorId }) else { break }
+            onMoveSelection?(snapped(time - grabOffset) - anchor.startSeconds)
         case .trimmingStart(let clipId):
             onTrimStart?(clipId, snapped(time))
         case .trimmingEnd(let clipId):
@@ -263,6 +298,19 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Clip fade")
         case .gaining:
             onCommitEdit?("Clip gain")
+        case .movingSelection:
+            onCommitEdit?("Move clips")
+        case .marquee(let origin, let current):
+            if origin == current {
+                // A click, not a sweep: the playhead follows, as it always has.
+                onSeek?(max(0, seconds(atX: point.x)))
+            } else {
+                onSelectMany?(clipsIntersecting(NSRect(x: min(origin.x, current.x),
+                                                       y: min(origin.y, current.y),
+                                                       width: abs(current.x - origin.x),
+                                                       height: abs(current.y - origin.y))))
+            }
+            needsDisplay = true
         case .none, .seeking:
             break
         }
@@ -340,6 +388,18 @@ final class TimelineNSView: NSView {
         // The lane header column sits above the grid but below the playhead.
         NSColor(hex: 0x0b0806).setFill()
         NSRect(x: Self.headerWidth - 1, y: 0, width: 1, height: bounds.height).fill()
+
+        drawMarquee(context)
+    }
+
+    private func drawMarquee(_ context: CGContext) {
+        guard case .marquee(let origin, let current) = drag, origin != current else { return }
+        let rect = NSRect(x: min(origin.x, current.x), y: min(origin.y, current.y),
+                          width: abs(current.x - origin.x), height: abs(current.y - origin.y))
+        NSColor(hex: 0x5f9fd6).withAlphaComponent(0.15).setFill()
+        rect.fill()
+        NSColor(hex: 0x5f9fd6).withAlphaComponent(0.7).setStroke()
+        NSBezierPath(rect: rect).stroke()
     }
 
     /// Bars while they are at least 40 pt apart, otherwise a coarser multiple.
@@ -510,7 +570,9 @@ final class TimelineNSView: NSView {
             wedge.fill()
         }
 
-        guard clip.selected else { return }
+        // Both handles belong to one clip: on a multi-selection a drag moves the
+        // whole thing, so drawing grab points there would be a lie.
+        guard clip.selected, selectionCount == 1 else { return }
         NSColor(hex: 0xe6a23c).setFill()
         for position in [x(forSeconds: clip.startSeconds + clip.fadeInSeconds),
                          x(forSeconds: clip.startSeconds + clip.durationSeconds - clip.fadeOutSeconds)] {
@@ -519,9 +581,9 @@ final class TimelineNSView: NSView {
         }
     }
 
-    /// Only the selected clip shows its gain line; otherwise the lane is noisy.
+    /// Only a lone selected clip shows its gain line; otherwise the lane is noisy.
     private func drawGainLine(_ clip: TimelineModel.Clip, in rect: NSRect) {
-        guard clip.selected else { return }
+        guard clip.selected, selectionCount == 1 else { return }
         let lineY = gainLineY(clip, in: rect)
 
         NSColor(hex: 0xe6a23c).withAlphaComponent(0.8).setStroke()
@@ -600,7 +662,10 @@ struct TimelineView: NSViewRepresentable {
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
+    let onToggleSelect: (String) -> Void
+    let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
+    let onMoveSelection: (Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
     let onSetFades: (String, Double, Double) -> Void
@@ -629,7 +694,10 @@ struct TimelineView: NSViewRepresentable {
         view.onSeek = onSeek
         view.onZoom = onZoom
         view.onSelect = onSelect
+        view.onToggleSelect = onToggleSelect
+        view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip
+        view.onMoveSelection = onMoveSelection
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd
         view.onSetFades = onSetFades

@@ -518,12 +518,12 @@ final class EngineController: ObservableObject {
         // Timeline edits carry no modifier, the way every DAW does it.
         if !event.modifierFlags.contains(.command) {
             switch event.keyCode {
-            case KeyCode.b where selectedClipId != nil:
-                splitSelectedClipAtPlayhead()
+            case KeyCode.b where !selectedClipIds.isEmpty:
+                splitSelectedClipsAtPlayhead()
                 return nil
             case KeyCode.delete, KeyCode.forwardDelete:
-                guard selectedClipId != nil else { return event }
-                deleteSelectedClip()
+                guard !selectedClipIds.isEmpty else { return event }
+                deleteSelectedClips()
                 return nil
             default:
                 return event
@@ -545,14 +545,14 @@ final class EngineController: ObservableObject {
             importAudio(intoTrack: 0)
         case KeyCode.e:
             bounceProject()
-        case KeyCode.c where selectedClipId != nil:
-            copySelectedClip()
-        case KeyCode.x where selectedClipId != nil:
-            cutSelectedClip()
+        case KeyCode.c where !selectedClipIds.isEmpty:
+            copySelectedClips()
+        case KeyCode.x where !selectedClipIds.isEmpty:
+            cutSelectedClips()
         case KeyCode.v where clipboardClipName != nil:
-            pasteClipAtPlayhead()
-        case KeyCode.d where selectedClipId != nil:
-            duplicateSelectedClip()
+            pasteClipsAtPlayhead()
+        case KeyCode.d where !selectedClipIds.isEmpty:
+            duplicateSelectedClips()
         default:
             return event
         }
@@ -909,8 +909,28 @@ final class EngineController: ObservableObject {
     @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float])] = [:]
 
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
-    @Published var selectedClipId: String?
+    @Published var selectedClipIds: Set<String> = []
     @Published var selectedTrackId: Int?
+
+    /// Fades and clip gain edit one clip at a time; they hide on a multi-selection.
+    var selectedClipId: String? { selectedClipIds.count == 1 ? selectedClipIds.first : nil }
+
+    func selectClip(_ clipId: String?) {
+        selectedClipIds = clipId.map { [$0] } ?? []
+    }
+
+    /// Shift-click: add a clip to the selection, or take it back out.
+    func toggleClipSelection(_ clipId: String) {
+        if selectedClipIds.contains(clipId) {
+            selectedClipIds.remove(clipId)
+        } else {
+            selectedClipIds.insert(clipId)
+        }
+    }
+
+    func selectClips(_ clipIds: [String]) {
+        selectedClipIds = Set(clipIds)
+    }
 
     // Timeline viewport, in seconds.
     @Published private(set) var visibleStart: Double = 0
@@ -957,7 +977,7 @@ final class EngineController: ObservableObject {
                                           startSeconds: clip.startSeconds,
                                           durationSeconds: clip.durationSeconds,
                                           sourcePath: clip.sourcePath,
-                                          selected: clip.id == selectedClipId,
+                                          selected: selectedClipIds.contains(clip.id),
                                           fadeInSeconds: clip.fadeInSeconds,
                                           fadeOutSeconds: clip.fadeOutSeconds,
                                           gainDb: clip.gainDb)
@@ -1016,7 +1036,7 @@ final class EngineController: ObservableObject {
         var buffer = [CChar](repeating: 0, count: 128)
         guard nc_clip_move_to_track(handle, clipId, Int32(trackId), startSeconds,
                                     &buffer, buffer.count) else { return }
-        selectedClipId = String(cString: buffer)
+        selectClip(String(cString: buffer))
         reloadClips()
         refreshHistory()
     }
@@ -1126,7 +1146,7 @@ final class EngineController: ObservableObject {
             return
         }
         selectedTrackId = nil
-        selectedClipId = nil
+        selectedClipIds = []
         reloadTracks()
         reloadClips()
         refreshHistory()
@@ -1146,61 +1166,93 @@ final class EngineController: ObservableObject {
     // MARK: Clipboard
 
     @Published private(set) var clipboardClipName: String?
+    @Published private(set) var clipboardClipCount = 0
 
-    func copySelectedClip() {
-        guard let handle, let clipId = selectedClipId, nc_clip_copy(handle, clipId) else { return }
-        refreshClipboard()
+    /// Bridges a Swift string array to `const char* const*` for the batch edits.
+    private func withClipIds<R>(_ ids: [String], _ body: (UnsafeMutablePointer<UnsafePointer<CChar>?>, Int32) -> R) -> R? {
+        guard !ids.isEmpty else { return nil }
+        let copies = ids.map { strdup($0) }
+        defer { copies.forEach { free($0) } }
+        var pointers: [UnsafePointer<CChar>?] = copies.map { UnsafePointer($0) }
+        return pointers.withUnsafeMutableBufferPointer { body($0.baseAddress!, Int32(ids.count)) }
     }
 
-    func cutSelectedClip() {
-        guard let handle, let clipId = selectedClipId, nc_clip_cut(handle, clipId) else { return }
-        selectedClipId = nil
-        reloadClips()
-        refreshClipboard()
-        refreshHistory()
-    }
-
-    /// Pastes at the playhead, onto the clip's original track.
-    func pasteClipAtPlayhead() {
+    /// Ids the last batch edit created — the clips the user should now be holding.
+    private func selectBatchResult() {
         guard let handle else { return }
-        var buffer = [CChar](repeating: 0, count: 128)
-        guard nc_clip_paste(handle, playheadSeconds, &buffer, buffer.count) else { return }
-        selectedClipId = String(cString: buffer)
+        let count = Int(nc_result_count(handle))
+        selectedClipIds = Set((0..<count).map { index in
+            readEngineString { nc_result_id(handle, Int32(index), $0, $1) }
+        })
+    }
+
+    /// Ordered so a batch edit sees the same clips the user sees selected.
+    private var selection: [String] { clips.map(\.id).filter { selectedClipIds.contains($0) } }
+
+    func copySelectedClips() {
+        guard let handle else { return }
+        guard withClipIds(selection, { nc_clip_copy_many(handle, $0, $1) }) == true else { return }
+        refreshClipboard()
+    }
+
+    func cutSelectedClips() {
+        guard let handle else { return }
+        guard let cut = withClipIds(selection, { nc_clip_cut_many(handle, $0, $1) }), cut > 0 else { return }
+        selectedClipIds = []
+        reloadClips()
+        refreshClipboard()
+        refreshHistory()
+    }
+
+    /// Pastes at the playhead: the earliest clip lands there, the rest keep their offsets.
+    func pasteClipsAtPlayhead() {
+        guard let handle, nc_clip_paste_all(handle, playheadSeconds) > 0 else { return }
+        selectBatchResult()
         reloadClips()
         refreshHistory()
     }
 
-    func duplicateSelectedClip() {
-        guard let handle, let clipId = selectedClipId else { return }
-        var buffer = [CChar](repeating: 0, count: 128)
-        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return }
-        selectedClipId = String(cString: buffer)
+    func duplicateSelectedClips() {
+        guard let handle else { return }
+        guard let made = withClipIds(selection, { nc_clip_duplicate_many(handle, $0, $1) }), made > 0 else { return }
+        selectBatchResult()
         reloadClips()
         refreshHistory()
     }
 
     private func refreshClipboard() {
         guard let handle else { return }
+        clipboardClipCount = Int(nc_clipboard_clip_count(handle))
         clipboardClipName = nc_clipboard_has_clip(handle)
             ? readEngineString { nc_clipboard_clip_name(handle, $0, $1) }
             : nil
     }
 
-    func splitSelectedClipAtPlayhead() {
-        guard let handle, let clipId = selectedClipId else { return }
-        if nc_clip_split(handle, clipId, playheadSeconds) {
-            reloadClips()
-            refreshHistory()
-        }
+    /// Clips the playhead misses are left alone.
+    func splitSelectedClipsAtPlayhead() {
+        guard let handle else { return }
+        let playhead = playheadSeconds
+        guard let split = withClipIds(selection, { nc_clip_split_many(handle, $0, $1, playhead) }),
+              split > 0 else { return }
+        reloadClips()
+        refreshHistory()
     }
 
-    func deleteSelectedClip() {
-        guard let handle, let clipId = selectedClipId else { return }
-        if nc_clip_delete(handle, clipId) {
-            selectedClipId = nil
-            reloadClips()
-            refreshHistory()
-        }
+    func deleteSelectedClips() {
+        guard let handle else { return }
+        guard let deleted = withClipIds(selection, { nc_clip_delete_many(handle, $0, $1) }), deleted > 0 else { return }
+        selectedClipIds = []
+        reloadClips()
+        refreshHistory()
+    }
+
+    /// Continuous, for dragging a whole selection. Records nothing; the view calls
+    /// `commitClipGesture` when the drag ends.
+    func moveSelection(by deltaSeconds: Double) {
+        guard let handle, deltaSeconds != 0 else { return }
+        guard let moved = withClipIds(selection, { nc_clip_move_many(handle, $0, $1, deltaSeconds) }),
+              moved > 0 else { return }
+        reloadClips()
     }
 
     private func loadWaveforms() {

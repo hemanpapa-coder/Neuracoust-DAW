@@ -154,8 +154,11 @@ private struct EditView: View {
                     waveforms: engine.waveforms,
                     onSeek: { engine.seek($0) },
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
-                    onSelect: { engine.selectedClipId = $0 },
+                    onSelect: { engine.selectClip($0) },
+                    onToggleSelect: { engine.toggleClipSelection($0) },
+                    onSelectMany: { engine.selectClips($0) },
                     onMoveClip: { engine.moveClip($0, to: $1) },
+                    onMoveSelection: { engine.moveSelection(by: $0) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },
                     onSetFades: { engine.setClipFades($0, fadeIn: $1, fadeOut: $2) },
@@ -177,19 +180,21 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomButton("분할 (B)", enabled: engine.selectedClipId != nil) {
-                engine.splitSelectedClipAtPlayhead()
+            let hasSelection = !engine.selectedClipIds.isEmpty
+
+            zoomButton("분할 (B)", enabled: hasSelection) {
+                engine.splitSelectedClipsAtPlayhead()
             }
-            zoomButton("삭제", enabled: engine.selectedClipId != nil) {
-                engine.deleteSelectedClip()
+            zoomButton("삭제", enabled: hasSelection) {
+                engine.deleteSelectedClips()
             }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomButton("복사", enabled: engine.selectedClipId != nil) { engine.copySelectedClip() }
-            zoomButton("잘라내기", enabled: engine.selectedClipId != nil) { engine.cutSelectedClip() }
-            zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipAtPlayhead() }
-            zoomButton("복제", enabled: engine.selectedClipId != nil) { engine.duplicateSelectedClip() }
+            zoomButton("복사", enabled: hasSelection) { engine.copySelectedClips() }
+            zoomButton("잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
+            zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
+            zoomButton("복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
