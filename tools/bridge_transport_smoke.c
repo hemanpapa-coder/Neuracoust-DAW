@@ -235,6 +235,15 @@ int main(void) {
                     fprintf(stderr, "FAIL: setting a parameter on an empty slot succeeded\n");
                     failures++;
                 }
+                // A nameless edit from the editor still gets a label.
+                nc_track_set_vst3_parameter(engine, 0, 0, 11, NULL, 0.5);
+                const int nameless = nc_track_insert_param_count(engine, 0, 0) - 1;
+                char paramName[128] = {0};
+                nc_track_insert_param_name(engine, 0, 0, nameless, paramName, sizeof(paramName));
+                if (strcmp(paramName, "Param 11") != 0) {
+                    fprintf(stderr, "FAIL: nameless parameter labelled '%s'\n", paramName);
+                    failures++;
+                }
                 printf("vst3 parameters: %d stored on slot 0\n",
                        nc_track_insert_param_count(engine, 0, 0));
 

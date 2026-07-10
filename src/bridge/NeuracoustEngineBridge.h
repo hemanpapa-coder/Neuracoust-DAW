@@ -172,6 +172,8 @@ void nc_track_insert_class_name(NCEngine* engine, int index, int slot, char* out
 int nc_track_insert_param_count(NCEngine* engine, int index, int slot);
 uint32_t nc_track_insert_param_id(NCEngine* engine, int index, int slot, int paramIndex);
 double nc_track_insert_param_value(NCEngine* engine, int index, int slot, int paramIndex);
+void nc_track_insert_param_name(NCEngine* engine, int index, int slot, int paramIndex,
+                                char* out, size_t outLen);
 
 /// True when this insert runs in the sandboxed realtime bridge rather than on the
 /// audio thread. Those editors must be pointed at the bridge's shared memory, or

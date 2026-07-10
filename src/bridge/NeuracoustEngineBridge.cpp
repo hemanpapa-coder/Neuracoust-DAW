@@ -689,6 +689,17 @@ double nc_track_insert_param_value(NCEngine* engine, int index, int slot, int pa
     return insert->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
 }
 
+void nc_track_insert_param_name(NCEngine* engine, int index, int slot, int paramIndex,
+                                char* out, size_t outLen) {
+    const auto* insert = insertAt(engine, index, slot);
+    if (insert == nullptr || paramIndex < 0 ||
+        static_cast<size_t>(paramIndex) >= insert->parameters.size()) {
+        copyText(out, outLen, std::string{});
+        return;
+    }
+    copyText(out, outLen, insert->parameters[static_cast<size_t>(paramIndex)].displayName);
+}
+
 bool nc_track_insert_observer(NCEngine* engine, int index, int slot,
                               char* shmName, size_t shmNameLen,
                               int* maxBlock, double* sampleRate) {
@@ -754,7 +765,9 @@ bool nc_track_set_vst3_parameter(NCEngine* engine, int index, int slot,
         }
     }
     if (!found) {
-        insert->parameters.push_back({parameterId, name, clamped});
+        // The editor's PARAM lines carry no name; label it the way the engine does.
+        insert->parameters.push_back(
+            {parameterId, name.empty() ? "Param " + std::to_string(parameterId) : name, clamped});
     }
 
     // Fine-grained: never rebuild the graph for a knob turn.
