@@ -184,6 +184,10 @@ struct ChannelStrip: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var editors: PluginEditorHost
 
+    @State private var renaming = false
+    @State private var draftName = ""
+    @FocusState private var nameFieldFocused: Bool
+
     let track: EngineController.Track
     let isChild: Bool
     let showIO: Bool
@@ -442,14 +446,42 @@ struct ChannelStrip: View {
         )
     }
 
+    /// Double-click to rename. A rejected name (Master, Monitor, a duplicate) simply
+    /// snaps back rather than reporting an error the user cannot act on.
     private var nameplate: some View {
-        Text(track.name)
-            .font(Theme.Font.ui(10, .bold))
-            .foregroundStyle(Theme.Palette.text)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Theme.Space.md)
-            .background(accent.opacity(0.16))
+        Group {
+            if renaming {
+                TextField("", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .focused($nameFieldFocused)
+                    .onSubmit { commitRename() }
+                    .onExitCommand { renaming = false }
+                    .onChange(of: nameFieldFocused) { _, focused in
+                        if !focused { commitRename() }
+                    }
+            } else {
+                Text(track.name)
+                    .lineLimit(1)
+                    .onTapGesture(count: 2) {
+                        guard !track.kind.isMasterish else { return }
+                        draftName = track.name
+                        renaming = true
+                        nameFieldFocused = true
+                    }
+            }
+        }
+        .font(Theme.Font.ui(10, .bold))
+        .foregroundStyle(Theme.Palette.text)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Theme.Space.md)
+        .background(accent.opacity(0.16))
+    }
+
+    private func commitRename() {
+        defer { renaming = false }
+        guard draftName != track.name else { return }
+        engine.renameTrack(track.id, to: draftName)
     }
 
     /// peak is real. GR needs per-insert gain reduction the engine does not publish,

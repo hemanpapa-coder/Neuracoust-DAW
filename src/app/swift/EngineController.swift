@@ -267,6 +267,18 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Master and Monitor refuse to be renamed, as does a name already in use.
+    @discardableResult
+    func renameTrack(_ trackId: Int, to newName: String) -> Bool {
+        guard let handle else { return false }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, nc_track_rename(handle, Int32(trackId), trimmed) else { return false }
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+        return true
+    }
+
     // MARK: Plug-in editor
 
     struct InsertDescriptor {

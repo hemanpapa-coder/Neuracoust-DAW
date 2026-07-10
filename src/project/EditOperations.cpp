@@ -3455,13 +3455,18 @@ bool normalizeMonitorStationProjectState(ProjectDocument& project) {
 }
 
 bool renameTrack(ProjectDocument& project, const std::string& oldName, const std::string& newName) {
-    TrackState* track = findTrack(project, oldName);
+    // A caller that passes project.tracks[i].name binds oldName to the very string
+    // assigned below; every comparison after that would be against the *new* name,
+    // and the clips would silently keep pointing at a track that no longer exists.
+    const std::string previousName = oldName;
+
+    TrackState* track = findTrack(project, previousName);
     const std::string cleanName = trimTrackName(newName);
     if (track == nullptr || cleanName.empty() ||
-        isProtectedTrackName(oldName) || isProtectedTrackName(cleanName)) {
+        isProtectedTrackName(previousName) || isProtectedTrackName(cleanName)) {
         return false;
     }
-    if (cleanName == oldName) {
+    if (cleanName == previousName) {
         return true;
     }
     if (trackNameExists(project, cleanName)) {
@@ -3469,37 +3474,37 @@ bool renameTrack(ProjectDocument& project, const std::string& oldName, const std
     }
 
     track->name = cleanName;
-    if (project.tempoMasterTrackName == oldName) {
+    if (project.tempoMasterTrackName == previousName) {
         project.tempoMasterTrackName = cleanName;
     }
     for (auto& otherTrack : project.tracks) {
-        if (otherTrack.inputBus == oldName) {
+        if (otherTrack.inputBus == previousName) {
             otherTrack.inputBus = cleanName;
         }
-        if (otherTrack.outputBus == oldName) {
+        if (otherTrack.outputBus == previousName) {
             otherTrack.outputBus = cleanName;
         }
         for (auto& send : otherTrack.sends) {
-            if (send.busName == oldName) {
+            if (send.busName == previousName) {
                 send.busName = cleanName;
             }
         }
-        if (otherTrack.controlMasterTrackName == oldName) {
+        if (otherTrack.controlMasterTrackName == previousName) {
             otherTrack.controlMasterTrackName = cleanName;
         }
     }
     for (auto& clip : project.clips) {
-        if (clip.trackName == oldName) {
+        if (clip.trackName == previousName) {
             clip.trackName = cleanName;
         }
     }
     for (auto& playlist : project.trackPlaylists) {
-        if (playlist.trackName == oldName) {
+        if (playlist.trackName == previousName) {
             playlist.trackName = cleanName;
         }
     }
     for (auto& region : project.midiRegions) {
-        if (region.trackName == oldName) {
+        if (region.trackName == previousName) {
             region.trackName = cleanName;
         }
     }

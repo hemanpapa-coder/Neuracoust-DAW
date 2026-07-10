@@ -454,6 +454,8 @@ int main() {
             char renamed[128] = {0};
             nc_track_name(engine, added, renamed, sizeof(renamed));
             check(strcmp(renamed, "Guitar") == 0, "the rename stuck");
+            check(!nc_track_rename(engine, added, "Master"), "a protected name is refused");
+            check(!nc_track_rename(engine, added, "Audio 1"), "a name already in use is refused");
 
             check(nc_track_delete(engine, added, true), "delete the track");
             check(nc_track_count(engine) == before, "track count came back down");
@@ -470,6 +472,44 @@ int main() {
             }
             check(masterIndex >= 0, "found the master track");
             check(!nc_track_delete(engine, masterIndex, true), "master refuses deletion");
+        }
+
+        // --- renaming a track must drag its clips along, or the track goes silent -
+        {
+
+            // The clips carry a track *name*. A rename that misses them leaves the
+            // clip attached to a track that no longer exists, so its fader, mute and
+            // solo stop reaching it. The bounce below still plays either way — the
+            // renderer works off the rebuilt playlist — so it is the clip's own
+            // trackName that has to be checked.
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 1.0, error, sizeof(error)), "a clip on Audio 1");
+            check(nc_track_rename(engine, 0, "Guitar"), "rename the track under the clip");
+
+            char clipTrackAfter[128] = {0};
+            nc_clip_track(engine, 0, clipTrackAfter, sizeof(clipTrackAfter));
+
+            check(strcmp(clipTrackAfter, "Guitar") == 0, "the clip followed the rename");
+
+            char renameProject[256] = "/tmp/neuracoust-io-smoke/Renamed.ndaw";
+            check(nc_project_save_as(engine, renameProject, error, sizeof(error)), "save the rename");
+            neuracoust::daw::ProjectDocument renamedDocument;
+            std::string renameError;
+            std::string renameText;
+            if (FILE* file = fopen(renameProject, "rb")) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) renameText.append(buffer, read);
+                fclose(file);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(renameText, renameProject,
+                                                             renamedDocument, renameError),
+                  "parse it");
+            const std::string renameBounce = "/tmp/neuracoust-io-smoke/renamed.wav";
+            check(neuracoust::daw::bounceProjectToWav(renamedDocument, renameBounce).ok, "bounce it");
+            const double renamedAudibleAt = firstAudibleSecond(renameBounce);
+            printf("renamed track: audio starts at %.3f s (expect 1.000)\n", renamedAudibleAt);
+            check(std::abs(renamedAudibleAt - 1.0) < 0.05, "the renamed track still plays its clip");
         }
 
         // --- moving a clip to another track must not disturb its neighbours -------
