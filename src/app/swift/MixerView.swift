@@ -271,6 +271,13 @@ struct ChannelStrip: View {
 
     private var insertSection: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // An instrument track's sound starts here, not in an insert.
+            if !track.instrumentName.isEmpty {
+                Text("악기")
+                    .font(Theme.Font.mono(6.5))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                SlotChip(label: track.instrumentName, accent: accent)
+            }
             Text("인서트 A–E")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)

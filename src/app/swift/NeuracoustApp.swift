@@ -162,6 +162,10 @@ private struct EditView: View {
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
                     onSelect: { engine.selectClip($0) },
                     onSetRange: { engine.setLoopRange(start: $0, end: $1) },
+                    onOpenRegion: { engine.editingRegionId = $0 },
+                    onMoveRegion: { engine.moveMidiRegion($0, laneIndex: $1, startSeconds: $2) },
+                    onResizeRegion: { engine.resizeMidiRegion($0, durationSeconds: $1) },
+                    onAddRegion: { engine.addMidiRegion(laneIndex: $0, startSeconds: $1) },
                     onMoveMarker: { engine.moveMarker(from: $0, to: $1) },
                     onDeleteMarker: { engine.deleteMarker(at: $0) },
                     onSelectBetweenMarkers: { engine.selectBetweenMarkers(around: $0) },
@@ -183,6 +187,8 @@ private struct EditView: View {
                     onCommitEdit: { engine.commitClipGesture($0) },
                     snap: { engine.snap($0) }
                 )
+
+                PianoRollPanel()
             }
         }
     }

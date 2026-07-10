@@ -147,6 +147,14 @@ loads one.
 Both the realtime path and the offline bounce render instruments through the same
 `renderProjectAudioBlockWithStateAndMeters`, so a MIDI part that plays also exports.
 
+Double-click an instrument lane to make a region, double-click the region to open the
+piano roll under the timeline. In the roll a click adds a note, a drag moves it, the
+right edge resizes it, a double-click deletes it. A click that lands just short of an
+existing note does **not** stack a second note on top of it.
+
+An instrument dropped on an instrument track from the plug-in browser fills its
+instrument slot rather than an insert.
+
 ## There is no recording
 
 The transport's round button is **not** a take recorder. `nc_engine_set_recording` →

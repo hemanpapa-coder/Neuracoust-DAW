@@ -74,6 +74,8 @@ final class EngineController: ObservableObject {
         var recordArmed: Bool
         var inputMonitoring: Bool
         var inserts: [InsertSlot]
+        /// What turns this track's MIDI notes into sound. Empty on every other kind.
+        var instrumentName: String
         var sends: [String]
 
         var peakLeft: Float = 0
@@ -234,9 +236,19 @@ final class EngineController: ObservableObject {
 
     // MARK: Inserts
 
+    /// An instrument dropped on an instrument track fills its instrument slot rather
+    /// than an insert — an insert cannot turn MIDI notes into sound.
     func addInsert(_ pluginIndex: Int) {
-        guard let handle, let trackId = pluginTargetTrack else { return }
-        if nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex)) {
+        guard let handle, let trackId = pluginTargetTrack,
+              let track = tracks.first(where: { $0.id == trackId }) else { return }
+
+        let plugin = plugins.first { $0.id == pluginIndex }
+        let loadsAsInstrument = track.kind == .instrument && plugin?.category == "Instrument"
+
+        let changed = loadsAsInstrument
+            ? nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
+            : nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
+        if changed {
             reloadTracks()
             refreshHistory()
         }
@@ -701,6 +713,10 @@ final class EngineController: ObservableObject {
                         modeBadge: readEngineString { nc_track_insert_mode_badge(handle, i, s, $0, $1) }
                     )
                 },
+                instrumentName: {
+                    let loaded = readEngineString { nc_track_instrument_name(handle, i, $0, $1) }
+                    return loaded == "No Instrument" ? "" : loaded
+                }(),
                 sends: (0..<sendCount).map { slot in
                     readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) }
                 }
@@ -737,6 +753,7 @@ final class EngineController: ObservableObject {
         reloadTracks()
         reloadClips()
         reloadMarkers()
+        reloadMidiRegions()
         reloadMonitorState()
         refreshHistory()
     }
@@ -746,6 +763,7 @@ final class EngineController: ObservableObject {
         reloadTracks()
         reloadClips()
         reloadMarkers()
+        reloadMidiRegions()
         reloadMonitorState()
         refreshHistory()
     }
@@ -915,6 +933,7 @@ final class EngineController: ObservableObject {
         reloadTracks()
         reloadClips()
         reloadMarkers()
+        reloadMidiRegions()
         reloadMonitorState()
         refreshHistory()
         lastError = nil
@@ -1028,6 +1047,25 @@ final class EngineController: ObservableObject {
             visibleStart: visibleStart,
             visibleDuration: visibleDuration,
             markers: markers.map { TimelineModel.Marker(name: $0.name, timeSeconds: $0.timeSeconds) },
+            midiRegions: midiRegions.compactMap { region in
+                guard let lane = laneIndex[region.trackName] else { return nil }
+                // Notes are in beats from the region start; the sketch wants seconds.
+                let secondsPerBeat = 60.0 / Double(tempoBpm)
+                return TimelineModel.MidiRegion(
+                    id: region.id,
+                    name: region.name,
+                    laneIndex: lane,
+                    startSeconds: region.startSeconds,
+                    durationSeconds: region.durationSeconds,
+                    muted: region.muted,
+                    editing: region.id == editingRegionId,
+                    noteSketch: notes(inRegion: region.id).map { note in
+                        TimelineModel.MidiRegion.Sketch(
+                            startSeconds: region.startSeconds + note.startBeats * secondsPerBeat,
+                            durationSeconds: note.durationBeats * secondsPerBeat,
+                            pitch: note.pitch)
+                    })
+            },
             rangeStart: loopStartSeconds,
             rangeEnd: loopEndSeconds,
             loopEnabled: loopEnabled
@@ -1289,6 +1327,133 @@ final class EngineController: ObservableObject {
         selectedClipIds = []
         reloadClips()
         refreshHistory()
+    }
+
+    // MARK: MIDI
+
+    struct MidiRegion: Equatable {
+        let id: String
+        let name: String
+        let trackName: String
+        let startSeconds: Double
+        let durationSeconds: Double
+        let muted: Bool
+    }
+
+    struct MidiNote: Equatable {
+        let id: String
+        let pitch: Int
+        let startBeats: Double
+        let durationBeats: Double
+        let velocity: Int
+    }
+
+    @Published private(set) var midiRegions: [MidiRegion] = []
+    /// The region open in the piano roll, or nil while it is closed.
+    @Published var editingRegionId: String?
+
+    var editingRegion: MidiRegion? {
+        midiRegions.first { $0.id == editingRegionId }
+    }
+
+    private func reloadMidiRegions() {
+        guard let handle else { return }
+        midiRegions = (0..<Int(nc_midi_region_count(handle))).map { index in
+            let i = Int32(index)
+            return MidiRegion(id: readEngineString { nc_midi_region_id(handle, i, $0, $1) },
+                              name: readEngineString { nc_midi_region_name(handle, i, $0, $1) },
+                              trackName: readEngineString { nc_midi_region_track(handle, i, $0, $1) },
+                              startSeconds: nc_midi_region_start_seconds(handle, i),
+                              durationSeconds: nc_midi_region_duration_seconds(handle, i),
+                              muted: nc_midi_region_muted(handle, i))
+        }
+        if let editing = editingRegionId, !midiRegions.contains(where: { $0.id == editing }) {
+            editingRegionId = nil
+        }
+    }
+
+    func notes(inRegion regionId: String) -> [MidiNote] {
+        guard let handle else { return [] }
+        let count = Int(nc_midi_note_count(handle, regionId))
+        return (0..<count).map { index in
+            let i = Int32(index)
+            return MidiNote(id: readEngineString { nc_midi_note_id(handle, regionId, i, $0, $1) },
+                            pitch: Int(nc_midi_note_pitch(handle, regionId, i)),
+                            startBeats: nc_midi_note_start_beats(handle, regionId, i),
+                            durationBeats: nc_midi_note_duration_beats(handle, regionId, i),
+                            velocity: Int(nc_midi_note_velocity(handle, regionId, i)))
+        }
+    }
+
+    /// Only instrument and midi tracks can hold a region.
+    func canHoldMidi(_ track: Track) -> Bool { track.kind == .instrument || track.kind == .midi }
+
+    func addMidiRegion(laneIndex: Int, startSeconds: Double, durationSeconds: Double = 4) {
+        guard let handle, laneIndex < laneTracks.count,
+              canHoldMidi(laneTracks[laneIndex]) else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_midi_region_add(handle, Int32(laneTracks[laneIndex].id), startSeconds,
+                                 durationSeconds, &buffer, buffer.count) else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    /// Continuous; the view commits the gesture when the drag ends.
+    func moveMidiRegion(_ regionId: String, laneIndex: Int?, startSeconds: Double) {
+        guard let handle else { return }
+        let trackIndex = laneIndex.map { $0 < laneTracks.count ? Int32(laneTracks[$0].id) : -1 } ?? -1
+        guard nc_midi_region_move(handle, regionId, trackIndex, startSeconds) else { return }
+        reloadMidiRegions()
+    }
+
+    func resizeMidiRegion(_ regionId: String, durationSeconds: Double) {
+        guard let handle, nc_midi_region_resize(handle, regionId, durationSeconds) else { return }
+        reloadMidiRegions()
+    }
+
+    func deleteMidiRegion(_ regionId: String) {
+        guard let handle, nc_midi_region_delete(handle, regionId) else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    // MARK: Piano roll
+
+    func addNote(pitch: Int, startBeats: Double, durationBeats: Double, velocity: Int = 96) {
+        guard let handle, let regionId = editingRegionId else { return }
+        // A click that lands a pixel short of an existing note must not stack a second
+        // one on top of it — silently doubled notes are hard to see and easy to hear.
+        let occupied = notes(inRegion: regionId).contains {
+            $0.pitch == pitch && startBeats < $0.startBeats + $0.durationBeats
+                && $0.startBeats < startBeats + durationBeats
+        }
+        guard !occupied else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_midi_note_add(handle, regionId, Int32(pitch), startBeats, durationBeats,
+                               Int32(velocity), &buffer, buffer.count) else { return }
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    /// Continuous.
+    func moveNote(_ noteId: String, pitch: Int, startBeats: Double) {
+        guard let handle, let regionId = editingRegionId,
+              nc_midi_note_move(handle, regionId, noteId, Int32(pitch), startBeats) else { return }
+        objectWillChange.send()
+    }
+
+    /// Continuous.
+    func resizeNote(_ noteId: String, durationBeats: Double) {
+        guard let handle, let regionId = editingRegionId,
+              nc_midi_note_resize(handle, regionId, noteId, durationBeats) else { return }
+        objectWillChange.send()
+    }
+
+    func deleteNote(_ noteId: String) {
+        guard let handle, let regionId = editingRegionId,
+              nc_midi_note_delete(handle, regionId, noteId) else { return }
+        refreshHistory()
+        objectWillChange.send()
     }
 
     // MARK: Markers

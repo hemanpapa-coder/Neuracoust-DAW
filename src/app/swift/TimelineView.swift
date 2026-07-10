@@ -56,7 +56,27 @@ struct TimelineModel: Equatable {
         let timeSeconds: Double
     }
 
+    /// A MIDI part on an instrument lane. Notes are drawn as a folded-down sketch.
+    struct MidiRegion: Equatable {
+        let id: String
+        let name: String
+        let laneIndex: Int
+        let startSeconds: Double
+        let durationSeconds: Double
+        let muted: Bool
+        let editing: Bool
+        /// (start seconds, duration seconds, pitch) — already in timeline time.
+        let noteSketch: [Sketch]
+
+        struct Sketch: Equatable {
+            let startSeconds: Double
+            let durationSeconds: Double
+            let pitch: Int
+        }
+    }
+
     var markers: [Marker] = []
+    var midiRegions: [MidiRegion] = []
 
     /// The loop range, which is also the range every range edit acts on.
     var rangeStart: Double = 0
@@ -92,6 +112,10 @@ final class TimelineNSView: NSView {
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
+    var onOpenRegion: ((String) -> Void)?
+    var onMoveRegion: ((String, Int, Double) -> Void)?   // (id, lane, start) — continuous
+    var onResizeRegion: ((String, Double) -> Void)?      // (id, duration) — continuous
+    var onAddRegion: ((Int, Double) -> Void)?            // (lane, start)
     var onMoveMarker: ((Double, Double) -> Void)?        // (from, to) — continuous
     var onDeleteMarker: ((Double) -> Void)?
     var onSelectBetweenMarkers: ((Double) -> Void)?
@@ -123,6 +147,8 @@ final class TimelineNSView: NSView {
         case rangingFrom(seconds: Double)
         case movingAutomationPoint(laneIndex: Int, pointIndex: Int)
         case movingMarker(fromSeconds: Double)
+        case movingRegion(id: String, grabOffsetSeconds: Double)
+        case resizingRegion(id: String)
         case moving(clipId: String, grabOffsetSeconds: Double)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
@@ -218,6 +244,66 @@ final class TimelineNSView: NSView {
 
     private var selectionCount: Int { model.clips.reduce(0) { $1.selected ? $0 + 1 : $0 } }
 
+    private func regionRect(_ region: TimelineModel.MidiRegion) -> NSRect {
+        let left = x(forSeconds: region.startSeconds)
+        let right = x(forSeconds: region.startSeconds + region.durationSeconds)
+        let top = laneTop(region.laneIndex) + 6
+        return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+    }
+
+    private func region(at point: NSPoint) -> TimelineModel.MidiRegion? {
+        model.midiRegions.reversed().first { regionRect($0).contains(point) }
+    }
+
+    private func drawMidiRegions(_ context: CGContext) {
+        context.saveGState()
+        context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
+                                width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+
+        for region in model.midiRegions {
+            let rect = regionRect(region)
+            let accent = NSColor(hex: region.muted ? 0x6b6156 : 0x9b7fd4)
+
+            accent.withAlphaComponent(region.muted ? 0.10 : 0.20).setFill()
+            let body = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+            body.fill()
+
+            // The notes, folded into the region's height. Only pitches that are used
+            // get a row, so a two-note part is legible at this size.
+            let pitches = region.noteSketch.map(\.pitch)
+            if let lowest = pitches.min(), let highest = pitches.max() {
+                let span = max(1, highest - lowest)
+                let usable = rect.height - 10
+                accent.withAlphaComponent(0.9).setFill()
+                for note in region.noteSketch {
+                    let noteLeft = x(forSeconds: note.startSeconds)
+                    let noteRight = x(forSeconds: note.startSeconds + note.durationSeconds)
+                    let fraction = CGFloat(note.pitch - lowest) / CGFloat(span)
+                    let noteY = rect.maxY - 5 - fraction * usable
+                    NSRect(x: noteLeft, y: noteY - 1,
+                           width: max(2, noteRight - noteLeft), height: 2.5).fill()
+                }
+            }
+
+            (region.name as NSString).draw(
+                at: NSPoint(x: rect.minX + 4, y: rect.minY + 2),
+                withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                    .foregroundColor: accent,
+                ])
+
+            if region.editing {
+                NSColor(hex: 0xe6a23c).setStroke()
+                body.lineWidth = 2
+            } else {
+                accent.withAlphaComponent(0.8).setStroke()
+                body.lineWidth = 1
+            }
+            body.stroke()
+        }
+        context.restoreGState()
+    }
+
     /// Every clip the marquee touches, however slightly.
     private func clipsIntersecting(_ rect: NSRect) -> [String] {
         model.clips.filter { clipRect($0).intersects(rect) }.map(\.id)
@@ -296,6 +382,25 @@ final class TimelineNSView: NSView {
             return
         }
 
+        if let region = region(at: point) {
+            let rect = regionRect(region)
+            if event.clickCount >= 2 {
+                onOpenRegion?(region.id)
+            } else if rect.maxX - point.x <= Self.trimHandleWidth {
+                drag = .resizingRegion(id: region.id)
+            } else {
+                drag = .movingRegion(id: region.id,
+                                     grabOffsetSeconds: seconds(atX: point.x) - region.startSeconds)
+            }
+            return
+        }
+
+        // Double-clicking an empty instrument lane starts a new part there.
+        if event.clickCount >= 2, let lane = laneIndex(at: point) {
+            onAddRegion?(lane, max(0, snapped(seconds(atX: point.x))))
+            return
+        }
+
         // Dragging from empty lane space sweeps a selection rectangle.
         guard let hit = clip(at: point) else {
             if !event.modifierFlags.contains(.shift) {
@@ -364,6 +469,13 @@ final class TimelineNSView: NSView {
             break
         case .seeking:
             onSeek?(time)
+        case .movingRegion(let id, let grabOffset):
+            guard let region = model.midiRegions.first(where: { $0.id == id }) else { break }
+            let lane = laneIndex(at: point) ?? region.laneIndex
+            onMoveRegion?(id, lane, max(0, snapped(time - grabOffset)))
+        case .resizingRegion(let id):
+            guard let region = model.midiRegions.first(where: { $0.id == id }) else { break }
+            onResizeRegion?(id, max(0.1, snapped(time) - region.startSeconds))
         case .movingMarker(let from):
             let target = max(0, snapped(time))
             // The engine finds the marker by where it sits now, so follow it.
@@ -440,6 +552,10 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Automation point")
         case .movingMarker:
             onCommitEdit?("Move marker")
+        case .movingRegion:
+            onCommitEdit?("Move MIDI region")
+        case .resizingRegion:
+            onCommitEdit?("Resize MIDI region")
         case .none, .seeking, .rangingFrom:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -515,6 +631,7 @@ final class TimelineNSView: NSView {
         drawLaneHeaders(context)
         drawGrid(context)
         drawClips(context)
+        drawMidiRegions(context)
         drawAutomation(context)
         // Last, so a marker's hairline is not painted over by the clips it lines up with.
         drawMarkers(context)
@@ -979,6 +1096,10 @@ struct TimelineView: NSViewRepresentable {
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
     let onSetRange: (Double, Double) -> Void
+    let onOpenRegion: (String) -> Void
+    let onMoveRegion: (String, Int, Double) -> Void
+    let onResizeRegion: (String, Double) -> Void
+    let onAddRegion: (Int, Double) -> Void
     let onMoveMarker: (Double, Double) -> Void
     let onDeleteMarker: (Double) -> Void
     let onSelectBetweenMarkers: (Double) -> Void
@@ -1020,6 +1141,10 @@ struct TimelineView: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange
+        view.onOpenRegion = onOpenRegion
+        view.onMoveRegion = onMoveRegion
+        view.onResizeRegion = onResizeRegion
+        view.onAddRegion = onAddRegion
         view.onMoveMarker = onMoveMarker
         view.onDeleteMarker = onDeleteMarker
         view.onSelectBetweenMarkers = onSelectBetweenMarkers
