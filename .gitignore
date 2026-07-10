@@ -2,6 +2,7 @@
 
 # Build outputs
 build/
+build-*/
 dist/
 cmake-build-*/
 CMakeFiles/
@@ -22,6 +23,3 @@ compile_commands.json
 *.dmg
 *.pkg
 *.zip
-
-# Xcode generator output (SwiftUI app)
-build-xcode/

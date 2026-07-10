@@ -7,20 +7,19 @@ Reproduce the Claude Design look as a **native macOS app**, driven by the **same
 
 ## Build
 
-```sh
-# Engine, tools, tests (no Swift needed)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j8
-(cd build && ctest --output-on-failure)
+Everything — engine, tools, tests, and the SwiftUI app — builds from one directory:
 
-# The SwiftUI app. Swift needs a Swift-capable generator; Ninja is not installed here.
-cmake -S . -B build-xcode -G Xcode
-cmake --build build-xcode --config Debug --target NeuracoustDAW
-open "build-xcode/Debug/Neuracoust DAW.app"
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+(cd build && ctest --output-on-failure)
+open "build/Neuracoust DAW.app"
 ```
 
+Swift needs a Swift-capable generator. Ninja and Xcode both qualify; under any other generator (e.g. Unix Makefiles) the app target is skipped with a message and everything else still builds.
+
 Three things this tree forces, all of which cost time to rediscover:
-- The source path contains a space (`/Volumes/Program Dev`). The bridging header and header search paths must go through Xcode build settings (`XCODE_ATTRIBUTE_*`), not raw `-import-objc-header` / `-I` flags, or the arguments get split at the space.
+- The source path contains a space (`/Volumes/Program Dev`). The bridging header and include dir must reach the compiler as separate, individually-quoted arguments — a `"SHELL:-import-objc-header <path>"` string gets split at the space. Under the Xcode generator they go through `XCODE_ATTRIBUTE_*` instead.
 - A Swift file holding `@main` must not be named `main.swift`.
 - The VST3 SDK is **referenced in place** at `../DAW/third_party/vst3sdk`, not copied — that tree also carries `depot_tools` and `libwebrtc-src` (~460k files). **DW therefore depends on the DAW folder existing.** WebRTC is off by default and not needed.
 

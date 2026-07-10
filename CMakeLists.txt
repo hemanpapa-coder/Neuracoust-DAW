@@ -288,16 +288,25 @@ if(NEURACOUST_BUILD_SWIFT_APP)
 
     target_link_libraries(NeuracoustDAW PRIVATE neuracoust_daw_core)
 
-    # This source tree lives under a path containing a space. Bridging-header and
-    # header-search settings must reach the compiler quoted, so they go through
-    # Xcode build settings rather than raw -import-objc-header / -I flags.
+    # This source tree lives under a path containing a space, so the bridging header
+    # and include dir must reach the compiler as single quoted arguments. Passing
+    # them as separate list items lets CMake quote each one; a "SHELL:-import-objc-header
+    # <path>" string would be split at the space instead.
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+        set_target_properties(NeuracoustDAW PROPERTIES
+            XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/app/swift/Bridging.h"
+            XCODE_ATTRIBUTE_HEADER_SEARCH_PATHS "\"${CMAKE_CURRENT_SOURCE_DIR}/src\"")
+    else()
+        target_compile_options(NeuracoustDAW PRIVATE
+            "-import-objc-header" "${CMAKE_CURRENT_SOURCE_DIR}/src/app/swift/Bridging.h"
+            "-Xcc" "-I${CMAKE_CURRENT_SOURCE_DIR}/src")
+    endif()
+
     set_target_properties(NeuracoustDAW PROPERTIES
         OUTPUT_NAME "Neuracoust DAW"
         MACOSX_BUNDLE TRUE
         XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.neuracoust.daw"
-        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/app/swift/Bridging.h"
-        XCODE_ATTRIBUTE_HEADER_SEARCH_PATHS "\"${CMAKE_CURRENT_SOURCE_DIR}/src\""
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.neuracoust.daw"
         MACOSX_BUNDLE_BUNDLE_NAME "Neuracoust DAW"
         MACOSX_BUNDLE_DISPLAY_NAME "Neuracoust DAW"
@@ -306,6 +315,8 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         MACOSX_BUNDLE_BUNDLE_VERSION "${NEURACOUST_DAW_VERSION}")
 
     # The engine spawns these; keep them next to the app the way it expects.
+    # The swift driver also drops a main.d depfile beside the executable — evict it
+    # so nothing but real binaries ships inside MacOS/.
     add_dependencies(NeuracoustDAW NeuracoustVst3EditorHost NeuracoustAuEditorHost)
     add_custom_command(TARGET NeuracoustDAW POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -313,7 +324,9 @@ if(NEURACOUST_BUILD_SWIFT_APP)
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust VST3 Editor Host"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:NeuracoustAuEditorHost>"
-            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust AU Editor Host")
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust AU Editor Host"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/main.d")
 else()
     message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
 endif()
