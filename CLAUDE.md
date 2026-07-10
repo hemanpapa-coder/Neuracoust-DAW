@@ -81,6 +81,10 @@ Menu items still declare their shortcuts so they are discoverable; the `NSEvent`
 
 **Note for verification:** the computer-use tool cannot press Z here. It maps the character `"z"` to a key code using the active layout, which under Korean input yields key code 0 (the A key). Shortcut behaviour has to be checked by hand.
 
+## Bounce
+
+`nc_bounce_to_wav` renders the engine's document and blocks — about 25x realtime with no plug-ins, so a three-minute song would freeze the UI for seconds. The app instead serializes the document (`nc_project_serialize`) and renders that snapshot on a background task through `nc_bounce_snapshot_to_wav`, which touches no shared state. `project_io_smoke` proves the two paths are sample-for-sample identical; if they ever diverge, a background export would be quietly lying.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.

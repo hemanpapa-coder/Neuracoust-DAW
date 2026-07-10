@@ -295,6 +295,41 @@ bool nc_clip_paste(NCEngine* engine, double startSeconds, char* out, size_t outL
 bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t outLen);
 
 // ---------------------------------------------------------------------------
+// Bounce (offline export)
+//
+// Renders the whole document through the same plan the realtime engine builds.
+// It blocks: see the timing the smoke test prints before deciding whether the UI
+// needs a progress sheet.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    bool ok;
+    double durationSeconds;
+    float peakLeft;
+    float peakRight;
+    float rmsLeft;
+    float rmsRight;
+    bool clippingDetected;
+    bool nearSilent;
+    int missingMediaClipCount;
+    char message[NC_TEXT_LEN];
+} NCBounceResult;
+
+/// Bounces the engine's current document. Blocks; roughly 25x realtime with no
+/// plug-ins, so a three-minute song freezes the caller for several seconds.
+bool nc_bounce_to_wav(NCEngine* engine, const char* path, NCBounceResult* out);
+
+/// Serializes the document into `out`. Returns the number of bytes the document
+/// needs (excluding the terminator), so a short buffer can be retried. The text is
+/// self-contained: `nc_bounce_snapshot_to_wav` renders it without touching the
+/// engine, which is what makes an off-thread bounce safe.
+int nc_project_serialize(NCEngine* engine, char* out, size_t outLen);
+
+/// Renders a serialized document. Touches no shared state — safe to call from a
+/// background thread while the user keeps editing.
+bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out);
+
+// ---------------------------------------------------------------------------
 // Waveform peaks
 //
 // Decoding a WAV costs real time, so the engine caches one peak set per file at a

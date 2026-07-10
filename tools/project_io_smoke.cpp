@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -478,6 +479,74 @@ int main() {
             const double audibleAt = firstAudibleSecond(crossBounce);
             printf("cross-track move: audio starts at %.3f s (expect 2.000)\n", audibleAt);
             check(std::abs(audibleAt - 2.0) < 0.05, "the relocated clip is audible on its new track");
+        }
+
+        // --- bounce through the bridge, and time it -------------------------------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "import for bounce ui");
+
+            NCBounceResult bounced;
+            const auto began = std::chrono::steady_clock::now();
+            const bool ok = nc_bounce_to_wav(engine, "/tmp/neuracoust-io-smoke/export.wav", &bounced);
+            const double elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - began).count();
+
+            printf("bounce: ok=%d duration=%.2f s peak=%.4f/%.4f clipped=%d silent=%d in %.0f ms\n",
+                   (int)ok, bounced.durationSeconds, bounced.peakLeft, bounced.peakRight,
+                   (int)bounced.clippingDetected, (int)bounced.nearSilent, elapsedMs);
+
+            check(ok && bounced.ok, "the bounce succeeded");
+            check(bounced.durationSeconds > 1.9, "it rendered the whole 2 s clip");
+            check(bounced.peakLeft > 0.001f, "it is not silent");
+            check(!bounced.nearSilent, "and the engine agrees it is not silent");
+            check(bounced.missingMediaClipCount == 0, "no media went missing");
+            check(firstAudibleSecond("/tmp/neuracoust-io-smoke/export.wav") < 0.05,
+                  "the exported audio starts where the clip does");
+
+            // The off-thread path renders a serialized copy. It must agree exactly
+            // with the engine's own bounce, or a background export would lie.
+            const int needed = nc_project_serialize(engine, nullptr, 0);
+            check(needed > 0, "the document serializes");
+            std::string snapshot(static_cast<size_t>(needed) + 1, '\0');
+            check(nc_project_serialize(engine, snapshot.data(), snapshot.size()) == needed,
+                  "the buffer round-trips");
+
+            NCBounceResult fromSnapshot;
+            const auto snapBegan = std::chrono::steady_clock::now();
+            check(nc_bounce_snapshot_to_wav(snapshot.c_str(),
+                                            "/tmp/neuracoust-io-smoke/export-snapshot.wav",
+                                            &fromSnapshot),
+                  "the snapshot bounce succeeded");
+            const double snapMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - snapBegan).count();
+            printf("snapshot bounce: peak=%.4f in %.0f ms\n", fromSnapshot.peakLeft, snapMs);
+
+            check(std::abs(fromSnapshot.durationSeconds - bounced.durationSeconds) < 0.001,
+                  "same duration as the engine bounce");
+            check(std::abs(fromSnapshot.peakLeft - bounced.peakLeft) < 0.0001f,
+                  "same peak as the engine bounce");
+
+            neuracoust::daw::WavAudioData direct;
+            neuracoust::daw::WavAudioData viaSnapshot;
+            std::string readError;
+            const std::string directPath = "/tmp/neuracoust-io-smoke/export.wav";
+            const std::string snapshotPath = "/tmp/neuracoust-io-smoke/export-snapshot.wav";
+            check(neuracoust::daw::readPcmWavFile(directPath, direct, readError) &&
+                  neuracoust::daw::readPcmWavFile(snapshotPath, viaSnapshot, readError),
+                  "read both renders");
+            check(direct.interleavedSamples.size() == viaSnapshot.interleavedSamples.size(),
+                  "both renders are the same length");
+            check(std::equal(direct.interleavedSamples.begin(), direct.interleavedSamples.end(),
+                             viaSnapshot.interleavedSamples.begin()),
+                  "both renders are sample-for-sample identical");
+
+            // A bad snapshot must fail, not render silence.
+            NCBounceResult broken;
+            check(!nc_bounce_snapshot_to_wav("{ not a project }",
+                                             "/tmp/neuracoust-io-smoke/broken.wav", &broken),
+                  "a corrupt snapshot fails");
+            check(strlen(broken.message) > 0, "and says why");
         }
 
         // snapProjectTime always snaps — it does not consult a "snap enabled" flag.

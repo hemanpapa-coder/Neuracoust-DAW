@@ -1,6 +1,7 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
 #include "audio/ListenRoom.h"
+#include "audio/OfflineBounce.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
 #include "audio/WavFile.h"
@@ -1199,6 +1200,82 @@ bool nc_clip_duplicate(NCEngine* engine, const char* clipId, char* out, size_t o
     engine->recordStep("Duplicate clip");
     copyText(out, outLen, newClipId);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Bounce
+// ---------------------------------------------------------------------------
+
+namespace {
+void fillBounceResult(const neuracoust::daw::BounceResult& result, NCBounceResult* out);
+} // namespace
+
+bool nc_bounce_to_wav(NCEngine* engine, const char* path, NCBounceResult* out) {
+    if (out != nullptr) {
+        std::memset(out, 0, sizeof(*out));
+    }
+    if (engine == nullptr || path == nullptr || *path == '\0') {
+        if (out != nullptr) copyText(out->message, NC_TEXT_LEN, "no output path");
+        return false;
+    }
+
+    // Bounce the document as edited. The renderer rebuilds clips from the
+    // placements, which every clip edit has already refreshed.
+    const auto result = neuracoust::daw::bounceProjectToWav(engine->project, path);
+    fillBounceResult(result, out);
+    return result.ok;
+}
+
+namespace {
+
+void fillBounceResult(const neuracoust::daw::BounceResult& result, NCBounceResult* out) {
+    if (out == nullptr) {
+        return;
+    }
+    out->ok = result.ok;
+    out->durationSeconds = result.durationSeconds;
+    out->peakLeft = result.levelStats.peakLeft;
+    out->peakRight = result.levelStats.peakRight;
+    out->rmsLeft = result.levelStats.rmsLeft;
+    out->rmsRight = result.levelStats.rmsRight;
+    out->clippingDetected = result.levelStats.clippingDetected;
+    out->nearSilent = result.levelStats.nearSilent;
+    out->missingMediaClipCount = static_cast<int>(result.missingMediaClipIds.size());
+    copyText(out->message, NC_TEXT_LEN, result.message);
+}
+
+} // namespace
+
+int nc_project_serialize(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr) {
+        return 0;
+    }
+    const std::string text = neuracoust::daw::serializeProject(engine->project);
+    if (out != nullptr && outLen > 0) {
+        copyText(out, outLen, text);
+    }
+    return static_cast<int>(text.size());
+}
+
+bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out) {
+    if (out != nullptr) {
+        std::memset(out, 0, sizeof(*out));
+    }
+    if (projectText == nullptr || path == nullptr || *path == '\0') {
+        if (out != nullptr) copyText(out->message, NC_TEXT_LEN, "no project or no output path");
+        return false;
+    }
+
+    neuracoust::daw::ProjectDocument project;
+    std::string error;
+    if (!neuracoust::daw::deserializeProject(projectText, project, error)) {
+        if (out != nullptr) copyText(out->message, NC_TEXT_LEN, error.empty() ? "could not parse the project" : error);
+        return false;
+    }
+
+    const auto result = neuracoust::daw::bounceProjectToWav(project, path);
+    fillBounceResult(result, out);
+    return result.ok;
 }
 
 bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* maxs) {

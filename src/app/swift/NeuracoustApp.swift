@@ -70,6 +70,9 @@ struct NeuracoustApp: App {
                 Divider()
                 Button("오디오 가져오기…") { engine.importAudio(intoTrack: 0) }
                     .keyboardShortcut("i", modifiers: .command)
+                Button("바운스…") { engine.bounceProject() }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(engine.bouncing)
             }
             CommandGroup(replacing: .undoRedo) {
                 Button("실행 취소\(engine.canUndo ? ": \(engine.undoStepName)" : "")") {
@@ -118,6 +121,9 @@ struct RootView: View {
             if engine.pluginBrowserOpen {
                 PluginBrowser()
             }
+        }
+        .overlay(alignment: .bottom) {
+            BounceStatus()
         }
     }
 }
@@ -224,6 +230,70 @@ private struct EditView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+}
+
+/// Bounce runs off the main thread, so the app stays live; this is the only
+/// signal that it is happening, and afterwards, what came out.
+private struct BounceStatus: View {
+    @EnvironmentObject private var engine: EngineController
+
+    var body: some View {
+        Group {
+            if engine.bouncing {
+                banner {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("바운스 중…")
+                        .font(Theme.Font.ui(10))
+                        .foregroundStyle(Theme.Palette.text)
+                }
+            } else if let summary = engine.bounceSummary {
+                banner {
+                    Circle()
+                        .fill(summary.clipped ? Theme.Palette.red : Theme.Palette.green)
+                        .frame(width: 6, height: 6)
+                    Text((summary.path as NSString).lastPathComponent)
+                        .font(Theme.Font.ui(10, .medium))
+                        .foregroundStyle(Theme.Palette.textBright)
+                    Text(String(format: "%.1f s · 피크 %.1f dBFS", summary.durationSeconds, summary.peakDbfs))
+                        .font(Theme.Font.mono(9))
+                        .foregroundStyle(Theme.Palette.textDim)
+                    if summary.clipped {
+                        Text("클리핑")
+                            .font(Theme.Font.mono(8, .semibold))
+                            .foregroundStyle(Theme.Palette.red)
+                    }
+                    if summary.nearSilent {
+                        Text("거의 무음")
+                            .font(Theme.Font.mono(8, .semibold))
+                            .foregroundStyle(Theme.Palette.amber)
+                    }
+                    Button("닫기") { engine.dismissBounceSummary() }
+                        .buttonStyle(.plain)
+                        .font(Theme.Font.ui(9))
+                        .foregroundStyle(Theme.Palette.textFaint)
+                }
+            }
+        }
+        .padding(.bottom, Theme.Space.xxl)
+    }
+
+    private func banner<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: Theme.Space.xl) {
+            content()
+        }
+        .padding(.horizontal, Theme.Space.xxl)
+        .padding(.vertical, Theme.Space.xl)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                .fill(Theme.Palette.toolbar)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 12, y: 6)
+        )
     }
 }
 

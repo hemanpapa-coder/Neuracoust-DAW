@@ -432,6 +432,7 @@ final class EngineController: ObservableObject {
         static let o: UInt16 = 31
         static let n: UInt16 = 45
         static let i: UInt16 = 34
+        static let e: UInt16 = 14
         static let b: UInt16 = 11
         static let c: UInt16 = 8
         static let x: UInt16 = 7
@@ -474,6 +475,8 @@ final class EngineController: ObservableObject {
             newProject()
         case KeyCode.i:
             importAudio(intoTrack: 0)
+        case KeyCode.e:
+            bounceProject()
         case KeyCode.c where selectedClipId != nil:
             copySelectedClip()
         case KeyCode.x where selectedClipId != nil:
@@ -948,6 +951,77 @@ final class EngineController: ObservableObject {
         selectedClipId = String(cString: buffer)
         reloadClips()
         refreshHistory()
+    }
+
+    // MARK: Bounce
+
+    struct BounceSummary {
+        let path: String
+        let durationSeconds: Double
+        let peakDbfs: Double
+        let clipped: Bool
+        let nearSilent: Bool
+    }
+
+    @Published private(set) var bouncing = false
+    @Published private(set) var bounceSummary: BounceSummary?
+
+    /// Renders off the main thread from a serialized snapshot, so editing stays
+    /// live and nothing races the engine. Roughly 25x realtime without plug-ins.
+    func bounceProject() {
+        guard let handle, !bouncing else { return }
+        guard !clips.isEmpty else {
+            lastError = "내보낼 클립이 없습니다"
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "wav")].compactMap { $0 }
+        panel.nameFieldStringValue = (projectName.isEmpty ? "Bounce" : projectName) + ".wav"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let needed = Int(nc_project_serialize(handle, nil, 0))
+        guard needed > 0 else {
+            lastError = "프로젝트를 직렬화할 수 없습니다"
+            return
+        }
+        var buffer = [CChar](repeating: 0, count: needed + 1)
+        _ = nc_project_serialize(handle, &buffer, buffer.count)
+        let snapshot = String(cString: buffer)
+
+        bouncing = true
+        bounceSummary = nil
+        let outputPath = url.path
+
+        Task.detached(priority: .userInitiated) {
+            var result = NCBounceResult()
+            let ok = nc_bounce_snapshot_to_wav(snapshot, outputPath, &result)
+
+            let message = withUnsafePointer(to: result.message) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(NC_TEXT_LEN)) { String(cString: $0) }
+            }
+            let peak = max(result.peakLeft, result.peakRight)
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.bouncing = false
+                guard ok else {
+                    self.lastError = message.isEmpty ? "바운스에 실패했습니다" : message
+                    return
+                }
+                self.bounceSummary = BounceSummary(
+                    path: outputPath,
+                    durationSeconds: result.durationSeconds,
+                    peakDbfs: peakToDb(peak),
+                    clipped: result.clippingDetected,
+                    nearSilent: result.nearSilent
+                )
+            }
+        }
+    }
+
+    func dismissBounceSummary() {
+        bounceSummary = nil
     }
 
     // MARK: Tracks
