@@ -540,6 +540,65 @@ void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring)
     engine->recordStep("Input monitoring");
 }
 
+namespace {
+
+/// A fresh track changes the render graph and the lane list; adopt it fully.
+int adoptNewTrack(NCEngine* engine, const std::string& trackName, const char* stepName) {
+    if (trackName.empty()) {
+        return -1;
+    }
+    engine->reconcileProject();
+    engine->recordStep(stepName);
+    for (size_t index = 0; index < engine->project.tracks.size(); ++index) {
+        if (engine->project.tracks[index].name == trackName) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+} // namespace
+
+int nc_track_add_audio(NCEngine* engine) {
+    if (engine == nullptr) return -1;
+    return adoptNewTrack(engine, neuracoust::daw::addAudioTrack(engine->project), "Add audio track");
+}
+
+int nc_track_add_instrument(NCEngine* engine) {
+    if (engine == nullptr) return -1;
+    return adoptNewTrack(engine, neuracoust::daw::addInstrumentTrack(engine->project), "Add instrument track");
+}
+
+int nc_track_add_midi(NCEngine* engine) {
+    if (engine == nullptr) return -1;
+    return adoptNewTrack(engine, neuracoust::daw::addMidiTrack(engine->project), "Add MIDI track");
+}
+
+bool nc_track_delete(NCEngine* engine, int index, bool removeClips) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return false;
+    const std::string name = track->name;
+    if (!neuracoust::daw::deleteTrack(engine->project, name, removeClips, removeClips)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Delete track");
+    return true;
+}
+
+bool nc_track_rename(NCEngine* engine, int index, const char* newName) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || newName == nullptr || *newName == '\0') return false;
+    if (!neuracoust::daw::renameTrack(engine->project, track->name, newName)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Rename track");
+    return true;
+}
+
 int nc_track_insert_count(NCEngine* engine, int index) {
     const auto* track = trackAt(engine, index);
     return track != nullptr ? static_cast<int>(track->inserts.size()) : 0;
@@ -1028,6 +1087,44 @@ const neuracoust::daw::ClipState* findClipById(NCEngine* engine, const std::stri
 }
 
 } // namespace
+
+bool nc_clip_move_to_track(NCEngine* engine, const char* clipId, int trackIndex,
+                           double startSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || clipId == nullptr) return false;
+
+    const auto* track = trackAt(engine, trackIndex);
+    const auto* clip = findClipById(engine, clipId);
+    if (track == nullptr || clip == nullptr) return false;
+    if (track->name == clip->trackName) {
+        // Same lane: an ordinary move, and the id survives.
+        if (!applyClipEdit(engine, neuracoust::daw::moveClip(engine->project, clipId,
+                                                             std::max(0.0, startSeconds)))) {
+            return false;
+        }
+        copyText(out, outLen, clipId);
+        return true;
+    }
+
+    // Re-place rather than mutate: pasteClip validates the target track for us,
+    // and deleteClip keeps the neighbours where they are.
+    neuracoust::daw::ClipState relocated = *clip;
+    relocated.trackName = track->name;
+
+    std::string newClipId;
+    if (!neuracoust::daw::pasteClip(engine->project, relocated,
+                                    std::max(0.0, startSeconds), newClipId)) {
+        return false;
+    }
+    if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Move clip to " + track->name);
+    copyText(out, outLen, newClipId);
+    return true;
+}
 
 bool nc_clip_copy(NCEngine* engine, const char* clipId) {
     if (engine == nullptr || clipId == nullptr) return false;

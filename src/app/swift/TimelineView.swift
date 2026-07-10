@@ -8,6 +8,7 @@ struct TimelineModel: Equatable {
         let name: String
         let accent: NSColor
         let muted: Bool
+        let selected: Bool
     }
 
     struct Clip: Equatable {
@@ -65,6 +66,8 @@ final class TimelineNSView: NSView {
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
     var onSetGain: ((String, Float) -> Void)?
+    var onSelectLane: ((Int) -> Void)?
+    var onMoveClipToLane: ((String, Int, Double) -> Void)?  // (clipId, laneIndex, start)
     var onCommitEdit: ((String) -> Void)?                // step name
     var snap: ((Double) -> Double)?
 
@@ -139,9 +142,23 @@ final class TimelineNSView: NSView {
         model.clips.reversed().first { clipRect($0).contains(point) }
     }
 
+    /// Which lane a point falls in, or nil above/below the lanes.
+    private func laneIndex(at point: NSPoint) -> Int? {
+        guard point.y >= Self.rulerHeight else { return nil }
+        let index = Int((point.y - Self.rulerHeight) / Self.laneHeight)
+        return index >= 0 && index < model.lanes.count ? index : nil
+    }
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard point.x >= lanesRect.minX else { return }
+
+        // Clicking a lane header selects that track.
+        if point.x < Self.headerWidth {
+            if let lane = laneIndex(at: point) {
+                onSelectLane?(lane)
+            }
+            return
+        }
 
         // The ruler is for scrubbing, not for grabbing clips.
         if point.y < Self.rulerHeight {
@@ -227,9 +244,19 @@ final class TimelineNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
         switch drag {
-        case .moving:
-            onCommitEdit?("Move clip")
+        case .moving(let clipId, _):
+            // Dropping on a different lane relocates the clip; that records its own
+            // step, so do not also commit a "Move clip" one.
+            if let lane = laneIndex(at: point),
+               let clip = model.clips.first(where: { $0.id == clipId }),
+               lane != clip.laneIndex {
+                onMoveClipToLane?(clipId, lane, clip.startSeconds)
+            } else {
+                onCommitEdit?("Move clip")
+            }
         case .trimmingStart, .trimmingEnd:
             onCommitEdit?("Trim clip")
         case .fadingIn, .fadingOut:
@@ -368,11 +395,11 @@ final class TimelineNSView: NSView {
                               y: Self.rulerHeight + CGFloat(index) * Self.laneHeight,
                               width: Self.headerWidth,
                               height: Self.laneHeight)
-            NSColor(hex: 0x332c26).setFill()
+            NSColor(hex: lane.selected ? 0x3d352e : 0x332c26).setFill()
             rect.fill()
 
             lane.accent.setFill()
-            NSRect(x: 0, y: rect.minY, width: 3, height: rect.height).fill()
+            NSRect(x: 0, y: rect.minY, width: lane.selected ? 5 : 3, height: rect.height).fill()
 
             (lane.name as NSString).draw(at: NSPoint(x: 12, y: rect.minY + 10),
                                          withAttributes: nameAttributes)
@@ -578,6 +605,8 @@ struct TimelineView: NSViewRepresentable {
     let onTrimEnd: (String, Double) -> Void
     let onSetFades: (String, Double, Double) -> Void
     let onSetGain: (String, Float) -> Void
+    let onSelectLane: (Int) -> Void
+    let onMoveClipToLane: (String, Int, Double) -> Void
     let onCommitEdit: (String) -> Void
     let snap: (Double) -> Double
 
@@ -605,6 +634,8 @@ struct TimelineView: NSViewRepresentable {
         view.onTrimEnd = onTrimEnd
         view.onSetFades = onSetFades
         view.onSetGain = onSetGain
+        view.onSelectLane = onSelectLane
+        view.onMoveClipToLane = onMoveClipToLane
         view.onCommitEdit = onCommitEdit
         view.snap = snap
     }

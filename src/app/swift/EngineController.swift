@@ -839,6 +839,7 @@ final class EngineController: ObservableObject {
 
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
     @Published var selectedClipId: String?
+    @Published var selectedTrackId: Int?
 
     // Timeline viewport, in seconds.
     @Published private(set) var visibleStart: Double = 0
@@ -864,15 +865,18 @@ final class EngineController: ObservableObject {
 
     /// Lanes come from the tracks the timeline can hold clips on; Master and
     /// Monitor are buses, not lanes.
+    var laneTracks: [Track] { tracks.filter { !$0.kind.isMasterish } }
+
     var timelineModel: TimelineModel {
-        let lanes = tracks.filter { !$0.kind.isMasterish }
+        let lanes = laneTracks
         let laneIndex = Dictionary(uniqueKeysWithValues: lanes.enumerated().map { ($1.name, $0) })
 
         return TimelineModel(
             lanes: lanes.map {
                 TimelineModel.Lane(name: $0.name,
                                    accent: NSColor.from($0.kind.accent),
-                                   muted: $0.muted)
+                                   muted: $0.muted,
+                                   selected: $0.id == selectedTrackId)
             },
             clips: clips.compactMap { clip in
                 guard let lane = laneIndex[clip.trackName] else { return nil }
@@ -926,6 +930,71 @@ final class EngineController: ObservableObject {
     func setClipGain(_ clipId: String, _ gainDb: Float) {
         guard let handle else { return }
         if nc_clip_set_gain_db(handle, clipId, gainDb) { reloadClips() }
+    }
+
+    /// Lane indices address `laneTracks`, not `tracks` — Master and Monitor are not lanes.
+    func selectLane(_ laneIndex: Int) {
+        guard laneIndex < laneTracks.count else { return }
+        selectedTrackId = laneTracks[laneIndex].id
+    }
+
+    func moveClipToLane(_ clipId: String, laneIndex: Int, startSeconds: Double) {
+        guard let handle, laneIndex < laneTracks.count else { return }
+        let trackId = laneTracks[laneIndex].id
+
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_move_to_track(handle, clipId, Int32(trackId), startSeconds,
+                                    &buffer, buffer.count) else { return }
+        selectedClipId = String(cString: buffer)
+        reloadClips()
+        refreshHistory()
+    }
+
+    // MARK: Tracks
+
+    func addAudioTrack() {
+        guard let handle, nc_track_add_audio(handle) >= 0 else { return }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    func addInstrumentTrack() {
+        guard let handle, nc_track_add_instrument(handle) >= 0 else { return }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// Deleting takes the clips with it, so ask first when the track has any.
+    func deleteSelectedTrack() {
+        guard let handle, let trackId = selectedTrackId,
+              let track = tracks.first(where: { $0.id == trackId }) else { return }
+
+        let clipsOnTrack = clips.filter { $0.trackName == track.name }
+        if !clipsOnTrack.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "\(track.name) 트랙을 삭제할까요?"
+            alert.informativeText = "이 트랙의 클립 \(clipsOnTrack.count)개도 함께 삭제됩니다."
+            alert.addButton(withTitle: "삭제")
+            alert.addButton(withTitle: "취소")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        guard nc_track_delete(handle, Int32(trackId), true) else {
+            lastError = "이 트랙은 삭제할 수 없습니다"
+            return
+        }
+        selectedTrackId = nil
+        selectedClipId = nil
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+    }
+
+    /// Master and Monitor refuse deletion in the engine; do not offer it.
+    var canDeleteSelectedTrack: Bool {
+        guard let trackId = selectedTrackId,
+              let track = tracks.first(where: { $0.id == trackId }) else { return false }
+        return !track.kind.isMasterish
     }
 
     func commitClipGesture(_ stepName: String) {

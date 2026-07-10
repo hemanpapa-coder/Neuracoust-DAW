@@ -144,6 +144,18 @@ void nc_track_set_solo(NCEngine* engine, int index, bool solo);
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
 
+/// New tracks land at the end of the list. Returns the new track's index, or -1.
+int nc_track_add_audio(NCEngine* engine);
+int nc_track_add_instrument(NCEngine* engine);
+int nc_track_add_midi(NCEngine* engine);
+
+/// Deletes the track and, when `removeClips` is true, everything on it. Refuses on
+/// Master and Monitor. Returns false when the track cannot go.
+bool nc_track_delete(NCEngine* engine, int index, bool removeClips);
+
+/// Fails when the name is empty or already taken.
+bool nc_track_rename(NCEngine* engine, int index, const char* newName);
+
 int nc_track_insert_count(NCEngine* engine, int index);
 void nc_track_insert_name(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 bool nc_track_insert_bypassed(NCEngine* engine, int index, int slot);
@@ -264,6 +276,13 @@ bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
 double nc_clip_fade_in(NCEngine* engine, int index);
 double nc_clip_fade_out(NCEngine* engine, int index);
 bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, double fadeOut);
+
+/// Moves a clip onto another track at `startSeconds`, leaving every other clip
+/// where it is. (`shuffleMoveClip` would ripple its neighbours — that is Shuffle
+/// edit mode, not a plain drag.) Discrete: it records its own step, and the clip
+/// gets a new id, returned in `out`.
+bool nc_clip_move_to_track(NCEngine* engine, const char* clipId, int trackIndex,
+                           double startSeconds, char* out, size_t outLen);
 
 /// Clipboard. Copy stores the clip; paste places a copy at `startSeconds` on the
 /// clip's original track. Cut copies then deletes. All record their own step.

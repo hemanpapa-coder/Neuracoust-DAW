@@ -391,6 +391,95 @@ int main() {
             }
         }
 
+        // --- tracks: add, rename, delete -----------------------------------------
+        {
+            nc_project_new(engine);
+            const int before = nc_track_count(engine);
+            const int added = nc_track_add_audio(engine);
+            check(added >= 0, "added an audio track");
+            check(nc_track_count(engine) == before + 1, "track count grew");
+
+            char addedName[128] = {0};
+            nc_track_name(engine, added, addedName, sizeof(addedName));
+            printf("added track: index=%d name='%s'\n", added, addedName);
+            check(nc_history_can_undo(engine), "adding a track records a step");
+
+            check(nc_track_rename(engine, added, "Guitar"), "rename the track");
+            char renamed[128] = {0};
+            nc_track_name(engine, added, renamed, sizeof(renamed));
+            check(strcmp(renamed, "Guitar") == 0, "the rename stuck");
+
+            check(nc_track_delete(engine, added, true), "delete the track");
+            check(nc_track_count(engine) == before, "track count came back down");
+
+            check(nc_history_undo(engine), "undo the delete");
+            check(nc_track_count(engine) == before + 1, "the track returned");
+
+            // Master must refuse deletion.
+            int masterIndex = -1;
+            for (int index = 0; index < nc_track_count(engine); ++index) {
+                char type[64] = {0};
+                nc_track_type(engine, index, type, sizeof(type));
+                if (strcmp(type, "master") == 0) masterIndex = index;
+            }
+            check(masterIndex >= 0, "found the master track");
+            check(!nc_track_delete(engine, masterIndex, true), "master refuses deletion");
+        }
+
+        // --- moving a clip to another track must not disturb its neighbours -------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 0.0, error, sizeof(error)), "clip A on track 0");
+            check(nc_audio_import(engine, 0, wavPath, 5.0, error, sizeof(error)), "clip B on track 0");
+            check(nc_clip_count(engine) == 2, "two clips on Audio 1");
+
+            char clipA[128] = {0};
+            for (int index = 0; index < 2; ++index) {
+                if (nc_clip_start_seconds(engine, index) < 0.5) {
+                    nc_clip_id(engine, index, clipA, sizeof(clipA));
+                }
+            }
+
+            char moved[128] = {0};
+            check(nc_clip_move_to_track(engine, clipA, 1, 2.0, moved, sizeof(moved)),
+                  "move clip A to Audio 2 at 2 s");
+            check(strlen(moved) > 0 && strcmp(moved, clipA) != 0, "it got a new id");
+
+            // Neighbour untouched, mover relocated.
+            bool sawNeighbourAtFive = false;
+            bool sawMoverOnAudio2 = false;
+            for (int index = 0; index < nc_clip_count(engine); ++index) {
+                char track[128] = {0};
+                nc_clip_track(engine, index, track, sizeof(track));
+                const double start = nc_clip_start_seconds(engine, index);
+                if (strcmp(track, "Audio 1") == 0 && std::abs(start - 5.0) < 0.01) sawNeighbourAtFive = true;
+                if (strcmp(track, "Audio 2") == 0 && std::abs(start - 2.0) < 0.01) sawMoverOnAudio2 = true;
+            }
+            check(sawNeighbourAtFive, "the neighbour stayed at 5 s");
+            check(sawMoverOnAudio2, "the mover sits on Audio 2 at 2 s");
+
+            // And it still makes a sound there.
+            char crossProject[256] = "/tmp/neuracoust-io-smoke/Crossed.ndaw";
+            check(nc_project_save_as(engine, crossProject, error, sizeof(error)), "save the cross-track move");
+            neuracoust::daw::ProjectDocument crossed;
+            std::string crossError;
+            FILE* crossFile = fopen(crossProject, "rb");
+            std::string crossText;
+            if (crossFile != nullptr) {
+                char buffer[8192];
+                size_t read = 0;
+                while ((read = fread(buffer, 1, sizeof(buffer), crossFile)) > 0) crossText.append(buffer, read);
+                fclose(crossFile);
+            }
+            check(neuracoust::daw::deserializeProjectForPath(crossText, crossProject, crossed, crossError),
+                  "parse it");
+            const std::string crossBounce = "/tmp/neuracoust-io-smoke/crossed.wav";
+            check(neuracoust::daw::bounceProjectToWav(crossed, crossBounce).ok, "bounce it");
+            const double audibleAt = firstAudibleSecond(crossBounce);
+            printf("cross-track move: audio starts at %.3f s (expect 2.000)\n", audibleAt);
+            check(std::abs(audibleAt - 2.0) < 0.05, "the relocated clip is audible on its new track");
+        }
+
         // snapProjectTime always snaps — it does not consult a "snap enabled" flag.
         // The default project's grid unit is 1 s, so 1.234 lands on 1.0. Whether to
         // snap at all is the caller's decision.

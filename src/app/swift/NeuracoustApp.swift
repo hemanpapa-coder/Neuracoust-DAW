@@ -150,6 +150,8 @@ private struct EditView: View {
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },
                     onSetFades: { engine.setClipFades($0, fadeIn: $1, fadeOut: $2) },
                     onSetGain: { engine.setClipGain($0, $1) },
+                    onSelectLane: { engine.selectLane($0) },
+                    onMoveClipToLane: { engine.moveClipToLane($0, laneIndex: $1, startSeconds: $2) },
                     onCommitEdit: { engine.commitClipGesture($0) },
                     snap: { engine.snap($0) }
                 )
@@ -178,6 +180,14 @@ private struct EditView: View {
             zoomButton("잘라내기", enabled: engine.selectedClipId != nil) { engine.cutSelectedClip() }
             zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipAtPlayhead() }
             zoomButton("복제", enabled: engine.selectedClipId != nil) { engine.duplicateSelectedClip() }
+
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            zoomButton("+오디오") { engine.addAudioTrack() }
+            zoomButton("+악기") { engine.addInstrumentTrack() }
+            zoomButton("트랙 삭제", enabled: engine.canDeleteSelectedTrack) {
+                engine.deleteSelectedTrack()
+            }
 
             Text(String(format: "%.1f s 표시 · 드래그: 이동 · 가장자리: 트림 · B: 분할 · Delete: 삭제", engine.visibleDuration))
                 .font(Theme.Font.mono(8))
