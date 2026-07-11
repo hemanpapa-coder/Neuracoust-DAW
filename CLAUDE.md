@@ -291,6 +291,14 @@ Input samples do reach the engine: the CoreAudio input **AudioQueue** hands them
 `NeuracoustDspEngine::pushInputMonitorInterleaved`, which drops them unless input
 monitoring or talkback is on, and then only into a mutex-guarded monitor buffer.
 
+The transport bar shows two small **input meters** beside MASTER OUT: **IN** is the
+audio-interface input peak (`status.inputPeak`, so it only moves while input monitoring
+or talkback is on — see above) and **MIDI** is live-input activity. MIDI activity is
+the peak of each pumped batch (velocity / CC / bend), accumulated in the bridge and read
+(and reset) through `nc_midi_input_activity`; `EngineController` decays both meters each
+tick so a transient stays readable. There is no MIDI **output** meter — the engine does
+not send MIDI out.
+
 The transport buttons carry Pro-Tools-style right-click menus: **Play** picks the
 playback mode (일반 / 루프 재생 — the loop is the existing loop toggle, so the two
 always agree), **Record** picks the record mode (새 테이크 / 루프 / 펀치 레코딩,

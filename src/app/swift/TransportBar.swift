@@ -62,6 +62,7 @@ struct TransportBar: View {
             displays
             tempoPods
             Spacer(minLength: Theme.Space.xl)
+            inputMeters
             masterMeter
             viewTabs
         }
@@ -284,6 +285,37 @@ struct TransportBar: View {
             RoundedRectangle(cornerRadius: Theme.Radius.display)
                 .fill(Theme.Palette.ruler)
         )
+    }
+
+    /// Incoming audio-interface input and live MIDI-input activity, beside the master out.
+    private var inputMeters: some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            meterLabelRow("IN", meterFraction(engine.inputPeak), Theme.Palette.green)
+            meterLabelRow("MIDI", Double(engine.midiActivity), Theme.Palette.purple)
+        }
+        .frame(width: 100)
+    }
+
+    private func meterLabelRow(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            Text(label)
+                .font(Theme.Font.mono(6.5))
+                .tracking(0.4)
+                .foregroundStyle(Theme.Palette.textFaint)
+                .frame(width: 26, alignment: .trailing)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
+                        .fill(Theme.Palette.recess)
+                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
+                        .fill(tint)
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: geo.size.width * max(0, min(1, fraction)))
+                        }
+                }
+            }
+            .frame(height: 5)
+        }
     }
 
     private var masterMeter: some View {

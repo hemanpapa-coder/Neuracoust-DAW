@@ -60,6 +60,9 @@ struct NCEngine {
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
+    /// Peak activity (0..1) of the MIDI seen since the last meter read; consumed by
+    /// nc_midi_input_activity so the UI can decay it.
+    float midiInputActivity = 0.0f;
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
@@ -3469,10 +3472,30 @@ bool nc_midi_live_active(NCEngine* engine) {
     return engine != nullptr && engine->midiInputRecorder.status().recording;
 }
 
+float nc_midi_input_activity(NCEngine* engine) {
+    if (engine == nullptr) return 0.0f;
+    const float value = engine->midiInputActivity;
+    engine->midiInputActivity = 0.0f;   // consume: the UI keeps its own decay
+    return value;
+}
+
 void nc_midi_pump_live_input(NCEngine* engine) {
     if (engine == nullptr || !engine->midiInputRecorder.status().recording) return;
     const auto pending = engine->midiInputRecorder.consumePendingEvents();
     if (pending.empty()) return;
+    // Track the loudest thing seen for the input meter (velocity / CC / bend magnitude).
+    using neuracoust::daw::RecordedMidiEventKind;
+    for (const auto& e : pending) {
+        float level = 0.0f;
+        switch (e.kind) {
+        case RecordedMidiEventKind::NoteOn:     level = std::max(0, std::min(127, e.velocity)) / 127.0f; break;
+        case RecordedMidiEventKind::Controller: level = std::max(0, std::min(127, e.value)) / 127.0f; break;
+        case RecordedMidiEventKind::PitchBend:  level = std::abs(e.value - 8192) / 8192.0f; break;
+        case RecordedMidiEventKind::ProgramChange: level = 0.45f; break;
+        default: break;
+        }
+        engine->midiInputActivity = std::max(engine->midiInputActivity, level);
+    }
     std::vector<neuracoust::daw::Vst3MidiEvent> liveEvents;
     liveEvents.reserve(pending.size());
     for (const auto& event : pending) {

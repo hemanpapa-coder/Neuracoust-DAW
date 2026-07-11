@@ -21,6 +21,10 @@ final class EngineController: ObservableObject {
     @Published private(set) var transportRunning = false
     @Published private(set) var outputPeakLeft: Float = 0
     @Published private(set) var outputPeakRight: Float = 0
+    /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
+    /// smoothed with a decay so the meters fall back gently.
+    @Published private(set) var inputPeak: Float = 0
+    @Published private(set) var midiActivity: Float = 0
     @Published private(set) var sampleRate: Double = 0
     @Published private(set) var bufferSize: Int = 0
     @Published private(set) var delayCompensationMs: Double = 0
@@ -2427,6 +2431,9 @@ final class EngineController: ObservableObject {
         transportRunning = status.transportRunning
         outputPeakLeft = status.outputPeakLeft
         outputPeakRight = status.outputPeakRight
+        // Input meter follows the peak immediately on the way up and decays on the way
+        // down, so a transient stays readable for a moment.
+        inputPeak = max(status.inputPeak, inputPeak * 0.82)
         sampleRate = status.sampleRate
         bufferSize = Int(status.requestedBufferSize)
         delayCompensationMs = status.delayCompensationMs
@@ -2445,6 +2452,8 @@ final class EngineController: ObservableObject {
 
         // Live MIDI: keep a keyboard open and drain its notes into armed instruments.
         pumpLiveMidi(handle)
+        // The pump bumps the activity; read (which resets it) and decay for the meter.
+        midiActivity = max(nc_midi_input_activity(handle), midiActivity - 0.07)
 
         listenRoom?.refresh()
     }

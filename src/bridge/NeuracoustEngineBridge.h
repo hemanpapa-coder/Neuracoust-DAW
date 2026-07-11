@@ -762,6 +762,9 @@ bool nc_midi_live_start(NCEngine* engine, const char* sourceId);
 void nc_midi_live_stop(NCEngine* engine);
 bool nc_midi_live_active(NCEngine* engine);
 void nc_midi_pump_live_input(NCEngine* engine);
+// Peak MIDI-input activity (0..1) since the last call; reading it resets it, so the UI
+// applies its own decay. Bump it by calling nc_midi_pump_live_input first each tick.
+float nc_midi_input_activity(NCEngine* engine);
 
 // ---------------------------------------------------------------------------
 // Listen Room
