@@ -78,6 +78,15 @@ public:
     int activeVst3TrackInsertCount() const;
     int activeRemoteDspTrackInsertCount() const;
 
+    // FFT spectrum for the analyzer: kSpectrumBins log-usable magnitude bins (0..1),
+    // published from the realtime metering path. Copies at most `count` bins.
+    static constexpr int kSpectrumBins = 1024;
+    int spectrumBinCount() const;
+    void copySpectrumBins(float* out, int count) const;
+    // Feeds a synthetic tone through the FFT and checks the peak lands in the right bin.
+    // Returns 0 on success, non-zero on failure. Used by a ctest.
+    static int runSpectrumSelfTest();
+
 private:
     struct RealtimeTrackInsertChain {
         std::string trackName;
@@ -118,6 +127,7 @@ private:
     void mixInputMonitorLocked(int64_t frameCount, std::vector<float>& interleavedStereo);
     void applyMonitorStationControlsLocked(std::vector<float>& interleavedStereo);
     void storeMetering(const std::vector<float>& interleavedStereo);
+    void updateSpectrum(const std::vector<float>& interleavedStereo);
     void publishListenRoomLocked(const std::vector<float>& interleavedStereo);
     void storeTrackInsertMeterLocked(const std::string& trackName,
                                      int slotIndex,
@@ -198,6 +208,12 @@ private:
     std::atomic<float> inputPeakForStatus_ {0.0f};
     float lowBandState_ = 0.0f;
     float midBandState_ = 0.0f;
+    // FFT spectrum analyzer state. Mono output accumulates into a window; when full a
+    // Hann-windowed radix-2 FFT publishes magnitudes under a try-lock, so the UI reader
+    // never blocks the render thread.
+    mutable std::mutex spectrumMutex_;
+    std::vector<float> spectrumAccumulator_;
+    std::vector<float> spectrumBins_;
     float monitorStationGainSmoothed_ = 1.0f;
     bool monitorStationGainInitialized_ = false;
     bool remoteDspMonitorActive_ = false;

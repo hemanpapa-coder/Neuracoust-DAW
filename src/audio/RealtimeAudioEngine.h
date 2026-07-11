@@ -74,6 +74,8 @@ struct AudioEngineStatus {
     float spectrumLow = 0.0f;
     float spectrumMid = 0.0f;
     float spectrumHigh = 0.0f;
+    // Full FFT magnitude bins (0..1, dB-scaled) for the spectrum analyzer.
+    std::vector<float> spectrumBins;
     std::vector<std::string> trackMeterNames;
     std::vector<float> trackPeakLeft;
     std::vector<float> trackPeakRight;

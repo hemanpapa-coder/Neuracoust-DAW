@@ -60,6 +60,9 @@ struct NCEngine {
     /// The reference/monitor input device (e.g. BlackHole for reference music).
     /// Empty means the system default input device.
     std::string inputDeviceId;
+    /// Latest FFT spectrum bins, cached each status poll so the analyzer reads them
+    /// without a second full status snapshot.
+    std::vector<float> lastSpectrumBins;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -336,6 +339,21 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     copyText(out->dspEngineName, NC_TEXT_LEN, s.dspEngineName);
     copyText(out->monitorDspPathMode, NC_TEXT_LEN, s.monitorDspPathMode);
     copyText(out->message, NC_TEXT_LEN, s.message);
+
+    engine->lastSpectrumBins = s.spectrumBins;
+}
+
+int nc_spectrum_bin_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->lastSpectrumBins.size()) : 0;
+}
+
+bool nc_spectrum_bins(NCEngine* engine, float* out, int count) {
+    if (engine == nullptr || out == nullptr || count <= 0) return false;
+    const auto& bins = engine->lastSpectrumBins;
+    const int n = std::min(count, static_cast<int>(bins.size()));
+    for (int i = 0; i < n; ++i) out[i] = bins[static_cast<size_t>(i)];
+    for (int i = n; i < count; ++i) out[i] = 0.0f;
+    return n > 0;
 }
 
 void nc_engine_set_transport_running(NCEngine* engine, bool running) {

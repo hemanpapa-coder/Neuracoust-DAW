@@ -88,6 +88,11 @@ void nc_engine_stop(NCEngine* engine);
 
 void nc_engine_status(NCEngine* engine, NCEngineStatus* out);
 
+// FFT spectrum bins for the analyzer (0..1, dB-scaled, low→high frequency). Cached on
+// each nc_engine_status call, so poll status first, then read these.
+int nc_spectrum_bin_count(NCEngine* engine);
+bool nc_spectrum_bins(NCEngine* engine, float* out, int count);
+
 void nc_engine_set_transport_running(NCEngine* engine, bool running);
 void nc_engine_set_recording(NCEngine* engine, bool active);
 void nc_engine_seek(NCEngine* engine, double seconds);

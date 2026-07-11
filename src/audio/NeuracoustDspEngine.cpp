@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -1740,6 +1741,12 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
     status.spectrumLow = spectrumLow_.load();
     status.spectrumMid = spectrumMid_.load();
     status.spectrumHigh = spectrumHigh_.load();
+    {
+        std::unique_lock<std::mutex> lock(spectrumMutex_, std::try_to_lock);
+        if (lock.owns_lock()) {
+            status.spectrumBins = spectrumBins_;
+        }
+    }
     status.trackMeterNames = projectMeters_.trackNames;
     status.trackPeakLeft = projectMeters_.trackPeakLeft;
     status.trackPeakRight = projectMeters_.trackPeakRight;
@@ -2822,6 +2829,150 @@ void NeuracoustDspEngine::storeTrackMetersLocked(const ProjectAudioBlockMeters& 
     }
 }
 
+namespace {
+
+// FFT window: kSpectrumFftSize points, kSpectrumFftSize/2 usable magnitude bins.
+constexpr int kSpectrumFftSize = NeuracoustDspEngine::kSpectrumBins * 2;
+
+// In-place iterative radix-2 Cooley-Tukey FFT. Portable (no Accelerate) so the
+// metering path stays cross-platform. `re`/`im` are length n (a power of two).
+void radix2Fft(std::vector<float>& re, std::vector<float>& im) {
+    const size_t n = re.size();
+    if (n < 2) return;
+    // Bit-reversal permutation.
+    for (size_t i = 1, j = 0; i < n; ++i) {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            std::swap(re[i], re[j]);
+            std::swap(im[i], im[j]);
+        }
+    }
+    for (size_t len = 2; len <= n; len <<= 1) {
+        const double ang = -2.0 * M_PI / static_cast<double>(len);
+        const float wReStep = static_cast<float>(std::cos(ang));
+        const float wImStep = static_cast<float>(std::sin(ang));
+        for (size_t i = 0; i < n; i += len) {
+            float wRe = 1.0f;
+            float wIm = 0.0f;
+            for (size_t k = 0; k < len / 2; ++k) {
+                const float uRe = re[i + k];
+                const float uIm = im[i + k];
+                const float vRe = re[i + k + len / 2] * wRe - im[i + k + len / 2] * wIm;
+                const float vIm = re[i + k + len / 2] * wIm + im[i + k + len / 2] * wRe;
+                re[i + k] = uRe + vRe;
+                im[i + k] = uIm + vIm;
+                re[i + k + len / 2] = uRe - vRe;
+                im[i + k + len / 2] = uIm - vIm;
+                const float nextWRe = wRe * wReStep - wIm * wImStep;
+                wIm = wRe * wImStep + wIm * wReStep;
+                wRe = nextWRe;
+            }
+        }
+    }
+}
+
+} // namespace
+
+int NeuracoustDspEngine::spectrumBinCount() const {
+    std::lock_guard<std::mutex> lock(spectrumMutex_);
+    return static_cast<int>(spectrumBins_.size());
+}
+
+void NeuracoustDspEngine::copySpectrumBins(float* out, int count) const {
+    if (out == nullptr || count <= 0) return;
+    std::lock_guard<std::mutex> lock(spectrumMutex_);
+    const int available = std::min(count, static_cast<int>(spectrumBins_.size()));
+    for (int i = 0; i < available; ++i) out[i] = spectrumBins_[static_cast<size_t>(i)];
+    for (int i = available; i < count; ++i) out[i] = 0.0f;
+}
+
+// Accumulates mono output into a window; when full, runs a Hann-windowed FFT and
+// publishes normalized magnitude bins. Called from storeMetering on the render thread.
+void NeuracoustDspEngine::updateSpectrum(const std::vector<float>& interleavedStereo) {
+    spectrumAccumulator_.reserve(static_cast<size_t>(kSpectrumFftSize));
+    for (size_t index = 0; index + 1 < interleavedStereo.size(); index += 2) {
+        spectrumAccumulator_.push_back((interleavedStereo[index] + interleavedStereo[index + 1]) * 0.5f);
+    }
+    // A huge block could hold several windows; a tiny one fills over many calls. Bound
+    // the backlog so a pathological block can't make this loop forever.
+    if (spectrumAccumulator_.size() > static_cast<size_t>(kSpectrumFftSize) * 4) {
+        spectrumAccumulator_.erase(spectrumAccumulator_.begin(),
+                                   spectrumAccumulator_.end() - static_cast<std::ptrdiff_t>(kSpectrumFftSize));
+    }
+    if (static_cast<int>(spectrumAccumulator_.size()) < kSpectrumFftSize) {
+        return;
+    }
+
+    std::vector<float> re(static_cast<size_t>(kSpectrumFftSize));
+    std::vector<float> im(static_cast<size_t>(kSpectrumFftSize), 0.0f);
+    for (int i = 0; i < kSpectrumFftSize; ++i) {
+        // Hann window.
+        const float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * i / (kSpectrumFftSize - 1)));
+        re[static_cast<size_t>(i)] = spectrumAccumulator_[static_cast<size_t>(i)] * w;
+    }
+    // Keep the most recent samples for the next window (50% overlap keeps it lively).
+    spectrumAccumulator_.erase(spectrumAccumulator_.begin(),
+                               spectrumAccumulator_.begin() + kSpectrumFftSize / 2);
+
+    radix2Fft(re, im);
+
+    const int bins = kSpectrumFftSize / 2;
+    // 2/N normalization, then map to 0..1 on a dB scale (-90..0 dB) the UI can draw.
+    std::unique_lock<std::mutex> lock(spectrumMutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    spectrumBins_.assign(static_cast<size_t>(bins), 0.0f);
+    for (int i = 0; i < bins; ++i) {
+        const float mag = std::sqrt(re[static_cast<size_t>(i)] * re[static_cast<size_t>(i)] +
+                                    im[static_cast<size_t>(i)] * im[static_cast<size_t>(i)]) * (2.0f / kSpectrumFftSize);
+        const float db = 20.0f * std::log10(std::max(1e-6f, mag));
+        spectrumBins_[static_cast<size_t>(i)] = std::min(1.0f, std::max(0.0f, (db + 90.0f) / 90.0f));
+    }
+}
+
+int NeuracoustDspEngine::runSpectrumSelfTest() {
+    // 1 kHz tone at 48 kHz: expected FFT bin = f * N / SR = 1000 * 2048 / 48000 ≈ 43.
+    const double sampleRate = 48000.0;
+    const double toneHz = 1000.0;
+    const int expectedBin = static_cast<int>(std::lround(toneHz * kSpectrumFftSize / sampleRate));
+
+    NeuracoustDspEngine dsp;
+    std::vector<float> block(static_cast<size_t>(kSpectrumFftSize) * 2);  // interleaved stereo
+    // Feed several windows so the overlap settles.
+    for (int pass = 0; pass < 6; ++pass) {
+        for (int frame = 0; frame < kSpectrumFftSize; ++frame) {
+            const double t = static_cast<double>(pass * kSpectrumFftSize + frame) / sampleRate;
+            const float s = static_cast<float>(0.5 * std::sin(2.0 * M_PI * toneHz * t));
+            block[static_cast<size_t>(frame) * 2] = s;
+            block[static_cast<size_t>(frame) * 2 + 1] = s;
+        }
+        dsp.updateSpectrum(block);
+    }
+
+    std::vector<float> bins(static_cast<size_t>(NeuracoustDspEngine::kSpectrumBins), 0.0f);
+    dsp.copySpectrumBins(bins.data(), static_cast<int>(bins.size()));
+
+    int peakBin = 0;
+    float peak = 0.0f;
+    for (int i = 1; i < static_cast<int>(bins.size()); ++i) {
+        if (bins[static_cast<size_t>(i)] > peak) { peak = bins[static_cast<size_t>(i)]; peakBin = i; }
+    }
+    if (peak <= 0.0f) {
+        std::cerr << "SPECTRUM_SELF_TEST failed: no energy in any bin\n";
+        return 51;
+    }
+    if (std::abs(peakBin - expectedBin) > 2) {
+        std::cerr << "SPECTRUM_SELF_TEST failed: peak at bin " << peakBin
+                  << ", expected near " << expectedBin << "\n";
+        return 52;
+    }
+    std::cout << "SPECTRUM_SELF_TEST ok (peak bin " << peakBin << ")\n";
+    return 0;
+}
+
 void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedStereo) {
     float peakLeft = 0.0f;
     float peakRight = 0.0f;
@@ -2862,6 +3013,8 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
     spectrumLow_.store(std::min(1.0f, static_cast<float>(std::sqrt(lowEnergy / frames))));
     spectrumMid_.store(std::min(1.0f, static_cast<float>(std::sqrt(midEnergy / frames))));
     spectrumHigh_.store(std::min(1.0f, static_cast<float>(std::sqrt(highEnergy / frames))));
+
+    updateSpectrum(interleavedStereo);
 }
 
 void NeuracoustDspEngine::publishListenRoomLocked(const std::vector<float>& interleavedStereo) {
@@ -2880,6 +3033,11 @@ void NeuracoustDspEngine::resetMeteringLocked() {
     spectrumHigh_.store(0.0f);
     lowBandState_ = 0.0f;
     midBandState_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(spectrumMutex_);
+        spectrumAccumulator_.clear();
+        std::fill(spectrumBins_.begin(), spectrumBins_.end(), 0.0f);
+    }
 }
 
 } // namespace neuracoust::daw
