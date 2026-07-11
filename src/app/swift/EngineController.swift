@@ -1353,15 +1353,21 @@ final class EngineController: ObservableObject {
         laneIndex >= 0 && laneIndex < laneTracks.count ? laneTracks[laneIndex].id : nil
     }
 
-    /// Files dropped onto a lane at a point in time. A lane past the last one, or a
-    /// drop below the lanes, does nothing.
+    /// Files dropped onto a lane at a point in time. A drop past the last lane (onto
+    /// empty space) makes a new audio track and lands the clip there.
     func dropAudio(onLane laneIndex: Int, atSeconds seconds: Double, urls: [URL]) {
-        guard let trackId = trackId(forLane: laneIndex) else { return }
         let audio = urls.filter { nc_audio_import_supported($0.path) }
         guard !audio.isEmpty else {
             lastError = "가져올 수 있는 오디오 파일이 없습니다."
             return
         }
+        var targetLane = laneIndex
+        if trackId(forLane: targetLane) == nil {
+            guard let handle, nc_track_add_audio(handle) >= 0 else { return }
+            reloadTracks()
+            targetLane = laneTracks.count - 1   // the freshly-added track is the last lane
+        }
+        guard let trackId = trackId(forLane: targetLane) else { return }
         importAudio(intoTrack: trackId, at: snap(seconds), from: audio)
     }
 

@@ -750,9 +750,17 @@ final class TimelineNSView: NSView {
     /// name column, left of the lanes — lands at 0 s, so dragging a file onto the
     /// track drops it at the start of the timeline.
     private func dropTarget(at point: NSPoint) -> (lane: Int, seconds: Double)? {
-        guard let lane = laneIndex(at: point) else { return nil }
+        guard point.y >= Self.rulerHeight else { return nil }
         let seconds = point.x < lanesRect.minX ? 0 : max(0, seconds(atX: point.x))
-        return (lane, seconds)
+        if let lane = laneIndex(at: point) {
+            return (lane, seconds)
+        }
+        // Empty space below the last lane: a one-past index tells the drop handler to
+        // make a new track and land the clip on it.
+        if point.y >= laneTop(model.lanes.count) {
+            return (model.lanes.count, seconds)
+        }
+        return nil
     }
 
     private func updateDropTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
