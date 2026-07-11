@@ -785,6 +785,7 @@ final class EngineController: ObservableObject {
         nc_history_reset(handle)
         refreshHistory()
         installKeyMonitor()
+        installPluginEditorTransportObserver()
 
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -800,6 +801,19 @@ final class EngineController: ObservableObject {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             return MainActor.assumeIsolated { self.handleKeyDown(event) }
+        }
+    }
+
+    /// An out-of-process plugin editor's window steals key events, so its host process
+    /// catches the spacebar itself and broadcasts this notification. DW listens for it
+    /// and toggles the transport, so space works with a plugin GUI focused.
+    private func installPluginEditorTransportObserver() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.neuracoust.daw.pluginEditor.transport.toggle"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.togglePlay() }
         }
     }
 
