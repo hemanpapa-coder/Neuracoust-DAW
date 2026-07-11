@@ -386,7 +386,11 @@ struct ChannelStrip: View {
                     engine.toggleTrackSolo(track.id)
                 }
             }
-            stateButton("M", on: track.muted, tint: Theme.Palette.orange) {
+            // While another track is soloed, this one is silenced — blink its Mute the
+            // way Pro Tools does, so it reads as held down by the solo rather than off.
+            let soloSilenced = engine.anyTrackSoloed && !track.solo && track.kind.hasSolo
+            stateButton("M", on: track.muted, tint: Theme.Palette.orange,
+                        blink: soloSilenced && engine.soloBlinkOn) {
                 engine.toggleTrackMute(track.id)
             }
         }
@@ -395,16 +399,17 @@ struct ChannelStrip: View {
     private func stateButton(_ title: String,
                              on: Bool,
                              tint: Color,
+                             blink: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(Theme.Font.ui(9, .semibold))
-                .foregroundStyle(on ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
+                .foregroundStyle(on || blink ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
                 .frame(maxWidth: .infinity)
                 .frame(height: 20)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                        .fill(on ? tint : Theme.Palette.button)
+                        .fill(on ? tint : (blink ? tint.opacity(0.6) : Theme.Palette.button))
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.Radius.clip)
                                 .stroke(Theme.Palette.border, lineWidth: 1)

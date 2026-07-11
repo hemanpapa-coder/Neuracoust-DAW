@@ -107,6 +107,8 @@ This machine types Korean. With a Korean input source active, `charactersIgnorin
 
 Menu items still declare their shortcuts so they are discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers all of them (⌘Z, ⌘⇧Z, ⌘N, ⌘O, ⌘S, ⌘⇧S, ⌘I).
 
+The **spacebar** (key code 49, no modifier) toggles play/stop through the same monitor. It is consumed (`return nil`) so it does not also click whatever button holds focus. The `firstResponder is NSTextView` guard at the top keeps it typing a space in a search field.
+
 **Note for verification:** the computer-use tool cannot press Z here. It maps the character `"z"` to a key code using the active layout, which under Korean input yields key code 0 (the A key). Shortcut behaviour has to be checked by hand.
 
 ## Bounce
@@ -135,6 +137,38 @@ Two selections, and they do different work:
 
 Fades and clip gain stay single-clip: their handles hide when more than one clip is
 selected, rather than offering a grab that would move the selection instead.
+
+**Clip drag has two refinements** (`TimelineView.mouseDown`/`mouseDragged`):
+- **Axis-lock** — a clip's horizontal position is pinned to its start time until the
+  cursor leaves a small dead zone (`axisLockThreshold`), so a straight up/down lane
+  move does not smear it sideways. Crossing the zone re-baselines the grab so it
+  continues from the clip rather than jumping. Lane is resolved from the cursor Y at
+  drop, as before.
+- **Option-drag = copy** — holding ⌥ on mouse-down duplicates the clip in place
+  (`onBeginCopyDrag` → `duplicateClipForDrag`, which `nc_clip_duplicate`s then moves
+  the copy onto the original's start) and drags the copy, leaving the original put.
+
+**Loop range handles** — with a range set, the top strip carries a triangle grab at
+each edge (`.rangingEdgeStart`/`.rangingEdgeEnd`) and a middle grab to slide the whole
+range (`.movingRange`), the Pro-Tools loop bar. An empty strip still sweeps a fresh
+range. None of these record history.
+
+## Solo blink
+
+When any track is soloed, the silenced tracks' **Mute** buttons blink, the Pro-Tools
+tell that they are held down by the solo rather than off. `EngineController.soloBlinkOn`
+is a ~1 Hz phase toggled from the poll tick (only while `anyTrackSoloed`, and only
+published on change); `MixerView` pulses a strip's M fill when
+`anyTrackSoloed && !track.solo`.
+
+## Talkback key
+
+The monitor **Talk** button is a console talkback key, not a toggle: momentary while
+held (and it pulls **Dim** in with it, restoring Dim's prior state on release),
+double-click to latch on, a click on a latched key releases it. SwiftUI press gestures
+do not fire for a static press inside the dock's `ScrollView`, so it is a self-drawing
+`NSView` (`TalkbackKeyView`) reading `mouseDown`/`mouseUp`/`clickCount` directly.
+`EngineController.setTalkbackEngaged` remembers Dim's state across the press.
 
 ## Automation
 

@@ -179,6 +179,7 @@ private struct EditView: View {
                     onToggleSelect: { engine.toggleClipSelection($0) },
                     onSelectMany: { engine.selectClips($0) },
                     onMoveClip: { engine.moveClip($0, to: $1) },
+                    onBeginCopyDrag: { engine.duplicateClipForDrag($0, at: $1) },
                     onMoveSelection: { engine.moveSelection(by: $0) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },

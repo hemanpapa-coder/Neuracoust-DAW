@@ -131,6 +131,9 @@ final class TimelineNSView: NSView {
     var onToggleSelect: ((String) -> Void)?              // shift-click
     var onSelectMany: (([String]) -> Void)?              // marquee
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
+    /// Option-drag: duplicate the clip in place and return the copy's id, which the
+    /// drag then moves — leaving the original where it was.
+    var onBeginCopyDrag: ((String, Double) -> String?)?  // (clipId, startSeconds) -> newId
     var onMoveSelection: ((Double) -> Void)?             // delta seconds
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
@@ -144,20 +147,32 @@ final class TimelineNSView: NSView {
     /// Grab zone at each end of a clip.
     private static let trimHandleWidth: CGFloat = 8
 
+    /// How far the cursor must travel horizontally before a clip drag stops being
+    /// pinned to its start time — so a straight up/down lane move keeps its position.
+    private static let axisLockThreshold: CGFloat = 9
+
     private enum Drag {
         case none
         case seeking
         case marquee(origin: NSPoint, current: NSPoint)
         case rangingFrom(seconds: Double)
+        /// Dragging one edge of an existing range by its ruler handle, or sliding the
+        /// whole range by grabbing its middle.
+        case rangingEdgeStart
+        case rangingEdgeEnd
+        case movingRange(grabOffsetSeconds: Double)
         case movingAutomationPoint(laneIndex: Int, pointIndex: Int)
         case movingMarker(fromSeconds: Double)
         case movingRegion(id: String, grabOffsetSeconds: Double)
         case resizingRegion(id: String)
-        case moving(clipId: String, grabOffsetSeconds: Double)
+        /// startX is where the drag began; the clip's horizontal position stays put
+        /// until the cursor leaves the axis-lock dead zone, so a vertical (lane) move
+        /// does not smear the clip sideways. axisUnlocked latches once it crosses.
+        case moving(clipId: String, grabOffsetSeconds: Double, startX: CGFloat, axisUnlocked: Bool)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
         /// simply stops the whole selection instead of drifting it apart.
-        case movingSelection(anchorId: String, grabOffsetSeconds: Double)
+        case movingSelection(anchorId: String, grabOffsetSeconds: Double, startX: CGFloat, axisUnlocked: Bool)
         case trimmingStart(clipId: String)
         case trimmingEnd(clipId: String)
         case fadingIn(clip: TimelineModel.Clip)
@@ -182,6 +197,8 @@ final class TimelineNSView: NSView {
     static let rulerHeight: CGFloat = 30
     /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
     static let rangeStripHeight: CGFloat = 12
+    /// Grab radius around each range edge for its ruler handle.
+    static let rangeHandleWidth: CGFloat = 9
     static let laneHeight: CGFloat = 78
     static let automationHeight: CGFloat = 54
     static let headerWidth: CGFloat = 150
@@ -398,6 +415,25 @@ final class TimelineNSView: NSView {
         }
 
         if point.y < Self.rangeStripHeight {
+            // With a range already set, the strip carries a handle at each edge and a
+            // grab in the middle to slide the whole range — the Pro Tools loop bar.
+            // An empty strip (or a click outside the range) sweeps a fresh range.
+            if model.rangeEnd > model.rangeStart {
+                let leftX = x(forSeconds: model.rangeStart)
+                let rightX = x(forSeconds: model.rangeEnd)
+                if abs(point.x - leftX) <= Self.rangeHandleWidth {
+                    drag = .rangingEdgeStart
+                    return
+                }
+                if abs(point.x - rightX) <= Self.rangeHandleWidth {
+                    drag = .rangingEdgeEnd
+                    return
+                }
+                if point.x > leftX, point.x < rightX {
+                    drag = .movingRange(grabOffsetSeconds: seconds(atX: point.x) - model.rangeStart)
+                    return
+                }
+            }
             let origin = max(0, snapped(seconds(atX: point.x)))
             drag = .rangingFrom(seconds: origin)
             return
@@ -489,13 +525,22 @@ final class TimelineNSView: NSView {
         let grabOffset = seconds(atX: point.x) - hit.startSeconds
         if hit.selected, selectionCount > 1 {
             // Trimming a whole selection has no obvious meaning; a drag moves it.
-            drag = .movingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset)
+            drag = .movingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset,
+                                    startX: point.x, axisUnlocked: false)
         } else if point.x - rect.minX <= Self.trimHandleWidth {
             drag = .trimmingStart(clipId: hit.id)
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
             drag = .trimmingEnd(clipId: hit.id)
         } else {
-            drag = .moving(clipId: hit.id, grabOffsetSeconds: grabOffset)
+            // Holding Option turns the move into a copy: duplicate in place and drag
+            // the new clip, so the original stays put.
+            var clipId = hit.id
+            if event.modifierFlags.contains(.option),
+               let newId = onBeginCopyDrag?(hit.id, hit.startSeconds) {
+                clipId = newId
+            }
+            drag = .moving(clipId: clipId, grabOffsetSeconds: grabOffset,
+                           startX: point.x, axisUnlocked: false)
         }
     }
 
@@ -522,6 +567,15 @@ final class TimelineNSView: NSView {
             drag = .movingMarker(fromSeconds: target)
         case .rangingFrom(let origin):
             onSetRange?(origin, max(0, snapped(time)))
+        case .rangingEdgeStart:
+            // Drag the left edge; keep it left of the right edge.
+            onSetRange?(min(max(0, snapped(time)), model.rangeEnd - 0.01), model.rangeEnd)
+        case .rangingEdgeEnd:
+            onSetRange?(model.rangeStart, max(model.rangeStart + 0.01, max(0, snapped(time))))
+        case .movingRange(let grabOffset):
+            let width = model.rangeEnd - model.rangeStart
+            let newStart = max(0, snapped(time - grabOffset))
+            onSetRange?(newStart, newStart + width)
         case .movingAutomationPoint(let lane, let pointIndex):
             guard let rect = automationRect(lane), let automation = model.lanes[lane].automation else { break }
             onMoveAutomationPoint?(lane, pointIndex, max(0, snapped(time)),
@@ -529,11 +583,28 @@ final class TimelineNSView: NSView {
         case .marquee(let origin, _):
             drag = .marquee(origin: origin, current: point)
             needsDisplay = true
-        case .moving(let clipId, let grabOffset):
-            onMoveClip?(clipId, snapped(time - grabOffset))
-        case .movingSelection(let anchorId, let grabOffset):
+        case .moving(let clipId, let grabOffset, let startX, let unlocked):
+            if unlocked {
+                onMoveClip?(clipId, snapped(time - grabOffset))
+            } else if abs(point.x - startX) > Self.axisLockThreshold {
+                // Left the dead zone: from here the clip tracks the cursor. Re-baseline
+                // the grab off its current start so it continues smoothly instead of
+                // snapping by the threshold distance.
+                let start = model.clips.first(where: { $0.id == clipId })?.startSeconds ?? (time - grabOffset)
+                drag = .moving(clipId: clipId, grabOffsetSeconds: seconds(atX: point.x) - start,
+                               startX: startX, axisUnlocked: true)
+            }
+            // Locked and inside the dead zone: hold the horizontal position; the lane
+            // still resolves from the cursor Y at drop.
+        case .movingSelection(let anchorId, let grabOffset, let startX, let unlocked):
             guard let anchor = model.clips.first(where: { $0.id == anchorId }) else { break }
-            onMoveSelection?(snapped(time - grabOffset) - anchor.startSeconds)
+            if unlocked {
+                onMoveSelection?(snapped(time - grabOffset) - anchor.startSeconds)
+            } else if abs(point.x - startX) > Self.axisLockThreshold {
+                drag = .movingSelection(anchorId: anchorId,
+                                        grabOffsetSeconds: seconds(atX: point.x) - anchor.startSeconds,
+                                        startX: startX, axisUnlocked: true)
+            }
         case .trimmingStart(let clipId):
             onTrimStart?(clipId, snapped(time))
         case .trimmingEnd(let clipId):
@@ -558,7 +629,7 @@ final class TimelineNSView: NSView {
         let point = convert(event.locationInWindow, from: nil)
 
         switch drag {
-        case .moving(let clipId, _):
+        case .moving(let clipId, _, _, _):
             // Dropping on a different lane relocates the clip; that records its own
             // step, so do not also commit a "Move clip" one.
             if let lane = laneIndex(at: point),
@@ -595,7 +666,7 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Move MIDI region")
         case .resizingRegion:
             onCommitEdit?("Resize MIDI region")
-        case .none, .seeking, .rangingFrom:
+        case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
         }
@@ -796,6 +867,21 @@ final class TimelineNSView: NSView {
         }
         edges.lineWidth = 1
         edges.stroke()
+
+        // Pro-Tools-style triangle grab points at each edge, filling the strip. The
+        // view is flipped, so y=0 is the top: base up, apex pointing down.
+        let handleTint = model.loopEnabled ? NSColor(hex: 0x6fce8f) : NSColor(hex: 0xc4b8a6)
+        handleTint.setFill()
+        let half: CGFloat = 5
+        let tri = NSBezierPath()
+        for edge in [left, right] {
+            tri.removeAllPoints()
+            tri.move(to: NSPoint(x: edge - half, y: 0))
+            tri.line(to: NSPoint(x: edge + half, y: 0))
+            tri.line(to: NSPoint(x: edge, y: Self.rangeStripHeight))
+            tri.close()
+            tri.fill()
+        }
     }
 
     private func drawMarquee(_ context: CGContext) {
@@ -1263,6 +1349,7 @@ struct TimelineView: NSViewRepresentable {
     let onToggleSelect: (String) -> Void
     let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
+    var onBeginCopyDrag: ((String, Double) -> String?)? = nil
     let onMoveSelection: (Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
@@ -1310,6 +1397,7 @@ struct TimelineView: NSViewRepresentable {
         view.onToggleSelect = onToggleSelect
         view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip
+        view.onBeginCopyDrag = onBeginCopyDrag
         view.onMoveSelection = onMoveSelection
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct MonitorDock: View {
     @EnvironmentObject private var engine: EngineController
@@ -87,7 +88,7 @@ struct MonitorDock: View {
                 HStack(spacing: Theme.Space.sm) {
                     dimButton("Mute", engine.monitorMute, Theme.Palette.orange) { engine.toggleMonitorMute() }
                     dimButton("Dim", engine.monitorDim, Theme.Palette.orange) { engine.toggleDim() }
-                    dimButton("Talk", engine.monitorTalkback, Theme.Palette.red) { engine.toggleTalkback() }
+                    TalkbackButton()
                 }
             }
         }
@@ -696,5 +697,101 @@ struct MonitorDock: View {
         Text(text)
             .font(Theme.Font.ui(9, .medium))
             .foregroundStyle(Theme.Palette.textLabel)
+    }
+}
+
+/// The monitor Talkback key: momentary while held (and it pulls Dim in with it),
+/// double-click to latch it on, click a latched button to release. A console talkback
+/// key, not a plain toggle. SwiftUI press gestures do not fire reliably for a static
+/// press inside the dock's ScrollView, so the whole control is a self-drawing NSView
+/// that reads mouseDown/mouseUp (and clickCount) directly.
+private struct TalkbackButton: View {
+    @EnvironmentObject private var engine: EngineController
+
+    var body: some View {
+        TalkbackKeyRepresentable(isOn: engine.monitorTalkback) { engine.setTalkbackEngaged($0) }
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+    }
+}
+
+private struct TalkbackKeyRepresentable: NSViewRepresentable {
+    let isOn: Bool
+    let onEngaged: (Bool) -> Void
+    func makeNSView(context: Context) -> TalkbackKeyView {
+        let view = TalkbackKeyView()
+        view.onEngaged = onEngaged
+        view.isOn = isOn
+        return view
+    }
+    func updateNSView(_ view: TalkbackKeyView, context: Context) {
+        view.onEngaged = onEngaged
+        view.isOn = isOn
+    }
+}
+
+/// Draws the "Talk" key and runs the press/hold/latch logic. Momentary while held;
+/// double-click latches on; a click on a latched key releases it. `suppress` swallows
+/// the rest of a click sequence after an unlatch so a double-click used to release
+/// cannot immediately re-engage.
+final class TalkbackKeyView: NSView {
+    var onEngaged: ((Bool) -> Void)?
+    var isOn = false { didSet { if isOn != oldValue { needsDisplay = true } } }
+    private var latched = false
+    private var suppress = false
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private static func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255, alpha: alpha)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let red = Self.rgb(0xff5252)
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        (isOn ? red.withAlphaComponent(0.16) : Self.rgb(0x3d352e)).setFill()
+        path.fill()
+        (isOn ? red.withAlphaComponent(0.55) : Self.rgb(0x4f4339)).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let font = NSFont(name: "Space Grotesk", size: 10)
+            ?? NSFont.systemFont(ofSize: 10, weight: isOn ? .semibold : .regular)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: isOn ? red : Self.rgb(0x918676),
+            .paragraphStyle: style,
+        ]
+        let text = "Talk" as NSString
+        let h = text.size(withAttributes: attrs).height
+        text.draw(in: NSRect(x: 0, y: (bounds.height - h) / 2, width: bounds.width, height: h),
+                  withAttributes: attrs)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1 { suppress = false }   // a fresh gesture begins
+        if latched {
+            latched = false
+            onEngaged?(false)
+            suppress = true                              // ignore the rest of this sequence
+            return
+        }
+        if suppress { return }
+        onEngaged?(true)                                // momentary engage
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if suppress { return }
+        if event.clickCount >= 2 {
+            latched = true
+            onEngaged?(true)                            // stays on
+        } else {
+            onEngaged?(false)                           // momentary release
+        }
     }
 }

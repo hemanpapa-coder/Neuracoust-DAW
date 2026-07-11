@@ -710,6 +710,7 @@ final class EngineController: ObservableObject {
         static let v: UInt16 = 9
         static let d: UInt16 = 2
         static let m: UInt16 = 46
+        static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
     }
@@ -722,6 +723,12 @@ final class EngineController: ObservableObject {
         // Timeline edits carry no modifier, the way every DAW does it.
         if !event.modifierFlags.contains(.command) {
             switch event.keyCode {
+            case KeyCode.space:
+                // The transport toggle, the way the spacebar works in every DAW. It has
+                // to be consumed here (return nil) or it also clicks whatever button
+                // holds focus.
+                togglePlay()
+                return nil
             case KeyCode.b where selectedRegionId != nil:
                 splitRegionAtPlayhead(selectedRegionId!)
                 return nil
@@ -1292,6 +1299,21 @@ final class EngineController: ObservableObject {
     func moveClip(_ clipId: String, to startSeconds: Double) {
         guard let handle else { return }
         if nc_clip_move(handle, clipId, startSeconds) { reloadClips() }
+    }
+
+    /// Option-drag copy: duplicate the clip, drop the copy onto the original's start so
+    /// the drag begins in place, and hand back the new id for the drag to move. The
+    /// original is left untouched. Returns nil if duplication failed.
+    func duplicateClipForDrag(_ clipId: String, at startSeconds: Double) -> String? {
+        guard let handle else { return nil }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return nil }
+        let newId = String(cString: buffer)
+        _ = nc_clip_move(handle, newId, startSeconds)
+        selectClip(newId)
+        reloadClips()
+        refreshHistory()
+        return newId
     }
 
     func trimClipStart(_ clipId: String, to startSeconds: Double) {
@@ -1979,6 +2001,13 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// True while any track is soloed, so the others can show they are being held down.
+    var anyTrackSoloed: Bool { tracks.contains { $0.solo } }
+
+    /// A slow on/off phase for the solo-implied blink on silenced tracks, toggled from
+    /// the poll tick so every strip pulses in sync without its own animation timer.
+    @Published private(set) var soloBlinkOn = false
+
     /// Solo is additive here, the way the engine models it — several tracks can be
     /// soloed at once, and Master/Monitor refuse it.
     func toggleTrackSolo(_ id: Int) {
@@ -2166,6 +2195,32 @@ final class EngineController: ObservableObject {
         monitorTalkback = nc_monitor_talkback(handle)
     }
 
+    /// Talkback is momentary and pulls Dim in with it, like a console talkback key.
+    /// Engaging remembers Dim's prior state so releasing restores it rather than
+    /// forcing it off — the user may have Dim on independently.
+    private var dimBeforeTalkback = false
+    func setTalkbackEngaged(_ on: Bool) {
+        guard let handle else { return }
+        if on {
+            if !monitorTalkback {
+                dimBeforeTalkback = monitorDim
+            }
+            nc_monitor_set_talkback(handle, true)
+            monitorTalkback = nc_monitor_talkback(handle)
+            if !monitorDim {
+                nc_monitor_set_dim(handle, true)
+                monitorDim = nc_monitor_dim(handle)
+            }
+        } else {
+            nc_monitor_set_talkback(handle, false)
+            monitorTalkback = nc_monitor_talkback(handle)
+            if monitorDim != dimBeforeTalkback {
+                nc_monitor_set_dim(handle, dimBeforeTalkback)
+                monitorDim = nc_monitor_dim(handle)
+            }
+        }
+    }
+
     func setSpeakerSlot(_ slot: Int) {
         guard let handle else { return }
         nc_monitor_set_active_speaker_slot(handle, Int32(slot))
@@ -2267,6 +2322,12 @@ final class EngineController: ObservableObject {
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
         applyTrackMeters(status)
+
+        // Pulse the solo-implied blink ~2 Hz while any track is soloed; hold it off
+        // otherwise so idle strips do not repaint. Only publish on a change.
+        let blink = anyTrackSoloed && Int(CACurrentMediaTime() * 2.2).isMultiple(of: 2)
+        if blink != soloBlinkOn { soloBlinkOn = blink }
+
         listenRoom?.refresh()
     }
 
