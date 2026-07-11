@@ -1380,7 +1380,17 @@ Steinberg::ViewRect normalizedFlexibleWavesRectForState(const Steinberg::ViewRec
         normalized.getHeight() > initialSizeCapHeight) {
         return Steinberg::ViewRect(0, 0, width, initialSizeCapHeight);
     }
-    const Steinberg::int32 height = normalized.getHeight() <= 430 ? 365 : 540;
+    // The RS124 has a collapse button that toggles a two- vs one-unit layout, so its
+    // height is snapped to those two states. But the Waves GUI Size menu (125/150/200%)
+    // scales the whole view uniformly — width and height together. Snapping height to a
+    // fixed 365/540 while width grew clipped the panels off the bottom on enlarge.
+    // Derive the scale from the width (native is 840) so the two snap heights scale too.
+    constexpr double kNativeRs124Width = 840.0;
+    const double scale = std::max(0.25, static_cast<double>(width) / kNativeRs124Width);
+    const Steinberg::int32 threshold = static_cast<Steinberg::int32>(std::lround(430.0 * scale));
+    const Steinberg::int32 collapsedHeight = static_cast<Steinberg::int32>(std::lround(365.0 * scale));
+    const Steinberg::int32 expandedHeight = static_cast<Steinberg::int32>(std::lround(540.0 * scale));
+    const Steinberg::int32 height = normalized.getHeight() <= threshold ? collapsedHeight : expandedHeight;
     return Steinberg::ViewRect(0, 0, width, height);
 }
 
@@ -1505,6 +1515,16 @@ int runWavesViewSizeSelfTest() {
     if (rs124NormalizedRecollapsed.getHeight() != 365) {
         std::cerr << "WAVES_VIEW_SIZE_SELF_TEST failed: collapsed RS124 height was not restored after expand\n";
         return 40;
+    }
+    // GUI Size 150%: width grows to 1260, so the expanded height must scale with it
+    // (≈810) rather than being clipped back to the native 540.
+    const auto rs124Enlarged = normalizedFlexibleWavesRectForState(Steinberg::ViewRect(0, 0, 1260, 810),
+                                                                   true,
+                                                                   false,
+                                                                   365);
+    if (rs124Enlarged.getWidth() != 1260 || rs124Enlarged.getHeight() != 810) {
+        std::cerr << "WAVES_VIEW_SIZE_SELF_TEST failed: enlarged RS124 view was clipped instead of scaled\n";
+        return 41;
     }
     std::cout << "WAVES_VIEW_SIZE_SELF_TEST ok\n";
     return 0;
