@@ -203,7 +203,7 @@ struct ChannelStrip: View {
 
             VStack(spacing: Theme.Space.md) {
                 if showInserts && track.kind.showsInserts { insertSection }
-                if showSends && track.kind.showsSends { slotSection("센드 A–E", track.sends, Theme.Palette.teal) }
+                if showSends && track.kind.showsSends { sendSection }
                 if showIO { ioSection }
                 panSection
                 buttonRow
@@ -306,6 +306,64 @@ struct ChannelStrip: View {
                 }
             }
         }
+    }
+
+    /// Sends: each existing send is a menu (change level / remove); the last row adds
+    /// one, offering the aux/bus tracks — or making an Aux bus if there are none yet.
+    private var sendSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("센드")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+
+            ForEach(Array(track.sends.enumerated()), id: \.offset) { idx, send in
+                Menu {
+                    Text(send.bus)
+                    Menu("레벨") {
+                        ForEach([0, -3, -6, -12, -18, -24], id: \.self) { db in
+                            Button("\(db) dB") { engine.setSendGain(track.id, slot: idx, gainDb: Float(db)) }
+                        }
+                    }
+                    Divider()
+                    Button("센드 제거", role: .destructive) { engine.removeSend(track.id, slot: idx) }
+                } label: {
+                    sendChip("\(send.bus) · \(Int(send.gainDb))dB", filled: true)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+            }
+
+            Menu {
+                let options = engine.sendBusOptions(track.id)
+                ForEach(options, id: \.self) { bus in
+                    Button(bus) { engine.addSend(track.id, to: bus) }
+                }
+                if !options.isEmpty { Divider() }
+                Button("Aux 버스 만들기") { engine.addAuxTrack() }
+            } label: {
+                sendChip("+ 센드", filled: false)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+        }
+    }
+
+    private func sendChip(_ text: String, filled: Bool) -> some View {
+        Text(text)
+            .font(Theme.Font.ui(8))
+            .foregroundStyle(filled ? Theme.Palette.teal : Theme.Palette.textFaint)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Space.md)
+            .frame(height: 16)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                    .fill(filled ? Theme.Palette.teal.opacity(0.14) : Theme.Palette.button)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                            .stroke(Theme.Palette.divider, lineWidth: 1)
+                    )
+            )
     }
 
     private func slotSection(_ title: String, _ items: [String], _ tint: Color) -> some View {

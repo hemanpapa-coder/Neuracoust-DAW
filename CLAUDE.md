@@ -280,6 +280,25 @@ The plug-in browser and the editor host address it with the sentinel track id `-
 index `-1`. `addMasterVst3Insert` refuses a second copy of the same plug-in; that is
 the engine's rule.
 
+## Mixer routing and sends
+
+The engine already routed on `TrackState.inputBus` / `outputBus` (via `MixerGraph`) and
+carried `TrackSendState` sends with `EditOperations` helpers (`addTrackSendSlot`,
+`setTrackSendSlot`, `removeTrackSendSlot`); only the bridge setters and the mixer UI
+were missing, so the I/O pills and send chips were inert.
+
+- **I/O pills** are now Menus. Output = `nc_track_output_option_*` (Master plus aux/bus
+  tracks); input = hardware pairs for audio tracks, or the connected MIDI sources for
+  instrument/MIDI tracks (picking one opens it for live MIDI). `nc_track_set_input_bus`
+  / `_output_bus` set the field and `reconcileProject()` to rebuild the graph.
+- **Sends** need a destination: `nc_track_add_aux` makes an "Aux N" track. A strip's
+  send row lists existing sends (each a menu: 레벨 submenu → `nc_track_set_send_gain_db`,
+  or 센드 제거 → `nc_track_remove_send`) and a "+ 센드" that offers the aux/bus tracks
+  (`nc_track_send_option_*`) or makes one. Send state is `[EngineController.TrackSend]`
+  (bus + gainDb). All the routing setters reconcile, so each is one undo step. There are
+  no buses in a default project, so the output/send menus only offer Master until an Aux
+  is made (트랙 menu → Aux(버스) 트랙 추가, or the send "+ 센드").
+
 ## There is no recording
 
 The transport's round button is **not** a take recorder. `nc_engine_set_recording` →

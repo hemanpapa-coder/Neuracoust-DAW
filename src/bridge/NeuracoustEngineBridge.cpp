@@ -984,6 +984,89 @@ float nc_track_send_gain_db(NCEngine* engine, int index, int slot) {
     return track->sends[static_cast<size_t>(slot)].gainDb;
 }
 
+int nc_track_add_aux(NCEngine* engine) {
+    if (engine == nullptr) return -1;
+    auto& tracks = engine->project.tracks;
+    const auto taken = [&](const std::string& nm) {
+        return std::any_of(tracks.begin(), tracks.end(),
+                           [&](const neuracoust::daw::TrackState& t) { return t.name == nm; });
+    };
+    std::string name;
+    for (int n = 1; ; ++n) { name = "Aux " + std::to_string(n); if (!taken(name)) break; }
+    neuracoust::daw::TrackState aux;
+    aux.name = name;
+    aux.trackType = "aux";
+    aux.outputBus = "Master";
+    aux.colorHex = "#7C8BA0";
+    auto master = std::find_if(tracks.begin(), tracks.end(), [](const neuracoust::daw::TrackState& t) {
+        return t.name == "Master" || t.trackType == "master";
+    });
+    if (master != tracks.end()) tracks.insert(master, aux); else tracks.push_back(aux);
+    return adoptNewTrack(engine, name, "Add aux track");
+}
+
+namespace {
+// Send targets = aux/bus tracks (not the track itself, not master/monitor). Cached
+// between the count and name queries.
+std::vector<std::string>& sendOptionCache() {
+    static std::vector<std::string> options;
+    return options;
+}
+}
+
+int nc_track_send_option_count(NCEngine* engine, int index) {
+    auto& options = sendOptionCache();
+    options.clear();
+    if (engine == nullptr) return 0;
+    const auto* self = trackAt(engine, index);
+    for (const auto& track : engine->project.tracks) {
+        if (self != nullptr && track.name == self->name) continue;
+        if (track.trackType == "aux" || track.trackType == "bus_folder" ||
+            track.trackType == "routing_folder") {
+            options.push_back(track.name);
+        }
+    }
+    return static_cast<int>(options.size());
+}
+
+void nc_track_send_option(NCEngine* engine, int index, int i, char* out, size_t outLen) {
+    (void)engine; (void)index;
+    const auto& options = sendOptionCache();
+    copyText(out, outLen, (i >= 0 && static_cast<size_t>(i) < options.size())
+                              ? options[static_cast<size_t>(i)] : std::string{});
+}
+
+bool nc_track_add_send(NCEngine* engine, int index, const char* busName) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || busName == nullptr) return false;
+    neuracoust::daw::TrackSendState send;
+    send.busName = busName;
+    send.gainDb = -12.0f;
+    send.enabled = true;
+    if (!neuracoust::daw::addTrackSendSlot(engine->project, track->name, send)) return false;
+    engine->recordStep("Add send");
+    engine->reconcileProject();
+    return true;
+}
+
+void nc_track_set_send_gain_db(NCEngine* engine, int index, int slot, float db) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return;
+    neuracoust::daw::TrackSendState send = track->sends[static_cast<size_t>(slot)];
+    send.gainDb = db;
+    if (!neuracoust::daw::setTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot), send)) return;
+    engine->recordStep("Set send level");
+    engine->reconcileProject();
+}
+
+void nc_track_remove_send(NCEngine* engine, int index, int slot) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return;
+    neuracoust::daw::removeTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot));
+    engine->recordStep("Remove send");
+    engine->reconcileProject();
+}
+
 // ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------

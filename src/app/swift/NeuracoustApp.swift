@@ -102,6 +102,7 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("t", modifiers: .command)
                 Button("악기 트랙 추가") { engine.addInstrumentTrack() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("Aux(버스) 트랙 추가") { engine.addAuxTrack() }
                 Divider()
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)

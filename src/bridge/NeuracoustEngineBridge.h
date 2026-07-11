@@ -247,6 +247,15 @@ bool nc_master_set_vst3_parameter(NCEngine* engine, int slot, uint32_t parameter
 int nc_track_send_count(NCEngine* engine, int index);
 void nc_track_send_bus(NCEngine* engine, int index, int slot, char* out, size_t outLen);
 float nc_track_send_gain_db(NCEngine* engine, int index, int slot);
+// Sends route a copy of the track to an aux/bus. nc_track_add_aux makes a destination
+// bus. Send options are the aux/bus tracks (count then name, cached between the calls).
+// add / set-gain / remove all reconcile the mixer graph.
+int  nc_track_add_aux(NCEngine* engine);
+int  nc_track_send_option_count(NCEngine* engine, int index);
+void nc_track_send_option(NCEngine* engine, int index, int i, char* out, size_t outLen);
+bool nc_track_add_send(NCEngine* engine, int index, const char* busName);
+void nc_track_set_send_gain_db(NCEngine* engine, int index, int slot, float db);
+void nc_track_remove_send(NCEngine* engine, int index, int slot);
 
 // ---------------------------------------------------------------------------
 // History (undo / redo / dirty / autosave)

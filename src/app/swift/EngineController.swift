@@ -79,6 +79,11 @@ final class EngineController: ObservableObject {
 
     // MARK: Tracks
 
+    struct TrackSend: Hashable {
+        let bus: String
+        let gainDb: Float
+    }
+
     struct Track: Identifiable {
         let id: Int
         let name: String
@@ -96,7 +101,7 @@ final class EngineController: ObservableObject {
         var inserts: [InsertSlot]
         /// What turns this track's MIDI notes into sound. Empty on every other kind.
         var instrumentName: String
-        var sends: [String]
+        var sends: [TrackSend]
 
         var peakLeft: Float = 0
         var peakRight: Float = 0
@@ -929,7 +934,8 @@ final class EngineController: ObservableObject {
                     return loaded == "No Instrument" ? "" : loaded
                 }(),
                 sends: (0..<sendCount).map { slot in
-                    readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) }
+                    TrackSend(bus: readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) },
+                              gainDb: nc_track_send_gain_db(handle, i, Int32(slot)))
                 }
             )
         }
@@ -2051,6 +2057,46 @@ final class EngineController: ObservableObject {
     func setTrackMidiSource(_ id: Int, sourceId: String, label: String) {
         startLiveMidi(sourceId)
         setTrackInputBus(id, label)
+    }
+
+    // MARK: Track sends
+
+    /// Make a new aux/bus track that sends can target.
+    @discardableResult
+    func addAuxTrack() -> Bool {
+        guard let handle, nc_track_add_aux(handle) >= 0 else { return false }
+        reloadTracks()
+        refreshHistory()
+        return true
+    }
+
+    /// The aux/bus tracks this track may send to.
+    func sendBusOptions(_ id: Int) -> [String] {
+        guard let handle else { return [] }
+        return (0..<Int(nc_track_send_option_count(handle, Int32(id)))).map { i in
+            readString { nc_track_send_option(handle, Int32(id), Int32(i), $0, $1) }
+        }
+    }
+
+    func addSend(_ id: Int, to bus: String) {
+        guard let handle else { return }
+        _ = bus.withCString { nc_track_add_send(handle, Int32(id), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    func setSendGain(_ id: Int, slot: Int, gainDb: Float) {
+        guard let handle else { return }
+        nc_track_set_send_gain_db(handle, Int32(id), Int32(slot), gainDb)
+        reloadTracks()
+        refreshHistory()
+    }
+
+    func removeSend(_ id: Int, slot: Int) {
+        guard let handle else { return }
+        nc_track_remove_send(handle, Int32(id), Int32(slot))
+        reloadTracks()
+        refreshHistory()
     }
 
     /// True while any track is soloed, so the others can show they are being held down.
