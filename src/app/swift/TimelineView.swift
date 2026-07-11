@@ -148,9 +148,10 @@ final class TimelineNSView: NSView {
             window?.invalidateCursorRects(for: self)
         }
     }
-    /// Option-drag: duplicate the clip in place and return the copy's id, which the
-    /// drag then moves — leaving the original where it was.
-    var onBeginCopyDrag: ((String, Double) -> String?)?  // (clipId, startSeconds) -> newId
+    /// Option-drag copy, committed on release: (originalClipId, targetLaneIndex, start).
+    /// The copy is created only here, at the drop, so nothing sums in place during drag.
+    var onDropCopy: ((String, Int, Double) -> Void)?     // (clipId, laneIndex, startSeconds)
+    var onDropCopyToNewTrack: ((String, Double) -> Void)?  // drop past last lane → new track
     var onMoveSelection: ((Double) -> Void)?             // delta seconds
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
@@ -195,6 +196,10 @@ final class TimelineNSView: NSView {
         /// until the cursor leaves the axis-lock dead zone, so a vertical (lane) move
         /// does not smear the clip sideways. axisUnlocked latches once it crosses.
         case moving(clipId: String, grabOffsetSeconds: Double, startX: CGFloat, axisUnlocked: Bool)
+        /// Option-drag copy. The original is left untouched and a ghost follows the
+        /// cursor; the copy is created only on release (and only if actually moved), so
+        /// an option-click never leaves a doubled clip summing in place.
+        case copyMoving(clipId: String, grabOffsetSeconds: Double, startX: CGFloat, axisUnlocked: Bool)
         /// Dragging one clip of a multi-selection drags all of them. The anchor's
         /// live start is read back from the model each frame, so a clamp at zero
         /// simply stops the whole selection instead of drifting it apart.
@@ -340,6 +345,35 @@ final class TimelineNSView: NSView {
     /// visibly follows the pointer vertically as well as horizontally.
     private func drawDragGhost(_ context: CGContext) {
         guard let cursor = dragCursor else { return }
+
+        // Option-drag copy: the original stays put, so the ghost follows the cursor fully
+        // (both axes) to preview where the copy will land on release.
+        if case .copyMoving(let clipId, let grabOffset, _, _) = drag,
+           let clip = model.clips.first(where: { $0.id == clipId }) {
+            let below = droppedBelowLanes(cursor)
+            let dropStart = max(0, snapped(seconds(atX: cursor.x) - grabOffset))
+            let left = x(forSeconds: dropStart)
+            let width = clipRect(clip).width
+            let destTop: CGFloat = below
+                ? laneTop(model.lanes.count - 1) + Self.laneHeight + 6
+                : laneTop(laneIndex(at: cursor) ?? clip.laneIndex) + 6
+            context.saveGState()
+            context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
+                                    width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+            let ghost = NSRect(x: left, y: destTop, width: width, height: Self.laneHeight - 12)
+            NSColor(hex: 0x35BFA8).withAlphaComponent(0.35).setFill()
+            let path = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
+            path.fill()
+            NSColor(hex: 0x8ff0e0).withAlphaComponent(0.85).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            ("＋복사" as NSString).draw(at: NSPoint(x: ghost.minX + 4, y: ghost.minY + 3),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 8, weight: .bold),
+                                 .foregroundColor: NSColor(hex: 0xeafff9)])
+            context.restoreGState()
+            return
+        }
+
         var draggedIds: [String] = []
         var anchorLane: Int?
         switch drag {
@@ -701,15 +735,13 @@ final class TimelineNSView: NSView {
             drag = .trimmingStart(clipId: hit.id)
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
             drag = .trimmingEnd(clipId: hit.id)
+        } else if event.modifierFlags.contains(.option) {
+            // Option-drag = copy, but the copy is made on release, not now — so an
+            // option-click that never moves cannot leave a duplicate summing in place.
+            drag = .copyMoving(clipId: hit.id, grabOffsetSeconds: grabOffset,
+                               startX: point.x, axisUnlocked: false)
         } else {
-            // Holding Option turns the move into a copy: duplicate in place and drag
-            // the new clip, so the original stays put.
-            var clipId = hit.id
-            if event.modifierFlags.contains(.option),
-               let newId = onBeginCopyDrag?(hit.id, hit.startSeconds) {
-                clipId = newId
-            }
-            drag = .moving(clipId: clipId, grabOffsetSeconds: grabOffset,
+            drag = .moving(clipId: hit.id, grabOffsetSeconds: grabOffset,
                            startX: point.x, axisUnlocked: false)
         }
     }
@@ -768,6 +800,15 @@ final class TimelineNSView: NSView {
             }
             // Locked and inside the dead zone: hold the horizontal position; the lane
             // still resolves from the cursor Y at drop.
+        case .copyMoving(let clipId, let grabOffset, let startX, let unlocked):
+            // The original never moves; only the ghost follows. Latch the axis lock the
+            // same way so a straight vertical carry does not smear the ghost sideways.
+            dragCursor = point
+            needsDisplay = true
+            if !unlocked, abs(point.x - startX) > Self.axisLockThreshold {
+                drag = .copyMoving(clipId: clipId, grabOffsetSeconds: grabOffset,
+                                   startX: startX, axisUnlocked: true)
+            }
         case .movingSelection(let anchorId, let grabOffset, let startX, let unlocked):
             dragCursor = point
             needsDisplay = true
@@ -820,6 +861,20 @@ final class TimelineNSView: NSView {
                 }
             } else {
                 onCommitEdit?("Move clip")
+            }
+        case .copyMoving(let clipId, let grabOffset, _, let unlocked):
+            // Make the copy now, at the drop — and only if the drag actually moved, so an
+            // option-click in place never spawns an overlapping duplicate that sums.
+            let movedLane = laneIndex(at: point).map { lane in
+                model.clips.first { $0.id == clipId }.map { lane != $0.laneIndex } ?? false
+            } ?? false
+            if unlocked || movedLane || droppedBelowLanes(point) {
+                let dropStart = max(0, snapped(seconds(atX: point.x) - grabOffset))
+                if droppedBelowLanes(point) {
+                    onDropCopyToNewTrack?(clipId, dropStart)
+                } else {
+                    onDropCopy?(clipId, laneIndex(at: point) ?? -1, dropStart)
+                }
             }
         case .trimmingStart, .trimmingEnd:
             onCommitEdit?("Trim clip")
@@ -1722,7 +1777,8 @@ struct TimelineView: NSViewRepresentable {
     let onToggleSelect: (String) -> Void
     let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
-    var onBeginCopyDrag: ((String, Double) -> String?)? = nil
+    var onDropCopy: ((String, Int, Double) -> Void)? = nil
+    var onDropCopyToNewTrack: ((String, Double) -> Void)? = nil
     var onSplitClip: ((String, Double) -> Void)? = nil
     var editTool: String = "smart"
     let onMoveSelection: (Double) -> Void
@@ -1779,7 +1835,8 @@ struct TimelineView: NSViewRepresentable {
         view.onToggleSelect = onToggleSelect
         view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip
-        view.onBeginCopyDrag = onBeginCopyDrag
+        view.onDropCopy = onDropCopy
+        view.onDropCopyToNewTrack = onDropCopyToNewTrack
         view.onSplitClip = onSplitClip
         view.editTool = editTool
         view.onMoveSelection = onMoveSelection

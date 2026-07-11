@@ -1465,16 +1465,52 @@ final class EngineController: ObservableObject {
     /// Option-drag copy: duplicate the clip, drop the copy onto the original's start so
     /// the drag begins in place, and hand back the new id for the drag to move. The
     /// original is left untouched. Returns nil if duplication failed.
-    func duplicateClipForDrag(_ clipId: String, at startSeconds: Double) -> String? {
-        guard let handle else { return nil }
+    /// Option-drag copy, committed on release: duplicate the original and place the copy
+    /// at the drop lane + time. Nothing is created until the drop, so no clip ever sums
+    /// in place while dragging. `laneIndex` addresses `laneTracks`; -1 falls back to the
+    /// original's own track.
+    func dropClipCopy(_ clipId: String, laneIndex: Int, startSeconds: Double) {
+        guard let handle else { return }
         var buffer = [CChar](repeating: 0, count: 128)
-        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return nil }
+        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return }
         let newId = String(cString: buffer)
-        _ = nc_clip_move(handle, newId, startSeconds)
-        selectClip(newId)
+
+        var targetTrackId = -1
+        if laneIndex >= 0 && laneIndex < laneTracks.count {
+            targetTrackId = laneTracks[laneIndex].id
+        } else if let clip = clips.first(where: { $0.id == clipId }),
+                  let track = laneTracks.first(where: { $0.name == clip.trackName }) {
+            targetTrackId = track.id
+        }
+
+        if targetTrackId >= 0 {
+            var out = [CChar](repeating: 0, count: 128)
+            if nc_clip_move_to_track(handle, newId, Int32(targetTrackId), startSeconds, &out, out.count) {
+                selectClip(String(cString: out))
+            }
+        } else {
+            _ = nc_clip_move(handle, newId, startSeconds)
+            selectClip(newId)
+        }
         reloadClips()
         refreshHistory()
-        return newId
+    }
+
+    /// Option-drag copy dropped past the last lane: duplicate onto a fresh audio track.
+    func dropClipCopyToNewTrack(_ clipId: String, startSeconds: Double) {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_duplicate(handle, clipId, &buffer, buffer.count) else { return }
+        let newId = String(cString: buffer)
+        let newIndex = nc_track_add_audio(handle)
+        guard newIndex >= 0 else { reloadClips(); refreshHistory(); return }
+        reloadTracks()
+        var out = [CChar](repeating: 0, count: 128)
+        if nc_clip_move_to_track(handle, newId, newIndex, startSeconds, &out, out.count) {
+            selectClip(String(cString: out))
+        }
+        reloadClips()
+        refreshHistory()
     }
 
     func trimClipStart(_ clipId: String, to startSeconds: Double) {
