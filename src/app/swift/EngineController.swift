@@ -21,6 +21,8 @@ final class EngineController: ObservableObject {
     @Published private(set) var transportRunning = false
     @Published private(set) var outputPeakLeft: Float = 0
     @Published private(set) var outputPeakRight: Float = 0
+    /// Full FFT spectrum magnitude bins (0..1, low→high frequency) for the analyzer.
+    @Published private(set) var spectrumBins: [Float] = []
     /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
     /// smoothed with a decay so the meters fall back gently.
     @Published private(set) var inputPeak: Float = 0
@@ -2436,6 +2438,40 @@ final class EngineController: ObservableObject {
     /// Per-tick meter release. At ~30 Hz this falls a held peak to silence in ~0.2 s.
     private static let meterDecay: Float = 0.80
 
+    /// The analyzer type the small dock widget opens on click (right-click changes it).
+    @Published var dockAnalyzerKind: AnalyzerKind = .spectrum
+
+    /// One-click on the small spectrum widget opens a large, movable analyzer window.
+    func openAnalyzerWindow() {
+        AnalyzerWindowManager.shared.open(kind: dockAnalyzerKind, engine: self)
+    }
+
+    private var spectrumScratch = [Float](repeating: 0, count: 1024)
+    /// Reads the FFT bins (cached by the status poll) and smooths them so the analyzer
+    /// rises fast and falls gently, the way a hardware analyzer does.
+    private func updateSpectrumBins(_ handle: OpaquePointer) {
+        let count = Int(nc_spectrum_bin_count(handle))
+        guard count > 0 else {
+            if !spectrumBins.isEmpty { spectrumBins = [] }
+            return
+        }
+        if spectrumScratch.count < count { spectrumScratch = [Float](repeating: 0, count: count) }
+        _ = spectrumScratch.withUnsafeMutableBufferPointer {
+            nc_spectrum_bins(handle, $0.baseAddress, Int32(count))
+        }
+        if spectrumBins.count != count {
+            spectrumBins = Array(spectrumScratch[0..<count])
+            return
+        }
+        for i in 0..<count {
+            let incoming = spectrumScratch[i]
+            // Fast attack, slow release.
+            spectrumBins[i] = incoming > spectrumBins[i]
+                ? incoming
+                : spectrumBins[i] * 0.72 + incoming * 0.28
+        }
+    }
+
     // MARK: - Monitor station
 
     private func reloadMonitorState() {
@@ -2846,6 +2882,7 @@ final class EngineController: ObservableObject {
         // engine peak stays lit after stop; with it the meter always falls to silence.
         outputPeakLeft = max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay)
         outputPeakRight = max(status.outputPeakRight, outputPeakRight * Self.meterDecay)
+        updateSpectrumBins(handle)
         // Input meter follows the peak immediately on the way up and decays on the way
         // down, so a transient stays readable for a moment.
         inputPeak = max(status.inputPeak, inputPeak * 0.82)

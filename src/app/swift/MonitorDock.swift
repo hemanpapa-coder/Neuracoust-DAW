@@ -461,7 +461,30 @@ struct MonitorDock: View {
                     .font(Theme.Font.mono(6.5))
                     .tracking(0.6)
                     .foregroundStyle(Theme.Palette.textFaint)
-                SpectrumBars(low: engine.spectrumLow, mid: engine.spectrumMid, high: engine.spectrumHigh)
+                SpectrumAnalyzerView(bins: engine.spectrumBins,
+                                     sampleRate: engine.sampleRate,
+                                     compact: true)
+                    .frame(height: 40)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.35)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { engine.openAnalyzerWindow() }
+                    .contextMenu {
+                        Menu("큰 창으로 열기") {
+                            ForEach(AnalyzerKind.allCases) { k in
+                                Button(k.label + (k.isAvailable ? "" : " (준비 중)")) {
+                                    AnalyzerWindowManager.shared.open(kind: k, engine: engine)
+                                }
+                                .disabled(!k.isAvailable)
+                            }
+                        }
+                        Divider()
+                        Picker("클릭 시 열 종류", selection: $engine.dockAnalyzerKind) {
+                            ForEach(AnalyzerKind.allCases) { k in
+                                Text(k.label).tag(k)
+                            }
+                        }
+                    }
+                    .help("클릭: 큰 분석 창 열기 · 우클릭: 종류 선택")
             }
             .padding(.top, Theme.Space.sm)
         }
