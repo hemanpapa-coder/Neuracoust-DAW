@@ -23,6 +23,8 @@ final class EngineController: ObservableObject {
     @Published private(set) var outputPeakRight: Float = 0
     /// Full FFT spectrum magnitude bins (0..1, low→high frequency) for the analyzer.
     @Published private(set) var spectrumBins: [Float] = []
+    /// Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
+    @Published private(set) var goniometerSamples: [Float] = []
     /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
     /// smoothed with a decay so the meters fall back gently.
     @Published private(set) var inputPeak: Float = 0
@@ -2472,6 +2474,20 @@ final class EngineController: ObservableObject {
         }
     }
 
+    private var goniometerScratch = [Float](repeating: 0, count: 1024)
+    private func updateGoniometer(_ handle: OpaquePointer) {
+        let count = Int(nc_goniometer_sample_count(handle))
+        guard count > 0 else {
+            if !goniometerSamples.isEmpty { goniometerSamples = [] }
+            return
+        }
+        if goniometerScratch.count < count { goniometerScratch = [Float](repeating: 0, count: count) }
+        _ = goniometerScratch.withUnsafeMutableBufferPointer {
+            nc_goniometer_samples(handle, $0.baseAddress, Int32(count))
+        }
+        goniometerSamples = Array(goniometerScratch[0..<count])
+    }
+
     // MARK: - Monitor station
 
     private func reloadMonitorState() {
@@ -2883,6 +2899,7 @@ final class EngineController: ObservableObject {
         outputPeakLeft = max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay)
         outputPeakRight = max(status.outputPeakRight, outputPeakRight * Self.meterDecay)
         updateSpectrumBins(handle)
+        updateGoniometer(handle)
         // Input meter follows the peak immediately on the way up and decays on the way
         // down, so a transient stays readable for a moment.
         inputPeak = max(status.inputPeak, inputPeak * 0.82)

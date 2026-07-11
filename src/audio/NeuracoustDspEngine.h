@@ -214,6 +214,10 @@ private:
     mutable std::mutex spectrumMutex_;
     std::vector<float> spectrumAccumulator_;
     std::vector<float> spectrumBins_;
+    // Goniometer: the most recent L/R sample pairs (interleaved), subsampled to a fixed
+    // point count so the vectorscope stays cheap to draw.
+    static constexpr int kGoniometerPoints = 512;
+    std::vector<float> goniometerSamples_;
     float monitorStationGainSmoothed_ = 1.0f;
     bool monitorStationGainInitialized_ = false;
     bool remoteDspMonitorActive_ = false;

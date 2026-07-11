@@ -1745,6 +1745,7 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
         std::unique_lock<std::mutex> lock(spectrumMutex_, std::try_to_lock);
         if (lock.owns_lock()) {
             status.spectrumBins = spectrumBins_;
+            status.goniometerSamples = goniometerSamples_;
         }
     }
     status.trackMeterNames = projectMeters_.trackNames;
@@ -3015,6 +3016,19 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
     spectrumHigh_.store(std::min(1.0f, static_cast<float>(std::sqrt(highEnergy / frames))));
 
     updateSpectrum(interleavedStereo);
+
+    // Goniometer: subsample the block's L/R pairs to a fixed point count.
+    const int64_t pairCount = static_cast<int64_t>(interleavedStereo.size() / 2);
+    if (pairCount > 0) {
+        std::lock_guard<std::mutex> lock(spectrumMutex_);
+        goniometerSamples_.assign(static_cast<size_t>(kGoniometerPoints) * 2, 0.0f);
+        for (int i = 0; i < kGoniometerPoints; ++i) {
+            const int64_t frame = pairCount == 1 ? 0
+                : (static_cast<int64_t>(i) * (pairCount - 1)) / (kGoniometerPoints - 1);
+            goniometerSamples_[static_cast<size_t>(i) * 2] = interleavedStereo[static_cast<size_t>(frame) * 2];
+            goniometerSamples_[static_cast<size_t>(i) * 2 + 1] = interleavedStereo[static_cast<size_t>(frame) * 2 + 1];
+        }
+    }
 }
 
 void NeuracoustDspEngine::publishListenRoomLocked(const std::vector<float>& interleavedStereo) {
@@ -3037,6 +3051,7 @@ void NeuracoustDspEngine::resetMeteringLocked() {
         std::lock_guard<std::mutex> lock(spectrumMutex_);
         spectrumAccumulator_.clear();
         std::fill(spectrumBins_.begin(), spectrumBins_.end(), 0.0f);
+        std::fill(goniometerSamples_.begin(), goniometerSamples_.end(), 0.0f);
     }
 }
 

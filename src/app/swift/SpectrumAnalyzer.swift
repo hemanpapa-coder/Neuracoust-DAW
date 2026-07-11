@@ -79,3 +79,47 @@ struct SpectrumAnalyzerView: View {
         }
     }
 }
+
+/// A goniometer / vectorscope: L/R plotted as a Lissajous, rotated 45° so a mono
+/// signal draws a vertical line and a wide stereo image spreads horizontally — the
+/// classic phase display. `samples` are interleaved L,R pairs.
+struct GoniometerView: View {
+    var samples: [Float]
+
+    var body: some View {
+        Canvas { context, size in
+            let side = min(size.width, size.height)
+            let cx = size.width / 2
+            let cy = size.height / 2
+            let radius = side / 2 - 4
+
+            // Reference frame: the diamond and the L/R, M/S axes.
+            var frame = Path()
+            frame.move(to: CGPoint(x: cx, y: cy - radius))
+            frame.addLine(to: CGPoint(x: cx + radius, y: cy))
+            frame.addLine(to: CGPoint(x: cx, y: cy + radius))
+            frame.addLine(to: CGPoint(x: cx - radius, y: cy))
+            frame.closeSubpath()
+            context.stroke(frame, with: .color(.white.opacity(0.10)), lineWidth: 1)
+            var cross = Path()
+            cross.move(to: CGPoint(x: cx, y: cy - radius)); cross.addLine(to: CGPoint(x: cx, y: cy + radius))
+            cross.move(to: CGPoint(x: cx - radius, y: cy)); cross.addLine(to: CGPoint(x: cx + radius, y: cy))
+            context.stroke(cross, with: .color(.white.opacity(0.06)), lineWidth: 1)
+
+            guard samples.count >= 4 else { return }
+            let scale = radius * 0.9
+            var dots = Path()
+            var i = 0
+            while i + 1 < samples.count {
+                let l = CGFloat(samples[i])
+                let r = CGFloat(samples[i + 1])
+                // Rotate 45°: mono (L=R) → vertical, side (L=-R) → horizontal.
+                let x = cx + (l - r) * 0.7071 * scale
+                let y = cy - (l + r) * 0.7071 * scale
+                dots.addEllipse(in: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6))
+                i += 2
+            }
+            context.fill(dots, with: .color(Color(hue: 0.08, saturation: 0.85, brightness: 1.0).opacity(0.8)))
+        }
+    }
+}

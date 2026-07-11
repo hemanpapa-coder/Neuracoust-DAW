@@ -93,6 +93,10 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out);
 int nc_spectrum_bin_count(NCEngine* engine);
 bool nc_spectrum_bins(NCEngine* engine, float* out, int count);
 
+// Goniometer L/R sample pairs (interleaved L,R,L,R…). Cached on each nc_engine_status.
+int nc_goniometer_sample_count(NCEngine* engine);
+bool nc_goniometer_samples(NCEngine* engine, float* out, int count);
+
 void nc_engine_set_transport_running(NCEngine* engine, bool running);
 void nc_engine_set_recording(NCEngine* engine, bool active);
 void nc_engine_seek(NCEngine* engine, double seconds);

@@ -63,6 +63,8 @@ struct NCEngine {
     /// Latest FFT spectrum bins, cached each status poll so the analyzer reads them
     /// without a second full status snapshot.
     std::vector<float> lastSpectrumBins;
+    /// Latest goniometer L/R sample pairs, cached the same way.
+    std::vector<float> lastGoniometerSamples;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -341,6 +343,7 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     copyText(out->message, NC_TEXT_LEN, s.message);
 
     engine->lastSpectrumBins = s.spectrumBins;
+    engine->lastGoniometerSamples = s.goniometerSamples;
 }
 
 int nc_spectrum_bin_count(NCEngine* engine) {
@@ -352,6 +355,20 @@ bool nc_spectrum_bins(NCEngine* engine, float* out, int count) {
     const auto& bins = engine->lastSpectrumBins;
     const int n = std::min(count, static_cast<int>(bins.size()));
     for (int i = 0; i < n; ++i) out[i] = bins[static_cast<size_t>(i)];
+    for (int i = n; i < count; ++i) out[i] = 0.0f;
+    return n > 0;
+}
+
+// Goniometer L/R pairs (interleaved), cached on each status poll like the spectrum.
+int nc_goniometer_sample_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->lastGoniometerSamples.size()) : 0;
+}
+
+bool nc_goniometer_samples(NCEngine* engine, float* out, int count) {
+    if (engine == nullptr || out == nullptr || count <= 0) return false;
+    const auto& s = engine->lastGoniometerSamples;
+    const int n = std::min(count, static_cast<int>(s.size()));
+    for (int i = 0; i < n; ++i) out[i] = s[static_cast<size_t>(i)];
     for (int i = n; i < count; ++i) out[i] = 0.0f;
     return n > 0;
 }
