@@ -552,6 +552,36 @@ final class EngineController: ObservableObject {
     }
     @Published var editTool: EditTool = .smart
 
+    /// Pro Tools edit modes. Grid snaps to the timeline quantum, Slip is free, Shuffle
+    /// ripples neighbours on move/delete, Spot places a clip by typed time. The engine
+    /// has no edit-mode state — the UI decides which move/delete path to take.
+    enum EditMode: String, CaseIterable, Identifiable {
+        case shuffle, slip, spot, grid
+        var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .shuffle: return "arrow.left.arrow.right"
+            case .slip: return "arrow.left.and.right"
+            case .spot: return "scope"
+            case .grid: return "grid"
+            }
+        }
+        var label: String {
+            switch self {
+            case .shuffle: return "셔플"
+            case .slip: return "슬립"
+            case .spot: return "스팟"
+            case .grid: return "그리드"
+            }
+        }
+    }
+    @Published var editMode: EditMode = .grid {
+        didSet { snapEnabled = (editMode == .grid) }
+    }
+
+    /// Spot mode surfaces this sheet: the clip awaiting an exact placement time.
+    @Published var spotTargetClipId: String?
+
     /// Split a specific clip at a timeline second (the 분할 tool clicking a clip).
     func splitClipAt(_ clipId: String, seconds: Double) {
         guard let handle else { return }
@@ -1564,6 +1594,20 @@ final class EngineController: ObservableObject {
     }
 
     func commitClipGesture(_ stepName: String) {
+        // A single-clip move honours the edit mode: Shuffle ripples the neighbours,
+        // Spot opens the exact-time sheet instead of committing the free position.
+        if stepName == "Move clip", let clip = clips.first(where: { selectedClipIds.contains($0.id) }) {
+            switch editMode {
+            case .shuffle:
+                commitShuffleMove()
+                return
+            case .spot:
+                spotTargetClipId = clip.id
+                return
+            case .grid, .slip:
+                break
+            }
+        }
         recordGesture(stepName)
     }
 
@@ -1665,10 +1709,42 @@ final class EngineController: ObservableObject {
 
     func deleteSelectedClips() {
         guard let handle else { return }
+        // Shuffle mode ripples: deleting closes the gap and pulls later clips left.
+        if editMode == .shuffle, !selection.isEmpty {
+            let sel = clips.filter { selectedClipIds.contains($0.id) }
+            let start = sel.map { $0.startSeconds }.min() ?? 0
+            let end = sel.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
+            if nc_clip_shuffle_delete_range(handle, start, end) > 0 {
+                selectedClipIds = []
+                reloadClips()
+                refreshHistory()
+                return
+            }
+        }
         guard let deleted = withClipIds(selection, { nc_clip_delete_many(handle, $0, $1) }), deleted > 0 else { return }
         selectedClipIds = []
         reloadClips()
         refreshHistory()
+    }
+
+    /// Commit a Shuffle-mode drag: after the free preview move, re-lay the clip against
+    /// its neighbours so they ripple. Single-clip only — matches Pro Tools shuffle drag.
+    func commitShuffleMove() {
+        guard let handle, editMode == .shuffle, selectedClipIds.count == 1,
+              let clip = clips.first(where: { selectedClipIds.contains($0.id) }) else { return }
+        _ = nc_clip_shuffle_move(handle, clip.id, clip.startSeconds)
+        reloadClips()
+        refreshHistory()
+    }
+
+    /// Spot mode: place a clip at an exact typed time. Records its own step.
+    func spotPlaceClip(_ clipId: String, at seconds: Double) {
+        guard let handle else { return }
+        if nc_clip_move(handle, clipId, max(0, seconds)) {
+            reloadClips()
+            recordGesture("Spot clip")
+        }
+        spotTargetClipId = nil
     }
 
     // MARK: MIDI

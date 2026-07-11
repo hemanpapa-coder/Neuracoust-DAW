@@ -1468,6 +1468,28 @@ int nc_clip_glue_range(NCEngine* engine, double startSeconds, double endSeconds)
     return static_cast<int>(glued.size());
 }
 
+bool nc_clip_shuffle_move(NCEngine* engine, const char* clipId, double newStartSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    if (!neuracoust::daw::shuffleMoveClip(engine->project, clipId, std::max(0.0, newStartSeconds))) {
+        return false;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Shuffle move");
+    return true;
+}
+
+int nc_clip_shuffle_delete_range(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    if (!neuracoust::daw::shuffleDeleteClipRange(engine->project, startSeconds, endSeconds)) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Shuffle delete");
+    return 1;
+}
+
 bool nc_track_clear_instrument(NCEngine* engine, int trackIndex) {
     auto* track = trackAt(engine, trackIndex);
     if (track == nullptr) return false;

@@ -145,6 +145,63 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             BounceStatus()
         }
+        .sheet(isPresented: Binding(
+            get: { engine.spotTargetClipId != nil },
+            set: { if !$0 { engine.spotTargetClipId = nil } }
+        )) {
+            SpotDialog()
+        }
+    }
+}
+
+/// Spot edit mode: type an exact start time (seconds) for the dropped clip.
+private struct SpotDialog: View {
+    @EnvironmentObject private var engine: EngineController
+    @State private var seconds: String = ""
+
+    private var clip: EngineController.Clip? {
+        engine.clips.first { $0.id == engine.spotTargetClipId }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.lg) {
+            Text("스팟 — 정확한 위치 지정")
+                .font(Theme.Font.ui(12, .semibold))
+                .foregroundStyle(Theme.Palette.textBright)
+            if let clip {
+                Text(clip.name)
+                    .font(Theme.Font.mono(9))
+                    .foregroundStyle(Theme.Palette.textFaint)
+            }
+            HStack(spacing: Theme.Space.sm) {
+                Text("시작 (초)")
+                    .font(Theme.Font.ui(10))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                TextField("0.000", text: $seconds)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 120)
+                    .onSubmit(place)
+            }
+            HStack {
+                Spacer()
+                Button("취소") { engine.spotTargetClipId = nil }
+                Button("배치") { place() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(Theme.Space.xxl)
+        .frame(width: 300)
+        .onAppear {
+            if let clip { seconds = String(format: "%.3f", clip.startSeconds) }
+        }
+    }
+
+    private func place() {
+        guard let id = engine.spotTargetClipId, let value = Double(seconds) else {
+            engine.spotTargetClipId = nil
+            return
+        }
+        engine.spotPlaceClip(id, at: value)
     }
 }
 

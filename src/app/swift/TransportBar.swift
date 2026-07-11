@@ -188,7 +188,34 @@ struct TransportBar: View {
         HStack(spacing: Theme.Space.sm) {
             toggle("Loop", isOn: engine.loopEnabled, tint: Theme.Palette.green) { engine.toggleLoop() }
             toggle("Click", isOn: engine.clickEnabled, tint: Theme.Palette.amber) { engine.toggleClick() }
-            toggle("Snap", isOn: engine.snapEnabled, tint: Theme.Palette.accent) { engine.snapEnabled.toggle() }
+            editModePicker
+        }
+    }
+
+    /// Pro Tools edit modes replace the old Snap on/off: Grid snaps, Slip is free,
+    /// Shuffle ripples, Spot places by typed time.
+    private var editModePicker: some View {
+        HStack(spacing: 1) {
+            ForEach(EngineController.EditMode.allCases) { mode in
+                let active = engine.editMode == mode
+                Button { engine.editMode = mode } label: {
+                    Text(mode.label)
+                        .font(Theme.Font.ui(8.5, .medium))
+                        .foregroundStyle(active ? Theme.Palette.accent : Theme.Palette.textFaint)
+                        .padding(.horizontal, 6)
+                        .frame(height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .fill(active ? Theme.Palette.accent.opacity(0.14) : Theme.Palette.button)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("\(mode.label) 편집 모드")
+            }
         }
     }
 

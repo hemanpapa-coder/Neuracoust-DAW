@@ -159,6 +159,12 @@ int nc_track_add_instrument(NCEngine* engine);
 bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex);
 // Remove the instrument from a track's instrument slot.
 bool nc_track_clear_instrument(NCEngine* engine, int trackIndex);
+
+/// Shuffle (ripple) edit mode. A shuffle move drops the clip and slides its
+/// neighbours to close/open the gap; a shuffle delete removes the range and pulls
+/// later clips left to fill it. Both record their own step.
+bool nc_clip_shuffle_move(NCEngine* engine, const char* clipId, double newStartSeconds);
+int nc_clip_shuffle_delete_range(NCEngine* engine, double startSeconds, double endSeconds);
 void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen);
 int nc_track_add_midi(NCEngine* engine);
 
