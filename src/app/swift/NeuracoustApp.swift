@@ -257,6 +257,7 @@ private struct EditView: View {
                     onCommitGain: { engine.commitClipGain($0) },
                     onSelectLane: { engine.selectLane($0) },
                     onMoveClipToLane: { engine.moveClipToLane($0, laneIndex: $1, startSeconds: $2) },
+                    onDropClipToNewTrack: { engine.dropClipToNewTrack($0, startSeconds: $1) },
                     onCommitEdit: { engine.commitClipGesture($0) },
                     snap: { engine.snap($0) },
                     onToggleMute: { engine.toggleTrackMute($0) },

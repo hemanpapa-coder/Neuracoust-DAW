@@ -1513,6 +1513,25 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Dropping a clip (or its option-drag copy) past the last lane makes a fresh audio
+    /// track and lands the clip there.
+    func dropClipToNewTrack(_ clipId: String, startSeconds: Double) {
+        guard let handle else { return }
+        let newIndex = nc_track_add_audio(handle)
+        guard newIndex >= 0 else { return }
+        reloadTracks()
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_clip_move_to_track(handle, clipId, newIndex, startSeconds,
+                                    &buffer, buffer.count) else {
+            reloadClips()
+            refreshHistory()
+            return
+        }
+        selectClip(String(cString: buffer))
+        reloadClips()
+        refreshHistory()
+    }
+
     // MARK: Bounce
 
     struct BounceSummary {

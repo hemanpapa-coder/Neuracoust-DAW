@@ -157,6 +157,7 @@ final class TimelineNSView: NSView {
     var onCommitGain: ((String) -> Void)?                // drag-end: reconcile + record
     var onSelectLane: ((Int) -> Void)?
     var onMoveClipToLane: ((String, Int, Double) -> Void)?  // (clipId, laneIndex, start)
+    var onDropClipToNewTrack: ((String, Double) -> Void)?   // drop past last lane → new track
     var onCommitEdit: ((String) -> Void)?                // step name
     var snap: ((Double) -> Double)?
 
@@ -412,6 +413,16 @@ final class TimelineNSView: NSView {
             }
         }
         return nil
+    }
+
+    /// True when a drop lands below the last lane, in the empty lane area — the cue to
+    /// spin up a new track for the clip.
+    private func droppedBelowLanes(_ point: NSPoint) -> Bool {
+        guard point.y >= Self.rulerHeight, !model.lanes.isEmpty else {
+            return point.y >= Self.rulerHeight && model.lanes.isEmpty
+        }
+        let lastBottom = laneTop(model.lanes.count - 1) + Self.laneHeight
+        return point.y >= lastBottom
     }
 
     /// Which open automation row a point falls in.
@@ -724,12 +735,17 @@ final class TimelineNSView: NSView {
 
         switch drag {
         case .moving(let clipId, _, _, _):
-            // Dropping on a different lane relocates the clip; that records its own
-            // step, so do not also commit a "Move clip" one.
-            if let lane = laneIndex(at: point),
-               let clip = model.clips.first(where: { $0.id == clipId }),
-               lane != clip.laneIndex {
-                onMoveClipToLane?(clipId, lane, clip.startSeconds)
+            // Dropping past the last lane in empty space makes a new track and lands the
+            // clip (or the option-drag copy) there. Dropping on another lane relocates it;
+            // both record their own step, so no extra "Move clip".
+            if let clip = model.clips.first(where: { $0.id == clipId }) {
+                if droppedBelowLanes(point) {
+                    onDropClipToNewTrack?(clipId, clip.startSeconds)
+                } else if let lane = laneIndex(at: point), lane != clip.laneIndex {
+                    onMoveClipToLane?(clipId, lane, clip.startSeconds)
+                } else {
+                    onCommitEdit?("Move clip")
+                }
             } else {
                 onCommitEdit?("Move clip")
             }
@@ -1597,6 +1613,7 @@ struct TimelineView: NSViewRepresentable {
     let onCommitGain: (String) -> Void
     let onSelectLane: (Int) -> Void
     let onMoveClipToLane: (String, Int, Double) -> Void
+    let onDropClipToNewTrack: (String, Double) -> Void
     let onCommitEdit: (String) -> Void
     let snap: (Double) -> Double
     let onToggleMute: (Int) -> Void
@@ -1652,6 +1669,7 @@ struct TimelineView: NSViewRepresentable {
         view.onCommitGain = onCommitGain
         view.onSelectLane = onSelectLane
         view.onMoveClipToLane = onMoveClipToLane
+        view.onDropClipToNewTrack = onDropClipToNewTrack
         view.onCommitEdit = onCommitEdit
         view.snap = snap
         view.onToggleMute = onToggleMute
