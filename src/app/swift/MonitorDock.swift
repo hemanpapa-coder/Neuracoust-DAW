@@ -121,14 +121,33 @@ struct MonitorDock: View {
     private var outputMode: some View {
         VStack(spacing: Theme.Space.lg) {
             HStack(spacing: Theme.Space.sm) {
+                let exclusive = engine.monitorOutputExclusive
                 outputTab("🔊 스피커", active: engine.outputMode == .speaker) {
                     engine.outputMode = .speaker
                 }
-                .contextMenu { deviceMenu }
+                .opacity(exclusive && engine.outputMode != .speaker ? 0.45 : 1)
+                .contextMenu { speakerMenu }
                 outputTab("🎧 헤드폰", active: engine.outputMode == .headphone) {
                     engine.outputMode = .headphone
                 }
-                .contextMenu { deviceMenu }
+                .opacity(exclusive && engine.outputMode != .headphone ? 0.45 : 1)
+                .contextMenu { headphoneMenu }
+            }
+
+            // Whether speaker and headphone are mutually exclusive, and the physical
+            // model of whichever output is active.
+            HStack(spacing: Theme.Space.sm) {
+                Toggle("", isOn: Binding(get: { engine.monitorOutputExclusive },
+                                         set: { engine.setMonitorOutputExclusive($0) }))
+                    .labelsHidden().toggleStyle(.switch).scaleEffect(0.7).frame(width: 34)
+                Text("스피커/헤드폰 배타")
+                    .font(Theme.Font.ui(9, .medium))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                Spacer()
+                Text(activePhysicalModelLabel)
+                    .font(Theme.Font.mono(7.5))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                    .lineLimit(1)
             }
 
             if engine.outputMode == .speaker {
@@ -138,6 +157,42 @@ struct MonitorDock: View {
             }
         }
         .onAppear { engine.refreshOutputDevices() }
+    }
+
+    private var activePhysicalModelLabel: String {
+        let model = engine.outputMode == .speaker ? engine.physicalSpeakerModel
+                                                   : engine.physicalHeadphoneModel
+        return model.isEmpty ? "실물 모델 미지정" : model
+    }
+
+    /// The 스피커 tab's right-click menu: physical output device plus the real speaker
+    /// model the user monitors on (not the A/B/C simulator).
+    @ViewBuilder
+    private var speakerMenu: some View {
+        deviceMenu
+        Divider()
+        Menu("실물 스피커 모델") {
+            ForEach(engine.speakerModelCatalog, id: \.self) { model in
+                Button { engine.setPhysicalSpeakerModel(model) } label: {
+                    if engine.physicalSpeakerModel == model { Label(model, systemImage: "checkmark") }
+                    else { Text(model) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var headphoneMenu: some View {
+        deviceMenu
+        Divider()
+        Menu("실물 헤드폰 모델") {
+            ForEach(engine.headphoneModelCatalog, id: \.self) { model in
+                Button { engine.setPhysicalHeadphoneModel(model) } label: {
+                    if engine.physicalHeadphoneModel == model { Label(model, systemImage: "checkmark") }
+                    else { Text(model) }
+                }
+            }
+        }
     }
 
     /// Right-click device picker. "시스템 기본" leaves the id empty, which is a valid

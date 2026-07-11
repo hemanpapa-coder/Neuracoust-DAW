@@ -2219,6 +2219,9 @@ final class EngineController: ObservableObject {
         dspCoreCount = Int(nc_dsp_core_count(handle))
         externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
         remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
+        physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
+        physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
+        monitorOutputExclusive = nc_monitor_output_exclusive(handle)
         reloadMonitorListen()
     }
 
@@ -2356,6 +2359,37 @@ final class EngineController: ObservableObject {
             readString { nc_speaker_output_route(Int32(i), $0, $1) }
         }
     }()
+    lazy var headphoneModelCatalog: [String] = {
+        guard let handle else { return [] }
+        return (0..<Int(nc_headphone_model_count())).map { i in
+            readString { nc_headphone_model_name(Int32(i), $0, $1) }
+        }
+    }()
+
+    // The real speaker/headphone the user monitors on (definition, not a simulation),
+    // and whether speaker and headphone are mutually exclusive.
+    @Published var physicalSpeakerModel = ""
+    @Published var physicalHeadphoneModel = ""
+    @Published var monitorOutputExclusive = true
+
+    func setPhysicalSpeakerModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_speaker_model(handle, $0) }
+        physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setPhysicalHeadphoneModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_headphone_model(handle, $0) }
+        physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setMonitorOutputExclusive(_ exclusive: Bool) {
+        guard let handle else { return }
+        nc_monitor_set_output_exclusive(handle, exclusive)
+        monitorOutputExclusive = nc_monitor_output_exclusive(handle)
+        refreshHistory()
+    }
 
     /// Assign a speaker MODEL to a slot (spec-based virtual monitoring). Pass a bare
     /// catalog name; the engine stores the slotted form and clears any physical route.

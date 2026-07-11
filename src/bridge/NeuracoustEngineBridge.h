@@ -760,6 +760,17 @@ bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot);
 // pushModules(). The catalog getters back the pickers.
 int  nc_speaker_model_count(void);
 void nc_speaker_model_name(int index, char* out, size_t outLen);
+// Headphone model catalog, and the **physical** speaker/headphone the user monitors on
+// (a definition of real hardware, not a simulation). Plus the speaker/headphone
+// exclusivity flag — when set, one output is active at a time.
+int  nc_headphone_model_count(void);
+void nc_headphone_model_name(int index, char* out, size_t outLen);
+void nc_monitor_physical_speaker_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_speaker_model(NCEngine* engine, const char* model);
+void nc_monitor_physical_headphone_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model);
+bool nc_monitor_output_exclusive(NCEngine* engine);
+void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 int  nc_speaker_output_route_count(void);
 void nc_speaker_output_route(int index, char* out, size_t outLen);
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);

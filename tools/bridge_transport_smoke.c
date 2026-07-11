@@ -531,6 +531,22 @@ int main(void) {
         printf("external dsp core reserve OK\n");
     }
 
+    // --- Physical monitor models + speaker/headphone exclusivity ----------------
+    {
+        char buf[128];
+        if (nc_headphone_model_count() < 10) { fprintf(stderr, "FAIL: headphone catalog too small (%d)\n", nc_headphone_model_count()); failures++; }
+        if (!nc_monitor_output_exclusive(engine)) { fprintf(stderr, "FAIL: exclusive not on by default\n"); failures++; }
+        nc_monitor_set_physical_speaker_model(engine, "Genelec 8040B (NF)");
+        nc_monitor_physical_speaker_model(engine, buf, sizeof buf);
+        if (strcmp(buf, "Genelec 8040B (NF)") != 0) { fprintf(stderr, "FAIL: physical speaker '%s'\n", buf); failures++; }
+        nc_monitor_set_physical_headphone_model(engine, "Sennheiser HD 650");
+        nc_monitor_physical_headphone_model(engine, buf, sizeof buf);
+        if (strcmp(buf, "Sennheiser HD 650") != 0) { fprintf(stderr, "FAIL: physical headphone '%s'\n", buf); failures++; }
+        nc_monitor_set_output_exclusive(engine, false);
+        if (nc_monitor_output_exclusive(engine)) { fprintf(stderr, "FAIL: exclusive stayed on\n"); failures++; }
+        printf("physical monitor models OK\n");
+    }
+
     // --- Speaker set: model catalog + model/output setters ---------------------
     {
         char buf[256];

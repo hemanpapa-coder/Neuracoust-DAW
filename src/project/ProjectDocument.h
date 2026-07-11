@@ -207,6 +207,13 @@ struct ProjectDocument {
     // falls back to "studio.local". This is what makes External/NDS reach a real node
     // instead of the hardcoded default.
     std::string remoteDspHost = "studio.local";
+    // The **physical** speaker / headphone the user actually monitors on — a definition
+    // of the real hardware, not a simulation. Empty = unspecified. When
+    // monitorSpeakerHeadphoneExclusive is set, switching to one output deactivates the
+    // other, so only speaker or only headphone monitors at a time.
+    std::string physicalSpeakerModel;
+    std::string physicalHeadphoneModel;
+    bool monitorSpeakerHeadphoneExclusive = true;
     bool windowsProcessorAffinityEnabled = false;
     std::string windowsProcessorAffinityMode = "p_core_preferred";
     bool monitorStationMono = false;

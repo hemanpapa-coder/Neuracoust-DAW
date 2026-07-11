@@ -3475,6 +3475,61 @@ void nc_speaker_model_name(int index, char* out, size_t outLen) {
                               ? catalog[static_cast<size_t>(index)] : std::string{});
 }
 
+namespace {
+// Physical headphone models the user might monitor on, for the 헤드폰 model picker.
+const std::vector<std::string>& headphoneModelCatalog() {
+    static const std::vector<std::string> models = {
+        "Flat",
+        "Sennheiser HD 600", "Sennheiser HD 650", "Sennheiser HD 660S", "Sennheiser HD 800S", "Sennheiser HD 25", "Sennheiser HD 280 Pro",
+        "Beyerdynamic DT 770 Pro", "Beyerdynamic DT 880 Pro", "Beyerdynamic DT 990 Pro", "Beyerdynamic DT 1990 Pro",
+        "AKG K240 Studio", "AKG K271 MkII", "AKG K371", "AKG K702", "AKG K712 Pro",
+        "Audio-Technica ATH-M50x", "Audio-Technica ATH-M40x", "Audio-Technica ATH-R70x",
+        "Sony MDR-7506", "Sony MDR-CD900ST", "Sony MDR-M1ST",
+        "Focal Clear Pro", "Focal Listen Pro", "Audeze LCD-X", "Audeze MM-500", "HIFIMAN Sundara", "HIFIMAN Arya",
+        "Shure SRH840A", "Shure SRH1540", "Grado SR325x", "Neumann NDH 20", "Neumann NDH 30", "Slate VSX",
+        "Apple AirPods Pro", "Apple AirPods Max", "Bose QC", "Sony WH-1000XM5", "Earbuds (generic)",
+    };
+    return models;
+}
+}
+
+int nc_headphone_model_count() {
+    return static_cast<int>(headphoneModelCatalog().size());
+}
+
+void nc_headphone_model_name(int index, char* out, size_t outLen) {
+    const auto& catalog = headphoneModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < catalog.size())
+                              ? catalog[static_cast<size_t>(index)] : std::string{});
+}
+
+void nc_monitor_physical_speaker_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalSpeakerModel : std::string{});
+}
+void nc_monitor_set_physical_speaker_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.physicalSpeakerModel == model) return;
+    engine->project.physicalSpeakerModel = model;
+    engine->recordStep("Set physical speaker");
+}
+void nc_monitor_physical_headphone_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalHeadphoneModel : std::string{});
+}
+void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.physicalHeadphoneModel == model) return;
+    engine->project.physicalHeadphoneModel = model;
+    engine->recordStep("Set physical headphone");
+}
+bool nc_monitor_output_exclusive(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorSpeakerHeadphoneExclusive;
+}
+void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive) {
+    if (engine == nullptr || engine->project.monitorSpeakerHeadphoneExclusive == exclusive) return;
+    engine->project.monitorSpeakerHeadphoneExclusive = exclusive;
+    engine->recordStep(exclusive ? "Enable speaker/headphone exclusive" : "Disable speaker/headphone exclusive");
+}
+
 int nc_speaker_output_route_count() {
     return static_cast<int>(speakerOutputRouteCatalog().size());
 }

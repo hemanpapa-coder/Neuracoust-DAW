@@ -1962,6 +1962,9 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"requestedDspCoreCount\": " << std::max(1, std::min(16, project.requestedDspCoreCount)) << ",\n";
     out << "  \"externalDspCoreCount\": " << std::max(1, std::min(16, project.externalDspCoreCount)) << ",\n";
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
+    out << "  \"physicalSpeakerModel\": \"" << escapeJsonString(project.physicalSpeakerModel) << "\",\n";
+    out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
+    out << "  \"monitorSpeakerHeadphoneExclusive\": " << (project.monitorSpeakerHeadphoneExclusive ? "true" : "false") << ",\n";
     out << "  \"windowsProcessorAffinityEnabled\": " << (project.windowsProcessorAffinityEnabled ? "true" : "false") << ",\n";
     out << "  \"windowsProcessorAffinityMode\": \"" << escapeJsonString(project.windowsProcessorAffinityMode) << "\",\n";
     const std::string monitorListenMode = project.monitorStationListenMode.empty() ? "LR" : project.monitorStationListenMode;
@@ -2463,6 +2466,9 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         const std::string host = stringAfterKey(text, "remoteDspHost");
         parsed.remoteDspHost = host.empty() ? std::string("studio.local") : host;
     }
+    parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
+    parsed.physicalHeadphoneModel = stringAfterKey(text, "physicalHeadphoneModel");
+    parsed.monitorSpeakerHeadphoneExclusive = boolAfterKey(text, "monitorSpeakerHeadphoneExclusive", true);
     parsed.windowsProcessorAffinityEnabled = boolAfterKey(text, "windowsProcessorAffinityEnabled", false);
     parsed.windowsProcessorAffinityMode = stringAfterKey(text, "windowsProcessorAffinityMode");
     if (!isValidWindowsProcessorAffinityMode(parsed.windowsProcessorAffinityMode)) {

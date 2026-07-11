@@ -437,6 +437,16 @@ The **device** tabs (스피커/헤드폰) pick the physical output *interface*; 
 distinct from the **A/B/C speaker sets** below (see next section), which pick a
 modelled speaker or route to a specific output pair.
 
+Right-clicking each tab now also picks the **physical model** the user actually monitors
+on — the 스피커 menu adds 실물 스피커 모델 (the same `nc_speaker_model_*` catalog),
+the 헤드폰 menu adds 실물 헤드폰 모델 (`nc_headphone_model_*`). These are a *definition*
+of the real hardware (`project.physicalSpeakerModel` / `physicalHeadphoneModel`), not the
+A/B/C simulator. A **스피커/헤드폰 배타** switch (`monitorSpeakerHeadphoneExclusive`,
+default on) marks speaker and headphone mutually exclusive; while on, the inactive tab is
+dimmed. **Note:** the switch currently drives the flag + the dimming only — the audio
+still follows the single `outputMode`; true simultaneous speaker+headphone output is
+unbuilt engine work.
+
 ## Monitor speaker sets (A/B/C)
 
 Each A/B/C set is a monitor speaker slot on the `Speaker Simulation` module
