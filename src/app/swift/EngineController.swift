@@ -2170,7 +2170,16 @@ final class EngineController: ObservableObject {
 
     func addChord(at seconds: Double, name: String) {
         guard let handle else { return }
-        if nc_chord_add(handle, seconds, name) { reloadConductor(); refreshHistory() }
+        if nc_chord_add(handle, seconds, Self.normalizeChordName(name)) { reloadConductor(); refreshHistory() }
+    }
+
+    /// Normalise a typed chord so the root reads as an uppercase note — "dm7" → "Dm7",
+    /// "f#maj7" → "F#maj7", "bb" → "Bb". Only the leading note letter is capitalised; the
+    /// quality (m, maj, sus, add…) is left as typed, so "Dm7" and "DM7" both survive.
+    static func normalizeChordName(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard let first = s.first, ("a"..."g").contains(Character(first.lowercased())) else { return s }
+        return first.uppercased() + s.dropFirst()
     }
     func deleteChord(at seconds: Double) {
         guard let handle else { return }
@@ -2256,6 +2265,61 @@ final class EngineController: ObservableObject {
             let kv = pair.split(separator: ":", maxSplits: 1)
             guard kv.count == 2, let t = Double(kv[0]) else { return nil }
             return (t, String(kv[1]))
+        }
+    }
+
+    // Song-form / arrangement sections (Intro, Verse, Chorus…). Each event starts a section
+    // that runs until the next one; app-side and persisted with the settings.
+    @Published private(set) var songForm: [ConductorEvent] = []
+    private var songFormStore: [(seconds: Double, label: String)] = [] { didSet { publishSongForm() }}
+    private func publishSongForm() {
+        songForm = songFormStore.sorted { $0.seconds < $1.seconds }.enumerated().map {
+            ConductorEvent(id: $0.offset, timeSeconds: $0.element.seconds, label: $0.element.label)
+        }
+    }
+    func addSongSection(at seconds: Double, name: String) {
+        let label = name.trimmingCharacters(in: .whitespaces)
+        songFormStore.removeAll { abs($0.seconds - seconds) < 0.05 }
+        songFormStore.append((seconds, label.isEmpty ? "Section" : label))
+        persistSongForm()
+    }
+    func deleteSongSection(at seconds: Double) {
+        songFormStore.removeAll { abs($0.seconds - seconds) <= markerTolerance }
+        persistSongForm()
+    }
+    func moveSongSection(from: Double, to: Double) {
+        guard let i = songFormStore.firstIndex(where: { abs($0.seconds - from) <= markerTolerance }) else { return }
+        songFormStore[i].seconds = max(0, snap(to))
+        persistSongForm()
+    }
+    private func persistSongForm() {
+        let encoded = songFormStore.map { "\($0.seconds):\($0.label)" }.joined(separator: "|")
+        UserDefaults.standard.set(encoded, forKey: SettingsKey.songForm)
+    }
+    private func restoreSongForm() {
+        guard let s = UserDefaults.standard.string(forKey: SettingsKey.songForm), !s.isEmpty else { return }
+        songFormStore = s.split(separator: "|").compactMap { pair in
+            let kv = pair.split(separator: ":", maxSplits: 1)
+            guard kv.count == 2, let t = Double(kv[0]) else { return nil }
+            return (t, String(kv[1]))
+        }
+    }
+
+    /// A stable colour for a song-form section, keyed off common section names.
+    static func songSectionColor(_ label: String) -> Color {
+        switch label.lowercased() {
+        case let l where l.contains("intro"):   return Color(hex: 0x5f9fd6)
+        case let l where l.contains("verse"):   return Color(hex: 0x5fb85f)
+        case let l where l.contains("pre"):      return Color(hex: 0x8fbf5f)
+        case let l where l.contains("chorus") || l.contains("훅") || l.contains("hook"): return Color(hex: 0xe6a23c)
+        case let l where l.contains("bridge"):   return Color(hex: 0xb79cf0)
+        case let l where l.contains("solo"):     return Color(hex: 0xe0607a)
+        case let l where l.contains("outro") || l.contains("end"): return Color(hex: 0x8a8f98)
+        case let l where l.contains("drop"):     return Color(hex: 0xe0517a)
+        default:
+            // Deterministic hue from the label so custom names still get a stable colour.
+            let h = Double(abs(label.hashValue) % 360) / 360.0
+            return Color(hue: h, saturation: 0.55, brightness: 0.78)
         }
     }
 
@@ -2893,6 +2957,7 @@ final class EngineController: ObservableObject {
         static let dockAnalyzer = "nc.dockAnalyzerKind"
         static let musicalKey = "nc.musicalKey"
         static let keyEvents = "nc.keyEvents"
+        static let songForm = "nc.songForm"
         static let editTool = "nc.editTool"
         static let soloMonitor = "nc.soloMonitorMode"
         static let click = "nc.clickEnabled"
@@ -2961,6 +3026,7 @@ final class EngineController: ObservableObject {
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
         if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
         restoreKeyEvents()
+        restoreSongForm()
         if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
         if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
         if d.object(forKey: SettingsKey.click) != nil, d.bool(forKey: SettingsKey.click) != clickEnabled { toggleClick() }

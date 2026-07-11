@@ -15,10 +15,11 @@ struct GlobalTracksBar: View {
     private static let sepHeight: CGFloat = 1
 
     enum Ruler: String, CaseIterable, Identifiable {
-        case marker = "마커", tempo = "템포", meter = "박자", key = "조성", chord = "코드", lyric = "가사"
+        case songForm = "송폼", marker = "마커", tempo = "템포", meter = "박자", key = "조성", chord = "코드", lyric = "가사"
         var id: String { rawValue }
         var color: Color {
             switch self {
+            case .songForm: return Color(hex: 0xd98f5a)
             case .marker: return Color(hex: 0xe8c84a)
             case .tempo:  return Color(hex: 0x5fb85f)
             case .meter:  return Color(hex: 0x5f9fd6)
@@ -29,6 +30,7 @@ struct GlobalTracksBar: View {
         }
         var icon: String {
             switch self {
+            case .songForm: return "rectangle.3.group"
             case .marker: return "mappin"
             case .tempo:  return "metronome"
             case .meter:  return "textformat.123"
@@ -37,7 +39,13 @@ struct GlobalTracksBar: View {
             case .lyric:  return "text.quote"
             }
         }
-        var defaultHeight: CGFloat { self == .lyric || self == .chord ? 22 : 20 }
+        var defaultHeight: CGFloat {
+            switch self {
+            case .songForm: return 24
+            case .lyric, .chord: return 22
+            default: return 20
+            }
+        }
     }
 
     @State private var heights: [String: CGFloat] = [:]
@@ -213,6 +221,13 @@ struct GlobalTracksBar: View {
     @ViewBuilder
     private func lane(_ ruler: Ruler, laneWidth: CGFloat) -> some View {
         switch ruler {
+        case .songForm:
+            let sections = engine.songForm
+            ForEach(Array(sections.enumerated()), id: \.element.id) { idx, e in
+                let end = idx + 1 < sections.count ? sections[idx + 1].timeSeconds
+                                                   : engine.visibleStart + engine.visibleDuration + 1
+                songBlock(e, endSeconds: end, laneWidth: laneWidth)
+            }
         case .marker:
             ForEach(engine.markers.indices, id: \.self) { i in
                 let m = engine.markers[i]
@@ -279,6 +294,38 @@ struct GlobalTracksBar: View {
         }
     }
 
+    /// A song-form section drawn as a coloured block from its start to the next section
+    /// (or the visible end). Drag the block to move its start; right-click to delete.
+    private func songBlock(_ e: EngineController.ConductorEvent, endSeconds: Double, laneWidth: CGFloat) -> some View {
+        let startT = dragSeconds["sf\(e.timeSeconds)"] ?? e.timeSeconds
+        let startX = x(startT, laneWidth)
+        let endX = x(endSeconds, laneWidth)
+        let clippedStart = max(Self.headerWidth, startX)
+        let clippedEnd = min(Self.headerWidth + laneWidth, endX)
+        let width = max(0, clippedEnd - clippedStart)
+        let color = EngineController.songSectionColor(e.label)
+        return Group {
+            if width > 1 && clippedEnd > Self.headerWidth {
+                HStack(spacing: 0) {
+                    Rectangle().fill(color).frame(width: 2.5)
+                    Text(e.label)
+                        .font(Theme.Font.mono(9, .semibold)).foregroundStyle(.white.opacity(0.95))
+                        .lineLimit(1).padding(.leading, 4).padding(.trailing, 2)
+                    Spacer(minLength: 0)
+                }
+                .frame(width: width, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .background(color.opacity(0.30))
+                .overlay(RoundedRectangle(cornerRadius: 2).stroke(color.opacity(0.7), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .offset(x: clippedStart - Self.headerWidth)
+                .gesture(dragGesture(key: "sf\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth,
+                                     onMove: { engine.moveSongSection(from: e.timeSeconds, to: $0) }))
+                .contextMenu { Button("삭제", role: .destructive) { engine.deleteSongSection(at: e.timeSeconds) } }
+            }
+        }
+    }
+
     private func tempoPoint(_ e: EngineController.ConductorEvent, laneWidth: CGFloat) -> some View {
         let px = x(e.timeSeconds, laneWidth)
         return Group {
@@ -338,6 +385,7 @@ struct GlobalTracksBar: View {
 
     private func commitAdd(_ t: AddTarget, text: String) {
         switch t.ruler {
+        case .songForm: engine.addSongSection(at: t.seconds, name: text)
         case .marker: engine.addMarker(at: t.seconds, name: text)
         case .tempo:  engine.addTempoMarker(at: t.seconds, bpm: Double(text) ?? Double(engine.tempoBpm))
         case .meter:  engine.addMeter(at: t.seconds, text: text.isEmpty ? "\(engine.timeSignature.numerator)/\(engine.timeSignature.denominator)" : text)
@@ -397,6 +445,8 @@ private struct ConductorAddSheet: View {
                 meterPresets
             } else if ruler == .key {
                 keyPresets
+            } else if ruler == .songForm {
+                songPresets
             }
             TextField(placeholder, text: $text)
                 .textFieldStyle(.roundedBorder).frame(width: 220).onSubmit { commit(text) }
@@ -423,6 +473,20 @@ private struct ConductorAddSheet: View {
             }
         }
     }
+    private var songPresets: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                ForEach(["Intro", "Verse", "Pre", "Chorus"], id: \.self) { s in
+                    Button(s) { commit(s) }.buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+            HStack(spacing: 5) {
+                ForEach(["Bridge", "Solo", "Drop", "Outro"], id: \.self) { s in
+                    Button(s) { commit(s) }.buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+        }
+    }
 
     private var placeholder: String {
         switch ruler {
@@ -431,6 +495,7 @@ private struct ConductorAddSheet: View {
         case .key:   return "조성 (예: C, Am, F#)"
         case .chord: return "코드 (예: Cmaj7)"
         case .lyric: return "가사"
+        case .songForm: return "구간 (예: Verse)"
         case .marker: return "이름"
         }
     }
