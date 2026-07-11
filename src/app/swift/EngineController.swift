@@ -2714,6 +2714,25 @@ final class EngineController: ObservableObject {
         insertTailOnStopSeconds = nc_insert_tail_on_stop_seconds(handle)
     }
 
+    /// The monitor station's input: the DAW Master, or the BlackHole loopback (the
+    /// computer's audio). Two mutually-exclusive choices, like the Monitor DSP app.
+    func selectMonitorInput(blackHole: Bool) {
+        if blackHole {
+            refreshInputDevices()
+            if let bh = inputDevices.first(where: { $0.name.lowercased().contains("blackhole") }) {
+                setInputDevice(bh.id)
+            }
+            setMonitorListenSource(true)
+        } else {
+            setMonitorListenSource(false)
+        }
+    }
+
+    /// True when a BlackHole loopback device is present to select as the monitor source.
+    var hasBlackHoleInput: Bool {
+        inputDevices.contains { $0.name.lowercased().contains("blackhole") }
+    }
+
     /// Master vs source monitoring. Source routes the input device (e.g. BlackHole)
     /// through the monitor bus so you hear the computer's audio.
     func setMonitorListenSource(_ on: Bool) {
