@@ -666,6 +666,21 @@ void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
 int nc_dsp_core_count(NCEngine* engine);
 void nc_dsp_set_core_count(NCEngine* engine, int count);
 
+// ---------------------------------------------------------------------------
+// Output device
+//
+// Which physical output the engine opens. An empty id means the system default; the
+// device is read at start(), so changing it restarts the engine. nc_output_device_*
+// enumerate the output-capable devices (call count first, it refreshes the cache).
+// ---------------------------------------------------------------------------
+
+int nc_output_device_count(NCEngine* engine);
+void nc_output_device_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_output_device_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_current_output_device_id(NCEngine* engine, char* out, size_t outLen);
+void nc_active_output_device_name(NCEngine* engine, char* out, size_t outLen);
+void nc_set_output_device(NCEngine* engine, const char* deviceId);
+
 void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_path_mode(NCEngine* engine, const char* mode);
 

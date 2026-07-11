@@ -559,6 +559,31 @@ final class EngineController: ObservableObject {
     /// which simulation module is enabled.
     @Published var outputMode: OutputMode = .speaker
 
+    struct OutputDevice: Identifiable, Hashable { let id: String; let name: String }
+    @Published private(set) var outputDevices: [OutputDevice] = []
+    @Published private(set) var currentOutputDeviceId = ""   // empty = system default
+    @Published private(set) var activeOutputDeviceName = ""
+
+    /// Rescans CoreAudio and refreshes the device list — called when a menu opens.
+    func refreshOutputDevices() {
+        guard let handle else { return }
+        let count = Int(nc_output_device_count(handle))
+        outputDevices = (0..<count).map { i in
+            OutputDevice(id: readEngineString { nc_output_device_id(handle, Int32(i), $0, $1) },
+                         name: readEngineString(capacity: 256) { nc_output_device_name(handle, Int32(i), $0, $1) })
+        }
+        currentOutputDeviceId = readEngineString { nc_current_output_device_id(handle, $0, $1) }
+        activeOutputDeviceName = readEngineString(capacity: 256) { nc_active_output_device_name(handle, $0, $1) }
+    }
+
+    /// An empty id selects the system default. Changing the device restarts the engine.
+    func setOutputDevice(_ id: String) {
+        guard let handle else { return }
+        nc_set_output_device(handle, id.isEmpty ? nil : id)
+        currentOutputDeviceId = readEngineString { nc_current_output_device_id(handle, $0, $1) }
+        activeOutputDeviceName = readEngineString(capacity: 256) { nc_active_output_device_name(handle, $0, $1) }
+    }
+
     // Live meters, refreshed each tick.
     @Published private(set) var phaseCorrelation: Float = 0
     @Published private(set) var spectrumLow: Float = 0

@@ -123,15 +123,44 @@ struct MonitorDock: View {
                 outputTab("🔊 스피커", active: engine.outputMode == .speaker) {
                     engine.outputMode = .speaker
                 }
+                .contextMenu { deviceMenu }
                 outputTab("🎧 헤드폰", active: engine.outputMode == .headphone) {
                     engine.outputMode = .headphone
                 }
+                .contextMenu { deviceMenu }
             }
 
             if engine.outputMode == .speaker {
                 speakerSets
             } else {
                 headphonePanel
+            }
+        }
+        .onAppear { engine.refreshOutputDevices() }
+    }
+
+    /// Right-click device picker. "시스템 기본" leaves the id empty, which is a valid
+    /// choice — the engine opens the OS default. Building the menu rescans the devices.
+    @ViewBuilder
+    private var deviceMenu: some View {
+        Text("출력 장치").font(.caption)
+        Button {
+            engine.setOutputDevice("")
+        } label: {
+            let onDefault = engine.currentOutputDeviceId.isEmpty
+            let label = "시스템 기본 · \(engine.activeOutputDeviceName)"
+            if onDefault { Label(label, systemImage: "checkmark") } else { Text(label) }
+        }
+        Divider()
+        ForEach(engine.outputDevices) { device in
+            Button {
+                engine.setOutputDevice(device.id)
+            } label: {
+                if engine.currentOutputDeviceId == device.id {
+                    Label(device.name, systemImage: "checkmark")
+                } else {
+                    Text(device.name)
+                }
             }
         }
     }

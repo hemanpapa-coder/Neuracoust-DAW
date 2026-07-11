@@ -1,5 +1,6 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
+#include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
 #include "audio/OfflineBounce.h"
 #include "audio/RealtimeAudioEngine.h"
@@ -52,6 +53,8 @@ struct NCEngine {
     ProjectDocument project = neuracoust::daw::defaultProject();
     bool monitorDspEnabled = true;
     std::string monitorDspPathMode = "internal";
+    /// Empty means the system default output device.
+    std::string outputDeviceId;
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
@@ -200,6 +203,7 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     settings.performanceCoreIsolationEnabled = engine->project.appleSiliconCoreIsolationEnabled;
     settings.requestedPerformanceCoreCount =
         std::max(1, std::min(16, engine->project.requestedDspCoreCount));
+    settings.outputDeviceId = engine->outputDeviceId;
     return settings;
 }
 
@@ -2912,6 +2916,62 @@ void nc_dsp_set_core_count(NCEngine* engine, int count) {
     }
     engine->project.requestedDspCoreCount = clamped;
     engine->recordStep("Set DSP core count");
+    restartEngineForSettings(engine);
+}
+
+namespace {
+
+// Output-capable devices, cached so a right-click menu does not re-scan CoreAudio on
+// every open. The scan is cheap but the caller reads it item by item.
+std::vector<neuracoust::daw::AudioDeviceInfo>& outputDeviceCache() {
+    static std::vector<neuracoust::daw::AudioDeviceInfo> devices;
+    return devices;
+}
+
+} // namespace
+
+int nc_output_device_count(NCEngine* engine) {
+    (void)engine;
+    auto& cache = outputDeviceCache();
+    cache.clear();
+    for (const auto& device : neuracoust::daw::enumerateAudioDevices()) {
+        if (device.outputChannels > 0) {
+            cache.push_back(device);
+        }
+    }
+    return static_cast<int>(cache.size());
+}
+
+void nc_output_device_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    (void)engine;
+    const auto& cache = outputDeviceCache();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < cache.size())
+                              ? cache[static_cast<size_t>(index)].id : std::string{});
+}
+
+void nc_output_device_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    (void)engine;
+    const auto& cache = outputDeviceCache();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < cache.size())
+                              ? cache[static_cast<size_t>(index)].name : std::string{});
+}
+
+void nc_current_output_device_id(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->outputDeviceId : std::string{});
+}
+
+/// The device the engine actually opened, so the UI can show the default's real name.
+void nc_active_output_device_name(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->engine.status().deviceName : std::string{});
+}
+
+void nc_set_output_device(NCEngine* engine, const char* deviceId) {
+    if (engine == nullptr) return;
+    const std::string next = deviceId != nullptr ? deviceId : "";
+    if (next == engine->outputDeviceId) {
+        return;
+    }
+    engine->outputDeviceId = next;
     restartEngineForSettings(engine);
 }
 

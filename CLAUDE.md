@@ -314,6 +314,19 @@ accepts `internal` / `external` / `nds` / `remote_external` / `auto` and falls b
 `internal` for anything else — the earlier two-way toggle sent `remote_internal`,
 which silently resolved to internal, so External and NDS were never reachable.
 
+## Output device selection
+
+Right-clicking either monitor output tab (스피커 / 헤드폰) opens a device menu:
+**시스템 기본** (empty `outputDeviceId`, follows the OS default) plus every physical
+device with output channels, enumerated via `enumerateAudioDevices()`. The choice is
+`NCEngine.outputDeviceId`, wired into `buildEngineSettings` as `outputDeviceId` and
+read only at `start()` — so `nc_set_output_device` **restarts the engine**, same
+brief dropout as a core-count change. `nc_active_output_device_name` reports the
+device the engine actually opened (`status().deviceName`), which is what the 시스템
+기본 line shows; a specific pick carries its own checkmark. Bridge cache
+(`outputDeviceCache`) is filtered to `outputChannels > 0` and refreshed on each count
+query.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.
