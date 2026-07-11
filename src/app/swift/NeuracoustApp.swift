@@ -97,6 +97,15 @@ struct NeuracoustApp: App {
                 Button("마커 추가") { engine.addMarkerAtPlayhead() }
                     .keyboardShortcut("m", modifiers: .command)
             }
+            CommandMenu("트랙") {
+                Button("오디오 트랙 추가") { engine.addAudioTrack() }
+                    .keyboardShortcut("t", modifiers: .command)
+                Button("악기 트랙 추가") { engine.addInstrumentTrack() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                Divider()
+                Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
+                    .disabled(engine.selectedTrackId == nil)
+            }
         }
     }
 }

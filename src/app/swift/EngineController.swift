@@ -712,6 +712,7 @@ final class EngineController: ObservableObject {
         static let v: UInt16 = 9
         static let d: UInt16 = 2
         static let m: UInt16 = 46
+        static let t: UInt16 = 17
         static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
@@ -777,6 +778,9 @@ final class EngineController: ObservableObject {
             duplicateSelectedClips()
         case KeyCode.m:
             addMarkerAtPlayhead()
+        case KeyCode.t:
+            // ⌘T adds an audio track, ⌘⇧T an instrument track — the way most DAWs do it.
+            shift ? addInstrumentTrack() : addAudioTrack()
         default:
             return event
         }

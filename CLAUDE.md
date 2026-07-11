@@ -105,7 +105,7 @@ match the engine and dropped phase and the L/R solos entirely.
 
 This machine types Korean. With a Korean input source active, `charactersIgnoringModifiers` for the Z key is not `"z"`, so any shortcut compared against a character silently stops working — including SwiftUI's `.keyboardShortcut("z")`. Match `NSEvent.keyCode` instead (Z is 6). The old UI already knew this: all 308 of its `NSMenuItem`s carry an empty `keyEquivalent` and every shortcut runs through an `NSEvent` monitor.
 
-Menu items still declare their shortcuts so they are discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers all of them (⌘Z, ⌘⇧Z, ⌘N, ⌘O, ⌘S, ⌘⇧S, ⌘I).
+Menu items still declare their shortcuts so they are discoverable; the `NSEvent` monitor in `EngineController` is what actually delivers all of them (⌘Z, ⌘⇧Z, ⌘N, ⌘O, ⌘S, ⌘⇧S, ⌘I, ⌘M, ⌘T add audio track / ⌘⇧T add instrument track). The engine already had `nc_track_add_audio/instrument/midi`; the gap was only the shortcut and the discoverable **트랙** menu (`CommandMenu("트랙")`) — the "+오디오"/"+악기" toolbar buttons already worked.
 
 The **spacebar** (key code 49, no modifier) toggles play/stop through the same monitor. It is consumed (`return nil`) so it does not also click whatever button holds focus. The `firstResponder is NSTextView` guard at the top keeps it typing a space in a search field.
 
