@@ -512,6 +512,7 @@ struct ChannelStrip: View {
                 stateButton("S", on: track.solo, tint: Theme.Palette.yellow) {
                     engine.toggleTrackSolo(track.id)
                 }
+                .contextMenu { soloModeMenu }
             }
             // While another track is soloed, this one is silenced — blink its Mute the
             // way Pro Tools does, so it reads as held down by the solo rather than off.
@@ -521,6 +522,29 @@ struct ChannelStrip: View {
                 engine.toggleTrackMute(track.id)
             }
         }
+    }
+
+    /// The Solo button's right-click menu, ported from the old UI: solo-select behaviour,
+    /// solo-monitor mode, and Clear All Solos.
+    @ViewBuilder private var soloModeMenu: some View {
+        Picker("솔로 선택", selection: Binding(
+            get: { engine.soloSelectMode },
+            set: { engine.soloSelectMode = $0 }
+        )) {
+            Text("추가 (Additive)").tag(EngineController.SoloSelectMode.additive)
+            Text("배타 (Exclusive)").tag(EngineController.SoloSelectMode.exclusive)
+        }
+        Divider()
+        Picker("솔로 모니터", selection: Binding(
+            get: { engine.soloMonitorMode },
+            set: { engine.setSoloMonitorMode($0) }
+        )) {
+            Text("SIP · Solo In Place").tag(EngineController.SoloMonitorMode.sip)
+            Text("AFL · After Fader (준비 중)").tag(EngineController.SoloMonitorMode.afl)
+            Text("PFL · Pre Fader (준비 중)").tag(EngineController.SoloMonitorMode.pfl)
+        }
+        Divider()
+        Button("모든 솔로 해제") { engine.clearAllSolos() }
     }
 
     private func stateButton(_ title: String,

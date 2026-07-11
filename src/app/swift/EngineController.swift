@@ -2420,12 +2420,41 @@ final class EngineController: ObservableObject {
 
     /// Solo is additive here, the way the engine models it — several tracks can be
     /// soloed at once, and Master/Monitor refuse it.
+    /// Solo select behaviour set from the Solo button's right-click menu. Additive lets
+    /// solos stack; Exclusive clears the others when you solo a track (Pro Tools X-OR).
+    enum SoloSelectMode: String { case additive, exclusive }
+    @Published var soloSelectMode: SoloSelectMode = .additive
+    /// Solo monitor mode. SIP (solo-in-place) is the engine's behaviour today; AFL/PFL
+    /// need a solo bus and are stored until that engine work lands.
+    enum SoloMonitorMode: String { case sip, afl, pfl }
+    @Published var soloMonitorMode: SoloMonitorMode = .sip
+
     func toggleTrackSolo(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
-        nc_track_set_solo(handle, Int32(id), !track.solo)
+        let willSolo = !track.solo
+        // Exclusive: soloing a track clears every other track's solo first.
+        if soloSelectMode == .exclusive && willSolo {
+            for other in tracks where other.id != id && other.solo {
+                nc_track_set_solo(handle, Int32(other.id), false)
+            }
+            reloadTracks()
+        }
+        nc_track_set_solo(handle, Int32(id), willSolo)
         syncTrack(id)
         refreshHistory()
     }
+
+    func clearAllSolos() {
+        guard let handle else { return }
+        var changed = false
+        for track in tracks where track.solo {
+            nc_track_set_solo(handle, Int32(track.id), false)
+            changed = true
+        }
+        if changed { reloadTracks(); refreshHistory() }
+    }
+
+    func setSoloMonitorMode(_ mode: SoloMonitorMode) { soloMonitorMode = mode }
 
     func toggleTrackArm(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
