@@ -648,6 +648,10 @@ struct MonitorDock: View {
                     .foregroundStyle(engine.remoteDspActive ? Theme.Palette.teal : Theme.Palette.textFaint)
             }
 
+            // The node the engine streams External/NDS monitor audio to. Type a host or
+            // IP, or 검색 to broadcast-probe the LAN.
+            RemoteHostField()
+
             Divider().overlay(Theme.Palette.divider)
 
             // Internal DSP core allocation. Isolation keeps a floor of 4.
@@ -697,6 +701,57 @@ struct MonitorDock: View {
         Text(text)
             .font(Theme.Font.ui(9, .medium))
             .foregroundStyle(Theme.Palette.textLabel)
+    }
+}
+
+/// The remote DSP node address field: edits a draft locally and commits on Enter or
+/// blur so the engine is not retargeted (and history recorded) on every keystroke.
+private struct RemoteHostField: View {
+    @EnvironmentObject private var engine: EngineController
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Text("노드")
+                .font(Theme.Font.mono(7.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            TextField("studio.local", text: $draft)
+                .textFieldStyle(.plain)
+                .font(Theme.Font.mono(9))
+                .foregroundStyle(Theme.Palette.text)
+                .focused($focused)
+                .onSubmit { commit() }
+                .onChange(of: focused) { if !$1 { commit() } }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.recess)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
+            Button { engine.discoverRemoteDspHost() } label: {
+                Text("검색")
+                    .font(Theme.Font.ui(8.5, .medium))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+            }
+            .buttonStyle(.plain)
+        }
+        .onAppear { draft = engine.remoteDspHost }
+        .onChange(of: engine.remoteDspHost) { draft = $1 }   // reflect discover / project load
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty, trimmed != engine.remoteDspHost {
+            engine.setRemoteDspHost(trimmed)
+        } else {
+            draft = engine.remoteDspHost
+        }
     }
 }
 

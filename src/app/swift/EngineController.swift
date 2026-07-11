@@ -597,6 +597,8 @@ final class EngineController: ObservableObject {
     @Published private(set) var dspCoreCount = 4
     // Cores DW asks the external DSP Manager to reserve; a connected node's own report wins.
     @Published private(set) var externalDspCoreCount = 4
+    // The remote DSP node address the engine streams to (External/NDS target).
+    @Published var remoteDspHost = "studio.local"
     @Published private(set) var remoteDspRoundTripMs: Double = 0
 
     /// Inserts the engine is actually running, summed across paths. This is the
@@ -2120,6 +2122,7 @@ final class EngineController: ObservableObject {
         coreIsolationEnabled = nc_dsp_core_isolation(handle)
         dspCoreCount = Int(nc_dsp_core_count(handle))
         externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
+        remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
         reloadMonitorListen()
     }
 
@@ -2166,6 +2169,21 @@ final class EngineController: ObservableObject {
         nc_dsp_set_external_core_count(handle, Int32(count))
         externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
         refreshHistory()
+    }
+
+    /// Point the engine's remote DSP stream at a node address. Applies live.
+    func setRemoteDspHost(_ host: String) {
+        guard let handle else { return }
+        nc_dsp_set_remote_host(handle, host)
+        remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
+        refreshHistory()
+    }
+
+    /// Broadcast-probe the LAN for a node and adopt its address if one answers.
+    func discoverRemoteDspHost() {
+        guard let handle else { return }
+        let found = readString { nc_dsp_discover_remote_host(handle, $0, $1) }
+        if !found.isEmpty { setRemoteDspHost(found) }
     }
 
     /// Isolation keeps a floor of 4 cores, matching the engine.

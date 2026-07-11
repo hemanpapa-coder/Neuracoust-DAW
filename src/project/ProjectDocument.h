@@ -203,6 +203,10 @@ struct ProjectDocument {
     // hint: when a connected node reports its own core_count that report wins, so this
     // is the value used before/without a report and the count the DAW requests.
     int externalDspCoreCount = 4;
+    // The remote DSP node the engine streams monitor audio to (host or IPv4). Empty
+    // falls back to "studio.local". This is what makes External/NDS reach a real node
+    // instead of the hardcoded default.
+    std::string remoteDspHost = "studio.local";
     bool windowsProcessorAffinityEnabled = false;
     std::string windowsProcessorAffinityMode = "p_core_preferred";
     bool monitorStationMono = false;

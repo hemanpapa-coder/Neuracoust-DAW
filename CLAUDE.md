@@ -343,6 +343,19 @@ reserve). It is only a hint: a connected node's own reported `core_count` wins i
 precedence. The dock's Remote Core / DSP section carries both steppers — 내부 코어 격리
 (internal) and 외부 DSP 코어 (external).
 
+**Remote node address.** The engine only ever streamed to the hardcoded `studio.local`;
+now the target node is the project's `remoteDspHost` (default `studio.local`), plumbed
+into `buildRemoteDspSettings` (`settings.host = remoteDspHost`, `nodes` cleared so the
+host is the effective target). `nc_dsp_set_remote_host` re-applies the monitor path live
+(no restart); `nc_dsp_discover_remote_host` broadcast-probes the LAN. The dock's Remote
+Core / DSP section has a 노드 field + 검색 button. **NDS is not a separate server** — it,
+External, and remote_external all speak the same NART UDP protocol (audio on 20000,
+status/discover on 20001) to `neuracoust_remote_core_server`, which runs on the node
+(Windows / Intel Mac / Linux). Verified live: with the host set to a real node the DAW
+opens a connected UDP socket to `<node>:20000` and the dock shows 원격 코어 연결됨 with
+the round-trip. The stream only runs on monitor signal (a silent/empty block is skipped)
+and reconfigures when the host changes.
+
 ## Monitor DSP path
 
 The three sources — **내부 DSP**, **외부 DSP**, **NDS** — are **multi-select**, not

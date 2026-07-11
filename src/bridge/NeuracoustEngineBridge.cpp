@@ -17,6 +17,7 @@
 #include "project/ProjectHistory.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -188,6 +189,12 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
         static_cast<uint16_t>(std::max(1, std::min(16, engine->project.externalDspCoreCount)));
+    // Point the engine at the user's node. Clearing the default node list makes the
+    // top-level host the effective target, so External/NDS reach a real server instead
+    // of the hardcoded "studio.local" default.
+    settings.host = engine->project.remoteDspHost.empty()
+                        ? std::string("studio.local") : engine->project.remoteDspHost;
+    settings.nodes.clear();
     return settings;
 }
 
@@ -3016,6 +3023,40 @@ void nc_dsp_set_external_core_count(NCEngine* engine, int count) {
     // path to push the new hint live — no full audio restart needed.
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
                                          buildRemoteDspSettings(engine));
+}
+
+void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.remoteDspHost : std::string{});
+}
+
+void nc_dsp_set_remote_host(NCEngine* engine, const char* host) {
+    if (engine == nullptr) return;
+    std::string next = host != nullptr ? host : "";
+    // Trim surrounding whitespace so a stray paste does not become the hostname.
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    next.erase(next.begin(), std::find_if(next.begin(), next.end(), notSpace));
+    next.erase(std::find_if(next.rbegin(), next.rend(), notSpace).base(), next.end());
+    if (next.empty()) next = "studio.local";
+    if (next == engine->project.remoteDspHost) return;
+    engine->project.remoteDspHost = next;
+    engine->recordStep("Set remote DSP host");
+    // Re-apply the monitor path live so the stream retargets without an audio restart.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
+                                         buildRemoteDspSettings(engine));
+}
+
+/// Broadcast-discover a node and return its address, or "" if none answered. Lets the
+/// UI fill the host field without the user typing an IP.
+void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, std::string{});
+    const auto settings = engine != nullptr ? buildRemoteDspSettings(engine)
+                                            : neuracoust::daw::defaultRemoteDspServerSettings();
+    for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 600)) {
+        if (!found.node.host.empty()) {
+            copyText(out, outLen, found.node.host);
+            return;
+        }
+    }
 }
 
 float nc_monitor_volume_db(NCEngine* engine) {

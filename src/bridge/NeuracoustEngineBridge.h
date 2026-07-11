@@ -672,6 +672,14 @@ void nc_dsp_set_core_count(NCEngine* engine, int count);
 int nc_dsp_external_core_count(NCEngine* engine);
 void nc_dsp_set_external_core_count(NCEngine* engine, int count);
 
+// The remote DSP node the engine streams monitor audio to (host or IPv4). Empty falls
+// back to "studio.local". Setting it re-applies the monitor path live — no restart.
+// nc_dsp_discover_remote_host broadcast-probes the LAN and returns a node address (or
+// "" if none answered) so the UI can fill the field without typing an IP.
+void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen);
+void nc_dsp_set_remote_host(NCEngine* engine, const char* host);
+void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen);
+
 // ---------------------------------------------------------------------------
 // Output device
 //
