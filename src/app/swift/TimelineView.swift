@@ -212,6 +212,11 @@ final class TimelineNSView: NSView {
 
     override var isFlipped: Bool { true }
 
+    // So clicking the timeline pulls focus off any text field (the node host field,
+    // plugin search, a rename box). Without this the field editor stays first responder
+    // and the keyCode monitor's "don't steal keys while typing" guard swallows Delete.
+    override var acceptsFirstResponder: Bool { true }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -383,6 +388,11 @@ final class TimelineNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // Take focus so a text field that was being edited resigns — otherwise the
+        // keyCode monitor treats every key as "user is typing" and Delete never fires.
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
 
         // Clicking a lane header selects that track; the "A" chip folds automation out.
         if point.x < Self.headerWidth {
