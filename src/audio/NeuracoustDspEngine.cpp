@@ -1918,10 +1918,25 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         }
     }
     RemoteDspServerSettings remotePlanSettings = settings_.remoteDspServer;
+    // Never resolve a hostname on the realtime render thread: getaddrinfo() for an
+    // mDNS ".local" name can block for seconds if the node is absent, freezing audio
+    // (the app then looks crashed). Only probe when the host is a numeric IPv4, which
+    // resolves instantly; a hostname target simply skips the auto-detect until the user
+    // enters an IP.
+    auto hostIsNumericIpv4 = [](const std::string& host) {
+        if (host.empty()) return false;
+        int dots = 0;
+        for (char c : host) {
+            if (c == '.') { ++dots; }
+            else if (c < '0' || c > '9') { return false; }
+        }
+        return dots == 3;
+    };
     if (remotePlanSettings.enabled && hasRemoteCapableTrackInsert) {
         remotePlanSettings.pluginDspEnabled = true;
         double measuredRemoteRoundTripMs = 0.0;
-        if (remotePlanSettings.loadedPluginIdHint.empty()) {
+        if (remotePlanSettings.loadedPluginIdHint.empty() &&
+            hostIsNumericIpv4(remotePlanSettings.host)) {
             RemoteDspServerSettings infoSettings = remotePlanSettings;
             infoSettings.timeoutMs = infoSettings.timeoutMs > 0 ? std::min(infoSettings.timeoutMs, 150) : 150;
             const auto serverInfo = queryRemoteDspServerInfo(infoSettings);
