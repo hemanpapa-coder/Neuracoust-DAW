@@ -353,6 +353,16 @@ struct ChannelStrip: View {
                             else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
                         }
                         Divider()
+                        if !isMaster {
+                            Menu("슬롯으로 이동") {
+                                ForEach(0..<5, id: \.self) { target in
+                                    Button("슬롯 \(["A","B","C","D","E"][target])") {
+                                        engine.moveInsert(track: ownerId, from: slot, to: target)
+                                    }
+                                    .disabled(target == slot)
+                                }
+                            }
+                        }
                         Button("앞으로 이동") {
                             if isMaster { engine.moveMasterInsert(slot: slot, direction: -1) }
                             else { engine.moveInsert(track: ownerId, slot: slot, direction: -1) }

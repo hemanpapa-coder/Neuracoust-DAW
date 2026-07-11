@@ -352,14 +352,11 @@ final class EngineController: ObservableObject {
         }
     }
 
-    /// Drag-and-drop reorder: move a plugin from one slot to another. Inserts are packed,
-    /// so the target is clamped to the insert count — dropping past the last plug-in moves
-    /// it to the end rather than failing (which snapped the drag back).
+    /// Drag a plugin to an exact slot (A–E), Pro Tools style — it stays where you drop it,
+    /// leaving earlier slots empty. Dropping onto an occupied slot swaps the two.
     func moveInsert(track trackId: Int, from: Int, to: Int) {
-        guard let handle, from != to,
-              let track = tracks.first(where: { $0.id == trackId }) else { return }
-        let clamped = min(to, track.inserts.count)
-        if nc_track_move_insert_to_index(handle, Int32(trackId), Int32(from), Int32(clamped)) >= 0 {
+        guard let handle, from != to else { return }
+        if nc_track_move_insert_to_slot(handle, Int32(trackId), Int32(from), Int32(to)) >= 0 {
             reloadTracks()
             refreshHistory()
         }
@@ -2708,8 +2705,8 @@ final class EngineController: ObservableObject {
     }
 
     /// Mute: the old UI's monitor station mute, distinct from the mono listen button.
-    /// Seconds of reverb/delay tail rendered after stop (Pro Tools HD style; 0 = cut).
-    @Published private(set) var insertTailOnStopSeconds: Double = 5
+    /// Insert tail on stop: <0 always-on (default), 0 cut, >0 ring out N seconds.
+    @Published private(set) var insertTailOnStopSeconds: Double = -1
 
     func setInsertTailOnStopSeconds(_ seconds: Double) {
         guard let handle else { return }

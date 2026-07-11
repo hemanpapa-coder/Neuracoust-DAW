@@ -98,16 +98,16 @@ struct TransportBar: View {
             }
             transportKey("stop.fill") { engine.stop() }
                 .contextMenu {
-                    Text("정지 후 리버브 테일 (Pro Tools HD 방식)")
-                    Picker("테일 길이", selection: Binding(
+                    Text("정지 후 인서트 DSP (Pro Tools HD 방식)")
+                    Picker("인서트 DSP", selection: Binding(
                         get: { engine.insertTailOnStopSeconds },
                         set: { engine.setInsertTailOnStopSeconds($0) }
                     )) {
+                        Text("항상 켜짐 (고정 · DSP 계속 구동)").tag(-1.0)
                         Text("끔 (즉시 컷)").tag(0.0)
-                        Text("2초").tag(2.0)
-                        Text("5초").tag(5.0)
-                        Text("10초").tag(10.0)
-                        Text("20초").tag(20.0)
+                        Text("2초 링아웃").tag(2.0)
+                        Text("5초 링아웃").tag(5.0)
+                        Text("10초 링아웃").tag(10.0)
                     }
                 }
             // Not a take recorder yet: it arms the input monitor path. Drawn hollow so
@@ -437,6 +437,11 @@ struct StatusStrip: View {
             if engine.activeInsertCount > 0 {
                 stat("INSERTS", "\(engine.activeInsertCount)")
             }
+
+            // Insert-DSP-on-stop mode (right-click Stop to change).
+            stat("INS DSP", engine.insertTailOnStopSeconds < 0 ? "항상"
+                          : engine.insertTailOnStopSeconds == 0 ? "컷"
+                          : String(format: "%.0f초", engine.insertTailOnStopSeconds))
 
             if engine.canUndo {
                 stat("UNDO", engine.undoStepName)

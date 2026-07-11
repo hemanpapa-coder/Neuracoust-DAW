@@ -67,8 +67,8 @@ struct NCEngine {
     std::vector<float> lastGoniometerSamples;
     /// Monitor the computer's input source instead of the DAW master. Default: master.
     bool monitorListenSource = false;
-    /// Seconds of reverb/delay tail rendered after stop (Pro Tools HD style). Default 5.
-    double insertTailOnStopSeconds = 5.0;
+    /// Insert tail on stop: <0 always on (default), 0 cut, >0 ring out N seconds.
+    double insertTailOnStopSeconds = -1.0;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -3138,6 +3138,32 @@ int nc_track_move_insert_to_index(NCEngine* engine, int trackIndex, int fromSlot
     return moved;
 }
 
+// Pro Tools-style positional move: place a plugin in an exact slot (A–E), leaving gaps.
+// Inserts stay a packed vector, but empty slots (empty pluginPath) are padded in and the
+// render skips them, so a plug-in can sit in slot C with A/B empty. Trailing empties are
+// trimmed. Returns the target slot, or -1.
+int nc_track_move_insert_to_slot(NCEngine* engine, int trackIndex, int fromSlot, int toSlot) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || fromSlot < 0 || toSlot < 0 || toSlot > 4 || fromSlot == toSlot) {
+        return -1;
+    }
+    if (static_cast<size_t>(fromSlot) >= track->inserts.size() ||
+        track->inserts[static_cast<size_t>(fromSlot)].pluginPath.empty()) {
+        return -1;  // no plug-in at the source
+    }
+    const int need = std::max(fromSlot, toSlot) + 1;
+    while (static_cast<int>(track->inserts.size()) < need) {
+        track->inserts.push_back(neuracoust::daw::TrackInsertSlot{});
+    }
+    std::swap(track->inserts[static_cast<size_t>(fromSlot)], track->inserts[static_cast<size_t>(toSlot)]);
+    while (!track->inserts.empty() && track->inserts.back().pluginPath.empty()) {
+        track->inserts.pop_back();
+    }
+    engine->reconcileProject();
+    engine->recordStep("Move insert");
+    return toSlot;
+}
+
 void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen) {
     const auto* track = trackAt(engine, trackIndex);
     if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
@@ -3524,8 +3550,8 @@ double nc_insert_tail_on_stop_seconds(NCEngine* engine) {
 
 void nc_set_insert_tail_on_stop_seconds(NCEngine* engine, double seconds) {
     if (engine == nullptr) return;
-    engine->insertTailOnStopSeconds = std::max(0.0, seconds);
-    engine->engine.setInsertTailOnStopSeconds(engine->insertTailOnStopSeconds);
+    engine->insertTailOnStopSeconds = seconds;  // <0 = always on
+    engine->engine.setInsertTailOnStopSeconds(seconds);
 }
 
 void nc_monitor_set_talkback(NCEngine* engine, bool on) {

@@ -5,6 +5,10 @@ struct MonitorDock: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var listen: ListenRoomController
 
+    /// Opens the searchable model picker sheet. Nested context submenus of ~200 items do
+    /// not render on macOS, so model selection uses this instead.
+    @State var modelPicker: ModelPickerContext?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -25,6 +29,9 @@ struct MonitorDock: View {
             .scrollIndicators(.never)
         }
         .background(Theme.Palette.panel)
+        .sheet(item: $modelPicker) { ctx in
+            ModelPickerSheet(context: ctx) { modelPicker = nil }
+        }
     }
 
     // MARK: Header
@@ -174,32 +181,14 @@ struct MonitorDock: View {
         return model.isEmpty ? "실물 모델 미지정" : model
     }
 
-    /// The ~200-entry speaker/headphone catalog is grouped by brand into nested submenus.
-    /// A flat 200-item context submenu did not render on macOS (and was unusable anyway).
+    /// A single menu item that opens the searchable model picker sheet. Nested context
+    /// submenus of ~200 items do not render on macOS, so this replaces them.
     @ViewBuilder
     private func modelMenu(_ title: String, catalog: [String], selected: String,
                            onPick: @escaping (String) -> Void) -> some View {
-        Menu(title) {
-            let groups = Dictionary(grouping: catalog) { model in
-                model.split(separator: " ").first.map(String.init) ?? model
-            }
-            ForEach(groups.keys.sorted(), id: \.self) { brand in
-                let models = groups[brand] ?? []
-                if models.count == 1, let only = models.first {
-                    Button { onPick(only) } label: {
-                        if only == selected { Label(only, systemImage: "checkmark") } else { Text(only) }
-                    }
-                } else {
-                    Menu(brand) {
-                        ForEach(models, id: \.self) { model in
-                            Button { onPick(model) } label: {
-                                if model == selected { Label(model, systemImage: "checkmark") }
-                                else { Text(model) }
-                            }
-                        }
-                    }
-                }
-            }
+        Button("\(title)…") {
+            modelPicker = ModelPickerContext(title: title, catalog: catalog,
+                                             selected: selected, onPick: onPick)
         }
     }
 
@@ -1029,5 +1018,78 @@ final class TalkbackKeyView: NSView {
         } else {
             onEngaged?(false)                           // momentary release
         }
+    }
+}
+
+/// A model-selection request for the searchable picker sheet.
+struct ModelPickerContext: Identifiable {
+    let id = UUID()
+    let title: String
+    let catalog: [String]
+    let selected: String
+    let onPick: (String) -> Void
+}
+
+/// A searchable, scrollable model picker — reliable where a 200-item nested context
+/// submenu is not, and the shape the popup redesign wants.
+struct ModelPickerSheet: View {
+    let context: ModelPickerContext
+    let dismiss: () -> Void
+    @State private var query = ""
+
+    private var filtered: [String] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return context.catalog }
+        return context.catalog.filter { $0.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            HStack {
+                Text(context.title)
+                    .font(Theme.Font.ui(12, .semibold))
+                    .foregroundStyle(Theme.Palette.textBright)
+                Spacer()
+                Button("닫기") { dismiss() }
+            }
+            TextField("검색…", text: $query)
+                .textFieldStyle(.roundedBorder)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(filtered, id: \.self) { model in
+                            Button {
+                                context.onPick(model)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(model)
+                                        .font(Theme.Font.ui(11))
+                                        .foregroundStyle(Theme.Palette.text)
+                                    Spacer()
+                                    if model == context.selected {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Theme.Palette.accent)
+                                    }
+                                }
+                                .padding(.horizontal, Theme.Space.md)
+                                .padding(.vertical, 5)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(model == context.selected
+                                            ? Theme.Palette.accent.opacity(0.12) : Color.clear)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .id(model)
+                        }
+                    }
+                }
+                .onAppear { if !context.selected.isEmpty { proxy.scrollTo(context.selected, anchor: .center) } }
+            }
+        }
+        .padding(Theme.Space.xl)
+        .frame(width: 340, height: 460)
+        .background(Theme.Palette.panel)
     }
 }

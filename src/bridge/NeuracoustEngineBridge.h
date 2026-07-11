@@ -691,6 +691,7 @@ bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot);
 /// direction is -1 (earlier in the chain) or +1. Returns the new slot index, or -1.
 int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction);
 int nc_track_move_insert_to_index(NCEngine* engine, int trackIndex, int fromSlot, int toSlot);
+int nc_track_move_insert_to_slot(NCEngine* engine, int trackIndex, int fromSlot, int toSlot);
 
 /// "NAT", "INT", "RINT" or "EXT" — what the insert will actually run on.
 void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);
