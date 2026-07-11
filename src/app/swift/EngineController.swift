@@ -2313,8 +2313,13 @@ final class EngineController: ObservableObject {
         if !nc_midi_live_active(handle) {
             let count = Int(nc_midi_input_count(handle))
             if count > 0, !midiLiveAutoStarted {
-                let id = readString { nc_midi_input_id(handle, 0, $0, $1) }
-                _ = id.withCString { nc_midi_live_start(handle, $0) }
+                // Prefer a real MIDI interface over the Waves SoundGrid virtual ports,
+                // which sit first in the list but are not the user's keyboard.
+                let sources = midiInputs()
+                let keyboard = sources.first { !$0.name.localizedCaseInsensitiveContains("SoundGrid")
+                                            && !$0.name.localizedCaseInsensitiveContains("Waves") }
+                let chosen = keyboard?.id ?? sources.first?.id ?? ""
+                _ = chosen.withCString { nc_midi_live_start(handle, $0) }
                 midiLiveAutoStarted = true
             } else if count == 0 {
                 midiLiveAutoStarted = false
