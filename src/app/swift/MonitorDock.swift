@@ -362,9 +362,54 @@ struct MonitorDock: View {
         ("Bugs", Theme.Palette.orange),
     ]
 
+    private var referenceInputLabel: String {
+        if engine.currentInputDeviceId.isEmpty { return "레퍼런스 입력: 시스템 기본" }
+        let name = engine.inputDevices.first { $0.id == engine.currentInputDeviceId }?.name
+        return "레퍼런스 입력: \(name ?? engine.currentInputDeviceId)"
+    }
+
     private var referenceMonitoring: some View {
         VStack(alignment: .leading, spacing: Theme.Space.md) {
             sectionLabel("레퍼런스 모니터링 · A/B")
+
+            // Reference input: pick BlackHole (or any loopback) to A/B reference music
+            // playing in another app against the mix. Changing it restarts the engine.
+            Menu {
+                Button {
+                    engine.setInputDevice("")
+                } label: {
+                    Label("시스템 기본 입력", systemImage: engine.currentInputDeviceId.isEmpty ? "checkmark" : "")
+                }
+                ForEach(engine.inputDevices) { device in
+                    Button {
+                        engine.setInputDevice(device.id)
+                    } label: {
+                        Label(device.name, systemImage: engine.currentInputDeviceId == device.id ? "checkmark" : "")
+                    }
+                }
+            } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    Image(systemName: "waveform.badge.mic")
+                        .font(.system(size: 9))
+                    Text(referenceInputLabel)
+                        .font(Theme.Font.ui(9))
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
+                }
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .padding(.horizontal, Theme.Space.sm)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .onAppear { engine.refreshInputDevices() }
+
             HStack(spacing: Theme.Space.sm) {
                 ForEach(Self.streamRefs, id: \.0) { name, dot in
                     HStack(spacing: Theme.Space.xs) {

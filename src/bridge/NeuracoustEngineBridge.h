@@ -721,6 +721,15 @@ void nc_current_output_device_id(NCEngine* engine, char* out, size_t outLen);
 void nc_active_output_device_name(NCEngine* engine, char* out, size_t outLen);
 void nc_set_output_device(NCEngine* engine, const char* deviceId);
 
+// Input device — the reference/monitor input (e.g. BlackHole for reference music).
+// Empty id = system default; read at start(), so changing it restarts the engine.
+// nc_input_device_* enumerate the input-capable devices (call count first to refresh).
+int nc_input_device_count(NCEngine* engine);
+void nc_input_device_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_input_device_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_current_input_device_id(NCEngine* engine, char* out, size_t outLen);
+void nc_set_input_device(NCEngine* engine, const char* deviceId);
+
 void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_path_mode(NCEngine* engine, const char* mode);
 

@@ -671,6 +671,27 @@ final class EngineController: ObservableObject {
         activeOutputDeviceName = readEngineString(capacity: 256) { nc_active_output_device_name(handle, $0, $1) }
     }
 
+    // Reference/monitor input — pick BlackHole here to A/B reference music into the mix.
+    @Published private(set) var inputDevices: [OutputDevice] = []
+    @Published private(set) var currentInputDeviceId = ""   // empty = system default
+
+    func refreshInputDevices() {
+        guard let handle else { return }
+        let count = Int(nc_input_device_count(handle))
+        inputDevices = (0..<count).map { i in
+            OutputDevice(id: readEngineString { nc_input_device_id(handle, Int32(i), $0, $1) },
+                         name: readEngineString(capacity: 256) { nc_input_device_name(handle, Int32(i), $0, $1) })
+        }
+        currentInputDeviceId = readEngineString { nc_current_input_device_id(handle, $0, $1) }
+    }
+
+    /// An empty id selects the system default. Changing the device restarts the engine.
+    func setInputDevice(_ id: String) {
+        guard let handle else { return }
+        nc_set_input_device(handle, id.isEmpty ? nil : id)
+        currentInputDeviceId = readEngineString { nc_current_input_device_id(handle, $0, $1) }
+    }
+
     // Live meters, refreshed each tick.
     @Published private(set) var phaseCorrelation: Float = 0
     @Published private(set) var spectrumLow: Float = 0

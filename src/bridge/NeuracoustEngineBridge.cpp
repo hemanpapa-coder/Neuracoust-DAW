@@ -57,6 +57,9 @@ struct NCEngine {
     std::string monitorDspPathMode = "internal";
     /// Empty means the system default output device.
     std::string outputDeviceId;
+    /// The reference/monitor input device (e.g. BlackHole for reference music).
+    /// Empty means the system default input device.
+    std::string inputDeviceId;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -230,6 +233,7 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
         std::max(1, std::min(16, engine->project.requestedDspCoreCount));
     settings.remoteDspServer = buildRemoteDspSettings(engine);
     settings.outputDeviceId = engine->outputDeviceId;
+    settings.inputDeviceId = engine->inputDeviceId;
     return settings;
 }
 
@@ -3172,6 +3176,57 @@ void nc_set_output_device(NCEngine* engine, const char* deviceId) {
         return;
     }
     engine->outputDeviceId = next;
+    restartEngineForSettings(engine);
+}
+
+namespace {
+
+// Input-capable devices — BlackHole and other loopbacks show up here so reference
+// music can be monitored. Cached the same way as the output list.
+std::vector<neuracoust::daw::AudioDeviceInfo>& inputDeviceCache() {
+    static std::vector<neuracoust::daw::AudioDeviceInfo> devices;
+    return devices;
+}
+
+} // namespace
+
+int nc_input_device_count(NCEngine* engine) {
+    (void)engine;
+    auto& cache = inputDeviceCache();
+    cache.clear();
+    for (const auto& device : neuracoust::daw::enumerateAudioDevices()) {
+        if (device.inputChannels > 0) {
+            cache.push_back(device);
+        }
+    }
+    return static_cast<int>(cache.size());
+}
+
+void nc_input_device_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    (void)engine;
+    const auto& cache = inputDeviceCache();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < cache.size())
+                              ? cache[static_cast<size_t>(index)].id : std::string{});
+}
+
+void nc_input_device_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    (void)engine;
+    const auto& cache = inputDeviceCache();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < cache.size())
+                              ? cache[static_cast<size_t>(index)].name : std::string{});
+}
+
+void nc_current_input_device_id(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->inputDeviceId : std::string{});
+}
+
+void nc_set_input_device(NCEngine* engine, const char* deviceId) {
+    if (engine == nullptr) return;
+    const std::string next = deviceId != nullptr ? deviceId : "";
+    if (next == engine->inputDeviceId) {
+        return;
+    }
+    engine->inputDeviceId = next;
     restartEngineForSettings(engine);
 }
 
