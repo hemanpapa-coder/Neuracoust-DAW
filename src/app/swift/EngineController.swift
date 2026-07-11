@@ -2222,6 +2222,8 @@ final class EngineController: ObservableObject {
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
+        autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
+        autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
         reloadMonitorListen()
     }
 
@@ -2389,6 +2391,30 @@ final class EngineController: ObservableObject {
         nc_monitor_set_output_exclusive(handle, exclusive)
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
         refreshHistory()
+    }
+
+    // Master auto fade-out (a fade in the master volume automation over the last N sec).
+    @Published var autoFadeOutSeconds: Double = 0
+    @Published var autoFadeOutCurve = "equal_power"
+    static let autoFadeCurves = ["equal_power", "linear", "exponential", "logarithmic"]
+
+    func setAutoFadeSeconds(_ seconds: Double) {
+        guard let handle else { return }
+        nc_master_set_auto_fade_seconds(handle, seconds)
+        autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
+        reloadTracks()
+        refreshHistory()
+    }
+    func setAutoFadeCurve(_ curve: String) {
+        guard let handle else { return }
+        _ = curve.withCString { nc_master_set_auto_fade_curve(handle, $0) }
+        autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
+        reloadTracks()
+        refreshHistory()
+    }
+    /// 0..1 amplitude of a curve at normalized position, for drawing the fade preview.
+    func autoFadeAmplitude(_ curve: String, _ t: Double) -> Float {
+        curve.withCString { nc_auto_fade_amplitude($0, t) }
     }
 
     /// Assign a speaker MODEL to a slot (spec-based virtual monitoring). Pass a bare

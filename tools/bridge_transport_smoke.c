@@ -547,6 +547,23 @@ int main(void) {
         printf("physical monitor models OK\n");
     }
 
+    // --- Master auto fade-out ---------------------------------------------------
+    {
+        char buf[64];
+        if (nc_master_auto_fade_seconds(engine) != 0.0) { fprintf(stderr, "FAIL: auto fade not off by default\n"); failures++; }
+        nc_master_set_auto_fade_seconds(engine, 5.0);
+        if (nc_master_auto_fade_seconds(engine) != 5.0) { fprintf(stderr, "FAIL: auto fade seconds %.1f\n", nc_master_auto_fade_seconds(engine)); failures++; }
+        nc_master_set_auto_fade_curve(engine, "linear");
+        nc_master_auto_fade_curve(engine, buf, sizeof buf);
+        if (strcmp(buf, "linear") != 0) { fprintf(stderr, "FAIL: auto fade curve '%s'\n", buf); failures++; }
+        // The curve amplitude falls from ~1 at the start to ~0 at the end.
+        if (nc_auto_fade_amplitude("linear", 0.0) < 0.99f) { fprintf(stderr, "FAIL: fade start amp\n"); failures++; }
+        if (nc_auto_fade_amplitude("linear", 1.0) > 0.01f) { fprintf(stderr, "FAIL: fade end amp\n"); failures++; }
+        nc_master_set_auto_fade_seconds(engine, 0.0);
+        if (nc_master_auto_fade_seconds(engine) != 0.0) { fprintf(stderr, "FAIL: auto fade off\n"); failures++; }
+        printf("master auto fade-out OK\n");
+    }
+
     // --- Speaker set: model catalog + model/output setters ---------------------
     {
         char buf[256];

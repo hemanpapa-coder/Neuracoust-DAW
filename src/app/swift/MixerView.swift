@@ -209,6 +209,7 @@ struct ChannelStrip: View {
                 buttonRow
                 faderSection
                 volumeReadout
+                if track.kind == .master { autoFadeSection }
                 if showDynamics { dynamicsSelector }
             }
             .padding(.horizontal, Theme.Space.md)
@@ -534,6 +535,56 @@ struct ChannelStrip: View {
     private var meterPeakLeft: Float { track.kind == .master ? engine.outputPeakLeft : track.peakLeft }
     private var meterPeakRight: Float { track.kind == .master ? engine.outputPeakRight : track.peakRight }
 
+    /// Master-only: an auto fade-out over the last N seconds, with a curve preview and
+    /// picker. The seconds and curve write master volume automation in the engine.
+    private var autoFadeSection: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("오토 페이드아웃")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            HStack(spacing: Theme.Space.sm) {
+                AutoFadeCurvePreview(curve: engine.autoFadeOutCurve,
+                                     active: engine.autoFadeOutSeconds > 0)
+                    .environmentObject(engine)
+                    .frame(width: 30, height: 20)
+                Button { engine.setAutoFadeSeconds(max(0, engine.autoFadeOutSeconds - 1)) } label: {
+                    Text("−").font(Theme.Font.ui(11, .bold)).frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(engine.autoFadeOutSeconds > 0 ? Theme.Palette.text : Theme.Palette.textFainter)
+                Text(engine.autoFadeOutSeconds <= 0 ? "끔" : "\(Int(engine.autoFadeOutSeconds.rounded()))s")
+                    .font(Theme.Font.mono(8.5)).foregroundStyle(Theme.Palette.text)
+                    .frame(minWidth: 22)
+                Button { engine.setAutoFadeSeconds(engine.autoFadeOutSeconds + 1) } label: {
+                    Text("+").font(Theme.Font.ui(11, .bold)).frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.text)
+            }
+            Menu {
+                ForEach(EngineController.autoFadeCurves, id: \.self) { curve in
+                    Button(autoFadeCurveLabel(curve)) { engine.setAutoFadeCurve(curve) }
+                }
+            } label: {
+                Text("커브: \(autoFadeCurveLabel(engine.autoFadeOutCurve)) ▾")
+                    .font(Theme.Font.ui(8))
+                    .foregroundStyle(Theme.Palette.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+        }
+    }
+
+    private func autoFadeCurveLabel(_ curve: String) -> String {
+        switch curve {
+        case "linear": return "직선"
+        case "exponential": return "지수"
+        case "logarithmic": return "로그"
+        default: return "등파워"
+        }
+    }
+
     private var volumeReadout: some View {
         HStack(spacing: 2) {
             Text(dbLabel(track.volumeDb))
@@ -629,6 +680,29 @@ struct ChannelStrip: View {
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(value == "—" ? Theme.Palette.textFainter : Theme.Palette.textLabel)
         }
+    }
+}
+
+/// A tiny preview of the auto fade-out curve: full at the left, silent at the right.
+private struct AutoFadeCurvePreview: View {
+    @EnvironmentObject var engine: EngineController
+    let curve: String
+    let active: Bool
+
+    var body: some View {
+        Canvas { ctx, size in
+            var path = Path()
+            let steps = 20
+            for i in 0...steps {
+                let t = Double(i) / Double(steps)
+                let amp = CGFloat(engine.autoFadeAmplitude(curve, t))
+                let point = CGPoint(x: size.width * CGFloat(t), y: size.height * (1 - amp))
+                if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            ctx.stroke(path, with: .color(active ? Theme.Palette.accent : Theme.Palette.textFainter),
+                       lineWidth: 1.5)
+        }
+        .background(RoundedRectangle(cornerRadius: 3).fill(Theme.Palette.recess))
     }
 }
 

@@ -1965,6 +1965,8 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"physicalSpeakerModel\": \"" << escapeJsonString(project.physicalSpeakerModel) << "\",\n";
     out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
     out << "  \"monitorSpeakerHeadphoneExclusive\": " << (project.monitorSpeakerHeadphoneExclusive ? "true" : "false") << ",\n";
+    out << "  \"autoFadeOutSeconds\": " << project.autoFadeOutSeconds << ",\n";
+    out << "  \"autoFadeOutCurve\": \"" << escapeJsonString(project.autoFadeOutCurve) << "\",\n";
     out << "  \"windowsProcessorAffinityEnabled\": " << (project.windowsProcessorAffinityEnabled ? "true" : "false") << ",\n";
     out << "  \"windowsProcessorAffinityMode\": \"" << escapeJsonString(project.windowsProcessorAffinityMode) << "\",\n";
     const std::string monitorListenMode = project.monitorStationListenMode.empty() ? "LR" : project.monitorStationListenMode;
@@ -2469,6 +2471,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
     parsed.physicalHeadphoneModel = stringAfterKey(text, "physicalHeadphoneModel");
     parsed.monitorSpeakerHeadphoneExclusive = boolAfterKey(text, "monitorSpeakerHeadphoneExclusive", true);
+    parsed.autoFadeOutSeconds = finiteRange(numberAfterKey(text, "autoFadeOutSeconds", 0.0), 0.0, 0.0, 600.0);
+    {
+        const std::string curve = stringAfterKey(text, "autoFadeOutCurve");
+        parsed.autoFadeOutCurve = curve.empty() ? std::string("equal_power") : curve;
+    }
     parsed.windowsProcessorAffinityEnabled = boolAfterKey(text, "windowsProcessorAffinityEnabled", false);
     parsed.windowsProcessorAffinityMode = stringAfterKey(text, "windowsProcessorAffinityMode");
     if (!isValidWindowsProcessorAffinityMode(parsed.windowsProcessorAffinityMode)) {

@@ -177,7 +177,18 @@ and its `"track.pan"` lane. Both go through `mixTimelineFrame`, which the realti
 mixer and the offline bounce share — so an automation curve is heard, not just drawn.
 Anything else written into `automationLanes` is stored by the project and ignored by
 the sound, which is why `nc_automation_parameter_supported` refuses it rather than
-letting the UI draw a curve that does nothing.
+letting the UI draw a curve that does nothing. The **Master** track's `volumeAutomation`
+is honoured too (it scales the summed output in `applyMixerMasterGainBalance`).
+
+**Auto fade-out** (Master strip, `MixerView.autoFadeSection`) rides on that: it is not a
+special engine feature — `applyMasterAutoFade` just **rewrites the Master track's
+volume automation** with a curve over the last N seconds of content (`projectContentEnd`
+down to `-120 dB`). `project.autoFadeOutSeconds` (0 = off) and `autoFadeOutCurve`
+(linear / equal_power / exponential / logarithmic) drive it; the setters regenerate the
+points, so **auto-fade owns the master automation** (manual master automation is
+overwritten). `nc_auto_fade_amplitude` feeds the strip's little curve preview. The base
+is the master fader's dB at generation time, so moving the master fader afterward does
+not re-scale the baked fade — re-apply if that matters.
 
 A lane folds out from the "A" chip in its timeline header; the parameter name below
 it is also the parameter picker. Clicking empty space adds a point, dragging moves

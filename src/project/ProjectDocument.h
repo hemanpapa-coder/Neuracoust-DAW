@@ -214,6 +214,10 @@ struct ProjectDocument {
     std::string physicalSpeakerModel;
     std::string physicalHeadphoneModel;
     bool monitorSpeakerHeadphoneExclusive = true;
+    // Auto fade-out: a fade written into the Master track's volume automation over the
+    // last N seconds. 0 = off. Curve is one of linear/equal_power/exponential/logarithmic.
+    double autoFadeOutSeconds = 0.0;
+    std::string autoFadeOutCurve = "equal_power";
     bool windowsProcessorAffinityEnabled = false;
     std::string windowsProcessorAffinityMode = "p_core_preferred";
     bool monitorStationMono = false;

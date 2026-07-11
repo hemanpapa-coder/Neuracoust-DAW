@@ -3530,6 +3530,86 @@ void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive) {
     engine->recordStep(exclusive ? "Enable speaker/headphone exclusive" : "Disable speaker/headphone exclusive");
 }
 
+namespace {
+// Fade-out amplitude curve at normalized position t (0 = full, 1 = silent), as a dB
+// offset. Mirrors the old UI's curve set.
+float autoFadeGainDb(const std::string& curve, double t) {
+    t = std::max(0.0, std::min(1.0, t));
+    double amp;
+    if (curve == "linear") amp = 1.0 - t;
+    else if (curve == "exponential") amp = (1.0 - t) * (1.0 - t) * (1.0 - t);   // slow then fast
+    else if (curve == "logarithmic") amp = 1.0 - t * t * t;                     // fast then slow
+    else amp = std::cos(t * 3.14159265358979323846 / 2.0);                      // equal_power
+    if (amp <= 1e-6) return -120.0f;
+    return static_cast<float>(20.0 * std::log10(amp));
+}
+
+double projectContentEnd(const ProjectDocument& project) {
+    double end = 0.0;
+    for (const auto& clip : project.clips) end = std::max(end, clip.startSeconds + clip.durationSeconds);
+    for (const auto& region : project.midiRegions) end = std::max(end, region.startSeconds + region.durationSeconds);
+    return end;
+}
+
+neuracoust::daw::TrackState* masterTrackPtr(NCEngine* engine) {
+    for (auto& track : engine->project.tracks) {
+        if (track.trackType == "master" || track.name == "Master") return &track;
+    }
+    return nullptr;
+}
+
+// Auto-fade owns the Master track's volume automation: rebuild it from the fade setting.
+void applyMasterAutoFade(NCEngine* engine) {
+    auto* master = masterTrackPtr(engine);
+    if (master == nullptr) return;
+    master->volumeAutomation.clear();
+    const double seconds = engine->project.autoFadeOutSeconds;
+    const double end = projectContentEnd(engine->project);
+    if (seconds > 0.0 && end > 0.0) {
+        const double start = std::max(0.0, end - seconds);
+        const std::string& curve = engine->project.autoFadeOutCurve;
+        const int steps = 24;
+        for (int i = 0; i <= steps; ++i) {
+            const double t = static_cast<double>(i) / static_cast<double>(steps);
+            neuracoust::daw::AutomationPointState point;
+            point.timeSeconds = start + t * (end - start);
+            point.value = std::max(-120.0f, std::min(12.0f, master->volumeDb + autoFadeGainDb(curve, t)));
+            master->volumeAutomation.push_back(point);
+        }
+    }
+    engine->reconcileProject();
+}
+} // namespace
+
+double nc_master_auto_fade_seconds(NCEngine* engine) {
+    return engine != nullptr ? engine->project.autoFadeOutSeconds : 0.0;
+}
+
+void nc_master_set_auto_fade_seconds(NCEngine* engine, double seconds) {
+    if (engine == nullptr) return;
+    engine->project.autoFadeOutSeconds = std::max(0.0, std::min(600.0, seconds));
+    applyMasterAutoFade(engine);
+    engine->recordStep("Set auto fade-out");
+}
+
+void nc_master_auto_fade_curve(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.autoFadeOutCurve : std::string{});
+}
+
+void nc_master_set_auto_fade_curve(NCEngine* engine, const char* curve) {
+    if (engine == nullptr || curve == nullptr) return;
+    engine->project.autoFadeOutCurve = curve;
+    applyMasterAutoFade(engine);
+    engine->recordStep("Set auto fade-out curve");
+}
+
+// The fade's gain (0..1 amplitude) at normalized position, for the UI curve preview.
+float nc_auto_fade_amplitude(const char* curve, double t) {
+    const std::string key = curve != nullptr ? curve : "equal_power";
+    const float db = autoFadeGainDb(key, t);
+    return db <= -119.0f ? 0.0f : static_cast<float>(std::pow(10.0, db / 20.0));
+}
+
 int nc_speaker_output_route_count() {
     return static_cast<int>(speakerOutputRouteCatalog().size());
 }

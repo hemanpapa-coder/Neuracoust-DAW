@@ -771,6 +771,17 @@ void nc_monitor_physical_headphone_model(NCEngine* engine, char* out, size_t out
 void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
+
+// Auto fade-out: a fade written into the Master track's volume automation over the last
+// N seconds of content (0 = off). Setting either regenerates it (auto-fade owns the
+// master automation). Curve: linear / equal_power / exponential / logarithmic.
+// nc_auto_fade_amplitude gives the 0..1 amplitude at a normalized position for the UI
+// curve preview.
+double nc_master_auto_fade_seconds(NCEngine* engine);
+void   nc_master_set_auto_fade_seconds(NCEngine* engine, double seconds);
+void   nc_master_auto_fade_curve(NCEngine* engine, char* out, size_t outLen);
+void   nc_master_set_auto_fade_curve(NCEngine* engine, const char* curve);
+float  nc_auto_fade_amplitude(const char* curve, double t);
 int  nc_speaker_output_route_count(void);
 void nc_speaker_output_route(int index, char* out, size_t outLen);
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);
