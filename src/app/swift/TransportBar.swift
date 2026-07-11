@@ -97,6 +97,19 @@ struct TransportBar: View {
                 transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
             }
             transportKey("stop.fill") { engine.stop() }
+                .contextMenu {
+                    Text("정지 후 리버브 테일 (Pro Tools HD 방식)")
+                    Picker("테일 길이", selection: Binding(
+                        get: { engine.insertTailOnStopSeconds },
+                        set: { engine.setInsertTailOnStopSeconds($0) }
+                    )) {
+                        Text("끔 (즉시 컷)").tag(0.0)
+                        Text("2초").tag(2.0)
+                        Text("5초").tag(5.0)
+                        Text("10초").tag(10.0)
+                        Text("20초").tag(20.0)
+                    }
+                }
             // Not a take recorder yet: it arms the input monitor path. Drawn hollow so
             // it does not read as a transport that captures audio. Right-click picks the
             // record mode the capture engine will use once it exists.

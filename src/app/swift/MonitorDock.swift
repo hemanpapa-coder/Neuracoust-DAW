@@ -174,34 +174,51 @@ struct MonitorDock: View {
         return model.isEmpty ? "실물 모델 미지정" : model
     }
 
+    /// The ~200-entry speaker/headphone catalog is grouped by brand into nested submenus.
+    /// A flat 200-item context submenu did not render on macOS (and was unusable anyway).
+    @ViewBuilder
+    private func modelMenu(_ title: String, catalog: [String], selected: String,
+                           onPick: @escaping (String) -> Void) -> some View {
+        Menu(title) {
+            let groups = Dictionary(grouping: catalog) { model in
+                model.split(separator: " ").first.map(String.init) ?? model
+            }
+            ForEach(groups.keys.sorted(), id: \.self) { brand in
+                let models = groups[brand] ?? []
+                if models.count == 1, let only = models.first {
+                    Button { onPick(only) } label: {
+                        if only == selected { Label(only, systemImage: "checkmark") } else { Text(only) }
+                    }
+                } else {
+                    Menu(brand) {
+                        ForEach(models, id: \.self) { model in
+                            Button { onPick(model) } label: {
+                                if model == selected { Label(model, systemImage: "checkmark") }
+                                else { Text(model) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The 스피커 tab's right-click menu: physical output device plus the real speaker
     /// model the user monitors on (not the A/B/C simulator).
     @ViewBuilder
     private var speakerMenu: some View {
         deviceMenu
         Divider()
-        Menu("실물 스피커 모델") {
-            ForEach(engine.speakerModelCatalog, id: \.self) { model in
-                Button { engine.setPhysicalSpeakerModel(model) } label: {
-                    if engine.physicalSpeakerModel == model { Label(model, systemImage: "checkmark") }
-                    else { Text(model) }
-                }
-            }
-        }
+        modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
+                  selected: engine.physicalSpeakerModel) { engine.setPhysicalSpeakerModel($0) }
     }
 
     @ViewBuilder
     private var headphoneMenu: some View {
         deviceMenu
         Divider()
-        Menu("실물 헤드폰 모델") {
-            ForEach(engine.headphoneModelCatalog, id: \.self) { model in
-                Button { engine.setPhysicalHeadphoneModel(model) } label: {
-                    if engine.physicalHeadphoneModel == model { Label(model, systemImage: "checkmark") }
-                    else { Text(model) }
-                }
-            }
-        }
+        modelMenu("실물 헤드폰 모델", catalog: engine.headphoneModelCatalog,
+                  selected: engine.physicalHeadphoneModel) { engine.setPhysicalHeadphoneModel($0) }
     }
 
     /// Right-click device picker. "시스템 기본" leaves the id empty, which is a valid
@@ -307,19 +324,8 @@ struct MonitorDock: View {
     @ViewBuilder
     private func speakerSetMenu(_ set: EngineController.SpeakerSet) -> some View {
         Text("\(set.letter) · \(set.name)")
-        Menu("스피커 모델") {
-            ForEach(engine.speakerModelCatalog, id: \.self) { model in
-                Button {
-                    engine.setSpeakerModel(set.id, model)
-                } label: {
-                    if set.output == "None", set.displayModel == model {
-                        Label(model, systemImage: "checkmark")
-                    } else {
-                        Text(model)
-                    }
-                }
-            }
-        }
+        modelMenu("스피커 모델", catalog: engine.speakerModelCatalog,
+                  selected: set.output == "None" ? set.displayModel : "") { engine.setSpeakerModel(set.id, $0) }
         Menu("물리 출력") {
             ForEach(engine.speakerOutputRoutes, id: \.self) { route in
                 Button {

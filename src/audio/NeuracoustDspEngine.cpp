@@ -1582,11 +1582,26 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
                 !track.instrument.bypassed &&
                 !track.instrument.pluginPath.empty();
         });
-    const bool hasRealtimeInsertRenderSource = transportRunning &&
-        (renderPlan.hasActiveVst3Inserts ||
-         renderPlan.hasActiveTrackVst3Inserts ||
-         !realtimeTrackInsertChains_.empty() ||
-         realtimeInsertChain_.activeVst3Count() > 0);
+    const bool hasActiveInserts =
+        renderPlan.hasActiveVst3Inserts ||
+        renderPlan.hasActiveTrackVst3Inserts ||
+        !realtimeTrackInsertChains_.empty() ||
+        realtimeInsertChain_.activeVst3Count() > 0;
+    // On the running→stopped edge, arm an insert tail so reverb/delay rings out instead
+    // of being cut. Playing resets it. The chains are fed silence while it counts down.
+    if (wasTransportRunning_ && !transportRunning && hasActiveInserts) {
+        const double tailSec = insertTailOnStopSeconds_.load(std::memory_order_relaxed);
+        insertTailSamplesRemaining_ = static_cast<int64_t>(tailSec * std::max(1.0, settings_.sampleRate));
+    }
+    wasTransportRunning_ = transportRunning;
+    if (transportRunning) {
+        insertTailSamplesRemaining_ = 0;
+    }
+    const bool insertTailActive = !transportRunning && insertTailSamplesRemaining_ > 0 && hasActiveInserts;
+    const bool hasRealtimeInsertRenderSource = (transportRunning || insertTailActive) && hasActiveInserts;
+    if (insertTailActive) {
+        insertTailSamplesRemaining_ = std::max<int64_t>(0, insertTailSamplesRemaining_ - frameCount);
+    }
     const bool hasProjectRenderContent = (transportRunning && (!renderPlan.clips.empty() ||
         !renderPlan.midiRegions.empty())) ||
         hasInstrumentTrack ||

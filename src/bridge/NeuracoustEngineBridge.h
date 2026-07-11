@@ -781,6 +781,10 @@ void nc_monitor_set_dim(NCEngine* engine, bool on);
 // Monitor source: master (false, default) vs the computer's input source (true).
 bool nc_monitor_listen_source(NCEngine* engine);
 void nc_monitor_set_listen_source(NCEngine* engine, bool on);
+
+// Reverb/delay tail rendered after stop, in seconds (0 = cut immediately).
+double nc_insert_tail_on_stop_seconds(NCEngine* engine);
+void nc_set_insert_tail_on_stop_seconds(NCEngine* engine, double seconds);
 void nc_monitor_set_talkback(NCEngine* engine, bool on);
 
 // The monitor listen state, ported whole from the old UI. It is not four exclusive

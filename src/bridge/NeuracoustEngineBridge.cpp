@@ -67,6 +67,8 @@ struct NCEngine {
     std::vector<float> lastGoniometerSamples;
     /// Monitor the computer's input source instead of the DAW master. Default: master.
     bool monitorListenSource = false;
+    /// Seconds of reverb/delay tail rendered after stop (Pro Tools HD style). Default 5.
+    double insertTailOnStopSeconds = 5.0;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -3514,6 +3516,16 @@ void nc_monitor_set_listen_source(NCEngine* engine, bool on) {
     if (engine == nullptr) return;
     engine->monitorListenSource = on;
     engine->engine.setMonitorListenSource(on);
+}
+
+double nc_insert_tail_on_stop_seconds(NCEngine* engine) {
+    return engine != nullptr ? engine->insertTailOnStopSeconds : 0.0;
+}
+
+void nc_set_insert_tail_on_stop_seconds(NCEngine* engine, double seconds) {
+    if (engine == nullptr) return;
+    engine->insertTailOnStopSeconds = std::max(0.0, seconds);
+    engine->engine.setInsertTailOnStopSeconds(engine->insertTailOnStopSeconds);
 }
 
 void nc_monitor_set_talkback(NCEngine* engine, bool on) {

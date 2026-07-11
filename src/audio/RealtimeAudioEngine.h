@@ -157,6 +157,7 @@ public:
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room");
     void setPhysicalInputAccessAllowed(bool allowed);
     void setMonitorListenSource(bool active);
+    void setInsertTailOnStopSeconds(double seconds);
     bool loadAudioFile(const std::string& path, std::string& error);
     bool loadProject(const ProjectDocument& project, std::string& error);
     bool updateProject(const ProjectDocument& project, std::string& error);

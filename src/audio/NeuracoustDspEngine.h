@@ -133,6 +133,10 @@ public:
     /// Monitor the computer's input source (e.g. BlackHole) through the monitor bus,
     /// instead of only the DAW master. Enables input capture so the source is heard.
     void setMonitorListenSource(bool active) { listenSourceActive_.store(active, std::memory_order_relaxed); }
+    /// Seconds of insert tail rendered after stop (0 = cut immediately).
+    void setInsertTailOnStopSeconds(double seconds) {
+        insertTailOnStopSeconds_.store(std::max(0.0, seconds), std::memory_order_relaxed);
+    }
 private:
     void publishListenRoomLocked(const std::vector<float>& interleavedStereo);
     void storeTrackInsertMeterLocked(const std::string& trackName,
@@ -210,6 +214,11 @@ private:
     std::atomic<bool> inputMonitorCaptureActive_ {false};
     std::atomic<bool> talkbackCaptureActive_ {false};
     std::atomic<bool> listenSourceActive_ {false};
+    // Ring out reverb/delay tails after the transport stops by keeping the insert chains
+    // alive (fed silence) for this long — Pro Tools HD behaviour. 0 = cut immediately.
+    std::atomic<double> insertTailOnStopSeconds_ {5.0};
+    int64_t insertTailSamplesRemaining_ = 0;
+    bool wasTransportRunning_ = false;
     std::atomic<bool> physicalInputMonitoringActiveForStatus_ {false};
     std::atomic<int> inputMonitorChannelsForStatus_ {0};
     std::atomic<float> inputPeakForStatus_ {0.0f};
