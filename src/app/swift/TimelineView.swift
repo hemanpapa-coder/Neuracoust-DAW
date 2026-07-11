@@ -25,6 +25,13 @@ struct TimelineModel: Equatable {
         let accent: NSColor
         let muted: Bool
         let selected: Bool
+        /// Inline channel strip in the lane header, so editing needs no mixer trip.
+        var trackId: Int = -1
+        var soloed: Bool = false
+        var armed: Bool = false
+        var volumeDb: Float = 0
+        var pan: Float = 0
+        var peak: Float = 0
         /// nil while the lane's automation is folded away.
         var automation: Automation?
     }
@@ -147,6 +154,12 @@ final class TimelineNSView: NSView {
     var onCommitEdit: ((String) -> Void)?                // step name
     var snap: ((Double) -> Double)?
 
+    // Inline lane-header channel strip: no mixer trip to mute/solo/arm or set level.
+    var onToggleMute: ((Int) -> Void)?                   // trackId
+    var onToggleSolo: ((Int) -> Void)?                   // trackId
+    var onToggleArm: ((Int) -> Void)?                    // trackId
+    var onSetVolumeDb: ((Int, Float) -> Void)?           // (trackId, db) — continuous
+
     /// Grab zone at each end of a clip.
     private static let trimHandleWidth: CGFloat = 8
 
@@ -181,6 +194,8 @@ final class TimelineNSView: NSView {
         case fadingIn(clip: TimelineModel.Clip)
         case fadingOut(clip: TimelineModel.Clip)
         case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
+        /// Dragging the inline volume fader in a lane header.
+        case headerFader(trackId: Int)
     }
 
     /// Clip gain is drawn as a horizontal line across this dB span.
@@ -406,11 +421,23 @@ final class TimelineNSView: NSView {
             window?.makeFirstResponder(self)
         }
 
-        // Clicking a lane header selects that track; the "A" chip folds automation out.
+        // Clicking a lane header selects that track; the "A" chip folds automation out;
+        // the inline strip mutes/solos/arms or drags the volume fader.
         if point.x < Self.headerWidth {
             if let lane = laneIndex(at: point) {
+                let trackId = model.lanes[lane].trackId
                 if automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
+                } else if headerMuteRect(lane).contains(point) {
+                    onToggleMute?(trackId)
+                } else if headerSoloRect(lane).contains(point) {
+                    onToggleSolo?(trackId)
+                } else if headerArmRect(lane).contains(point) {
+                    onToggleArm?(trackId)
+                } else if headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
+                    onSelectLane?(lane)
+                    onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
+                    drag = .headerFader(trackId: trackId)
                 } else {
                     onSelectLane?(lane)
                 }
@@ -680,6 +707,9 @@ final class TimelineNSView: NSView {
             let perPoint = span / Float(max(1, Self.laneHeight - 12))
             let value = startGainDb - Float(point.y - grabY) * perPoint
             onSetGain?(clip.id, min(Self.gainRange.upperBound, max(Self.gainRange.lowerBound, value)))
+        case .headerFader(let trackId):
+            // The fader's x-mapping is the same for every lane, so index 0 suffices.
+            onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: 0))
         }
     }
 
@@ -724,6 +754,8 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Move MIDI region")
         case .resizingRegion:
             onCommitEdit?("Resize MIDI region")
+        case .headerFader:
+            onCommitEdit?("Track volume")
         case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -1037,10 +1069,61 @@ final class TimelineNSView: NSView {
                     .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
                 ])
 
+            drawLaneHeaderStrip(lane, index: index)
+
             NSColor(hex: 0x1b1611).setFill()
             NSRect(x: 0, y: rect.maxY - 1, width: bounds.width, height: 1).fill()
         }
         context.restoreGState()
+    }
+
+    /// The inline channel strip drawn under each lane's name: M/S/R, a volume fader and
+    /// a peak meter, so common moves need no mixer trip.
+    private func drawLaneHeaderStrip(_ lane: TimelineModel.Lane, index: Int) {
+        func button(_ frame: NSRect, _ title: String, on: Bool, onColor: UInt32) {
+            NSColor(hex: on ? onColor : 0x2a241e).setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3).fill()
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .bold),
+                .foregroundColor: NSColor(hex: on ? 0x14100a : 0x9a8f7e),
+            ]
+            let size = (title as NSString).size(withAttributes: attrs)
+            (title as NSString).draw(
+                at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
+                withAttributes: attrs)
+        }
+        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c)
+        button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
+        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
+
+        // Volume fader: a track with a filled portion and a knob.
+        let fader = headerFaderRect(index)
+        NSColor(hex: 0x1a150f).setFill()
+        NSBezierPath(roundedRect: fader, xRadius: 2, yRadius: 2).fill()
+        let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
+        NSColor(hex: 0x4a4038).setFill()
+        NSRect(x: fader.minX, y: fader.midY - 1, width: knobX - fader.minX, height: 2).fill()
+        lane.accent.setFill()
+        NSBezierPath(ovalIn: NSRect(x: knobX - 4, y: fader.midY - 4, width: 8, height: 8)).fill()
+        (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
+            at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
+            withAttributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
+                .foregroundColor: NSColor(hex: 0x867b6a),
+            ])
+
+        // Peak meter.
+        let meter = headerMeterRect(index)
+        NSColor(hex: 0x140f0a).setFill()
+        NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
+        if lane.peak > 0.0001 {
+            let level = min(1, max(0, CGFloat(lane.peak)))
+            let color = level > 0.9 ? NSColor(hex: 0xe5484d)
+                      : level > 0.7 ? NSColor(hex: 0xe6a23c)
+                      : NSColor(hex: 0x5fb85f)
+            color.setFill()
+            NSRect(x: meter.minX, y: meter.minY, width: meter.width * level, height: meter.height).fill()
+        }
     }
 
     /// Markers live in the ruler below the range strip; they must not eat the scrub.
@@ -1085,6 +1168,43 @@ final class TimelineNSView: NSView {
 
     private func automationToggleRect(_ index: Int) -> NSRect {
         NSRect(x: Self.headerWidth - 26, y: laneTop(index) + 10, width: 18, height: 14)
+    }
+
+    // Inline lane-header channel strip. All rects are in the header column (x < headerWidth).
+    private static let headerButtonWidth: CGFloat = 20
+    private static let headerButtonHeight: CGFloat = 15
+
+    private func headerMuteRect(_ index: Int) -> NSRect {
+        NSRect(x: 12, y: laneTop(index) + 30, width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+    }
+    private func headerSoloRect(_ index: Int) -> NSRect {
+        NSRect(x: 12 + Self.headerButtonWidth + 3, y: laneTop(index) + 30,
+               width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+    }
+    private func headerArmRect(_ index: Int) -> NSRect {
+        NSRect(x: 12 + 2 * (Self.headerButtonWidth + 3), y: laneTop(index) + 30,
+               width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+    }
+    /// The volume fader track spans this rect; the fill maps -60…+6 dB left→right.
+    private func headerFaderRect(_ index: Int) -> NSRect {
+        NSRect(x: 12, y: laneTop(index) + 52, width: Self.headerWidth - 24, height: 8)
+    }
+    private func headerMeterRect(_ index: Int) -> NSRect {
+        NSRect(x: 12, y: laneTop(index) + 63, width: Self.headerWidth - 24, height: 4)
+    }
+
+    private static let headerVolMinDb: Float = -60
+    private static let headerVolMaxDb: Float = 6
+
+    private func headerFaderFraction(_ db: Float) -> CGFloat {
+        let f = (db - Self.headerVolMinDb) / (Self.headerVolMaxDb - Self.headerVolMinDb)
+        return CGFloat(min(1, max(0, f)))
+    }
+    private func headerFaderDb(atX pointX: CGFloat, index: Int) -> Float {
+        let rect = headerFaderRect(index)
+        let raw = Float((pointX - rect.minX) / max(1, rect.width))
+        let fraction = min(1, max(0, raw))
+        return Self.headerVolMinDb + fraction * (Self.headerVolMaxDb - Self.headerVolMinDb)
     }
 
 
@@ -1427,6 +1547,10 @@ struct TimelineView: NSViewRepresentable {
     let onMoveClipToLane: (String, Int, Double) -> Void
     let onCommitEdit: (String) -> Void
     let snap: (Double) -> Double
+    let onToggleMute: (Int) -> Void
+    let onToggleSolo: (Int) -> Void
+    let onToggleArm: (Int) -> Void
+    let onSetVolumeDb: (Int, Float) -> Void
 
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
@@ -1477,5 +1601,9 @@ struct TimelineView: NSViewRepresentable {
         view.onMoveClipToLane = onMoveClipToLane
         view.onCommitEdit = onCommitEdit
         view.snap = snap
+        view.onToggleMute = onToggleMute
+        view.onToggleSolo = onToggleSolo
+        view.onToggleArm = onToggleArm
+        view.onSetVolumeDb = onSetVolumeDb
     }
 }

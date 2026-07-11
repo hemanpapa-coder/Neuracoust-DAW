@@ -257,7 +257,11 @@ private struct EditView: View {
                     onSelectLane: { engine.selectLane($0) },
                     onMoveClipToLane: { engine.moveClipToLane($0, laneIndex: $1, startSeconds: $2) },
                     onCommitEdit: { engine.commitClipGesture($0) },
-                    snap: { engine.snap($0) }
+                    snap: { engine.snap($0) },
+                    onToggleMute: { engine.toggleTrackMute($0) },
+                    onToggleSolo: { engine.toggleTrackSolo($0) },
+                    onToggleArm: { engine.toggleTrackArm($0) },
+                    onSetVolumeDb: { engine.setTrackVolume($0, $1) }
                 )
 
                 PianoRollPanel()

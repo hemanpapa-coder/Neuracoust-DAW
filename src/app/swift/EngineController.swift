@@ -1338,6 +1338,12 @@ final class EngineController: ObservableObject {
                                           accent: NSColor.from(track.kind.accent),
                                           muted: track.muted,
                                           selected: track.id == selectedTrackId,
+                                          trackId: track.id,
+                                          soloed: track.solo,
+                                          armed: track.recordArmed,
+                                          volumeDb: track.volumeDb,
+                                          pan: track.pan,
+                                          peak: max(track.peakLeft, track.peakRight),
                                           automation: automation)
             },
             clips: clips.compactMap { clip in
