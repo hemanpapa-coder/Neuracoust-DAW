@@ -210,6 +210,20 @@ renderer turns notes into VST3 events and mixes whatever the instrument returns.
 region on a bare midi track is silent by design. `nc_track_set_instrument` is what
 loads one.
 
+**Live MIDI input** (a keyboard played into an instrument) was unimplemented — the
+engine had `queueLiveMidiEvents` + renderer consumption, but nothing fed it, and the
+queue was cleared while stopped. Ported from the DAW folder: the bridge owns a
+`MidiInputRecorder`; `nc_midi_pump_live_input` (called every UI tick from `tick()`)
+drains `consumePendingEvents()`, converts each `RecordedMidiEvent` to a `Vst3MidiEvent`
+(`recordedMidiEventToVst3Event`), and `queueLiveMidiEvents` for every **instrument**
+track that is **record-armed or input-monitoring**. `EngineController.pumpLiveMidi`
+auto-opens the first source once (`nc_midi_input_count/id`, `nc_midi_live_start`), so
+it just works; `startLiveMidi`/`stopLiveMidi`/`midiInputs()` are there for a picker.
+Crucially, `NeuracoustDspEngine` no longer clears `liveMidiEvents` when stopped and
+`hasInstrumentTrack` is true when live events are queued — so a held key sounds
+**stopped or playing**. To hear it: add an instrument track (⌘⇧T), load an instrument,
+arm it, play.
+
 Both the realtime path and the offline bounce render instruments through the same
 `renderProjectAudioBlockWithStateAndMeters`, so a MIDI part that plays also exports.
 

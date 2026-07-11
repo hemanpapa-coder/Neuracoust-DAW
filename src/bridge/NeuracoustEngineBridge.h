@@ -751,6 +751,18 @@ void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model)
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
 void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
 
+// Live MIDI input: monitor a keyboard through armed/input-monitoring instrument tracks.
+// Enumerate sources, start on one (empty = first available), then call
+// nc_midi_pump_live_input each UI tick to drain events into the instruments. Live notes
+// sound whether or not the transport is running.
+int  nc_midi_input_count(NCEngine* engine);
+void nc_midi_input_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_midi_input_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_midi_live_start(NCEngine* engine, const char* sourceId);
+void nc_midi_live_stop(NCEngine* engine);
+bool nc_midi_live_active(NCEngine* engine);
+void nc_midi_pump_live_input(NCEngine* engine);
+
 // ---------------------------------------------------------------------------
 // Listen Room
 //

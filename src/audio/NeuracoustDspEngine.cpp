@@ -1561,10 +1561,12 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     syncProjectMonitorDspRenderPathLocked();
     const ProjectAudioRenderPlan& renderPlan = projectPlan_;
     const bool transportRunning = settings_.transportRunning;
-    if (!transportRunning && !projectRenderState_.liveMidiEvents.empty()) {
-        projectRenderState_.liveMidiEvents.clear();
-    }
-    const bool hasInstrumentTrack = transportRunning &&
+    // Live MIDI (a keyboard held while stopped) must still sound, so do not drop queued
+    // live events when the transport is idle — hasProjectRenderContent below already
+    // renders the instrument whenever liveMidiEvents is non-empty. The renderer consumes
+    // and erases each event, so nothing accumulates.
+    const bool hasLiveMidi = !projectRenderState_.liveMidiEvents.empty();
+    const bool hasInstrumentTrack = (transportRunning || hasLiveMidi) &&
         std::any_of(renderPlan.tracks.begin(), renderPlan.tracks.end(), [](const TrackState& track) {
             if (track.trackType != "instrument") {
                 return false;

@@ -2,6 +2,7 @@
 
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
+#include "audio/MidiInputRecorder.h"
 #include "audio/OfflineBounce.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
@@ -56,6 +57,9 @@ struct NCEngine {
     std::string monitorDspPathMode = "internal";
     /// Empty means the system default output device.
     std::string outputDeviceId;
+
+    /// Live MIDI input for monitoring a keyboard through an instrument track.
+    neuracoust::daw::MidiInputRecorder midiInputRecorder;
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
@@ -3388,6 +3392,101 @@ void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled) {
     *field = enabled;
     engine->recordStep("Toggle speaker room EQ");
     engine->pushModules();
+}
+
+// ---------------------------------------------------------------------------
+// Live MIDI input — monitor a keyboard through an armed instrument track
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool recordedMidiEventToVst3Event(const neuracoust::daw::RecordedMidiEvent& recorded,
+                                  neuracoust::daw::Vst3MidiEvent& vstEvent) {
+    using neuracoust::daw::RecordedMidiEventKind;
+    using neuracoust::daw::Vst3MidiEventKind;
+    vstEvent = {};
+    vstEvent.frameOffset = 0;
+    vstEvent.channel = std::max(1, std::min(16, recorded.channel));
+    switch (recorded.kind) {
+    case RecordedMidiEventKind::NoteOn:
+    case RecordedMidiEventKind::NoteOff:
+        vstEvent.kind = Vst3MidiEventKind::Note;
+        vstEvent.pitch = std::max(0, std::min(127, recorded.pitch));
+        vstEvent.velocity = recorded.kind == RecordedMidiEventKind::NoteOn
+            ? std::max(1, std::min(127, recorded.velocity)) : 0;
+        vstEvent.noteOn = recorded.kind == RecordedMidiEventKind::NoteOn;
+        return true;
+    case RecordedMidiEventKind::Controller:
+        vstEvent.kind = Vst3MidiEventKind::Controller;
+        vstEvent.controller = std::max(0, std::min(127, recorded.controller));
+        vstEvent.value = std::max(0, std::min(127, recorded.value));
+        return true;
+    case RecordedMidiEventKind::PitchBend:
+        vstEvent.kind = Vst3MidiEventKind::PitchBend;
+        vstEvent.value = std::max(0, std::min(16383, recorded.value));
+        return true;
+    case RecordedMidiEventKind::ProgramChange:
+        vstEvent.kind = Vst3MidiEventKind::ProgramChange;
+        vstEvent.program = std::max(0, std::min(127, recorded.program));
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+int nc_midi_input_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->midiInputRecorder.availableInputs().size()) : 0;
+}
+
+void nc_midi_input_id(NCEngine* engine, int index, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const auto inputs = engine->midiInputRecorder.availableInputs();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < inputs.size())
+                              ? inputs[static_cast<size_t>(index)].id : std::string{});
+}
+
+void nc_midi_input_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const auto inputs = engine->midiInputRecorder.availableInputs();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < inputs.size())
+                              ? inputs[static_cast<size_t>(index)].name : std::string{});
+}
+
+bool nc_midi_live_start(NCEngine* engine, const char* sourceId) {
+    if (engine == nullptr) return false;
+    return engine->midiInputRecorder.start(sourceId != nullptr ? sourceId : "");
+}
+
+void nc_midi_live_stop(NCEngine* engine) {
+    if (engine == nullptr) return;
+    std::vector<neuracoust::daw::RecordedMidiEvent> ignored;
+    std::string error;
+    engine->midiInputRecorder.stop(ignored, error);
+}
+
+bool nc_midi_live_active(NCEngine* engine) {
+    return engine != nullptr && engine->midiInputRecorder.status().recording;
+}
+
+void nc_midi_pump_live_input(NCEngine* engine) {
+    if (engine == nullptr || !engine->midiInputRecorder.status().recording) return;
+    const auto pending = engine->midiInputRecorder.consumePendingEvents();
+    if (pending.empty()) return;
+    std::vector<neuracoust::daw::Vst3MidiEvent> liveEvents;
+    liveEvents.reserve(pending.size());
+    for (const auto& event : pending) {
+        neuracoust::daw::Vst3MidiEvent v;
+        if (recordedMidiEventToVst3Event(event, v)) liveEvents.push_back(v);
+    }
+    if (liveEvents.empty()) return;
+    // Every armed / input-monitoring instrument track hears the keyboard. A track with
+    // no instrument plug-in simply renders nothing, so no extra guard is needed.
+    for (const auto& track : engine->project.tracks) {
+        if (track.trackType != "instrument") continue;
+        if (!(track.recordArmed || track.inputMonitoring)) continue;
+        engine->engine.queueLiveMidiEvents(track.name, liveEvents);
+    }
 }
 
 // ---------------------------------------------------------------------------

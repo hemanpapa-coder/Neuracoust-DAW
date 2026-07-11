@@ -2290,6 +2290,54 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    // MARK: Live MIDI input
+
+    /// True while a keyboard is open and feeding armed instrument tracks.
+    @Published private(set) var midiLiveActive = false
+    /// So auto-start is attempted once per set of connected inputs, not every tick.
+    private var midiLiveAutoStarted = false
+
+    /// Opens the first MIDI source when one appears, then drains its notes into every
+    /// armed / input-monitoring instrument track. Notes sound stopped or playing.
+    private func pumpLiveMidi(_ handle: OpaquePointer) {
+        if !nc_midi_live_active(handle) {
+            let count = Int(nc_midi_input_count(handle))
+            if count > 0, !midiLiveAutoStarted {
+                let id = readString { nc_midi_input_id(handle, 0, $0, $1) }
+                _ = id.withCString { nc_midi_live_start(handle, $0) }
+                midiLiveAutoStarted = true
+            } else if count == 0 {
+                midiLiveAutoStarted = false
+            }
+        }
+        nc_midi_pump_live_input(handle)
+        let active = nc_midi_live_active(handle)
+        if active != midiLiveActive { midiLiveActive = active }
+    }
+
+    /// The available MIDI input sources (id, name), for a source picker.
+    func midiInputs() -> [(id: String, name: String)] {
+        guard let handle else { return [] }
+        return (0..<Int(nc_midi_input_count(handle))).map { i in
+            (readString { nc_midi_input_id(handle, Int32(i), $0, $1) },
+             readString { nc_midi_input_name(handle, Int32(i), $0, $1) })
+        }
+    }
+
+    func startLiveMidi(_ sourceId: String) {
+        guard let handle else { return }
+        _ = sourceId.withCString { nc_midi_live_start(handle, $0) }
+        midiLiveAutoStarted = true
+        midiLiveActive = nc_midi_live_active(handle)
+    }
+
+    func stopLiveMidi() {
+        guard let handle else { return }
+        nc_midi_live_stop(handle)
+        midiLiveAutoStarted = true   // don't immediately re-auto-start what the user stopped
+        midiLiveActive = false
+    }
+
     func setModuleEnabled(_ index: Int, _ enabled: Bool) {
         guard let handle else { return }
         nc_monitor_set_module_enabled(handle, Int32(index), enabled)
@@ -2388,6 +2436,9 @@ final class EngineController: ObservableObject {
         // otherwise so idle strips do not repaint. Only publish on a change.
         let blink = anyTrackSoloed && Int(CACurrentMediaTime() * 2.2).isMultiple(of: 2)
         if blink != soloBlinkOn { soloBlinkOn = blink }
+
+        // Live MIDI: keep a keyboard open and drain its notes into armed instruments.
+        pumpLiveMidi(handle)
 
         listenRoom?.refresh()
     }
