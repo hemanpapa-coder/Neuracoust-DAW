@@ -122,6 +122,16 @@ an NSScrollView — a scroll view would carry the ruler and the marker strip awa
 the lanes. `laneTop()` accumulates the offset; everything that hit-tests or draws a
 lane goes through it.
 
+## Edit tools
+
+The timeline toolbar has a Pro-Tools/Logic-style **tool picker** (`EngineController.EditTool`
+→ `NeuracoustApp.toolSelector`): 스마트 / 이동 / 선택 / 트림 / 분할 / 페이드 / 줌. The
+active tool is passed to `TimelineNSView.editTool` (a raw string) and forces one behaviour
+in `mouseDown` instead of the smart zone detection — **분할** clicks a clip to split it at
+that point (`onSplitClip` → `nc_clip_split`), **줌** clicks to zoom in (⌥ out) around the
+cursor, **선택** always sweeps a marquee, **이동/트림/페이드** force that drag on a clip.
+**스마트** is the default and keeps the old grab-decides-from-the-zone behaviour.
+
 ## Selection and range editing
 
 Two selections, and they do different work:

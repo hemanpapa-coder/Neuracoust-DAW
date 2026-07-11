@@ -190,6 +190,8 @@ private struct EditView: View {
                     onSelectMany: { engine.selectClips($0) },
                     onMoveClip: { engine.moveClip($0, to: $1) },
                     onBeginCopyDrag: { engine.duplicateClipForDrag($0, at: $1) },
+                    onSplitClip: { engine.splitClipAt($0, seconds: $1) },
+                    editTool: engine.editTool.rawValue,
                     onMoveSelection: { engine.moveSelection(by: $0) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },
@@ -208,6 +210,10 @@ private struct EditView: View {
 
     private var toolbar: some View {
         HStack(spacing: Theme.Space.sm) {
+            toolSelector
+
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
             zoomButton("줌-") { engine.zoomTimeline(by: 1.5) }
             zoomButton("맞춤") { engine.fitTimeline() }
             zoomButton("줌+") { engine.zoomTimeline(by: 1 / 1.5) }
@@ -263,6 +269,31 @@ private struct EditView: View {
         .background(Theme.Palette.ruler)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.Palette.border).frame(height: 1)
+        }
+    }
+
+    /// The edit-tool picker: each tool forces a mouse behaviour in the timeline.
+    private var toolSelector: some View {
+        HStack(spacing: 2) {
+            ForEach(EngineController.EditTool.allCases) { tool in
+                let active = engine.editTool == tool
+                Button { engine.editTool = tool } label: {
+                    Image(systemName: tool.symbol)
+                        .font(.system(size: 10))
+                        .foregroundStyle(active ? Theme.Palette.deepBorder : Theme.Palette.textDim)
+                        .frame(width: 24, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .fill(active ? Theme.Palette.accent : Theme.Palette.button)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(tool.label)
+            }
         }
     }
 

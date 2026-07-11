@@ -513,6 +513,45 @@ final class EngineController: ObservableObject {
 
     enum OutputMode { case speaker, headphone }
 
+    /// The active edit tool. Smart behaves as before (grab decides from the hit zone);
+    /// the others force one behavior, the way Pro Tools / Logic tools do.
+    enum EditTool: String, CaseIterable, Identifiable {
+        case smart, grabber, selector, trim, split, fade, zoom
+        var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .smart: return "wand.and.stars"
+            case .grabber: return "hand.raised"
+            case .selector: return "rectangle.dashed"
+            case .trim: return "arrow.left.and.right.square"
+            case .split: return "scissors"
+            case .fade: return "line.diagonal"
+            case .zoom: return "magnifyingglass"
+            }
+        }
+        var label: String {
+            switch self {
+            case .smart: return "스마트"
+            case .grabber: return "이동"
+            case .selector: return "선택"
+            case .trim: return "트림"
+            case .split: return "분할"
+            case .fade: return "페이드"
+            case .zoom: return "줌"
+            }
+        }
+    }
+    @Published var editTool: EditTool = .smart
+
+    /// Split a specific clip at a timeline second (the 분할 tool clicking a clip).
+    func splitClipAt(_ clipId: String, seconds: Double) {
+        guard let handle else { return }
+        if nc_clip_split(handle, clipId, snap(seconds)) {
+            reloadClips()
+            refreshHistory()
+        }
+    }
+
     /// The monitor listen state, mirroring the engine's `monitorStationListenMode`
     /// ("LR"/"L"/"R"/"M"/"S") plus mono and phase inverts. Not four exclusive modes:
     /// the buttons cycle, the way the old UI's monitor station did.
@@ -2396,7 +2435,9 @@ final class EngineController: ObservableObject {
     // Master auto fade-out (a fade in the master volume automation over the last N sec).
     @Published var autoFadeOutSeconds: Double = 0
     @Published var autoFadeOutCurve = "equal_power"
-    static let autoFadeCurves = ["equal_power", "linear", "exponential", "logarithmic"]
+    static let autoFadeCurves = ["equal_power", "s_curve", "linear", "exponential", "logarithmic"]
+    /// The length used when auto fade-out is first turned on.
+    static let defaultAutoFadeSeconds = 5.0
 
     func setAutoFadeSeconds(_ seconds: Double) {
         guard let handle else { return }

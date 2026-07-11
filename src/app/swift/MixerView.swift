@@ -555,7 +555,13 @@ struct ChannelStrip: View {
                 Text(engine.autoFadeOutSeconds <= 0 ? "끔" : "\(Int(engine.autoFadeOutSeconds.rounded()))s")
                     .font(Theme.Font.mono(8.5)).foregroundStyle(Theme.Palette.text)
                     .frame(minWidth: 22)
-                Button { engine.setAutoFadeSeconds(engine.autoFadeOutSeconds + 1) } label: {
+                Button {
+                    // Turning it on from off jumps to the default length, then ±1 s.
+                    let next = engine.autoFadeOutSeconds <= 0
+                        ? EngineController.defaultAutoFadeSeconds
+                        : engine.autoFadeOutSeconds + 1
+                    engine.setAutoFadeSeconds(next)
+                } label: {
                     Text("+").font(Theme.Font.ui(11, .bold)).frame(width: 16, height: 16)
                 }
                 .buttonStyle(.plain)
@@ -581,6 +587,7 @@ struct ChannelStrip: View {
         case "linear": return "직선"
         case "exponential": return "지수"
         case "logarithmic": return "로그"
+        case "s_curve": return "S자"
         default: return "등파워"
         }
     }

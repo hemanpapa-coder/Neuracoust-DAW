@@ -3539,6 +3539,7 @@ float autoFadeGainDb(const std::string& curve, double t) {
     if (curve == "linear") amp = 1.0 - t;
     else if (curve == "exponential") amp = (1.0 - t) * (1.0 - t) * (1.0 - t);   // slow then fast
     else if (curve == "logarithmic") amp = 1.0 - t * t * t;                     // fast then slow
+    else if (curve == "s_curve") amp = 0.5 * (1.0 + std::cos(t * 3.14159265358979323846)); // ease both ends
     else amp = std::cos(t * 3.14159265358979323846 / 2.0);                      // equal_power
     if (amp <= 1e-6) return -120.0f;
     return static_cast<float>(20.0 * std::log10(amp));

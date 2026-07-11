@@ -131,6 +131,9 @@ final class TimelineNSView: NSView {
     var onToggleSelect: ((String) -> Void)?              // shift-click
     var onSelectMany: (([String]) -> Void)?              // marquee
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
+    var onSplitClip: ((String, Double) -> Void)?         // 분할 tool: (clipId, seconds)
+    /// The active edit tool as a raw string ("smart"/"grabber"/…); forces a behaviour.
+    var editTool: String = "smart"
     /// Option-drag: duplicate the clip in place and return the copy's id, which the
     /// drag then moves — leaving the original where it was.
     var onBeginCopyDrag: ((String, Double) -> String?)?  // (clipId, startSeconds) -> newId
@@ -257,6 +260,15 @@ final class TimelineNSView: NSView {
     private func seconds(atX pointX: CGFloat) -> Double {
         let fraction = Double((pointX - lanesRect.minX) / max(1, lanesRect.width))
         return model.visibleStart + fraction * model.visibleDuration
+    }
+
+    /// The 줌 tool: zoom in (or ⌥ out) keeping the time under the cursor put.
+    private func zoomAtCursor(_ point: NSPoint, out: Bool) {
+        let cursorTime = seconds(atX: point.x)
+        let newDuration = max(0.5, min(3600.0, model.visibleDuration * (out ? 2.0 : 0.5)))
+        let cursorFraction = Double((point.x - lanesRect.minX) / max(1, lanesRect.width))
+        let newStart = max(0, cursorTime - cursorFraction * newDuration)
+        onZoom?(newStart, newDuration)
     }
 
     // MARK: Interaction
@@ -466,6 +478,20 @@ final class TimelineNSView: NSView {
             return
         }
 
+        // Edit tools that act over the lanes regardless of what is under the cursor.
+        if point.y >= Self.rulerHeight {
+            if editTool == "zoom" {
+                zoomAtCursor(point, out: event.modifierFlags.contains(.option))
+                return
+            }
+            if editTool == "selector", point.x >= Self.headerWidth {
+                if !event.modifierFlags.contains(.shift) { onSelect?(nil) }
+                drag = .marquee(origin: point, current: point)
+                needsDisplay = true
+                return
+            }
+        }
+
         if let region = region(at: point) {
             let rect = regionRect(region)
             onSelectRegion?(region.id)
@@ -503,6 +529,28 @@ final class TimelineNSView: NSView {
         // Clicking inside a multi-selection keeps it, so it can be dragged whole.
         if !hit.selected {
             onSelect?(hit.id)
+        }
+
+        // A specific tool forces its behaviour instead of the smart zone detection.
+        switch editTool {
+        case "split":
+            onSplitClip?(hit.id, max(0, snapped(seconds(atX: point.x))))
+            return
+        case "grabber":
+            drag = .moving(clipId: hit.id, grabOffsetSeconds: seconds(atX: point.x) - hit.startSeconds,
+                           startX: point.x, axisUnlocked: false)
+            return
+        case "trim":
+            let r = clipRect(hit)
+            drag = (point.x - r.minX < r.width / 2) ? .trimmingStart(clipId: hit.id)
+                                                    : .trimmingEnd(clipId: hit.id)
+            return
+        case "fade":
+            let r = clipRect(hit)
+            drag = (point.x - r.minX < r.width / 2) ? .fadingIn(clip: hit) : .fadingOut(clip: hit)
+            return
+        default:
+            break   // smart tool → the zone detection below
         }
 
         let rect = clipRect(hit)
@@ -1368,6 +1416,8 @@ struct TimelineView: NSViewRepresentable {
     let onSelectMany: ([String]) -> Void
     let onMoveClip: (String, Double) -> Void
     var onBeginCopyDrag: ((String, Double) -> String?)? = nil
+    var onSplitClip: ((String, Double) -> Void)? = nil
+    var editTool: String = "smart"
     let onMoveSelection: (Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
@@ -1416,6 +1466,8 @@ struct TimelineView: NSViewRepresentable {
         view.onSelectMany = onSelectMany
         view.onMoveClip = onMoveClip
         view.onBeginCopyDrag = onBeginCopyDrag
+        view.onSplitClip = onSplitClip
+        view.editTool = editTool
         view.onMoveSelection = onMoveSelection
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd
