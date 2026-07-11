@@ -90,6 +90,15 @@ struct MonitorDock: View {
                     dimButton("Dim", engine.monitorDim, Theme.Palette.orange) { engine.toggleDim() }
                     TalkbackButton()
                 }
+                // Monitor the DAW master, or the computer's input source (e.g. BlackHole).
+                HStack(spacing: Theme.Space.sm) {
+                    dimButton("마스터", !engine.monitorListenSource, Theme.Palette.accent) {
+                        engine.setMonitorListenSource(false)
+                    }
+                    dimButton("소스", engine.monitorListenSource, Theme.Palette.accent) {
+                        engine.setMonitorListenSource(true)
+                    }
+                }
             }
         }
     }

@@ -520,6 +520,8 @@ public:
         refreshInputMonitorForCurrentProject();
     }
 
+    void setMonitorListenSource(bool active) { dspEngine_.setMonitorListenSource(active); }
+
     void setPhysicalInputAccessAllowed(bool allowed) {
         settings_.physicalInputAccessAllowed = allowed;
         refreshInputMonitorForCurrentProject();
@@ -978,6 +980,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
     impl_->setMonitorStationControls(mono, listenMode, swapLeftRight, invertLeft, invertRight, mute, dim, talkback, inputTrimDb, volumeDb, dimDb, talkbackRoute);
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
+void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }

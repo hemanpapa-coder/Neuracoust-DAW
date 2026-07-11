@@ -2566,8 +2566,13 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
     lowLatencyRecordMonitoringActive_ = settings_.lowLatencyRecordMonitoringEnabled &&
         capturedMonitorTrackPolicy &&
         settings_.inputMonitorChannelCount > 0;
-    inputMonitorCaptureActive_.store(lowLatencyRecordMonitoringActive_, std::memory_order_relaxed);
-    if (!lowLatencyRecordMonitoringActive_ && !talkbackCaptureActive_.load(std::memory_order_relaxed)) {
+    // "Listen to source" routes the input (e.g. BlackHole) through the monitor bus even
+    // with no record-armed track, so it enables input capture on its own.
+    const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
+    inputMonitorCaptureActive_.store(lowLatencyRecordMonitoringActive_ || listenSource,
+                                     std::memory_order_relaxed);
+    if (!lowLatencyRecordMonitoringActive_ && !listenSource &&
+        !talkbackCaptureActive_.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> inputLock(inputMonitorMutex_);
         physicalInputMonitoringActive_ = false;
         inputMonitorBuffer_.clear();

@@ -129,6 +129,11 @@ private:
     void applyMonitorStationControlsLocked(std::vector<float>& interleavedStereo);
     void storeMetering(const std::vector<float>& interleavedStereo);
     void updateSpectrum(const std::vector<float>& interleavedStereo);
+public:
+    /// Monitor the computer's input source (e.g. BlackHole) through the monitor bus,
+    /// instead of only the DAW master. Enables input capture so the source is heard.
+    void setMonitorListenSource(bool active) { listenSourceActive_.store(active, std::memory_order_relaxed); }
+private:
     void publishListenRoomLocked(const std::vector<float>& interleavedStereo);
     void storeTrackInsertMeterLocked(const std::string& trackName,
                                      int slotIndex,
@@ -204,6 +209,7 @@ private:
     std::atomic<float> spectrumHigh_ {0.0f};
     std::atomic<bool> inputMonitorCaptureActive_ {false};
     std::atomic<bool> talkbackCaptureActive_ {false};
+    std::atomic<bool> listenSourceActive_ {false};
     std::atomic<bool> physicalInputMonitoringActiveForStatus_ {false};
     std::atomic<int> inputMonitorChannelsForStatus_ {0};
     std::atomic<float> inputPeakForStatus_ {0.0f};

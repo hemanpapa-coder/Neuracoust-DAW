@@ -649,6 +649,8 @@ final class EngineController: ObservableObject {
     @Published private(set) var monitorMono = false
     @Published private(set) var monitorMute = false
     @Published private(set) var monitorTalkback = false
+    /// Monitor the DAW master (false, default) or the computer's input source (true).
+    @Published private(set) var monitorListenSource = false
     @Published private(set) var monitorDspEnabled = true
     @Published private(set) var monitorPathMode = "internal"
 
@@ -2664,6 +2666,14 @@ final class EngineController: ObservableObject {
     }
 
     /// Mute: the old UI's monitor station mute, distinct from the mono listen button.
+    /// Master vs source monitoring. Source routes the input device (e.g. BlackHole)
+    /// through the monitor bus so you hear the computer's audio.
+    func setMonitorListenSource(_ on: Bool) {
+        guard let handle else { return }
+        nc_monitor_set_listen_source(handle, on)
+        monitorListenSource = nc_monitor_listen_source(handle)
+    }
+
     func toggleMonitorMute() {
         guard let handle else { return }
         nc_monitor_set_mute(handle, !monitorMute)

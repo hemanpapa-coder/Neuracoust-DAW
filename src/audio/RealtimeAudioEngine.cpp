@@ -659,6 +659,7 @@ public:
         std::lock_guard<std::mutex> lock(playbackMutex_);
         settings_.physicalInputAccessAllowed = allowed;
     }
+    void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
 
     bool loadAudioFile(const std::string& path, std::string& error) {
         WavAudioData data;
@@ -1526,6 +1527,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
     impl_->setMonitorStationControls(mono, listenMode, swapLeftRight, invertLeft, invertRight, mute, dim, talkback, inputTrimDb, volumeDb, dimDb, talkbackRoute);
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
+void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
@@ -1640,6 +1642,7 @@ public:
         settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, volumeDb));
     }
     void setPhysicalInputAccessAllowed(bool allowed) { settings_.physicalInputAccessAllowed = allowed; }
+    void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
     bool loadAudioFile(const std::string&, std::string& error) {
         error = "Audio file playback is not implemented on this platform yet.";
         return false;
@@ -1703,6 +1706,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
     impl_->setMonitorStationControls(mono, listenMode, swapLeftRight, invertLeft, invertRight, mute, dim, talkback, inputTrimDb, volumeDb, dimDb, talkbackRoute);
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
+void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }

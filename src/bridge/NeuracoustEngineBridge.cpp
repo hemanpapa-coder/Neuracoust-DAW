@@ -65,6 +65,8 @@ struct NCEngine {
     std::vector<float> lastSpectrumBins;
     /// Latest goniometer L/R sample pairs, cached the same way.
     std::vector<float> lastGoniometerSamples;
+    /// Monitor the computer's input source instead of the DAW master. Default: master.
+    bool monitorListenSource = false;
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
@@ -3483,6 +3485,17 @@ void nc_monitor_set_dim(NCEngine* engine, bool on) {
     if (engine == nullptr) return;
     engine->project.monitorStationDim = on;
     engine->pushStationControls();
+}
+
+// Master (false, default) vs the computer's input source (true) for the monitor bus.
+bool nc_monitor_listen_source(NCEngine* engine) {
+    return engine != nullptr && engine->monitorListenSource;
+}
+
+void nc_monitor_set_listen_source(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->monitorListenSource = on;
+    engine->engine.setMonitorListenSource(on);
 }
 
 void nc_monitor_set_talkback(NCEngine* engine, bool on) {
