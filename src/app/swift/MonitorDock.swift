@@ -388,22 +388,33 @@ struct MonitorDock: View {
     // MARK: DSP source, listen room, remote core
 
     private var dspSource: some View {
-        // Three distinct engine modes, matching the old UI. The previous two-way toggle
-        // sent "remote_internal", which the engine does not accept and quietly treated
-        // as internal, so External and NDS were never actually selectable.
-        SegmentedRow(
-            items: ["internal", "remote_external", "nds"],
-            label: {
-                switch $0 {
-                case "remote_external": return "외부 DSP"
-                case "nds": return "NDS"
-                default: return "내부 DSP"
-                }
-            },
-            isActive: { $0 == engine.monitorPathMode },
-            action: { engine.setMonitorPathMode($0) },
-            fontSize: 9
-        )
+        // Multi-select, not one-of-three: any combination is allowed and lands on the
+        // engine's "auto" mode, which distributes across whatever is available.
+        HStack(spacing: Theme.Space.sm) {
+            dspSourceButton("내부 DSP", .internalDsp)
+            dspSourceButton("외부 DSP", .external)
+            dspSourceButton("NDS", .nds)
+        }
+    }
+
+    private func dspSourceButton(_ title: String, _ source: EngineController.DspSource) -> some View {
+        let on = engine.usesDspSource(source)
+        return Button { engine.toggleDspSource(source) } label: {
+            Text(title)
+                .font(Theme.Font.ui(9, on ? .semibold : .regular))
+                .foregroundStyle(on ? Theme.Palette.purpleLight : Theme.Palette.textMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Space.md)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(on ? Color(hex: 0x2a1f3d) : Theme.Palette.button)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(on ? Color(hex: 0x48376b) : Theme.Palette.divider, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private var listenRoom: some View {

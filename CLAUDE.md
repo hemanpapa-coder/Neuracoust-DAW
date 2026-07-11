@@ -304,13 +304,15 @@ remote-DSP plan and is not yet exposed here.
 
 ## Monitor DSP path
 
-Three modes, each a distinct engine value: **내부 DSP** `internal`, **외부 DSP**
-`remote_external`, **NDS** `nds`. The engine's `setMonitorDspPathMode` accepts
-`internal` / `external` / `nds` / `remote_external` / `auto` and falls back to
-`internal` for anything else — so the earlier two-way toggle, which sent
-`remote_internal`, silently resolved to internal and External and NDS were never
-actually reachable. Verified the engine renders under all three with the transport
-running.
+The three sources — **내부 DSP**, **외부 DSP**, **NDS** — are **multi-select**, not
+one-of-three. The engine has a single routing string, so the UI tracks the selected
+set itself (`EngineController.dspSources`) and derives the mode: a lone source maps to
+`internal` / `remote_external` / `nds`, any combination maps to `auto` (the engine's
+use-everything-available mode). Tracking the set separately means clicking NDS lights
+only NDS, not all three; the last selected source cannot be turned off. The engine
+accepts `internal` / `external` / `nds` / `remote_external` / `auto` and falls back to
+`internal` for anything else — the earlier two-way toggle sent `remote_internal`,
+which silently resolved to internal, so External and NDS were never reachable.
 
 ## Snapping
 

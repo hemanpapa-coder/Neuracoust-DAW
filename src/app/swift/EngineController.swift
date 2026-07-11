@@ -2056,6 +2056,11 @@ final class EngineController: ObservableObject {
         monitorTalkback = nc_monitor_talkback(handle)
         monitorDspEnabled = nc_monitor_dsp_enabled(handle)
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
+        // Only re-derive the selection when the engine mode no longer matches it — so a
+        // user's {internal, nds} choice (both mapping to "auto") is not flattened.
+        if modeFromDspSources(dspSources) != monitorPathMode {
+            dspSources = dspSourcesFromMode(monitorPathMode)
+        }
         coreIsolationEnabled = nc_dsp_core_isolation(handle)
         dspCoreCount = Int(nc_dsp_core_count(handle))
         reloadMonitorListen()
@@ -2151,6 +2156,46 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_set_path_mode(handle, mode)
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
+    }
+
+    // The three DSP sources are multi-select. The UI tracks exactly which the user
+    // picked; the engine has one routing string, so a lone source maps to its own mode
+    // and any combination maps to "auto" — the engine's use-everything-available mode.
+    // Tracking the selection separately means clicking NDS lights NDS, not all three.
+    enum DspSource: Hashable, CaseIterable { case internalDsp, external, nds }
+
+    /// Derived from the engine mode on load, then owned by the UI as the user toggles.
+    @Published private(set) var dspSources: Set<DspSource> = [.internalDsp]
+
+    func usesDspSource(_ source: DspSource) -> Bool { dspSources.contains(source) }
+
+    private func dspSourcesFromMode(_ mode: String) -> Set<DspSource> {
+        switch mode {
+        case "auto": return [.internalDsp, .external, .nds]
+        case "remote_external": return [.external]
+        case "nds", "external": return [.nds]
+        default: return [.internalDsp]
+        }
+    }
+
+    private func modeFromDspSources(_ sources: Set<DspSource>) -> String {
+        if sources.count >= 2 { return "auto" }
+        if sources.contains(.external) { return "remote_external" }
+        if sources.contains(.nds) { return "nds" }
+        return "internal"
+    }
+
+    /// Toggles a source in or out; the last one cannot be turned off.
+    func toggleDspSource(_ source: DspSource) {
+        var selected = dspSources
+        if selected.contains(source) {
+            guard selected.count > 1 else { return }
+            selected.remove(source)
+        } else {
+            selected.insert(source)
+        }
+        dspSources = selected
+        setMonitorPathMode(modeFromDspSources(selected))
     }
 
     // MARK: - Poll loop
