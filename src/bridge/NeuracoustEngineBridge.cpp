@@ -1524,6 +1524,13 @@ bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
     return applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
 }
 
+// Continuous: sets the field only, no graph rebuild — so dragging clip gain stays
+// smooth. The heavy reconcile happens once on commit via nc_clip_set_gain_db.
+bool nc_clip_set_gain_db_preview(NCEngine* engine, const char* clipId, float gainDb) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb);
+}
+
 double nc_clip_fade_in(NCEngine* engine, int index) {
     const auto* clip = clipAt(engine, index);
     return clip != nullptr ? clip->fadeInSeconds : 0.0;

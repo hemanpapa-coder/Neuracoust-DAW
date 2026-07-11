@@ -376,6 +376,9 @@ bool nc_clip_delete(NCEngine* engine, const char* clipId);
 /// -60…+12 dB. Continuous, like move and trim.
 float nc_clip_gain_db(NCEngine* engine, int index);
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
+/// Continuous preview: sets the gain field only, no graph rebuild (smooth drag).
+/// Commit with nc_clip_set_gain_db to reconcile + record one step.
+bool nc_clip_set_gain_db_preview(NCEngine* engine, const char* clipId, float gainDb);
 
 /// Fades, in seconds from each end. Continuous, like move and trim.
 double nc_clip_fade_in(NCEngine* engine, int index);

@@ -140,7 +140,12 @@ final class TimelineNSView: NSView {
     var onMoveClip: ((String, Double) -> Void)?          // (clipId, newStart)
     var onSplitClip: ((String, Double) -> Void)?         // 분할 tool: (clipId, seconds)
     /// The active edit tool as a raw string ("smart"/"grabber"/…); forces a behaviour.
-    var editTool: String = "smart"
+    var editTool: String = "smart" {
+        didSet {
+            guard editTool != oldValue else { return }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     /// Option-drag: duplicate the clip in place and return the copy's id, which the
     /// drag then moves — leaving the original where it was.
     var onBeginCopyDrag: ((String, Double) -> String?)?  // (clipId, startSeconds) -> newId
@@ -149,6 +154,7 @@ final class TimelineNSView: NSView {
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
     var onSetGain: ((String, Float) -> Void)?
+    var onCommitGain: ((String) -> Void)?                // drag-end: reconcile + record
     var onSelectLane: ((Int) -> Void)?
     var onMoveClipToLane: ((String, Int, Double) -> Void)?  // (clipId, laneIndex, start)
     var onCommitEdit: ((String) -> Void)?                // step name
@@ -731,8 +737,8 @@ final class TimelineNSView: NSView {
             onCommitEdit?("Trim clip")
         case .fadingIn, .fadingOut:
             onCommitEdit?("Clip fade")
-        case .gaining:
-            onCommitEdit?("Clip gain")
+        case .gaining(let clip, _, _):
+            onCommitGain?(clip.id)
         case .movingSelection:
             onCommitEdit?("Move clips")
         case .marquee(let origin, let current):
@@ -767,9 +773,49 @@ final class TimelineNSView: NSView {
         max(0, snap?(seconds) ?? seconds)
     }
 
-    /// A resize cursor over the trim handles tells the user they are there.
+    /// A white SF-Symbol cursor, cached — the timeline is dark, so a template (black)
+    /// symbol would be invisible.
+    private static var symbolCursorCache: [String: NSCursor] = [:]
+    private static func symbolCursor(_ name: String, hotSpotCentered: Bool = true) -> NSCursor {
+        if let cached = symbolCursorCache[name] { return cached }
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return .arrow }
+        let size = symbol.size
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.set()
+        symbol.draw(at: .zero, from: NSRect(origin: .zero, size: size),
+                    operation: .sourceOver, fraction: 1.0)
+        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        image.unlockFocus()
+        let hot = hotSpotCentered ? NSPoint(x: size.width / 2, y: size.height / 2) : NSPoint(x: 3, y: 3)
+        let cursor = NSCursor(image: image, hotSpot: hot)
+        symbolCursorCache[name] = cursor
+        return cursor
+    }
+
+    /// The cursor a forcing edit tool wants over the lanes; nil for smart (default arrow).
+    private var toolCursor: NSCursor? {
+        switch editTool {
+        case "split": return Self.symbolCursor("scissors")
+        case "zoom": return Self.symbolCursor("magnifyingglass")
+        case "selector": return .crosshair
+        case "trim": return .resizeLeftRight
+        case "grabber": return .openHand
+        case "fade": return Self.symbolCursor("line.diagonal")
+        default: return nil
+        }
+    }
+
+    /// A resize cursor over the trim handles tells the user they are there; a forcing
+    /// tool paints its own cursor over the whole lanes area.
     override func resetCursorRects() {
         super.resetCursorRects()
+        if let cursor = toolCursor {
+            addCursorRect(lanesRect, cursor: cursor)
+            return
+        }
         for clip in model.clips {
             let rect = clipRect(clip)
             guard rect.width > Self.trimHandleWidth * 2 else { continue }
@@ -1452,6 +1498,9 @@ final class TimelineNSView: NSView {
         let midY = rect.midY
         let halfHeight = rect.height / 2
         let buckets = peaks.mins.count
+        // Clip gain scales the drawn amplitude, so louder clips look louder. Clamped so
+        // a boosted transient still fits the row rather than spilling into the neighbour.
+        let gainFactor = CGFloat(pow(10, clip.gainDb / 20))
 
         let path = NSBezierPath()
         var drew = false
@@ -1482,8 +1531,10 @@ final class TimelineNSView: NSView {
                 high = max(high, peaks.maxs[bucket])
             }
             let pointX = rect.minX + CGFloat(column) + 0.5
-            path.move(to: NSPoint(x: pointX, y: midY - CGFloat(high) * halfHeight))
-            path.line(to: NSPoint(x: pointX, y: midY - CGFloat(low) * halfHeight))
+            let highY = max(-halfHeight, min(halfHeight, CGFloat(high) * gainFactor * halfHeight))
+            let lowY = max(-halfHeight, min(halfHeight, CGFloat(low) * gainFactor * halfHeight))
+            path.move(to: NSPoint(x: pointX, y: midY - highY))
+            path.line(to: NSPoint(x: pointX, y: midY - lowY))
             drew = true
         }
 
@@ -1543,6 +1594,7 @@ struct TimelineView: NSViewRepresentable {
     let onTrimEnd: (String, Double) -> Void
     let onSetFades: (String, Double, Double) -> Void
     let onSetGain: (String, Float) -> Void
+    let onCommitGain: (String) -> Void
     let onSelectLane: (Int) -> Void
     let onMoveClipToLane: (String, Int, Double) -> Void
     let onCommitEdit: (String) -> Void
@@ -1597,6 +1649,7 @@ struct TimelineView: NSViewRepresentable {
         view.onTrimEnd = onTrimEnd
         view.onSetFades = onSetFades
         view.onSetGain = onSetGain
+        view.onCommitGain = onCommitGain
         view.onSelectLane = onSelectLane
         view.onMoveClipToLane = onMoveClipToLane
         view.onCommitEdit = onCommitEdit

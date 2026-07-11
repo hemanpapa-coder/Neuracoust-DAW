@@ -1456,9 +1456,20 @@ final class EngineController: ObservableObject {
         if nc_clip_set_fades(handle, clipId, fadeIn, fadeOut) { reloadClips() }
     }
 
+    /// Continuous, for dragging clip gain. Sets the field without a graph rebuild so the
+    /// drag stays smooth; the waveform redraws from the new gain. Commit reconciles.
     func setClipGain(_ clipId: String, _ gainDb: Float) {
         guard let handle else { return }
-        if nc_clip_set_gain_db(handle, clipId, gainDb) { reloadClips() }
+        if nc_clip_set_gain_db_preview(handle, clipId, gainDb) { reloadClips() }
+    }
+
+    /// Drag-end: reconcile the previewed clip gain into the engine and record one step.
+    func commitClipGain(_ clipId: String) {
+        guard let handle, let clip = clips.first(where: { $0.id == clipId }) else { return }
+        if nc_clip_set_gain_db(handle, clipId, clip.gainDb) {
+            reloadClips()
+            recordGesture("Clip gain")
+        }
     }
 
     /// Lane indices address `laneTracks`, not `tracks` — Master and Monitor are not lanes.
@@ -2343,10 +2354,14 @@ final class EngineController: ObservableObject {
 
         for index in tracks.indices {
             let (left, right) = peaks[tracks[index].name] ?? (0, 0)
-            tracks[index].peakLeft = left
-            tracks[index].peakRight = right
+            // Ballistic, so a track meter falls to silence on stop instead of freezing.
+            tracks[index].peakLeft = max(left, tracks[index].peakLeft * Self.meterDecay)
+            tracks[index].peakRight = max(right, tracks[index].peakRight * Self.meterDecay)
         }
     }
+
+    /// Per-tick meter release. At ~30 Hz this falls a held peak to silence in ~0.2 s.
+    private static let meterDecay: Float = 0.80
 
     // MARK: - Monitor station
 
@@ -2754,8 +2769,10 @@ final class EngineController: ObservableObject {
 
         running = status.running
         transportRunning = status.transportRunning
-        outputPeakLeft = status.outputPeakLeft
-        outputPeakRight = status.outputPeakRight
+        // Ballistic meters: snap up to a new peak, decay down. Without the decay a held
+        // engine peak stays lit after stop; with it the meter always falls to silence.
+        outputPeakLeft = max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay)
+        outputPeakRight = max(status.outputPeakRight, outputPeakRight * Self.meterDecay)
         // Input meter follows the peak immediately on the way up and decays on the way
         // down, so a transient stays readable for a moment.
         inputPeak = max(status.inputPeak, inputPeak * 0.82)
