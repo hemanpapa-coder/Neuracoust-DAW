@@ -354,6 +354,15 @@ public:
         copy.spectrumLow = dspStatus.spectrumLow;
         copy.spectrumMid = dspStatus.spectrumMid;
         copy.spectrumHigh = dspStatus.spectrumHigh;
+        // Analyzer data — these were being dropped, so the spectrum/goniometer/LUFS UI
+        // never received anything.
+        copy.spectrumBins = dspStatus.spectrumBins;
+        copy.goniometerSamples = dspStatus.goniometerSamples;
+        copy.momentaryLufs = dspStatus.momentaryLufs;
+        copy.shortTermLufs = dspStatus.shortTermLufs;
+        copy.integratedLufs = dspStatus.integratedLufs;
+        copy.loudnessRange = dspStatus.loudnessRange;
+        copy.truePeakDb = dspStatus.truePeakDb;
         copy.trackMeterNames = dspStatus.trackMeterNames;
         copy.trackPeakLeft = dspStatus.trackPeakLeft;
         copy.trackPeakRight = dspStatus.trackPeakRight;

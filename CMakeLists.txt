@@ -584,3 +584,6 @@ if(APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/smoke-vst3-editor-host.command"
             "$<TARGET_FILE:NeuracoustVst3EditorHost>")
 endif()
+
+add_executable(neuracoust_spectrum_pipeline_probe tests/SpectrumPipelineProbe.cpp)
+target_link_libraries(neuracoust_spectrum_pipeline_probe PRIVATE neuracoust_daw_core)
