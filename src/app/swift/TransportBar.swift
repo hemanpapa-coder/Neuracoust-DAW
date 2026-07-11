@@ -329,11 +329,16 @@ struct TransportBar: View {
 
     /// Incoming audio-interface input and live MIDI-input activity, beside the master out.
     private var inputMeters: some View {
-        VStack(alignment: .trailing, spacing: 3) {
-            meterLabelRow("IN", meterFraction(engine.inputPeak), Theme.Palette.green)
-            meterLabelRow("MIDI", Double(engine.midiActivity), Theme.Palette.purple)
+        VStack(alignment: .trailing, spacing: 2) {
+            Text("입력 미터")
+                .font(Theme.Font.mono(6.5))
+                .tracking(0.6)
+                .foregroundStyle(Theme.Palette.textFaint)
+            // Channel-independent input activity: audio interface in, and live MIDI in.
+            meterLabelRow("오디오", meterFraction(engine.inputPeak), Theme.Palette.green)
+            meterLabelRow("미디", Double(engine.midiActivity), Theme.Palette.purple)
         }
-        .frame(width: 100)
+        .frame(width: 110)
     }
 
     private func meterLabelRow(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
@@ -342,7 +347,7 @@ struct TransportBar: View {
                 .font(Theme.Font.mono(6.5))
                 .tracking(0.4)
                 .foregroundStyle(Theme.Palette.textFaint)
-                .frame(width: 26, alignment: .trailing)
+                .frame(width: 30, alignment: .trailing)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
