@@ -814,6 +814,8 @@ final class EngineController: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        restorePersistedSettings()
     }
 
     /// The old UI drove every shortcut from an NSEvent monitor rather than menu key
@@ -2712,6 +2714,64 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_set_insert_tail_on_stop_seconds(handle, seconds)
         insertTailOnStopSeconds = nc_insert_tail_on_stop_seconds(handle)
+    }
+
+    // MARK: - App settings persistence
+    //
+    // Project files store the document; these are the app-level choices that otherwise
+    // reset every launch (devices, monitor input, DSP path, edit modes, …). Saved to
+    // UserDefaults and restored on start.
+    private enum SettingsKey {
+        static let outputDevice = "nc.outputDeviceId"
+        static let inputDevice = "nc.inputDeviceId"
+        static let listenSource = "nc.monitorListenSource"
+        static let insertTail = "nc.insertTailOnStopSeconds"
+        static let monitorPathMode = "nc.monitorPathMode"
+        static let outputMode = "nc.outputMode"
+        static let editMode = "nc.editMode"
+        static let soloSelect = "nc.soloSelectMode"
+        static let dockAnalyzer = "nc.dockAnalyzerKind"
+        static let saved = "nc.settingsSaved"
+    }
+
+    /// Saves every app-level setting as the default for future launches.
+    func saveAllSettings() {
+        let d = UserDefaults.standard
+        d.set(currentOutputDeviceId, forKey: SettingsKey.outputDevice)
+        d.set(currentInputDeviceId, forKey: SettingsKey.inputDevice)
+        d.set(monitorListenSource, forKey: SettingsKey.listenSource)
+        d.set(insertTailOnStopSeconds, forKey: SettingsKey.insertTail)
+        d.set(monitorPathMode, forKey: SettingsKey.monitorPathMode)
+        d.set(outputMode == .speaker ? "speaker" : "headphone", forKey: SettingsKey.outputMode)
+        d.set(editMode.rawValue, forKey: SettingsKey.editMode)
+        d.set(soloSelectMode.rawValue, forKey: SettingsKey.soloSelect)
+        d.set(dockAnalyzerKind.rawValue, forKey: SettingsKey.dockAnalyzer)
+        d.set(true, forKey: SettingsKey.saved)
+        lastError = "전체 설정을 저장했습니다."
+    }
+
+    /// Restores saved app-level settings. Called once at start.
+    func restorePersistedSettings() {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: SettingsKey.saved) else { return }
+        if let out = d.string(forKey: SettingsKey.outputDevice), !out.isEmpty { setOutputDevice(out) }
+        if let inp = d.string(forKey: SettingsKey.inputDevice), !inp.isEmpty { setInputDevice(inp) }
+        if d.object(forKey: SettingsKey.insertTail) != nil {
+            setInsertTailOnStopSeconds(d.double(forKey: SettingsKey.insertTail))
+        }
+        if let mode = d.string(forKey: SettingsKey.monitorPathMode), !mode.isEmpty {
+            setMonitorPathMode(mode)
+            dspSources = dspSourcesFromMode(mode)
+        }
+        if d.object(forKey: SettingsKey.listenSource) != nil {
+            setMonitorListenSource(d.bool(forKey: SettingsKey.listenSource))
+        }
+        if let om = d.string(forKey: SettingsKey.outputMode) {
+            outputMode = (om == "headphone") ? .headphone : .speaker
+        }
+        if let em = d.string(forKey: SettingsKey.editMode), let mode = EditMode(rawValue: em) { editMode = mode }
+        if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
+        if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the

@@ -72,6 +72,9 @@ struct NeuracoustApp: App {
             }
             CommandGroup(after: .saveItem) {
                 Divider()
+                Button("전체 설정 저장") { engine.saveAllSettings() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
+                Divider()
                 Button("오디오 가져오기…") { engine.importAudio(intoTrack: 0) }
                     .keyboardShortcut("i", modifiers: .command)
                 Button("바운스…") { engine.bounceProject() }
