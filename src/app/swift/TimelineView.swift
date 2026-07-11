@@ -30,6 +30,9 @@ struct TimelineModel: Equatable {
         var soloed: Bool = false
         var armed: Bool = false
         var inputMonitor: Bool = false
+        /// True when another track is soloed and this one is silenced by it — its Mute
+        /// button blinks, the Pro-Tools tell that it is held down by the solo.
+        var soloSilencedBlink: Bool = false
         var volumeDb: Float = 0
         var pan: Float = 0
         var peakLeft: Float = 0
@@ -1297,19 +1300,22 @@ final class TimelineNSView: NSView {
     /// The inline channel strip drawn under each lane's name: M/S/R, a volume fader and
     /// a peak meter, so common moves need no mixer trip.
     private func drawLaneHeaderStrip(_ lane: TimelineModel.Lane, index: Int) {
-        func button(_ frame: NSRect, _ title: String, on: Bool, onColor: UInt32) {
-            NSColor(hex: on ? onColor : 0x2a241e).setFill()
+        func button(_ frame: NSRect, _ title: String, on: Bool, onColor: UInt32, blink: Bool = false) {
+            // `blink` is the solo-silenced pulse: a half-lit fill even when not on.
+            let fill = on ? NSColor(hex: onColor)
+                     : (blink ? NSColor(hex: onColor).withAlphaComponent(0.55) : NSColor(hex: 0x2a241e))
+            fill.setFill()
             NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3).fill()
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .bold),
-                .foregroundColor: NSColor(hex: on ? 0x14100a : 0x9a8f7e),
+                .foregroundColor: (on || blink) ? NSColor(hex: 0x14100a) : NSColor(hex: 0x9a8f7e),
             ]
             let size = (title as NSString).size(withAttributes: attrs)
             (title as NSString).draw(
                 at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
                 withAttributes: attrs)
         }
-        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c)
+        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
         button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
         button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
         button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)

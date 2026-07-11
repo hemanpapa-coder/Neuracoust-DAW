@@ -1397,6 +1397,8 @@ final class EngineController: ObservableObject {
                                           soloed: track.solo,
                                           armed: track.recordArmed,
                                           inputMonitor: track.inputMonitoring,
+                                          soloSilencedBlink: anyTrackSoloed && !track.solo
+                                              && track.kind.hasSolo && soloBlinkOn,
                                           volumeDb: track.volumeDb,
                                           pan: track.pan,
                                           peakLeft: track.peakLeft,
