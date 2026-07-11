@@ -325,12 +325,45 @@ struct ChannelStrip: View {
             Text("I / O")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
-            ioPill(track.inputBus.isEmpty ? "—" : track.inputBus)
-            ioPill(track.outputBus.isEmpty ? "—" : track.outputBus)
+
+            // Input — a MIDI source for instrument/MIDI tracks, a hardware pair otherwise.
+            Menu {
+                if track.kind == .instrument || track.kind == .midi {
+                    let sources = engine.midiInputs()
+                    if sources.isEmpty {
+                        Text("연결된 MIDI 입력 없음")
+                    } else {
+                        ForEach(sources, id: \.id) { src in
+                            Button(src.name) {
+                                engine.setTrackMidiSource(track.id, sourceId: src.id, label: src.name)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(engine.audioInputOptions(), id: \.self) { opt in
+                        Button(opt) { engine.setTrackInputBus(track.id, opt) }
+                    }
+                }
+            } label: {
+                ioPillLabel(track.inputBus.isEmpty ? "—" : track.inputBus)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+
+            // Output — Master or any aux/bus track.
+            Menu {
+                ForEach(engine.outputBusOptions(track.id), id: \.self) { opt in
+                    Button(opt) { engine.setTrackOutputBus(track.id, opt) }
+                }
+            } label: {
+                ioPillLabel(track.outputBus.isEmpty ? "—" : track.outputBus)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
         }
     }
 
-    private func ioPill(_ text: String) -> some View {
+    private func ioPillLabel(_ text: String) -> some View {
         HStack(spacing: 0) {
             Text(text)
                 .font(Theme.Font.ui(8.5))

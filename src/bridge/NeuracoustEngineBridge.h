@@ -129,6 +129,12 @@ void nc_track_color(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_folder(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_input_bus(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen);
+// Route a track's input/output; both reconcile the mixer graph. Output options are
+// Master plus any aux/bus tracks (count then name, cached between the two calls).
+void nc_track_set_input_bus(NCEngine* engine, int index, const char* bus);
+void nc_track_set_output_bus(NCEngine* engine, int index, const char* bus);
+int  nc_track_output_option_count(NCEngine* engine, int index);
+void nc_track_output_option(NCEngine* engine, int index, int i, char* out, size_t outLen);
 
 float nc_track_volume_db(NCEngine* engine, int index);
 float nc_track_pan(NCEngine* engine, int index);

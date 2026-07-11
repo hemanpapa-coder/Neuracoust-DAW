@@ -513,6 +513,54 @@ void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen) 
     copyText(out, outLen, track != nullptr ? track->outputBus : std::string{});
 }
 
+void nc_track_set_input_bus(NCEngine* engine, int index, const char* bus) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || bus == nullptr || track->inputBus == bus) return;
+    track->inputBus = bus;
+    engine->recordStep("Set track input");
+    engine->reconcileProject();
+}
+
+void nc_track_set_output_bus(NCEngine* engine, int index, const char* bus) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || bus == nullptr || track->outputBus == bus) return;
+    track->outputBus = bus;
+    engine->recordStep("Set track output");
+    engine->reconcileProject();
+}
+
+namespace {
+// Output targets a track can route to: Master plus any aux/bus tracks (not itself,
+// not master/monitor). Cached between the count and name queries.
+std::vector<std::string>& outputOptionCache() {
+    static std::vector<std::string> options;
+    return options;
+}
+}
+
+int nc_track_output_option_count(NCEngine* engine, int index) {
+    auto& options = outputOptionCache();
+    options.clear();
+    if (engine == nullptr) return 0;
+    const auto* self = trackAt(engine, index);
+    options.push_back("Master");
+    for (const auto& track : engine->project.tracks) {
+        if (self != nullptr && track.name == self->name) continue;
+        if (track.trackType == "aux" || track.trackType == "bus_folder" ||
+            track.trackType == "routing_folder") {
+            options.push_back(track.name);
+        }
+    }
+    return static_cast<int>(options.size());
+}
+
+void nc_track_output_option(NCEngine* engine, int index, int i, char* out, size_t outLen) {
+    (void)engine; (void)index;
+    const auto& options = outputOptionCache();
+    copyText(out, outLen, (i >= 0 && static_cast<size_t>(i) < options.size())
+                              ? options[static_cast<size_t>(i)] : std::string{});
+}
+
 float nc_track_volume_db(NCEngine* engine, int index) {
     const auto* track = trackAt(engine, index);
     return track != nullptr ? track->volumeDb : 0.0f;

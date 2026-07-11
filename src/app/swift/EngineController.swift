@@ -2017,6 +2017,42 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    // MARK: Track I/O routing
+
+    /// Where a track can send its output: Master plus any aux/bus tracks.
+    func outputBusOptions(_ id: Int) -> [String] {
+        guard let handle else { return ["Master"] }
+        return (0..<Int(nc_track_output_option_count(handle, Int32(id)))).map { i in
+            readString { nc_track_output_option(handle, Int32(id), Int32(i), $0, $1) }
+        }
+    }
+
+    func setTrackOutputBus(_ id: Int, _ bus: String) {
+        guard let handle else { return }
+        _ = bus.withCString { nc_track_set_output_bus(handle, Int32(id), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// Audio-track input options — a few hardware input pairs.
+    func audioInputOptions() -> [String] {
+        ["Input 1-2", "Input 3-4", "Input 5-6", "Input 7-8"]
+    }
+
+    func setTrackInputBus(_ id: Int, _ bus: String) {
+        guard let handle else { return }
+        _ = bus.withCString { nc_track_set_input_bus(handle, Int32(id), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// Point an instrument/MIDI track's input at a MIDI source: open it for live input
+    /// and label the strip with it, so "MIDI Input" actually selects the keyboard.
+    func setTrackMidiSource(_ id: Int, sourceId: String, label: String) {
+        startLiveMidi(sourceId)
+        setTrackInputBus(id, label)
+    }
+
     /// True while any track is soloed, so the others can show they are being held down.
     var anyTrackSoloed: Bool { tracks.contains { $0.solo } }
 
