@@ -281,6 +281,8 @@ private struct EditView: View {
             VStack(spacing: 0) {
                 toolbar
 
+                GlobalTracksBar()
+
                 TimelineView(
                     model: engine.timelineModel,
                     playheadSeconds: engine.playheadSeconds,

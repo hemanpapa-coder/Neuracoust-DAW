@@ -2112,6 +2112,72 @@ final class EngineController: ObservableObject {
             Marker(name: readEngineString { nc_marker_name(handle, Int32(index), $0, $1) },
                    timeSeconds: nc_marker_time(handle, Int32(index)))
         }
+        reloadConductor()
+    }
+
+    // MARK: - Conductor / global track (tempo, chords, lyrics)
+
+    struct ConductorEvent: Equatable, Identifiable {
+        let id: Int
+        let timeSeconds: Double
+        let label: String
+    }
+    @Published private(set) var chords: [ConductorEvent] = []
+    @Published private(set) var lyrics: [ConductorEvent] = []
+    @Published private(set) var tempoMarkers: [ConductorEvent] = []
+    /// Musical key shown in the conductor bar. Engine has no key field yet, so this is
+    /// app-level (saved with the settings), display context for now.
+    @Published var musicalKey: String = "C"
+
+    func addMarker(at seconds: Double, name: String) {
+        guard let handle else { return }
+        var buffer = [CChar](repeating: 0, count: 128)
+        if nc_marker_add(handle, seconds, &buffer, buffer.count) {
+            if !name.isEmpty { nc_marker_rename(handle, seconds, markerTolerance, name) }
+            reloadMarkers()
+            refreshHistory()
+        }
+    }
+
+    private func reloadConductor() {
+        guard let handle else { return }
+        chords = (0..<Int(nc_chord_count(handle))).map { i in
+            ConductorEvent(id: i, timeSeconds: nc_chord_time(handle, Int32(i)),
+                           label: readEngineString { nc_chord_name(handle, Int32(i), $0, $1) })
+        }
+        lyrics = (0..<Int(nc_lyric_count(handle))).map { i in
+            ConductorEvent(id: i, timeSeconds: nc_lyric_time(handle, Int32(i)),
+                           label: readEngineString { nc_lyric_text(handle, Int32(i), $0, $1) })
+        }
+        tempoMarkers = (0..<Int(nc_tempo_marker_count(handle))).map { i in
+            ConductorEvent(id: i, timeSeconds: nc_tempo_marker_time(handle, Int32(i)),
+                           label: String(format: "%.0f", nc_tempo_marker_bpm(handle, Int32(i))))
+        }
+    }
+
+    func addChord(at seconds: Double, name: String) {
+        guard let handle else { return }
+        if nc_chord_add(handle, seconds, name) { reloadConductor(); refreshHistory() }
+    }
+    func deleteChord(at seconds: Double) {
+        guard let handle else { return }
+        if nc_chord_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
+    }
+    func addLyric(at seconds: Double, text: String) {
+        guard let handle else { return }
+        if nc_lyric_add(handle, seconds, text) { reloadConductor(); refreshHistory() }
+    }
+    func deleteLyric(at seconds: Double) {
+        guard let handle else { return }
+        if nc_lyric_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
+    }
+    func addTempoMarker(at seconds: Double, bpm: Double) {
+        guard let handle else { return }
+        if nc_tempo_marker_add(handle, seconds, bpm) { reloadConductor(); refreshHistory() }
+    }
+    func deleteTempoMarker(at seconds: Double) {
+        guard let handle else { return }
+        if nc_tempo_marker_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
     }
 
     func addMarkerAtPlayhead() {
@@ -2731,6 +2797,7 @@ final class EngineController: ObservableObject {
         static let editMode = "nc.editMode"
         static let soloSelect = "nc.soloSelectMode"
         static let dockAnalyzer = "nc.dockAnalyzerKind"
+        static let musicalKey = "nc.musicalKey"
         static let saved = "nc.settingsSaved"
     }
 
@@ -2746,6 +2813,7 @@ final class EngineController: ObservableObject {
         d.set(editMode.rawValue, forKey: SettingsKey.editMode)
         d.set(soloSelectMode.rawValue, forKey: SettingsKey.soloSelect)
         d.set(dockAnalyzerKind.rawValue, forKey: SettingsKey.dockAnalyzer)
+        d.set(musicalKey, forKey: SettingsKey.musicalKey)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -2772,6 +2840,7 @@ final class EngineController: ObservableObject {
         if let em = d.string(forKey: SettingsKey.editMode), let mode = EditMode(rawValue: em) { editMode = mode }
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
+        if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the

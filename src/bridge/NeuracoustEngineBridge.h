@@ -527,6 +527,29 @@ bool nc_marker_delete(NCEngine* engine, double timeSeconds, double toleranceSeco
 /// edit range from a marker.
 bool nc_marker_surrounding_range(NCEngine* engine, double seconds, double* start, double* end);
 
+// Conductor / global track: chords, lyrics, tempo markers.
+int nc_chord_count(NCEngine* engine);
+double nc_chord_time(NCEngine* engine, int index);
+void nc_chord_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_chord_add(NCEngine* engine, double timeSeconds, const char* name);
+bool nc_chord_rename(NCEngine* engine, double timeSeconds, double tol, const char* name);
+bool nc_chord_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
+bool nc_chord_delete(NCEngine* engine, double timeSeconds, double tol);
+
+int nc_lyric_count(NCEngine* engine);
+double nc_lyric_time(NCEngine* engine, int index);
+void nc_lyric_text(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_lyric_add(NCEngine* engine, double timeSeconds, const char* text);
+bool nc_lyric_rename(NCEngine* engine, double timeSeconds, double tol, const char* text);
+bool nc_lyric_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
+bool nc_lyric_delete(NCEngine* engine, double timeSeconds, double tol);
+
+int nc_tempo_marker_count(NCEngine* engine);
+double nc_tempo_marker_time(NCEngine* engine, int index);
+double nc_tempo_marker_bpm(NCEngine* engine, int index);
+bool nc_tempo_marker_add(NCEngine* engine, double timeSeconds, double bpm);
+bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol);
+
 // ---------------------------------------------------------------------------
 // Automation
 //

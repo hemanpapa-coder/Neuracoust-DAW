@@ -295,6 +295,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/PluginEditor.swift
         src/app/swift/PluginBrowser.swift
         src/app/swift/TimelineView.swift
+        src/app/swift/GlobalTracksBar.swift
         src/app/swift/SpectrumAnalyzer.swift
         src/app/swift/AnalyzerWindow.swift
         src/app/swift/EngineController.swift

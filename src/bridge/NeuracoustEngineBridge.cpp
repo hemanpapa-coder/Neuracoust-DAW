@@ -2244,6 +2244,111 @@ bool nc_marker_surrounding_range(NCEngine* engine, double seconds, double* start
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Conductor / global track: chords, lyrics, tempo markers. (Markers + tempo/sig
+// values already have accessors above.) These touch no audio.
+// ---------------------------------------------------------------------------
+
+int nc_chord_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.chordEvents.size());
+}
+double nc_chord_time(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.chordEvents.size()) return 0.0;
+    return engine->project.chordEvents[static_cast<size_t>(index)].timeSeconds;
+}
+void nc_chord_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    copyText(out, outLen, (engine != nullptr && index >= 0 && static_cast<size_t>(index) < engine->project.chordEvents.size())
+             ? engine->project.chordEvents[static_cast<size_t>(index)].name : std::string{});
+}
+bool nc_chord_add(NCEngine* engine, double timeSeconds, const char* name) {
+    if (engine == nullptr) return false;
+    const std::string id = neuracoust::daw::addChordEventAt(engine->project, timeSeconds, name != nullptr ? name : "");
+    if (id.empty()) return false;
+    engine->recordStep("Add chord");
+    return true;
+}
+bool nc_chord_rename(NCEngine* engine, double timeSeconds, double tol, const char* name) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::renameNearestChordEvent(engine->project, timeSeconds, tol, name != nullptr ? name : "")) return false;
+    engine->recordStep("Rename chord");
+    return true;
+}
+bool nc_chord_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::moveNearestChordEvent(engine->project, fromSeconds, tol, toSeconds)) return false;
+    engine->recordStep("Move chord");
+    return true;
+}
+bool nc_chord_delete(NCEngine* engine, double timeSeconds, double tol) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::deleteNearestChordEvent(engine->project, timeSeconds, tol)) return false;
+    engine->recordStep("Delete chord");
+    return true;
+}
+
+int nc_lyric_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.lyricEvents.size());
+}
+double nc_lyric_time(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.lyricEvents.size()) return 0.0;
+    return engine->project.lyricEvents[static_cast<size_t>(index)].timeSeconds;
+}
+void nc_lyric_text(NCEngine* engine, int index, char* out, size_t outLen) {
+    copyText(out, outLen, (engine != nullptr && index >= 0 && static_cast<size_t>(index) < engine->project.lyricEvents.size())
+             ? engine->project.lyricEvents[static_cast<size_t>(index)].text : std::string{});
+}
+bool nc_lyric_add(NCEngine* engine, double timeSeconds, const char* text) {
+    if (engine == nullptr) return false;
+    const std::string id = neuracoust::daw::addLyricEventAt(engine->project, timeSeconds, text != nullptr ? text : "");
+    if (id.empty()) return false;
+    engine->recordStep("Add lyric");
+    return true;
+}
+bool nc_lyric_rename(NCEngine* engine, double timeSeconds, double tol, const char* text) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::renameNearestLyricEvent(engine->project, timeSeconds, tol, text != nullptr ? text : "")) return false;
+    engine->recordStep("Edit lyric");
+    return true;
+}
+bool nc_lyric_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::moveNearestLyricEvent(engine->project, fromSeconds, tol, toSeconds)) return false;
+    engine->recordStep("Move lyric");
+    return true;
+}
+bool nc_lyric_delete(NCEngine* engine, double timeSeconds, double tol) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::deleteNearestLyricEvent(engine->project, timeSeconds, tol)) return false;
+    engine->recordStep("Delete lyric");
+    return true;
+}
+
+int nc_tempo_marker_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.tempoMap.size());
+}
+double nc_tempo_marker_time(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.tempoMap.size()) return 0.0;
+    return engine->project.tempoMap[static_cast<size_t>(index)].timeSeconds;
+}
+double nc_tempo_marker_bpm(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.tempoMap.size()) return 0.0;
+    return engine->project.tempoMap[static_cast<size_t>(index)].bpm;
+}
+bool nc_tempo_marker_add(NCEngine* engine, double timeSeconds, double bpm) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::addTempoMarkerAt(engine->project, timeSeconds, bpm)) return false;
+    engine->reconcileProject();
+    engine->recordStep("Add tempo");
+    return true;
+}
+bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol) {
+    if (engine == nullptr) return false;
+    if (!neuracoust::daw::deleteNearestTempoMarker(engine->project, timeSeconds, tol)) return false;
+    engine->reconcileProject();
+    engine->recordStep("Delete tempo");
+    return true;
+}
+
 bool nc_automation_parameter_supported(const char* parameterId) {
     return isVolumeParameter(parameterId) || isPanParameter(parameterId);
 }
