@@ -1299,7 +1299,17 @@ final class EngineController: ObservableObject {
     @Published private(set) var clips: [Clip] = []
 
     /// Peak envelopes keyed by source path, fetched once per file from the engine.
-    @Published private(set) var waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)] = [:]
+    /// Cached peaks per source path. `channels` is 1 (draw one envelope from L) or 2
+    /// (draw L on top, R below). For mono, L holds the single channel and R is empty.
+    struct WaveformData: Equatable {
+        let channels: Int
+        let minsL: [Float]
+        let maxsL: [Float]
+        let minsR: [Float]
+        let maxsR: [Float]
+        let durationSeconds: Double
+    }
+    @Published private(set) var waveforms: [String: WaveformData] = [:]
 
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
     @Published var selectedClipIds: Set<String> = []
@@ -2213,12 +2223,26 @@ final class EngineController: ObservableObject {
             // The peak count scales with the file's length, so read however many it has.
             let count = Int(nc_waveform_peak_count(handle, clip.sourcePath))
             guard count > 0 else { continue }
-            var mins = [Float](repeating: 0, count: count)
-            var maxs = [Float](repeating: 0, count: count)
-            if nc_waveform_peaks(handle, clip.sourcePath, &mins, &maxs, Int32(count)) {
-                waveforms[clip.sourcePath] = (mins, maxs,
-                                              nc_waveform_duration_seconds(handle, clip.sourcePath))
+            let channels = max(1, Int(nc_waveform_channel_count(handle, clip.sourcePath)))
+
+            var minsL = [Float](repeating: 0, count: count)
+            var maxsL = [Float](repeating: 0, count: count)
+            guard nc_waveform_channel_peaks(handle, clip.sourcePath, 0, &minsL, &maxsL, Int32(count)) else { continue }
+
+            var minsR: [Float] = []
+            var maxsR: [Float] = []
+            if channels > 1 {
+                var r0 = [Float](repeating: 0, count: count)
+                var r1 = [Float](repeating: 0, count: count)
+                if nc_waveform_channel_peaks(handle, clip.sourcePath, 1, &r0, &r1, Int32(count)) {
+                    minsR = r0
+                    maxsR = r1
+                }
             }
+            waveforms[clip.sourcePath] = WaveformData(
+                channels: minsR.isEmpty ? 1 : channels,
+                minsL: minsL, maxsL: maxsL, minsR: minsR, maxsR: maxsR,
+                durationSeconds: nc_waveform_duration_seconds(handle, clip.sourcePath))
         }
     }
 

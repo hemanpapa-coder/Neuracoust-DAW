@@ -622,6 +622,13 @@ bool nc_waveform_peaks(NCEngine* engine, const char* path, float* mins, float* m
 /// Zero until `nc_waveform_peaks` has read the file.
 double nc_waveform_duration_seconds(NCEngine* engine, const char* path);
 
+/// Channel count for the drawing: 1 (mono → one envelope) or 2 (stereo → L/R envelopes).
+int nc_waveform_channel_count(NCEngine* engine, const char* path);
+/// Per-channel peaks (channel 0 = L, 1 = R). Falls back to the mono envelope when the
+/// channel is absent, so it is always safe to call for either channel.
+bool nc_waveform_channel_peaks(NCEngine* engine, const char* path, int channel,
+                               float* mins, float* maxs, int count);
+
 // ---------------------------------------------------------------------------
 // Plugin browser
 //

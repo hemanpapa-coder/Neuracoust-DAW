@@ -74,8 +74,15 @@ struct NCEngine {
     /// Peaks keyed by source path. Decoding a WAV is not cheap and the timeline
     /// asks for the same file on every redraw.
     struct WaveformPeaks {
+        // Mono sum, kept for the single-envelope draw and any mono source.
         std::vector<float> mins;
         std::vector<float> maxs;
+        // Per-channel peaks (up to 2: L, R) so a stereo clip draws two envelopes.
+        int channels = 1;
+        std::vector<float> minsL;
+        std::vector<float> maxsL;
+        std::vector<float> minsR;
+        std::vector<float> maxsR;
         double durationSeconds = 0.0;
     };
     std::map<std::string, WaveformPeaks> waveformCache;
@@ -2568,8 +2575,15 @@ const NCEngine::WaveformPeaks* ensureWaveformPeaks(NCEngine* engine, const std::
     const int64_t peakCount = std::max<int64_t>(1, (frames + samplesPerPeak - 1) / samplesPerPeak);
 
     NCEngine::WaveformPeaks peaks;
+    peaks.channels = std::min(2, std::max(1, channels));
     peaks.mins.assign(static_cast<size_t>(peakCount), 0.0f);
     peaks.maxs.assign(static_cast<size_t>(peakCount), 0.0f);
+    peaks.minsL.assign(static_cast<size_t>(peakCount), 0.0f);
+    peaks.maxsL.assign(static_cast<size_t>(peakCount), 0.0f);
+    if (peaks.channels > 1) {
+        peaks.minsR.assign(static_cast<size_t>(peakCount), 0.0f);
+        peaks.maxsR.assign(static_cast<size_t>(peakCount), 0.0f);
+    }
     peaks.durationSeconds = audio.sampleRate > 0
         ? static_cast<double>(frames) / audio.sampleRate
         : 0.0;
@@ -2577,20 +2591,30 @@ const NCEngine::WaveformPeaks* ensureWaveformPeaks(NCEngine* engine, const std::
     for (int64_t peak = 0; peak < peakCount; ++peak) {
         const int64_t begin = peak * samplesPerPeak;
         const int64_t end = std::min(frames, begin + samplesPerPeak);
-        float low = 0.0f;
-        float high = 0.0f;
+        float low = 0.0f, high = 0.0f;     // mono sum
+        float lowL = 0.0f, highL = 0.0f;   // left channel
+        float lowR = 0.0f, highR = 0.0f;   // right channel
         for (int64_t frame = begin; frame < end; ++frame) {
-            // Sum to mono: the timeline draws one envelope per clip.
             float sum = 0.0f;
             for (int channel = 0; channel < channels; ++channel) {
-                sum += audio.interleavedSamples[static_cast<size_t>(frame * channels + channel)];
+                const float sample = audio.interleavedSamples[static_cast<size_t>(frame * channels + channel)];
+                sum += sample;
+                if (channel == 0) { lowL = std::min(lowL, sample); highL = std::max(highL, sample); }
+                else if (channel == 1) { lowR = std::min(lowR, sample); highR = std::max(highR, sample); }
             }
             const float value = sum / static_cast<float>(channels);
             low = std::min(low, value);
             high = std::max(high, value);
         }
-        peaks.mins[static_cast<size_t>(peak)] = std::max(-1.0f, low);
-        peaks.maxs[static_cast<size_t>(peak)] = std::min(1.0f, high);
+        const auto p = static_cast<size_t>(peak);
+        peaks.mins[p] = std::max(-1.0f, low);
+        peaks.maxs[p] = std::min(1.0f, high);
+        peaks.minsL[p] = std::max(-1.0f, lowL);
+        peaks.maxsL[p] = std::min(1.0f, highL);
+        if (peaks.channels > 1) {
+            peaks.minsR[p] = std::max(-1.0f, lowR);
+            peaks.maxsR[p] = std::min(1.0f, highR);
+        }
     }
 
     return &engine->waveformCache.emplace(key, std::move(peaks)).first->second;
@@ -2626,6 +2650,39 @@ double nc_waveform_duration_seconds(NCEngine* engine, const char* path) {
     }
     const auto cached = engine->waveformCache.find(path);
     return cached != engine->waveformCache.end() ? cached->second.durationSeconds : 0.0;
+}
+
+// 1 for mono, 2 for stereo — how many envelopes the clip should draw.
+int nc_waveform_channel_count(NCEngine* engine, const char* path) {
+    if (engine == nullptr || path == nullptr) {
+        return 0;
+    }
+    const auto* peaks = ensureWaveformPeaks(engine, path);
+    return peaks != nullptr ? peaks->channels : 0;
+}
+
+// Per-channel peaks: channel 0 = L, 1 = R. Falls back to the mono envelope when the
+// requested channel is absent (mono source asked for R).
+bool nc_waveform_channel_peaks(NCEngine* engine, const char* path, int channel,
+                               float* mins, float* maxs, int count) {
+    if (engine == nullptr || path == nullptr || mins == nullptr || maxs == nullptr || count <= 0) {
+        return false;
+    }
+    const auto* peaks = ensureWaveformPeaks(engine, path);
+    if (peaks == nullptr) {
+        return false;
+    }
+    const std::vector<float>* src = &peaks->mins;
+    const std::vector<float>* srcMax = &peaks->maxs;
+    if (channel == 0 && !peaks->minsL.empty()) {
+        src = &peaks->minsL; srcMax = &peaks->maxsL;
+    } else if (channel == 1 && !peaks->minsR.empty()) {
+        src = &peaks->minsR; srcMax = &peaks->maxsR;
+    }
+    const size_t available = std::min<size_t>(static_cast<size_t>(count), src->size());
+    std::memcpy(mins, src->data(), available * sizeof(float));
+    std::memcpy(maxs, srcMax->data(), available * sizeof(float));
+    return true;
 }
 
 // ---------------------------------------------------------------------------

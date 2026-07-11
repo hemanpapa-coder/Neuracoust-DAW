@@ -113,7 +113,7 @@ final class TimelineNSView: NSView {
     }
 
     /// Peaks by source path, supplied by the owner. Decoding lives in the engine.
-    var waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)] = [:] {
+    var waveforms: [String: EngineController.WaveformData] = [:] {
         didSet { needsDisplay = true }
     }
 
@@ -1504,19 +1504,34 @@ final class TimelineNSView: NSView {
                    ])
     }
 
-    /// Resamples the cached peak buckets onto the clip's on-screen width. Only the
-    /// visible span is walked, so zooming in does not cost more.
+    /// Resamples the cached peak buckets onto the clip's on-screen width. A stereo clip
+    /// draws two envelopes — L on the top half, R on the bottom — while a mono clip draws
+    /// one centered. Only the visible span is walked, so zooming in does not cost more.
     private func drawWaveform(_ clip: TimelineModel.Clip, in rect: NSRect, accent: NSColor) {
-        guard rect.width >= 1,
-              let peaks = waveforms[clip.sourcePath],
-              !peaks.mins.isEmpty else { return }
+        guard rect.width >= 1, let peaks = waveforms[clip.sourcePath] else { return }
+        let gainFactor = CGFloat(pow(10, clip.gainDb / 20))
 
+        if peaks.channels > 1, !peaks.minsR.isEmpty {
+            let gap: CGFloat = 2
+            let half = (rect.height - gap) / 2
+            let top = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: half)
+            let bottom = NSRect(x: rect.minX, y: rect.maxY - half, width: rect.width, height: half)
+            drawEnvelope(clip, mins: peaks.minsL, maxs: peaks.maxsL, fileDuration: peaks.durationSeconds,
+                         in: top, gainFactor: gainFactor, accent: accent)
+            drawEnvelope(clip, mins: peaks.minsR, maxs: peaks.maxsR, fileDuration: peaks.durationSeconds,
+                         in: bottom, gainFactor: gainFactor, accent: accent)
+        } else {
+            drawEnvelope(clip, mins: peaks.minsL, maxs: peaks.maxsL, fileDuration: peaks.durationSeconds,
+                         in: rect, gainFactor: gainFactor, accent: accent)
+        }
+    }
+
+    private func drawEnvelope(_ clip: TimelineModel.Clip, mins: [Float], maxs: [Float],
+                              fileDuration: Double, in rect: NSRect, gainFactor: CGFloat, accent: NSColor) {
+        guard rect.width >= 1, !mins.isEmpty, rect.height > 1 else { return }
         let midY = rect.midY
         let halfHeight = rect.height / 2
-        let buckets = peaks.mins.count
-        // Clip gain scales the drawn amplitude, so louder clips look louder. Clamped so
-        // a boosted transient still fits the row rather than spilling into the neighbour.
-        let gainFactor = CGFloat(pow(10, clip.gainDb / 20))
+        let buckets = mins.count
 
         let path = NSBezierPath()
         var drew = false
@@ -1527,13 +1542,9 @@ final class TimelineNSView: NSView {
 
         // The peaks span the whole file. A trimmed or split clip plays a window of it,
         // so map each on-screen column into that window rather than the file.
-        let fileDuration = peaks.durationSeconds
         let windowStart = fileDuration > 0 ? clip.sourceOffsetSeconds / fileDuration : 0
         let windowSpan = fileDuration > 0 ? clip.durationSeconds / fileDuration : 1
 
-        // A column usually covers many peaks; take the loudest of them so a transient
-        // is never skipped between samples. Zoomed in it covers less than one peak,
-        // and both edges land on the same index — still crisp.
         for column in firstColumn..<lastColumn {
             let startFraction = windowStart + Double(column) / Double(rect.width) * windowSpan
             let endFraction = windowStart + Double(column + 1) / Double(rect.width) * windowSpan
@@ -1543,8 +1554,8 @@ final class TimelineNSView: NSView {
             var low: Float = 0
             var high: Float = 0
             for bucket in first...last {
-                low = min(low, peaks.mins[bucket])
-                high = max(high, peaks.maxs[bucket])
+                low = min(low, mins[bucket])
+                high = max(high, maxs[bucket])
             }
             let pointX = rect.minX + CGFloat(column) + 0.5
             let highY = max(-halfHeight, min(halfHeight, CGFloat(high) * gainFactor * halfHeight))
@@ -1580,7 +1591,7 @@ extension NSColor {
 struct TimelineView: NSViewRepresentable {
     let model: TimelineModel
     let playheadSeconds: Double
-    let waveforms: [String: (mins: [Float], maxs: [Float], durationSeconds: Double)]
+    let waveforms: [String: EngineController.WaveformData]
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
