@@ -36,7 +36,7 @@ typedef struct {
     float spectrumMid;
     float spectrumHigh;
 
-    // ITU-R BS.1770 loudness. True-peak is currently sample-peak (not oversampled).
+    // ITU-R BS.1770 loudness. True-peak is 4× oversampled (inter-sample peaks).
     float momentaryLufs;
     float shortTermLufs;
     float integratedLufs;

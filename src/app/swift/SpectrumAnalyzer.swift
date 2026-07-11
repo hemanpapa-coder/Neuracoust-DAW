@@ -126,7 +126,7 @@ struct GoniometerView: View {
 
 /// ITU-R BS.1770 loudness readout: momentary / short-term / integrated LUFS, loudness
 /// range and true-peak, with a bar for the live momentary/short values. True-peak is a
-/// sample-peak approximation until oversampled true-peak DSP lands.
+/// 4× oversampled (catches inter-sample peaks).
 struct LoudnessView: View {
     var momentary: Float
     var shortTerm: Float
@@ -150,7 +150,7 @@ struct LoudnessView: View {
                 row("Short-term", lufsText(shortTerm) + " LUFS")
                 row("Range (LRA)", String(format: "%.1f LU", range))
                 row("True Peak", (truePeak <= -120 ? "−∞" : String(format: "%.1f", truePeak)) + " dBTP")
-                Text("ITU-R BS.1770 · TP는 샘플 피크 근사")
+                Text("ITU-R BS.1770 · True Peak 4× 오버샘플")
                     .font(.system(size: 8))
                     .foregroundStyle(.white.opacity(0.3))
             }

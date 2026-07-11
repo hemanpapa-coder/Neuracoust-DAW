@@ -44,6 +44,18 @@ private:
 
     void pushBlock(double meanSquare);
 
+    // 4× polyphase oversampler for true-peak: reveals inter-sample peaks the raw
+    // samples miss. `tpProto_` is a windowed-sinc prototype, each phase normalized.
+    static constexpr int kTpPhases = 4;
+    static constexpr int kTpTaps = 12;
+    std::vector<float> tpProto_;        // length kTpPhases * kTpTaps
+    std::vector<float> tpDelayL_;       // last kTpTaps input samples
+    std::vector<float> tpDelayR_;
+    int tpWrite_ = 0;
+    float truePeakLinear_ = 0.0f;
+    void buildTruePeakFilter();
+    void processTruePeak(double l, double r);
+
     double sampleRate_ = 48000.0;
     Biquad stage1_;  // high-shelf
     Biquad stage2_;  // high-pass (RLB)
@@ -64,7 +76,6 @@ private:
     float integratedLufs_ = -70.0f;
     float loudnessRange_ = 0.0f;
     float truePeakDb_ = -120.0f;
-    float peakHold_ = 0.0f;
 };
 
 } // namespace neuracoust::daw

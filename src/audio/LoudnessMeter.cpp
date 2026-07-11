@@ -53,9 +53,57 @@ void LoudnessMeter::prepare(double sampleRate) {
     reset();
 }
 
+void LoudnessMeter::buildTruePeakFilter() {
+    // Windowed-sinc lowpass, cutoff at the original Nyquist (1/kTpPhases in the
+    // oversampled domain), Hann window. Each phase is normalized to unity DC gain so a
+    // steady signal is not misread as a peak.
+    const int L = kTpPhases * kTpTaps;
+    tpProto_.assign(static_cast<size_t>(L), 0.0f);
+    const double center = (L - 1) / 2.0;
+    for (int k = 0; k < L; ++k) {
+        const double x = (k - center) / static_cast<double>(kTpPhases);
+        const double sinc = std::abs(x) < 1e-9 ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+        const double win = 0.5 * (1.0 - std::cos(2.0 * M_PI * k / (L - 1)));
+        tpProto_[static_cast<size_t>(k)] = static_cast<float>(sinc * win);
+    }
+    for (int p = 0; p < kTpPhases; ++p) {
+        double sum = 0.0;
+        for (int t = 0; t < kTpTaps; ++t) sum += tpProto_[static_cast<size_t>(p + t * kTpPhases)];
+        if (std::abs(sum) > 1e-9) {
+            for (int t = 0; t < kTpTaps; ++t) tpProto_[static_cast<size_t>(p + t * kTpPhases)] /= static_cast<float>(sum);
+        }
+    }
+    tpDelayL_.assign(static_cast<size_t>(kTpTaps), 0.0f);
+    tpDelayR_.assign(static_cast<size_t>(kTpTaps), 0.0f);
+    tpWrite_ = 0;
+}
+
+void LoudnessMeter::processTruePeak(double l, double r) {
+    // Ring of the last kTpTaps input samples (newest at tpWrite_-1).
+    tpDelayL_[static_cast<size_t>(tpWrite_)] = static_cast<float>(l);
+    tpDelayR_[static_cast<size_t>(tpWrite_)] = static_cast<float>(r);
+    tpWrite_ = (tpWrite_ + 1) % kTpTaps;
+    for (int p = 0; p < kTpPhases; ++p) {
+        double accL = 0.0, accR = 0.0;
+        for (int t = 0; t < kTpTaps; ++t) {
+            const int idx = (tpWrite_ - 1 - t + kTpTaps * 2) % kTpTaps;
+            const float h = tpProto_[static_cast<size_t>(p + t * kTpPhases)];
+            accL += tpDelayL_[static_cast<size_t>(idx)] * h;
+            accR += tpDelayR_[static_cast<size_t>(idx)] * h;
+        }
+        truePeakLinear_ = std::max(truePeakLinear_,
+                                   static_cast<float>(std::max(std::abs(accL), std::abs(accR))));
+    }
+}
+
 void LoudnessMeter::reset() {
     stage1_.resetState();
     stage2_.resetState();
+    if (tpProto_.empty()) buildTruePeakFilter();
+    std::fill(tpDelayL_.begin(), tpDelayL_.end(), 0.0f);
+    std::fill(tpDelayR_.begin(), tpDelayR_.end(), 0.0f);
+    tpWrite_ = 0;
+    truePeakLinear_ = 0.0f;
     sampleCounter_ = 0;
     sumL_ = sumR_ = 0.0;
     blocks_.clear();
@@ -63,7 +111,6 @@ void LoudnessMeter::reset() {
     momentaryLufs_ = shortTermLufs_ = integratedLufs_ = -70.0f;
     loudnessRange_ = 0.0f;
     truePeakDb_ = -120.0f;
-    peakHold_ = 0.0f;
 }
 
 void LoudnessMeter::pushBlock(double meanSquare) {
@@ -131,7 +178,7 @@ void LoudnessMeter::process(const float* interleaved, int64_t frames, int channe
     for (int64_t frame = 0; frame < frames; ++frame) {
         const double xL = interleaved[frame * channels];
         const double xR = channels > 1 ? interleaved[frame * channels + 1] : xL;
-        peakHold_ = std::max(peakHold_, static_cast<float>(std::max(std::abs(xL), std::abs(xR))));
+        processTruePeak(xL, xR);
 
         const double s1L = stage1_.process(xL, stage1_.z1L, stage1_.z2L);
         const double yL = stage2_.process(s1L, stage2_.z1L, stage2_.z2L);
@@ -147,7 +194,7 @@ void LoudnessMeter::process(const float* interleaved, int64_t frames, int channe
             sampleCounter_ = 0;
         }
     }
-    truePeakDb_ = peakHold_ > 0.0f ? 20.0f * std::log10(peakHold_) : -120.0f;
+    truePeakDb_ = truePeakLinear_ > 0.0f ? 20.0f * std::log10(truePeakLinear_) : -120.0f;
 }
 
 int LoudnessMeter::runSelfTest() {
@@ -184,6 +231,29 @@ int LoudnessMeter::runSelfTest() {
     if (!(quiet.integratedLufs() < integrated - 10.0f)) {
         std::cerr << "LOUDNESS_SELF_TEST failed: quieter signal did not read lower\n";
         return 62;
+    }
+
+    // Inter-sample peak: a full-scale tone at fs/4 with a 45° phase has samples at
+    // ±0.707 (−3 dBFS) but a true peak of 0 dBTP. The oversampler must see it.
+    {
+        LoudnessMeter tp;
+        tp.prepare(sr);
+        std::vector<float> block(2 * 4800);
+        for (int b = 0; b < 4; ++b) {
+            for (int i = 0; i < 4800; ++i) {
+                const double n = b * 4800 + i;
+                const float s = static_cast<float>(std::sin(2.0 * M_PI * (sr / 4.0) * n / sr + M_PI / 4.0));
+                block[static_cast<size_t>(i) * 2] = s;
+                block[static_cast<size_t>(i) * 2 + 1] = s;
+            }
+            tp.process(block.data(), 4800, 2);
+        }
+        // Sample peak here is ~−3 dBFS; true peak must climb well above that.
+        if (!(tp.truePeakDb() > -1.5f)) {
+            std::cerr << "LOUDNESS_SELF_TEST failed: true-peak missed the inter-sample peak ("
+                      << tp.truePeakDb() << " dBTP, expected near 0)\n";
+            return 63;
+        }
     }
     std::cout << "LOUDNESS_SELF_TEST ok (integrated " << integrated << " LUFS)\n";
     return 0;

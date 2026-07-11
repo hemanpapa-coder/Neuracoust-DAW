@@ -25,7 +25,7 @@ final class EngineController: ObservableObject {
     @Published private(set) var spectrumBins: [Float] = []
     /// Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
     @Published private(set) var goniometerSamples: [Float] = []
-    // ITU-R BS.1770 loudness. True-peak is currently a sample-peak approximation.
+    // ITU-R BS.1770 loudness. True-peak is 4× oversampled (inter-sample peaks).
     @Published private(set) var momentaryLufs: Float = -70
     @Published private(set) var shortTermLufs: Float = -70
     @Published private(set) var integratedLufs: Float = -70
