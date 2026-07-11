@@ -424,9 +424,9 @@ struct MonitorDock: View {
                                               startPoint: .leading, endPoint: .trailing))
 
             StatRow(label: "위상 상관", value: String(format: "%+.2f", engine.phaseCorrelation))
-            MeterBar(fraction: Double(engine.phaseCorrelation + 1) / 2,
-                     gradient: LinearGradient(colors: [Theme.Palette.yellow, Theme.Palette.green],
-                                              startPoint: .leading, endPoint: .trailing))
+            PhaseCorrelationDotMeter(correlation: engine.phaseCorrelation)
+
+            delayCompensationRow
 
             StatRow(label: "Low / Mid / High", value: bandLabel)
             StatRow(label: "L / R Peak", value: peakLabel)
@@ -476,6 +476,26 @@ struct MonitorDock: View {
         guard engine.sampleRate > 0, engine.bufferSize > 0 else { return 0 }
         let bufferPeriodUs = Double(engine.bufferSize) / engine.sampleRate * 1_000_000
         return min(1.0, engine.wakeJitterUs / bufferPeriodUs)
+    }
+
+    /// Plugin delay compensation: enable switch plus the engine's reported alignment.
+    private var delayCompensationRow: some View {
+        HStack(spacing: 6) {
+            Text("지연 보정 (PDC)")
+                .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
+            Spacer(minLength: 0)
+            Text(engine.delayCompensationEnabled
+                 ? (engine.delayCompensationSamples > 0
+                    ? String(format: "%.1f ms · %d smp", engine.delayCompensationMs, engine.delayCompensationSamples)
+                    : "0.0 ms")
+                 : "끔")
+                .font(Theme.Font.mono(9))
+                .foregroundStyle(engine.delayCompensationEnabled ? Theme.Palette.green : Theme.Palette.textFaint)
+            Toggle("", isOn: Binding(
+                get: { engine.delayCompensationEnabled },
+                set: { engine.setDelayCompensation($0) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+        }
     }
 
     private var bandLabel: String {

@@ -54,6 +54,7 @@ struct NCEngine {
     RealtimeAudioEngine engine;
     ProjectDocument project = neuracoust::daw::defaultProject();
     bool monitorDspEnabled = true;
+    bool delayCompensationEnabled = true;
     std::string monitorDspPathMode = "internal";
     /// Empty means the system default output device.
     std::string outputDeviceId;
@@ -234,6 +235,7 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     settings.transportRunning = false;
     settings.metronomeEnabled = false;
     settings.monitorDspEnabled = engine->monitorDspEnabled;
+    settings.delayCompensationEnabled = engine->delayCompensationEnabled;
     settings.monitorDspPathMode = engine->monitorDspPathMode;
     settings.monitorModules = engine->project.monitorModules;
     settings.monitorStationMono = engine->project.monitorStationMono;
@@ -3439,6 +3441,23 @@ void restartEngineForSettings(NCEngine* engine) {
 }
 
 } // namespace
+
+// --- Plugin delay compensation (PDC). The engine computes per-path latency and aligns
+//     tracks; the flag is read at start(), so toggling restarts the audio engine. ---
+bool nc_delay_compensation_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->delayCompensationEnabled;
+}
+void nc_delay_compensation_set(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->delayCompensationEnabled == enabled) return;
+    engine->delayCompensationEnabled = enabled;
+    restartEngineForSettings(engine);
+}
+double nc_delay_compensation_ms(NCEngine* engine) {
+    return engine == nullptr ? 0.0 : engine->engine.status().delayCompensationMs;
+}
+int nc_delay_compensation_samples(NCEngine* engine) {
+    return engine == nullptr ? 0 : engine->engine.status().delayCompensationSamples;
+}
 
 bool nc_dsp_core_isolation(NCEngine* engine) {
     return engine != nullptr && engine->project.appleSiliconCoreIsolationEnabled;

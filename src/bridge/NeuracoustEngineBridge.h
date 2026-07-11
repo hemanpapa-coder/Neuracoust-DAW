@@ -751,6 +751,11 @@ void nc_monitor_set_dsp_enabled(NCEngine* engine, bool enabled);
 // it — a brief dropout, the way a buffer-size change would.
 // ---------------------------------------------------------------------------
 
+bool nc_delay_compensation_enabled(NCEngine* engine);
+void nc_delay_compensation_set(NCEngine* engine, bool enabled);
+double nc_delay_compensation_ms(NCEngine* engine);
+int nc_delay_compensation_samples(NCEngine* engine);
+
 bool nc_dsp_core_isolation(NCEngine* engine);
 void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
 int nc_dsp_core_count(NCEngine* engine);

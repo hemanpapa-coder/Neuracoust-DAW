@@ -716,6 +716,10 @@ final class EngineController: ObservableObject {
 
     // Live meters, refreshed each tick.
     @Published private(set) var phaseCorrelation: Float = 0
+    /// Plugin delay compensation: the enable flag and the engine's reported alignment.
+    /// (`delayCompensationMs` is declared with the other status fields above.)
+    @Published var delayCompensationEnabled: Bool = true
+    @Published private(set) var delayCompensationSamples: Int = 0
     @Published private(set) var spectrumLow: Float = 0
     @Published private(set) var spectrumMid: Float = 0
     @Published private(set) var spectrumHigh: Float = 0
@@ -2810,6 +2814,14 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Toggle plugin delay compensation. The engine reads the flag at start(), so this
+    /// restarts the audio engine — a brief dropout, like a buffer-size change.
+    func setDelayCompensation(_ enabled: Bool) {
+        guard let handle else { return }
+        nc_delay_compensation_set(handle, enabled)
+        delayCompensationEnabled = nc_delay_compensation_enabled(handle)
+    }
+
     func setDspCoreCount(_ count: Int) {
         guard let handle else { return }
         nc_dsp_set_core_count(handle, Int32(count))
@@ -2892,6 +2904,7 @@ final class EngineController: ObservableObject {
         static let physSpeaker = "nc.physicalSpeakerModel"
         static let physHeadphone = "nc.physicalHeadphoneModel"
         static let monitorVol = "nc.monitorVolumeDb"
+        static let delayComp = "nc.delayCompensation"
         static let saved = "nc.settingsSaved"
     }
 
@@ -2919,6 +2932,7 @@ final class EngineController: ObservableObject {
         d.set(physicalSpeakerModel, forKey: SettingsKey.physSpeaker)
         d.set(physicalHeadphoneModel, forKey: SettingsKey.physHeadphone)
         d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
+        d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -2958,6 +2972,7 @@ final class EngineController: ObservableObject {
         if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
+        if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the
@@ -3250,6 +3265,8 @@ final class EngineController: ObservableObject {
         nc_engine_status(handle, &status)
 
         phaseCorrelation = status.phaseCorrelation
+        let dcSamples = Int(nc_delay_compensation_samples(handle))
+        if dcSamples != delayCompensationSamples { delayCompensationSamples = dcSamples }
         spectrumLow = status.spectrumLow
         spectrumMid = status.spectrumMid
         spectrumHigh = status.spectrumHigh

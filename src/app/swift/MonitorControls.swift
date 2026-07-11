@@ -95,6 +95,59 @@ struct MeterBar: View {
     }
 }
 
+/// Classic phase-correlation meter drawn as a row of discrete dots rather than a solid
+/// fill: the centre dot is 0 correlation, dots light out from centre toward the current
+/// value — green to the right (in phase, +1) and amber→red to the left (out of phase, −1),
+/// with the value dot brightest and a short decaying trail. This is the traditional
+/// correlation-meter look, matching the dot level meters elsewhere.
+struct PhaseCorrelationDotMeter: View {
+    let correlation: Float          // −1 … +1
+    var dotCount: Int = 31          // odd, so there is a true centre
+
+    var body: some View {
+        GeometryReader { geo in
+            let c = max(-1, min(1, correlation))
+            let center = dotCount / 2
+            let value = Int((Double(c) * 0.5 + 0.5) * Double(dotCount - 1)).clamped(to: 0...(dotCount - 1))
+            let spacing: CGFloat = 2
+            let dotW = max(2, (geo.size.width - spacing * CGFloat(dotCount - 1)) / CGFloat(dotCount))
+            HStack(spacing: spacing) {
+                ForEach(0..<dotCount, id: \.self) { i in
+                    Capsule().fill(color(for: i, center: center, value: value))
+                        .frame(width: dotW, height: geo.size.height)
+                }
+            }
+        }
+        .frame(height: 7)
+    }
+
+    private func color(for i: Int, center: Int, value: Int) -> Color {
+        let isCenter = i == center
+        // Which side and whether this dot is within the lit span from centre to value.
+        let lit = value >= center ? (i >= center && i <= value) : (i <= center && i >= value)
+        if i == value {
+            return sideColor(i, center: center).opacity(1.0)         // the indicator
+        }
+        if isCenter {
+            return Color.white.opacity(0.55)                          // centre reference tick
+        }
+        if lit {
+            return sideColor(i, center: center).opacity(0.7)         // the trail
+        }
+        return Color.white.opacity(0.08)                             // unlit dot
+    }
+
+    private func sideColor(_ i: Int, center: Int) -> Color {
+        if i > center { return Theme.Palette.green }                 // in phase
+        if i < center { return Color(hex: 0xe0a13a) }               // out of phase (amber→red near ends)
+        return Theme.Palette.green
+    }
+}
+
+private extension Comparable {
+    func clamped(to r: ClosedRange<Self>) -> Self { min(max(self, r.lowerBound), r.upperBound) }
+}
+
 /// The design draws 24 spectrum bars. The engine publishes three bands, so each
 /// band fills eight bars — no interpolation is invented between them.
 struct SpectrumBars: View {
