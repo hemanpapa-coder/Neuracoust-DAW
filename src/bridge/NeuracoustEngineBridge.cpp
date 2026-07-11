@@ -3118,6 +3118,24 @@ int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int directi
     return moved;
 }
 
+// Moves a plugin to an arbitrary slot (drag-and-drop reorder), unlike the ±1 direction
+// move. Returns the new index, or -1.
+int nc_track_move_insert_to_index(NCEngine* engine, int trackIndex, int fromSlot, int toSlot) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || fromSlot < 0 || toSlot < 0) {
+        return -1;
+    }
+    const int moved = neuracoust::daw::moveTrackInsertSlotToIndex(engine->project, track->name,
+                                                                  static_cast<size_t>(fromSlot),
+                                                                  static_cast<size_t>(toSlot));
+    if (moved < 0) {
+        return -1;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Move insert");
+    return moved;
+}
+
 void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen) {
     const auto* track = trackAt(engine, trackIndex);
     if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {

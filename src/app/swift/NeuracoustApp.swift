@@ -322,6 +322,7 @@ private struct EditView: View {
                     onToggleSolo: { engine.toggleTrackSolo($0) },
                     onToggleArm: { engine.toggleTrackArm($0) },
                     onToggleInputMonitor: { engine.toggleTrackInputMonitoring($0) },
+                    onRenameTrack: { _ = engine.renameTrack($0, to: $1) },
                     onSetVolumeDb: { engine.setTrackVolume($0, $1) }
                 )
 

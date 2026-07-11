@@ -1,4 +1,29 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// Drag a filled insert slot onto another to reorder it (track inserts only).
+private struct InsertDragDrop: ViewModifier {
+    let isMaster: Bool
+    let slot: Int
+    let filled: Bool
+    let onMove: (Int, Int) -> Void
+
+    func body(content: Content) -> some View {
+        let dropped = content.onDrop(of: [.plainText], isTargeted: nil) { providers in
+            guard !isMaster, let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                if let text = object as? String, let from = Int(text) {
+                    DispatchQueue.main.async { onMove(from, slot) }
+                }
+            }
+            return true
+        }
+        if filled && !isMaster {
+            return AnyView(dropped.onDrag { NSItemProvider(object: "\(slot)" as NSString) })
+        }
+        return AnyView(dropped)
+    }
+}
 
 struct MixerView: View {
     @EnvironmentObject private var engine: EngineController
@@ -307,10 +332,15 @@ struct ChannelStrip: View {
                     badge: insert?.modeBadge ?? "",
                     lit: editors.isOpen(.init(trackId: ownerId, insertIndex: slot))
                 ) {
-                    if insert?.isEmpty ?? true {
-                        engine.openPluginBrowser(forTrack: ownerId)
-                    } else {
+                    let filled = !(insert?.isEmpty ?? true)
+                    if NSEvent.modifierFlags.contains(.command) && filled {
+                        // Pro Tools: ⌘-click an insert bypasses it.
+                        if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
+                        else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
+                    } else if filled {
                         editors.toggle(trackId: ownerId, insertIndex: slot)
+                    } else {
+                        engine.openPluginBrowser(forTrack: ownerId)
                     }
                 }
                 .contextMenu {
@@ -340,6 +370,12 @@ struct ChannelStrip: View {
                         }
                     }
                 }
+                // Drag a plugin onto another slot to reorder it (track inserts).
+                .modifier(InsertDragDrop(isMaster: isMaster, slot: slot,
+                                         filled: !(insert?.isEmpty ?? true),
+                                         onMove: { from, to in
+                                             if !isMaster { engine.moveInsert(track: ownerId, from: from, to: to) }
+                                         }))
             }
         }
     }

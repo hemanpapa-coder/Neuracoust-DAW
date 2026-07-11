@@ -103,7 +103,7 @@ struct TimelineModel: Equatable {
 /// This is an NSView rather than SwiftUI because it repaints a waveform envelope
 /// per clip and moves a playhead at 30 Hz. The playhead lives in its own layer so
 /// moving it never triggers a redraw of the waveforms.
-final class TimelineNSView: NSView {
+final class TimelineNSView: NSView, NSTextFieldDelegate {
     var model = TimelineModel() {
         didSet {
             guard model != oldValue else { return }
@@ -172,6 +172,7 @@ final class TimelineNSView: NSView {
     var onToggleSolo: ((Int) -> Void)?                   // trackId
     var onToggleArm: ((Int) -> Void)?                    // trackId
     var onToggleInputMonitor: ((Int) -> Void)?           // trackId
+    var onRenameTrack: ((Int, String) -> Void)?          // (trackId, newName)
     var onSetVolumeDb: ((Int, Float) -> Void)?           // (trackId, db) — continuous
 
     /// Grab zone at each end of a clip.
@@ -545,7 +546,9 @@ final class TimelineNSView: NSView {
         if point.x < Self.headerWidth {
             if let lane = laneIndex(at: point) {
                 let trackId = model.lanes[lane].trackId
-                if automationToggleRect(lane).contains(point) {
+                if event.clickCount >= 2 && nameRect(lane).contains(point) {
+                    beginRenamingLane(lane)
+                } else if automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
                 } else if headerMuteRect(lane).contains(point) {
                     onToggleMute?(trackId)
@@ -1398,6 +1401,53 @@ final class TimelineNSView: NSView {
         NSRect(x: Self.headerWidth - 26, y: laneTop(index) + 10, width: 18, height: 14)
     }
 
+    /// The track-name band in the header — double-click here to rename.
+    private func nameRect(_ index: Int) -> NSRect {
+        NSRect(x: 10, y: laneTop(index) + 6, width: Self.headerWidth - 40, height: 22)
+    }
+
+    private var renameField: NSTextField?
+    private var renamingTrackId: Int?
+
+    /// Inline rename: float an NSTextField over the lane name, commit on Return / focus loss.
+    private func beginRenamingLane(_ index: Int) {
+        guard index < model.lanes.count else { return }
+        renameField?.removeFromSuperview()
+        let lane = model.lanes[index]
+        let field = NSTextField(frame: nameRect(index))
+        field.stringValue = lane.name
+        field.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .none
+        field.target = self
+        field.action = #selector(commitRename(_:))
+        field.delegate = self
+        addSubview(field)
+        window?.makeFirstResponder(field)
+        field.selectText(nil)
+        renameField = field
+        renamingTrackId = lane.trackId
+    }
+
+    @objc private func commitRename(_ sender: NSTextField) {
+        finishRenaming()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        finishRenaming()
+    }
+
+    private func finishRenaming() {
+        guard let field = renameField else { return }
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trackId = renamingTrackId
+        renameField = nil
+        renamingTrackId = nil
+        field.removeFromSuperview()
+        if let trackId, !newName.isEmpty { onRenameTrack?(trackId, newName) }
+    }
+
     // Inline lane-header channel strip. All rects are in the header column (x < headerWidth).
     private static let headerButtonWidth: CGFloat = 20
     private static let headerButtonHeight: CGFloat = 15
@@ -1802,6 +1852,7 @@ struct TimelineView: NSViewRepresentable {
     let onToggleSolo: (Int) -> Void
     let onToggleArm: (Int) -> Void
     let onToggleInputMonitor: (Int) -> Void
+    var onRenameTrack: ((Int, String) -> Void)? = nil
     let onSetVolumeDb: (Int, Float) -> Void
 
     func makeNSView(context: Context) -> TimelineNSView {
@@ -1860,6 +1911,7 @@ struct TimelineView: NSViewRepresentable {
         view.onToggleSolo = onToggleSolo
         view.onToggleArm = onToggleArm
         view.onToggleInputMonitor = onToggleInputMonitor
+        view.onRenameTrack = onRenameTrack
         view.onSetVolumeDb = onSetVolumeDb
     }
 }

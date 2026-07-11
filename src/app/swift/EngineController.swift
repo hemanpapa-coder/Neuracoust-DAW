@@ -352,6 +352,15 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Drag-and-drop reorder: move a plugin from one slot to any other.
+    func moveInsert(track trackId: Int, from: Int, to: Int) {
+        guard let handle, from != to else { return }
+        if nc_track_move_insert_to_index(handle, Int32(trackId), Int32(from), Int32(to)) >= 0 {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
     func moveInsert(track trackId: Int, slot: Int, direction: Int) {
         guard let handle else { return }
         if nc_track_move_insert(handle, Int32(trackId), Int32(slot), Int32(direction)) >= 0 {
