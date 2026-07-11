@@ -2813,6 +2813,17 @@ final class EngineController: ObservableObject {
         static let soloSelect = "nc.soloSelectMode"
         static let dockAnalyzer = "nc.dockAnalyzerKind"
         static let musicalKey = "nc.musicalKey"
+        static let editTool = "nc.editTool"
+        static let soloMonitor = "nc.soloMonitorMode"
+        static let click = "nc.clickEnabled"
+        static let coreIsolation = "nc.coreIsolation"
+        static let dspCores = "nc.dspCoreCount"
+        static let extDspCores = "nc.externalDspCoreCount"
+        static let remoteHost = "nc.remoteDspHost"
+        static let monitorExclusive = "nc.monitorOutputExclusive"
+        static let physSpeaker = "nc.physicalSpeakerModel"
+        static let physHeadphone = "nc.physicalHeadphoneModel"
+        static let monitorVol = "nc.monitorVolumeDb"
         static let saved = "nc.settingsSaved"
     }
 
@@ -2829,6 +2840,17 @@ final class EngineController: ObservableObject {
         d.set(soloSelectMode.rawValue, forKey: SettingsKey.soloSelect)
         d.set(dockAnalyzerKind.rawValue, forKey: SettingsKey.dockAnalyzer)
         d.set(musicalKey, forKey: SettingsKey.musicalKey)
+        d.set(editTool.rawValue, forKey: SettingsKey.editTool)
+        d.set(soloMonitorMode.rawValue, forKey: SettingsKey.soloMonitor)
+        d.set(clickEnabled, forKey: SettingsKey.click)
+        d.set(coreIsolationEnabled, forKey: SettingsKey.coreIsolation)
+        d.set(dspCoreCount, forKey: SettingsKey.dspCores)
+        d.set(externalDspCoreCount, forKey: SettingsKey.extDspCores)
+        d.set(remoteDspHost, forKey: SettingsKey.remoteHost)
+        d.set(monitorOutputExclusive, forKey: SettingsKey.monitorExclusive)
+        d.set(physicalSpeakerModel, forKey: SettingsKey.physSpeaker)
+        d.set(physicalHeadphoneModel, forKey: SettingsKey.physHeadphone)
+        d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -2856,6 +2878,17 @@ final class EngineController: ObservableObject {
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
         if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
+        if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
+        if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
+        if d.object(forKey: SettingsKey.click) != nil, d.bool(forKey: SettingsKey.click) != clickEnabled { toggleClick() }
+        if d.object(forKey: SettingsKey.coreIsolation) != nil { setCoreIsolation(d.bool(forKey: SettingsKey.coreIsolation)) }
+        if d.object(forKey: SettingsKey.dspCores) != nil { setDspCoreCount(d.integer(forKey: SettingsKey.dspCores)) }
+        if d.object(forKey: SettingsKey.extDspCores) != nil { setExternalDspCoreCount(d.integer(forKey: SettingsKey.extDspCores)) }
+        if let host = d.string(forKey: SettingsKey.remoteHost), !host.isEmpty { setRemoteDspHost(host) }
+        if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
+        if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
+        if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
+        if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the

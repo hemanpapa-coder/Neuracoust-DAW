@@ -297,6 +297,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/TimelineView.swift
         src/app/swift/GlobalTracksBar.swift
         src/app/swift/SpectrumAnalyzer.swift
+        src/app/swift/MetalSpectrumView.swift
         src/app/swift/AnalyzerWindow.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)

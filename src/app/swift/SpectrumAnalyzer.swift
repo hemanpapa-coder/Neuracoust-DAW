@@ -14,9 +14,49 @@ struct SpectrumAnalyzerView: View {
     private static let maxHz: Double = 20_000
 
     var body: some View {
+        ZStack {
+            if MetalSpectrumView.isAvailable {
+                MetalSpectrumView(bins: bins, sampleRate: sampleRate)
+            } else {
+                canvasSpectrum
+            }
+            axisOverlay
+        }
+    }
+
+    /// Frequency ticks + labels along the bottom (a few in compact, the full decade set
+    /// in the large view). Works over either the Metal or Canvas spectrum.
+    private var axisOverlay: some View {
+        Canvas { context, size in
+            let axisHeight: CGFloat = compact ? 10 : 14
+            let plot = CGRect(x: 0, y: 0, width: size.width, height: size.height - axisHeight)
+            guard plot.width > 2 else { return }
+            let logMin = log10(Self.minHz), logMax = log10(Self.maxHz)
+            let freqs: [Double] = compact ? [100, 1000, 10000]
+                                          : [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+            for hz in freqs {
+                let frac = (log10(hz) - logMin) / (logMax - logMin)
+                let x = plot.minX + CGFloat(frac) * plot.width
+                if !compact {
+                    var line = Path()
+                    line.move(to: CGPoint(x: x, y: plot.minY)); line.addLine(to: CGPoint(x: x, y: plot.maxY))
+                    context.stroke(line, with: .color(.white.opacity(0.06)), lineWidth: 1)
+                }
+                let label = hz >= 1000 ? "\(Int(hz / 1000))k" : "\(Int(hz))"
+                context.draw(Text(label).font(.system(size: compact ? 6.5 : 7, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4)),
+                             at: CGPoint(x: x, y: plot.maxY + axisHeight / 2))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Fallback CPU renderer (used only where Metal is unavailable). Interpolates the
+    /// sparse low-frequency bins so they read smoothly instead of as blocky steps.
+    private var canvasSpectrum: some View {
         Canvas { context, size in
             guard bins.count > 1, sampleRate > 0 else { return }
-            let axisHeight: CGFloat = compact ? 0 : 14
+            let axisHeight: CGFloat = compact ? 10 : 14
             let plot = CGRect(x: 0, y: 0, width: size.width, height: size.height - axisHeight)
             guard plot.height > 2, plot.width > 2 else { return }
 
@@ -24,19 +64,27 @@ struct SpectrumAnalyzerView: View {
             let logMax = log10(Self.maxHz)
             let binHz = sampleRate / Self.fftSize
 
-            // One filled column per pixel, height from the loudest bin it covers.
             let columns = Int(plot.width)
             var path = Path()
             path.move(to: CGPoint(x: 0, y: plot.maxY))
             var lastX: CGFloat = 0
             for column in 0...columns {
                 let frac = Double(column) / Double(max(1, columns))
-                let hz = pow(10, logMin + frac * (logMax - logMin))
-                let binF = hz / binHz
-                let lo = max(0, Int(binF))
-                let hi = min(bins.count - 1, max(lo, Int(hz * 1.03 / binHz)))
+                let fracNext = Double(column + 1) / Double(max(1, columns))
+                let binF = pow(10, logMin + frac * (logMax - logMin)) / binHz
+                let binFNext = pow(10, logMin + fracNext * (logMax - logMin)) / binHz
                 var mag: Float = 0
-                if lo <= hi { for b in lo...hi { mag = max(mag, bins[b]) } }
+                if binFNext - binF < 1.0 {
+                    // Low frequency: fewer bins than pixels — interpolate for smoothness.
+                    let lo = max(0, min(bins.count - 1, Int(binF)))
+                    let hi = min(bins.count - 1, lo + 1)
+                    let t = Float(binF - Double(lo))
+                    mag = bins[lo] * (1 - t) + bins[hi] * t
+                } else {
+                    // High frequency: many bins per pixel — take the peak.
+                    let lo = max(0, Int(binF)); let hi = min(bins.count - 1, max(lo, Int(binFNext)))
+                    for b in lo...hi { mag = max(mag, bins[b]) }
+                }
                 let x = plot.minX + CGFloat(frac) * plot.width
                 let y = plot.maxY - CGFloat(mag) * plot.height
                 path.addLine(to: CGPoint(x: x, y: y))
