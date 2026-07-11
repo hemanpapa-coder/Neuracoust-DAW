@@ -1,4 +1,6 @@
 import SwiftUI
+import Combine
+import QuartzCore
 
 /// Maps dB to fader travel.
 ///
@@ -198,24 +200,43 @@ struct PanSlider: View {
 }
 
 /// Segmented vertical meter, red at the top. Matches the design's scanline look.
+/// The unified dot level meter. Dense dot segments show the moving level (VU-style bar);
+/// a single bright dot holds the peak for ~1 s before falling. Used everywhere so every
+/// meter in the app reads the same way.
 struct VerticalMeter: View {
     let peak: Float
-    var segments = 24
+    /// Dot count. Dense by default (~2× the old meter) for a finer read.
+    var segments = 48
+
+    @State private var held: Float = 0
+    @State private var heldAt: CFTimeInterval = 0
+    private let clock = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GeometryReader { geo in
-            let lit = Int((meterFraction(peak) * Double(segments)).rounded())
+            let level = meterFraction(peak)
+            let lit = Int((level * Double(segments)).rounded())
+            let peakSeg = held > 0.0005 ? max(1, Int((meterFraction(held) * Double(segments)).rounded())) : 0
+            let dotH = max(1, (geo.size.height - CGFloat(segments - 1)) / CGFloat(segments))
             VStack(spacing: 1) {
                 ForEach(0..<segments, id: \.self) { index in
-                    let fromTop = index
-                    let isLit = (segments - fromTop) <= lit
-                    Rectangle()
-                        .fill(isLit ? segmentColor(fromTop) : Theme.Palette.recess)
-                        .frame(height: max(1, (geo.size.height - CGFloat(segments - 1)) / CGFloat(segments)))
+                    let fromBottom = segments - index          // 1…segments
+                    let isLit = fromBottom <= lit
+                    let isPeak = fromBottom == peakSeg
+                    RoundedRectangle(cornerRadius: dotH / 2)
+                        .fill(isPeak ? peakColor(index)
+                              : (isLit ? segmentColor(index) : Theme.Palette.recess))
+                        .frame(height: dotH)
                 }
             }
         }
-        .frame(width: 5)
+        .frame(width: 6)
+        .onReceive(clock) { _ in
+            // Peak hold: jump up instantly, hold ~1 s, then fall.
+            let now = CACurrentMediaTime()
+            if peak >= held { held = peak; heldAt = now }
+            else if now - heldAt > 1.0 { held = max(0, held - 0.035) }
+        }
     }
 
     private func segmentColor(_ fromTop: Int) -> Color {
@@ -223,6 +244,13 @@ struct VerticalMeter: View {
         if fraction < 0.12 { return Theme.Palette.red }
         if fraction < 0.32 { return Theme.Palette.yellow }
         return Theme.Palette.green
+    }
+    /// The held-peak dot is a brighter version of its zone's colour.
+    private func peakColor(_ fromTop: Int) -> Color {
+        let fraction = Double(fromTop) / Double(segments)
+        if fraction < 0.12 { return Color(hex: 0xff6b6b) }
+        if fraction < 0.32 { return Color(hex: 0xffe27a) }
+        return Color(hex: 0x9be89b)
     }
 }
 

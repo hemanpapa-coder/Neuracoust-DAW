@@ -836,8 +836,8 @@ struct MasterMeterPanel: View {
                 .frame(width: 16, height: 210)
 
                 HStack(spacing: 3) {
-                    VerticalMeter(peak: engine.outputPeakLeft, segments: 30)
-                    VerticalMeter(peak: engine.outputPeakRight, segments: 30)
+                    VerticalMeter(peak: engine.outputPeakLeft, segments: 60)
+                    VerticalMeter(peak: engine.outputPeakRight, segments: 60)
                 }
                 .frame(height: 210)
             }
