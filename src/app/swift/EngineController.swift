@@ -333,6 +333,15 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Remove the instrument from an instrument track's slot.
+    func clearInstrument(track trackId: Int) {
+        guard let handle else { return }
+        if nc_track_clear_instrument(handle, Int32(trackId)) {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
     func moveInsert(track trackId: Int, slot: Int, direction: Int) {
         guard let handle else { return }
         if nc_track_move_insert(handle, Int32(trackId), Int32(slot), Int32(direction)) >= 0 {
@@ -761,6 +770,7 @@ final class EngineController: ObservableObject {
         static let d: UInt16 = 2
         static let m: UInt16 = 46
         static let t: UInt16 = 17
+        static let h: UInt16 = 4
         static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
@@ -785,6 +795,9 @@ final class EngineController: ObservableObject {
                 return nil
             case KeyCode.b where !selectedClipIds.isEmpty:
                 splitSelectedClipsAtPlayhead()
+                return nil
+            case KeyCode.h where !selectedClipIds.isEmpty || hasEditRange:
+                healSelectedClips()
                 return nil
             case KeyCode.delete, KeyCode.forwardDelete:
                 if let regionId = selectedRegionId {
@@ -1627,6 +1640,27 @@ final class EngineController: ObservableObject {
               split > 0 else { return }
         reloadClips()
         refreshHistory()
+    }
+
+    /// Heal (re-join) split clips: glue adjacent same-source clips across the selected
+    /// clips' span, or the edit range if nothing is selected.
+    func healSelectedClips() {
+        guard let handle else { return }
+        let selected = clips.filter { selectedClipIds.contains($0.id) }
+        let start: Double
+        let end: Double
+        if selected.isEmpty {
+            guard hasEditRange else { return }
+            start = loopStartSeconds
+            end = loopEndSeconds
+        } else {
+            start = selected.map { $0.startSeconds }.min() ?? 0
+            end = selected.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
+        }
+        if nc_clip_glue_range(handle, start, end) > 0 {
+            reloadClips()
+            refreshHistory()
+        }
     }
 
     func deleteSelectedClips() {

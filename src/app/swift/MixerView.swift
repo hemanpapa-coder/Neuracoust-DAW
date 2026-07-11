@@ -282,6 +282,14 @@ struct ChannelStrip: View {
                 SlotChip(label: track.instrumentName, accent: accent, lit: editors.isOpen(slot)) {
                     editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
                 }
+                .contextMenu {
+                    Button("에디터 열기") {
+                        editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
+                    }
+                    Button("악기 교체…") { engine.openPluginBrowser(forTrack: track.id) }
+                    Divider()
+                    Button("악기 제거", role: .destructive) { engine.clearInstrument(track: track.id) }
+                }
             }
             Text("인서트 A–E")
                 .font(Theme.Font.mono(6.5))
@@ -303,6 +311,33 @@ struct ChannelStrip: View {
                         engine.openPluginBrowser(forTrack: ownerId)
                     } else {
                         editors.toggle(trackId: ownerId, insertIndex: slot)
+                    }
+                }
+                .contextMenu {
+                    if insert?.isEmpty ?? true {
+                        Button("플러그인 추가…") { engine.openPluginBrowser(forTrack: ownerId) }
+                    } else {
+                        Button("에디터 열기") { editors.toggle(trackId: ownerId, insertIndex: slot) }
+                        Button(insert!.bypassed ? "바이패스 해제" : "바이패스") {
+                            if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
+                            else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
+                        }
+                        Divider()
+                        Button("앞으로 이동") {
+                            if isMaster { engine.moveMasterInsert(slot: slot, direction: -1) }
+                            else { engine.moveInsert(track: ownerId, slot: slot, direction: -1) }
+                        }
+                        .disabled(slot == 0)
+                        Button("뒤로 이동") {
+                            if isMaster { engine.moveMasterInsert(slot: slot, direction: 1) }
+                            else { engine.moveInsert(track: ownerId, slot: slot, direction: 1) }
+                        }
+                        .disabled(slot >= chain.count - 1)
+                        Divider()
+                        Button("제거", role: .destructive) {
+                            if isMaster { engine.removeMasterInsert(slot: slot) }
+                            else { engine.removeInsert(track: ownerId, slot: slot) }
+                        }
                     }
                 }
             }

@@ -225,6 +225,9 @@ private struct EditView: View {
             zoomButton("분할 (B)", enabled: hasSelection) {
                 engine.splitSelectedClipsAtPlayhead()
             }
+            zoomButton("붙이기 (H)", enabled: hasSelection || engine.hasEditRange) {
+                engine.healSelectedClips()
+            }
             zoomButton("삭제", enabled: hasSelection) {
                 engine.deleteSelectedClips()
             }

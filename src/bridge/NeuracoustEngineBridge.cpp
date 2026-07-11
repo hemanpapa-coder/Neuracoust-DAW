@@ -1456,6 +1456,27 @@ bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds) {
     return true;
 }
 
+int nc_clip_glue_range(NCEngine* engine, double startSeconds, double endSeconds) {
+    if (engine == nullptr) return 0;
+    std::vector<std::string> glued;
+    if (!neuracoust::daw::glueClipRange(engine->project, startSeconds, endSeconds, glued) || glued.empty()) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Heal clips");
+    return static_cast<int>(glued.size());
+}
+
+bool nc_track_clear_instrument(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    if (!neuracoust::daw::clearTrackInstrumentSlot(engine->project, track->name)) return false;
+    engine->reconcileProject();
+    engine->recordStep("Remove instrument");
+    return true;
+}
+
 bool nc_clip_delete(NCEngine* engine, const char* clipId) {
     if (engine == nullptr || clipId == nullptr) return false;
     if (!neuracoust::daw::deleteClip(engine->project, clipId)) {

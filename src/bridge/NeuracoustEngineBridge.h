@@ -157,6 +157,8 @@ int nc_track_add_instrument(NCEngine* engine);
 /// Loads a scanned plug-in into the track's instrument slot — the thing that turns
 /// its MIDI notes into sound. `pluginIndex` addresses the filtered browser list.
 bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex);
+// Remove the instrument from a track's instrument slot.
+bool nc_track_clear_instrument(NCEngine* engine, int trackIndex);
 void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen);
 int nc_track_add_midi(NCEngine* engine);
 
@@ -360,6 +362,9 @@ bool nc_clip_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds
 
 /// Splits at `seconds`; the right-hand piece gets a new id. Records a step.
 bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds);
+// Heal (re-join) adjacent same-source clips within a time range; returns how many
+// resulting clips were glued. Pass the span of the selected clips or the edit range.
+int  nc_clip_glue_range(NCEngine* engine, double startSeconds, double endSeconds);
 bool nc_clip_delete(NCEngine* engine, const char* clipId);
 
 /// -60…+12 dB. Continuous, like move and trim.
