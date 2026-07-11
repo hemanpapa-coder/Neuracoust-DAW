@@ -36,6 +36,13 @@ typedef struct {
     float spectrumMid;
     float spectrumHigh;
 
+    // ITU-R BS.1770 loudness. True-peak is currently sample-peak (not oversampled).
+    float momentaryLufs;
+    float shortTermLufs;
+    float integratedLufs;
+    float loudnessRange;
+    float truePeakDb;
+
     double playbackSeconds;
 
     bool delayCompensationEnabled;

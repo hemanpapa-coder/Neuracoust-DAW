@@ -123,3 +123,65 @@ struct GoniometerView: View {
         }
     }
 }
+
+/// ITU-R BS.1770 loudness readout: momentary / short-term / integrated LUFS, loudness
+/// range and true-peak, with a bar for the live momentary/short values. True-peak is a
+/// sample-peak approximation until oversampled true-peak DSP lands.
+struct LoudnessView: View {
+    var momentary: Float
+    var shortTerm: Float
+    var integrated: Float
+    var range: Float
+    var truePeak: Float
+
+    // Maps a LUFS value in [-40, 0] to a 0..1 bar fraction.
+    private func frac(_ lufs: Float) -> CGFloat {
+        CGFloat(min(1, max(0, (lufs + 40) / 40)))
+    }
+    private func lufsText(_ v: Float) -> String { v <= -70 ? "−∞" : String(format: "%.1f", v) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 18) {
+            bar("M", momentary, tint: Color(hue: 0.09, saturation: 0.8, brightness: 1))
+            bar("S", shortTerm, tint: Color(hue: 0.55, saturation: 0.7, brightness: 1))
+            VStack(alignment: .leading, spacing: 8) {
+                row("Integrated", lufsText(integrated) + " LUFS")
+                row("Momentary", lufsText(momentary) + " LUFS")
+                row("Short-term", lufsText(shortTerm) + " LUFS")
+                row("Range (LRA)", String(format: "%.1f LU", range))
+                row("True Peak", (truePeak <= -120 ? "−∞" : String(format: "%.1f", truePeak)) + " dBTP")
+                Text("ITU-R BS.1770 · TP는 샘플 피크 근사")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(4)
+    }
+
+    private func bar(_ label: String, _ lufs: Float, tint: Color) -> some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                ZStack(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.06))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(tint)
+                        .frame(height: geo.size.height * frac(lufs))
+                }
+            }
+            .frame(width: 22)
+            Text(label).font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+            Spacer()
+            Text(value).font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+    }
+}

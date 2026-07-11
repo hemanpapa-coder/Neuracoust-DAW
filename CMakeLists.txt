@@ -71,6 +71,7 @@ add_library(neuracoust_daw_core
     src/audio/RemoteDspPluginCatalog.cpp
     src/audio/MonitorOutputRouting.cpp
     src/audio/NeuracoustDspEngine.cpp
+    src/audio/LoudnessMeter.cpp
     src/audio/MetronomeClick.cpp
     src/audio/MixMath.cpp
     src/audio/MixerGraph.cpp
@@ -519,6 +520,11 @@ add_executable(neuracoust_spectrum_fft_tests tests/SpectrumFftSmokeTest.cpp)
 neuracoust_link_core(neuracoust_spectrum_fft_tests)
 neuracoust_enable_release_asserts(neuracoust_spectrum_fft_tests)
 add_test(NAME spectrum_fft_smoke COMMAND neuracoust_spectrum_fft_tests)
+
+add_executable(neuracoust_loudness_meter_tests tests/LoudnessMeterSmokeTest.cpp)
+neuracoust_link_core(neuracoust_loudness_meter_tests)
+neuracoust_enable_release_asserts(neuracoust_loudness_meter_tests)
+add_test(NAME loudness_meter_smoke COMMAND neuracoust_loudness_meter_tests)
 
 add_executable(neuracoust_insert_dsp_policy_tests tests/InsertDspPolicyTest.cpp)
 neuracoust_link_core(neuracoust_insert_dsp_policy_tests)

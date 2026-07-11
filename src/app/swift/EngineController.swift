@@ -25,6 +25,12 @@ final class EngineController: ObservableObject {
     @Published private(set) var spectrumBins: [Float] = []
     /// Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
     @Published private(set) var goniometerSamples: [Float] = []
+    // ITU-R BS.1770 loudness. True-peak is currently a sample-peak approximation.
+    @Published private(set) var momentaryLufs: Float = -70
+    @Published private(set) var shortTermLufs: Float = -70
+    @Published private(set) var integratedLufs: Float = -70
+    @Published private(set) var loudnessRange: Float = 0
+    @Published private(set) var truePeakDb: Float = -120
     /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
     /// smoothed with a decay so the meters fall back gently.
     @Published private(set) var inputPeak: Float = 0
@@ -2900,6 +2906,11 @@ final class EngineController: ObservableObject {
         outputPeakRight = max(status.outputPeakRight, outputPeakRight * Self.meterDecay)
         updateSpectrumBins(handle)
         updateGoniometer(handle)
+        momentaryLufs = status.momentaryLufs
+        shortTermLufs = status.shortTermLufs
+        integratedLufs = status.integratedLufs
+        loudnessRange = status.loudnessRange
+        truePeakDb = status.truePeakDb
         // Input meter follows the peak immediately on the way up and decays on the way
         // down, so a transient stays readable for a moment.
         inputPeak = max(status.inputPeak, inputPeak * 0.82)

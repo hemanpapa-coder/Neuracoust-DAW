@@ -3,6 +3,7 @@
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MonitorDspProcessor.h"
 #include "audio/ListenRoom.h"
+#include "audio/LoudnessMeter.h"
 #include "audio/ProjectAudioRenderer.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspAsyncStream.h"
@@ -218,6 +219,9 @@ private:
     // point count so the vectorscope stays cheap to draw.
     static constexpr int kGoniometerPoints = 512;
     std::vector<float> goniometerSamples_;
+    // ITU-R BS.1770 loudness (momentary/short/integrated/LRA/true-peak).
+    LoudnessMeter loudnessMeter_;
+    double loudnessSampleRate_ = 0.0;
     float monitorStationGainSmoothed_ = 1.0f;
     bool monitorStationGainInitialized_ = false;
     bool remoteDspMonitorActive_ = false;

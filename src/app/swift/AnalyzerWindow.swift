@@ -15,9 +15,9 @@ enum AnalyzerKind: String, CaseIterable, Identifiable {
         case .spectrogram: return "스펙트로그램"
         }
     }
-    /// Spectrum and goniometer have engine data today; the rest are announced but not
-    /// yet live (they need LUFS / true-peak / spectrogram DSP).
-    var isAvailable: Bool { self == .spectrum || self == .goniometer }
+    /// Spectrum, goniometer and loudness are live; the spectrogram still needs its DSP.
+    /// (True-peak is shown inside the loudness panel.)
+    var isAvailable: Bool { self != .spectrogram && self != .truePeak }
 }
 
 /// Owns the floating analyzer windows. Each `open` mints a new window the user can drag
@@ -89,6 +89,12 @@ private struct AnalyzerWindowView: View {
             SpectrumAnalyzerView(bins: engine.spectrumBins, sampleRate: engine.sampleRate)
         case .goniometer:
             GoniometerView(samples: engine.goniometerSamples)
+        case .loudness:
+            LoudnessView(momentary: engine.momentaryLufs,
+                         shortTerm: engine.shortTermLufs,
+                         integrated: engine.integratedLufs,
+                         range: engine.loudnessRange,
+                         truePeak: engine.truePeakDb)
         default:
             VStack(spacing: 8) {
                 Text(kind.label)

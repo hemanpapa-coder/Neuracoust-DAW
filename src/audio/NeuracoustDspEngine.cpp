@@ -1748,6 +1748,11 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
             status.goniometerSamples = goniometerSamples_;
         }
     }
+    status.momentaryLufs = loudnessMeter_.momentaryLufs();
+    status.shortTermLufs = loudnessMeter_.shortTermLufs();
+    status.integratedLufs = loudnessMeter_.integratedLufs();
+    status.loudnessRange = loudnessMeter_.loudnessRange();
+    status.truePeakDb = loudnessMeter_.truePeakDb();
     status.trackMeterNames = projectMeters_.trackNames;
     status.trackPeakLeft = projectMeters_.trackPeakLeft;
     status.trackPeakRight = projectMeters_.trackPeakRight;
@@ -3017,6 +3022,17 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
 
     updateSpectrum(interleavedStereo);
 
+    // Loudness (BS.1770). Re-prepare the filter when the sample rate changes.
+    const double sr = sampleRateForStatus_.load(std::memory_order_relaxed);
+    if (sr > 0.0 && sr != loudnessSampleRate_) {
+        loudnessMeter_.prepare(sr);
+        loudnessSampleRate_ = sr;
+    }
+    if (loudnessSampleRate_ > 0.0 && !interleavedStereo.empty()) {
+        loudnessMeter_.process(interleavedStereo.data(),
+                               static_cast<int64_t>(interleavedStereo.size() / 2), 2);
+    }
+
     // Goniometer: subsample the block's L/R pairs to a fixed point count.
     const int64_t pairCount = static_cast<int64_t>(interleavedStereo.size() / 2);
     if (pairCount > 0) {
@@ -3053,6 +3069,7 @@ void NeuracoustDspEngine::resetMeteringLocked() {
         std::fill(spectrumBins_.begin(), spectrumBins_.end(), 0.0f);
         std::fill(goniometerSamples_.begin(), goniometerSamples_.end(), 0.0f);
     }
+    loudnessMeter_.reset();
 }
 
 } // namespace neuracoust::daw

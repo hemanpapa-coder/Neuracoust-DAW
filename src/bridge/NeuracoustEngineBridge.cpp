@@ -308,6 +308,11 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->spectrumLow = s.spectrumLow;
     out->spectrumMid = s.spectrumMid;
     out->spectrumHigh = s.spectrumHigh;
+    out->momentaryLufs = s.momentaryLufs;
+    out->shortTermLufs = s.shortTermLufs;
+    out->integratedLufs = s.integratedLufs;
+    out->loudnessRange = s.loudnessRange;
+    out->truePeakDb = s.truePeakDb;
     out->playbackSeconds = s.playbackSeconds;
     out->delayCompensationEnabled = s.delayCompensationEnabled;
     out->delayCompensationMs = s.delayCompensationMs;

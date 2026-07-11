@@ -78,6 +78,12 @@ struct AudioEngineStatus {
     std::vector<float> spectrumBins;
     // Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
     std::vector<float> goniometerSamples;
+    // ITU-R BS.1770 loudness metering.
+    float momentaryLufs = -70.0f;
+    float shortTermLufs = -70.0f;
+    float integratedLufs = -70.0f;
+    float loudnessRange = 0.0f;
+    float truePeakDb = -120.0f;
     std::vector<std::string> trackMeterNames;
     std::vector<float> trackPeakLeft;
     std::vector<float> trackPeakRight;
