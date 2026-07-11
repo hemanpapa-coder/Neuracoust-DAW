@@ -515,6 +515,22 @@ int main(void) {
         printf("dsp core allocation OK\n");
     }
 
+    // --- External DSP Manager core reserve -------------------------------------
+    {
+        // Default 4, independent of the internal reserve and its isolation floor.
+        if (nc_dsp_external_core_count(engine) != 4) { fprintf(stderr, "FAIL: default external core %d, expected 4\n", nc_dsp_external_core_count(engine)); failures++; }
+        nc_dsp_set_external_core_count(engine, 8);
+        if (nc_dsp_external_core_count(engine) != 8) { fprintf(stderr, "FAIL: external set 8 -> %d\n", nc_dsp_external_core_count(engine)); failures++; }
+        // No isolation floor here: the external reserve can go to 1 even with internal isolation on.
+        nc_dsp_set_external_core_count(engine, 1);
+        if (nc_dsp_external_core_count(engine) != 1) { fprintf(stderr, "FAIL: external floor to 1 (%d)\n", nc_dsp_external_core_count(engine)); failures++; }
+        nc_dsp_set_external_core_count(engine, 99);
+        if (nc_dsp_external_core_count(engine) != 16) { fprintf(stderr, "FAIL: external 99 not clamped to 16 (%d)\n", nc_dsp_external_core_count(engine)); failures++; }
+        // Internal reserve is unchanged by external edits.
+        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: external edit disturbed internal core (%d)\n", nc_dsp_core_count(engine)); failures++; }
+        printf("external dsp core reserve OK\n");
+    }
+
     nc_engine_stop(engine);
     nc_engine_destroy(engine);
 

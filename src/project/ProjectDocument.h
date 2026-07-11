@@ -199,6 +199,10 @@ struct ProjectDocument {
     double editSelectionEndSeconds = 0.0;
     bool appleSiliconCoreIsolationEnabled = true;
     int requestedDspCoreCount = 4;
+    // Cores DW asks the external DSP Manager (NuclustDspManager) to reserve. It is a
+    // hint: when a connected node reports its own core_count that report wins, so this
+    // is the value used before/without a report and the count the DAW requests.
+    int externalDspCoreCount = 4;
     bool windowsProcessorAffinityEnabled = false;
     std::string windowsProcessorAffinityMode = "p_core_preferred";
     bool monitorStationMono = false;

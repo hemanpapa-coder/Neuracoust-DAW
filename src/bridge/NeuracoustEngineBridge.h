@@ -666,6 +666,12 @@ void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
 int nc_dsp_core_count(NCEngine* engine);
 void nc_dsp_set_core_count(NCEngine* engine, int count);
 
+// Cores DW asks the external DSP Manager to reserve (1..16). This applies live through
+// the monitor DSP path — no audio restart. A connected node's own reported core count
+// still takes precedence; this is the request/fallback hint.
+int nc_dsp_external_core_count(NCEngine* engine);
+void nc_dsp_set_external_core_count(NCEngine* engine, int count);
+
 // ---------------------------------------------------------------------------
 // Output device
 //

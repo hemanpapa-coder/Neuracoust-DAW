@@ -299,8 +299,15 @@ floored at 4 while isolation is on). The bridge wires these in `buildEngineSetti
 dropout, the way a buffer-size change is. The dock's Remote Core / DSP section carries
 the isolation toggle and a − / count / + stepper.
 
-The external DSP core count (the networked DSP Manager) is a separate reserve in the
-remote-DSP plan and is not yet exposed here.
+The external DSP core count (the networked DSP Manager / NuclustDspManager) is a
+separate reserve — `RemoteDspServerSettings.totalCoreHint`, persisted as the project's
+`externalDspCoreCount` (default 4, clamped 1–16, **no** isolation floor). The bridge
+feeds it through `buildRemoteDspSettings`, and `nc_dsp_set_external_core_count` re-applies
+the monitor DSP path to push the new hint **live** (no audio restart, unlike the internal
+reserve). It is only a hint: a connected node's own reported `core_count` wins inside
+`makeRemoteDspCorePlan`, so the manager can set the count too and its report takes
+precedence. The dock's Remote Core / DSP section carries both steppers — 내부 코어 격리
+(internal) and 외부 DSP 코어 (external).
 
 ## Monitor DSP path
 

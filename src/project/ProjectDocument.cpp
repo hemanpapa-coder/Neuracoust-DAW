@@ -1960,6 +1960,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"editSelectionEndSeconds\": " << project.editSelectionEndSeconds << ",\n";
     out << "  \"appleSiliconCoreIsolationEnabled\": " << (project.appleSiliconCoreIsolationEnabled ? "true" : "false") << ",\n";
     out << "  \"requestedDspCoreCount\": " << std::max(1, std::min(16, project.requestedDspCoreCount)) << ",\n";
+    out << "  \"externalDspCoreCount\": " << std::max(1, std::min(16, project.externalDspCoreCount)) << ",\n";
     out << "  \"windowsProcessorAffinityEnabled\": " << (project.windowsProcessorAffinityEnabled ? "true" : "false") << ",\n";
     out << "  \"windowsProcessorAffinityMode\": \"" << escapeJsonString(project.windowsProcessorAffinityMode) << "\",\n";
     const std::string monitorListenMode = project.monitorStationListenMode.empty() ? "LR" : project.monitorStationListenMode;
@@ -2456,6 +2457,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.editSelectionEndSeconds = finiteRange(numberAfterKey(text, "editSelectionEndSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
     parsed.appleSiliconCoreIsolationEnabled = boolAfterKey(text, "appleSiliconCoreIsolationEnabled", true);
     parsed.requestedDspCoreCount = finiteIntRange(numberAfterKey(text, "requestedDspCoreCount", 4.0), 4, 1, 16);
+    parsed.externalDspCoreCount = finiteIntRange(numberAfterKey(text, "externalDspCoreCount", 4.0), 4, 1, 16);
     parsed.windowsProcessorAffinityEnabled = boolAfterKey(text, "windowsProcessorAffinityEnabled", false);
     parsed.windowsProcessorAffinityMode = stringAfterKey(text, "windowsProcessorAffinityMode");
     if (!isValidWindowsProcessorAffinityMode(parsed.windowsProcessorAffinityMode)) {

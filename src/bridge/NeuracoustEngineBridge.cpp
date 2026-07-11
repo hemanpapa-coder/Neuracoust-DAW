@@ -180,6 +180,17 @@ void nc_engine_destroy(NCEngine* engine) {
 
 namespace {
 
+// The external DSP Manager (NuclustDspManager) config DW hands the engine. Only the
+// requested core reserve is user-facing here; the rest stays at the shipped defaults.
+// A connected node's reported core_count still wins inside makeRemoteDspCorePlan — this
+// is the hint used before/without a report and the count DW asks the manager to hold.
+neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine) {
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.totalCoreHint =
+        static_cast<uint16_t>(std::max(1, std::min(16, engine->project.externalDspCoreCount)));
+    return settings;
+}
+
 AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     AudioEngineSettings settings;
     settings.sampleRate = engine->project.sampleRate;
@@ -203,6 +214,7 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     settings.performanceCoreIsolationEnabled = engine->project.appleSiliconCoreIsolationEnabled;
     settings.requestedPerformanceCoreCount =
         std::max(1, std::min(16, engine->project.requestedDspCoreCount));
+    settings.remoteDspServer = buildRemoteDspSettings(engine);
     settings.outputDeviceId = engine->outputDeviceId;
     return settings;
 }
@@ -2985,7 +2997,25 @@ void nc_monitor_set_path_mode(NCEngine* engine, const char* mode) {
     }
     engine->monitorDspPathMode = mode;
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
-                                         neuracoust::daw::defaultRemoteDspServerSettings());
+                                         buildRemoteDspSettings(engine));
+}
+
+int nc_dsp_external_core_count(NCEngine* engine) {
+    return engine != nullptr ? std::max(1, std::min(16, engine->project.externalDspCoreCount)) : 0;
+}
+
+void nc_dsp_set_external_core_count(NCEngine* engine, int count) {
+    if (engine == nullptr) return;
+    const int clamped = std::max(1, std::min(16, count));
+    if (clamped == engine->project.externalDspCoreCount) {
+        return;
+    }
+    engine->project.externalDspCoreCount = clamped;
+    engine->recordStep("Set external DSP core count");
+    // The remote reserve feeds through setMonitorDspPathMode, so re-apply the current
+    // path to push the new hint live — no full audio restart needed.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
+                                         buildRemoteDspSettings(engine));
 }
 
 float nc_monitor_volume_db(NCEngine* engine) {

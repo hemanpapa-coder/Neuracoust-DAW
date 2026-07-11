@@ -595,6 +595,8 @@ final class EngineController: ObservableObject {
     // DSP core allocation (a QoS hint the engine applies to its realtime thread).
     @Published private(set) var coreIsolationEnabled = true
     @Published private(set) var dspCoreCount = 4
+    // Cores DW asks the external DSP Manager to reserve; a connected node's own report wins.
+    @Published private(set) var externalDspCoreCount = 4
     @Published private(set) var remoteDspRoundTripMs: Double = 0
 
     /// Inserts the engine is actually running, summed across paths. This is the
@@ -2088,6 +2090,7 @@ final class EngineController: ObservableObject {
         }
         coreIsolationEnabled = nc_dsp_core_isolation(handle)
         dspCoreCount = Int(nc_dsp_core_count(handle))
+        externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
         reloadMonitorListen()
     }
 
@@ -2125,6 +2128,14 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_dsp_set_core_count(handle, Int32(count))
         dspCoreCount = Int(nc_dsp_core_count(handle))
+        refreshHistory()
+    }
+
+    /// The external DSP Manager reserve applies live through the monitor path — no restart.
+    func setExternalDspCoreCount(_ count: Int) {
+        guard let handle else { return }
+        nc_dsp_set_external_core_count(handle, Int32(count))
+        externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
         refreshHistory()
     }
 

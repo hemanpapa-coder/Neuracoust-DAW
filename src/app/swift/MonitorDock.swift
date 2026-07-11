@@ -580,29 +580,44 @@ struct MonitorDock: View {
     }
 
     /// − / count / + for the DSP core count, floored by isolation.
-    private var coreStepper: some View {
+    /// A − / count 코어 / + stepper. Both the internal reserve and the external DSP
+    /// Manager reserve share it; only the bounds and actions differ.
+    private func coreStepper(value: Int, minValue: Int,
+                             dec: @escaping () -> Void,
+                             inc: @escaping () -> Void) -> some View {
         HStack(spacing: Theme.Space.sm) {
-            Button { engine.setDspCoreCount(engine.dspCoreCount - 1) } label: {
+            Button(action: dec) {
                 Text("−").font(Theme.Font.ui(12, .bold)).frame(width: 20, height: 18)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(engine.dspCoreCount > engine.minDspCoreCount
-                             ? Theme.Palette.text : Theme.Palette.textFainter)
-            .disabled(engine.dspCoreCount <= engine.minDspCoreCount)
+            .foregroundStyle(value > minValue ? Theme.Palette.text : Theme.Palette.textFainter)
+            .disabled(value <= minValue)
 
-            Text("\(engine.dspCoreCount)")
+            Text("\(value)")
                 .font(Theme.Font.mono(11, .semibold))
                 .foregroundStyle(Theme.Palette.text)
                 .frame(minWidth: 20)
             Text("코어").font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textFaint)
 
-            Button { engine.setDspCoreCount(engine.dspCoreCount + 1) } label: {
+            Button(action: inc) {
                 Text("+").font(Theme.Font.ui(12, .bold)).frame(width: 20, height: 18)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(engine.dspCoreCount < 16 ? Theme.Palette.text : Theme.Palette.textFainter)
-            .disabled(engine.dspCoreCount >= 16)
+            .foregroundStyle(value < 16 ? Theme.Palette.text : Theme.Palette.textFainter)
+            .disabled(value >= 16)
         }
+    }
+
+    private var internalCoreStepper: some View {
+        coreStepper(value: engine.dspCoreCount, minValue: engine.minDspCoreCount,
+                    dec: { engine.setDspCoreCount(engine.dspCoreCount - 1) },
+                    inc: { engine.setDspCoreCount(engine.dspCoreCount + 1) })
+    }
+
+    private var externalCoreStepper: some View {
+        coreStepper(value: engine.externalDspCoreCount, minValue: 1,
+                    dec: { engine.setExternalDspCoreCount(engine.externalDspCoreCount - 1) },
+                    inc: { engine.setExternalDspCoreCount(engine.externalDspCoreCount + 1) })
     }
 
     private var remoteCore: some View {
@@ -644,7 +659,7 @@ struct MonitorDock: View {
                     .scaleEffect(0.7)
                     .frame(width: 34)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("코어 격리")
+                    Text("내부 코어 격리")
                         .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(Theme.Palette.textSecondary)
                     Text(engine.coreIsolationEnabled ? "DSP 우선 배정" : "Native 실행")
@@ -652,7 +667,22 @@ struct MonitorDock: View {
                         .foregroundStyle(Theme.Palette.textFaint)
                 }
                 Spacer()
-                coreStepper
+                internalCoreStepper
+            }
+
+            // The external DSP Manager's core reserve. Settable here or in the manager
+            // itself; a connected node's own report wins over this hint.
+            HStack {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("외부 DSP 코어")
+                        .font(Theme.Font.ui(9, .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Text("DSP 매니저 예약")
+                        .font(Theme.Font.mono(7))
+                        .foregroundStyle(Theme.Palette.textFaint)
+                }
+                Spacer()
+                externalCoreStepper
             }
         }
         .padding(Theme.Space.xl)
