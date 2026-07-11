@@ -32,7 +32,8 @@ struct TimelineModel: Equatable {
         var inputMonitor: Bool = false
         var volumeDb: Float = 0
         var pan: Float = 0
-        var peak: Float = 0
+        var peakLeft: Float = 0
+        var peakRight: Float = 0
         /// nil while the lane's automation is folded away.
         var automation: Automation?
     }
@@ -1274,18 +1275,22 @@ final class TimelineNSView: NSView {
                 .foregroundColor: NSColor(hex: 0x867b6a),
             ])
 
-        // Peak meter.
+        // Stereo peak meter: L bar on top, R below, so a stereo track reads as stereo.
         let meter = headerMeterRect(index)
         NSColor(hex: 0x140f0a).setFill()
         NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
-        if lane.peak > 0.0001 {
-            let level = min(1, max(0, CGFloat(lane.peak)))
-            let color = level > 0.9 ? NSColor(hex: 0xe5484d)
-                      : level > 0.7 ? NSColor(hex: 0xe6a23c)
+        let barHeight = (meter.height - 1) / 2
+        func meterBar(_ level: Float, atY y: CGFloat) {
+            guard level > 0.0001 else { return }
+            let l = min(1, max(0, CGFloat(level)))
+            let color = l > 0.9 ? NSColor(hex: 0xe5484d)
+                      : l > 0.7 ? NSColor(hex: 0xe6a23c)
                       : NSColor(hex: 0x5fb85f)
             color.setFill()
-            NSRect(x: meter.minX, y: meter.minY, width: meter.width * level, height: meter.height).fill()
+            NSRect(x: meter.minX, y: y, width: meter.width * l, height: barHeight).fill()
         }
+        meterBar(lane.peakLeft, atY: meter.minY)
+        meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
     }
 
     /// Markers live in the ruler below the range strip; they must not eat the scrub.
@@ -1356,7 +1361,7 @@ final class TimelineNSView: NSView {
         NSRect(x: 12, y: laneTop(index) + 52, width: Self.headerWidth - 24, height: 8)
     }
     private func headerMeterRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 63, width: Self.headerWidth - 24, height: 4)
+        NSRect(x: 12, y: laneTop(index) + 62, width: Self.headerWidth - 24, height: 7)
     }
 
     private static let headerVolMinDb: Float = -60

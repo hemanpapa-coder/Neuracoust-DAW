@@ -1651,6 +1651,11 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             trackInsertMeterSuppressSamples_ = std::max<int64_t>(0, trackInsertMeterSuppressSamples_ - frameCount);
         }
         storeTrackMetersLocked(meters);
+    } else {
+        // Nothing rendered this block (transport stopped, no live source): fall the track
+        // meters to silence instead of freezing them at the last playing value.
+        for (auto& peak : projectMeters_.trackPeakLeft) peak = 0.0f;
+        for (auto& peak : projectMeters_.trackPeakRight) peak = 0.0f;
     }
 
     const double increment = kTwoPi * settings_.testToneFrequency / std::max(1.0, settings_.sampleRate);

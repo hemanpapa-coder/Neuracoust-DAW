@@ -1399,7 +1399,8 @@ final class EngineController: ObservableObject {
                                           inputMonitor: track.inputMonitoring,
                                           volumeDb: track.volumeDb,
                                           pan: track.pan,
-                                          peak: max(track.peakLeft, track.peakRight),
+                                          peakLeft: track.peakLeft,
+                                          peakRight: track.peakRight,
                                           automation: automation)
             },
             clips: clips.compactMap { clip in
