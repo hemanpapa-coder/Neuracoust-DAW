@@ -84,7 +84,8 @@ struct TransportBar: View {
             transportKey("forward.fill") { engine.seek(engine.playheadSeconds + 2) }
             transportKey("forward.end.fill") {}
             transportKey(engine.transportRunning ? "pause.fill" : "play.fill",
-                         tint: engine.transportRunning ? Theme.Palette.green : Theme.Palette.text) {
+                         tint: engine.transportRunning ? Theme.Palette.green : Theme.Palette.text,
+                         badge: engine.loopEnabled ? ("repeat", Theme.Palette.green) : nil) {
                 engine.togglePlay()
             }
             // Right-click for the playback mode, the way Pro Tools does. Loop playback
@@ -99,7 +100,8 @@ struct TransportBar: View {
             // it does not read as a transport that captures audio. Right-click picks the
             // record mode the capture engine will use once it exists.
             transportKey("circle",
-                         tint: engine.recording ? Theme.Palette.red : Theme.Palette.textDim) {
+                         tint: engine.recording ? Theme.Palette.red : Theme.Palette.textDim,
+                         badge: recordBadge) {
                 engine.toggleRecording()
             }
             .help("입력 모니터 경로 (녹음 아님) · 우클릭으로 레코드 모드")
@@ -133,6 +135,7 @@ struct TransportBar: View {
 
     private func transportKey(_ symbol: String,
                               tint: Color = Theme.Palette.textSecondary,
+                              badge: (symbol: String, tint: Color)? = nil,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -147,8 +150,37 @@ struct TransportBar: View {
                                 .stroke(Theme.Palette.border, lineWidth: 1)
                         )
                 )
+                // The mode badge rides the bottom-trailing corner, exactly as the
+                // "Transport Mode Icons" design spec draws it.
+                .overlay(alignment: .bottomTrailing) {
+                    if let badge {
+                        Image(systemName: badge.symbol)
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundStyle(badge.tint)
+                            .frame(width: 9, height: 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: 2.5)
+                                    .fill(Theme.Palette.recess)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 2.5)
+                                            .stroke(Color.black.opacity(0.55), lineWidth: 0.5)
+                                    )
+                            )
+                            .offset(x: 2, y: 1)
+                    }
+                }
         }
         .buttonStyle(.plain)
+    }
+
+    /// The record button's corner badge, keyed to the staged record mode — the
+    /// design's 새 테이크 / 루프 / 펀치 glyphs.
+    private var recordBadge: (symbol: String, tint: Color)? {
+        switch engine.recordMode {
+        case .newTake: return nil
+        case .loop:    return ("repeat", Theme.Palette.red)
+        case .punch:   return ("arrowtriangle.down.fill", Theme.Palette.red)
+        }
     }
 
     private var toggles: some View {

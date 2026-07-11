@@ -314,6 +314,17 @@ accepts `internal` / `external` / `nds` / `remote_external` / `auto` and falls b
 `internal` for anything else — the earlier two-way toggle sent `remote_internal`,
 which silently resolved to internal, so External and NDS were never reachable.
 
+## Transport mode icons
+
+The Play and Record buttons carry a small corner **badge** that reflects their mode,
+so the glyph changes as the mode does — designed in the Claude Design project
+("Pro Tools 스타일 DAW 디자인", file `Transport Mode Icons.dc.html`) and implemented
+in `TransportBar.transportKey(badge:)`. Play shows a green `repeat` badge while
+`loopEnabled`; Record shows a red badge keyed to `recordMode` — none for 새 테이크,
+`repeat` for 루프, `arrowtriangle.down.fill` for 펀치. All future UI glyphs go through
+that design project first, then get reproduced here (the app uses SF Symbols, so the
+spec names the symbol + overlay rather than shipping an SVG).
+
 ## Output device selection
 
 Right-clicking either monitor output tab (스피커 / 헤드폰) opens a device menu:
