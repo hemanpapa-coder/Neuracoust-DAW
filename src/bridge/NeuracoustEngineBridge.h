@@ -160,6 +160,11 @@ bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex);
 // Remove the instrument from a track's instrument slot.
 bool nc_track_clear_instrument(NCEngine* engine, int trackIndex);
 
+/// Duplicates a track with all its settings (inserts, sends, routing, clips), optionally
+/// excluding clips/inserts/sends. Returns the new track's index, or -1 on failure.
+int nc_track_duplicate(NCEngine* engine, int trackIndex,
+                       bool includeClips, bool includeInserts, bool includeSends);
+
 /// Shuffle (ripple) edit mode. A shuffle move drops the clip and slides its
 /// neighbours to close/open the gap; a shuffle delete removes the range and pulls
 /// later clips left to fill it. Both record their own step.

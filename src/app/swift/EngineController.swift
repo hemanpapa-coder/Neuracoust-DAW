@@ -1611,6 +1611,22 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// The track the duplicate-options sheet is open for (an engine track index).
+    @Published var duplicateTrackTarget: Int?
+
+    /// Duplicates a track with all its settings; the sheet lets the user drop clips,
+    /// inserts or sends from the copy.
+    func duplicateTrack(_ trackId: Int, includeClips: Bool, includeInserts: Bool, includeSends: Bool) {
+        guard let handle else { return }
+        let newIndex = nc_track_duplicate(handle, Int32(trackId), includeClips, includeInserts, includeSends)
+        duplicateTrackTarget = nil
+        guard newIndex >= 0 else { return }
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+        selectedTrackId = Int(newIndex)
+    }
+
     func addInstrumentTrack() {
         guard let handle, nc_track_add_instrument(handle) >= 0 else { return }
         reloadTracks()

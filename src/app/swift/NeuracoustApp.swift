@@ -104,6 +104,11 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Aux(버스) 트랙 추가") { engine.addAuxTrack() }
                 Divider()
+                Button("선택 트랙 복제…") {
+                    if let id = engine.selectedTrackId { engine.duplicateTrackTarget = id }
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(engine.selectedTrackId == nil)
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)
             }
@@ -151,6 +156,58 @@ struct RootView: View {
         )) {
             SpotDialog()
         }
+        .sheet(isPresented: Binding(
+            get: { engine.duplicateTrackTarget != nil },
+            set: { if !$0 { engine.duplicateTrackTarget = nil } }
+        )) {
+            DuplicateTrackDialog()
+        }
+    }
+}
+
+/// Track duplication options: copy everything, or drop clips/inserts/sends from the copy.
+private struct DuplicateTrackDialog: View {
+    @EnvironmentObject private var engine: EngineController
+    @State private var includeClips = true
+    @State private var includeInserts = true
+    @State private var includeSends = true
+
+    private var trackName: String {
+        engine.tracks.first { $0.id == engine.duplicateTrackTarget }?.name ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.lg) {
+            Text("트랙 복제")
+                .font(Theme.Font.ui(12, .semibold))
+                .foregroundStyle(Theme.Palette.textBright)
+            Text(trackName)
+                .font(Theme.Font.mono(9))
+                .foregroundStyle(Theme.Palette.textFaint)
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                Toggle("클립 포함", isOn: $includeClips)
+                Toggle("인서트 포함", isOn: $includeInserts)
+                Toggle("센드 포함", isOn: $includeSends)
+            }
+            .toggleStyle(.checkbox)
+            .font(Theme.Font.ui(10))
+            .foregroundStyle(Theme.Palette.textSecondary)
+            HStack {
+                Spacer()
+                Button("취소") { engine.duplicateTrackTarget = nil }
+                Button("복제") {
+                    if let id = engine.duplicateTrackTarget {
+                        engine.duplicateTrack(id,
+                                              includeClips: includeClips,
+                                              includeInserts: includeInserts,
+                                              includeSends: includeSends)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(Theme.Space.xxl)
+        .frame(width: 280)
     }
 }
 

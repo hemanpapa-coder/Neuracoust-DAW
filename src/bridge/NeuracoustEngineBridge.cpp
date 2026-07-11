@@ -1503,6 +1503,46 @@ bool nc_track_clear_instrument(NCEngine* engine, int trackIndex) {
     return true;
 }
 
+// Duplicates a track with all its settings, optionally excluding clips/inserts/sends.
+// Returns the new track's index, or -1 on failure.
+int nc_track_duplicate(NCEngine* engine, int trackIndex,
+                       bool includeClips, bool includeInserts, bool includeSends) {
+    const auto* source = trackAt(engine, trackIndex);
+    if (source == nullptr) return -1;
+    const std::string sourceName = source->name;
+
+    std::string newTrackName;
+    std::vector<std::string> newClipIds;
+    if (!neuracoust::daw::duplicateTrackWithClips(engine->project, sourceName,
+                                                  newTrackName, newClipIds)) {
+        return -1;
+    }
+
+    // Strip the excluded parts from the fresh duplicate before it reaches the engine.
+    if (!includeClips) {
+        for (const auto& clipId : newClipIds) {
+            neuracoust::daw::deleteClip(engine->project, clipId);
+        }
+    }
+    for (auto& track : engine->project.tracks) {
+        if (track.name != newTrackName) continue;
+        if (!includeInserts) track.inserts.clear();
+        if (!includeSends) track.sends.clear();
+        break;
+    }
+
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Duplicate track");
+
+    for (size_t i = 0; i < engine->project.tracks.size(); ++i) {
+        if (engine->project.tracks[i].name == newTrackName) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 bool nc_clip_delete(NCEngine* engine, const char* clipId) {
     if (engine == nullptr || clipId == nullptr) return false;
     if (!neuracoust::daw::deleteClip(engine->project, clipId)) {
