@@ -320,6 +320,7 @@ private struct EditView: View {
                     onToggleMute: { engine.toggleTrackMute($0) },
                     onToggleSolo: { engine.toggleTrackSolo($0) },
                     onToggleArm: { engine.toggleTrackArm($0) },
+                    onToggleInputMonitor: { engine.toggleTrackInputMonitoring($0) },
                     onSetVolumeDb: { engine.setTrackVolume($0, $1) }
                 )
 

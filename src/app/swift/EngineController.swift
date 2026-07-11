@@ -1396,6 +1396,7 @@ final class EngineController: ObservableObject {
                                           trackId: track.id,
                                           soloed: track.solo,
                                           armed: track.recordArmed,
+                                          inputMonitor: track.inputMonitoring,
                                           volumeDb: track.volumeDb,
                                           pan: track.pan,
                                           peak: max(track.peakLeft, track.peakRight),
@@ -2671,24 +2672,23 @@ final class EngineController: ObservableObject {
     }
 
     /// The speaker-model catalog and physical-output routes, read once from the engine.
-    lazy var speakerModelCatalog: [String] = {
-        guard let handle else { return [] }
-        return (0..<Int(nc_speaker_model_count())).map { i in
+    // These catalogs are static engine data (no handle needed). Computed, not lazy, so a
+    // one-time access before the engine existed can never cache an empty list.
+    var speakerModelCatalog: [String] {
+        (0..<Int(nc_speaker_model_count())).map { i in
             readString { nc_speaker_model_name(Int32(i), $0, $1) }
         }
-    }()
-    lazy var speakerOutputRoutes: [String] = {
-        guard let handle else { return [] }
-        return (0..<Int(nc_speaker_output_route_count())).map { i in
+    }
+    var speakerOutputRoutes: [String] {
+        (0..<Int(nc_speaker_output_route_count())).map { i in
             readString { nc_speaker_output_route(Int32(i), $0, $1) }
         }
-    }()
-    lazy var headphoneModelCatalog: [String] = {
-        guard let handle else { return [] }
-        return (0..<Int(nc_headphone_model_count())).map { i in
+    }
+    var headphoneModelCatalog: [String] {
+        (0..<Int(nc_headphone_model_count())).map { i in
             readString { nc_headphone_model_name(Int32(i), $0, $1) }
         }
-    }()
+    }
 
     // The real speaker/headphone the user monitors on (definition, not a simulation),
     // and whether speaker and headphone are mutually exclusive.

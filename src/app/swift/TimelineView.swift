@@ -29,6 +29,7 @@ struct TimelineModel: Equatable {
         var trackId: Int = -1
         var soloed: Bool = false
         var armed: Bool = false
+        var inputMonitor: Bool = false
         var volumeDb: Float = 0
         var pan: Float = 0
         var peak: Float = 0
@@ -165,6 +166,7 @@ final class TimelineNSView: NSView {
     var onToggleMute: ((Int) -> Void)?                   // trackId
     var onToggleSolo: ((Int) -> Void)?                   // trackId
     var onToggleArm: ((Int) -> Void)?                    // trackId
+    var onToggleInputMonitor: ((Int) -> Void)?           // trackId
     var onSetVolumeDb: ((Int, Float) -> Void)?           // (trackId, db) — continuous
 
     /// Grab zone at each end of a clip.
@@ -451,6 +453,8 @@ final class TimelineNSView: NSView {
                     onToggleSolo?(trackId)
                 } else if headerArmRect(lane).contains(point) {
                     onToggleArm?(trackId)
+                } else if headerInputMonitorRect(lane).contains(point) {
+                    onToggleInputMonitor?(trackId)
                 } else if headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
                     onSelectLane?(lane)
                     onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
@@ -578,6 +582,7 @@ final class TimelineNSView: NSView {
         // A specific tool forces its behaviour instead of the smart zone detection.
         switch editTool {
         case "split":
+            performScissorsSnip()
             onSplitClip?(hit.id, max(0, snapped(seconds(atX: point.x))))
             return
         case "grabber":
@@ -790,37 +795,63 @@ final class TimelineNSView: NSView {
     }
 
     /// A white SF-Symbol cursor, cached — the timeline is dark, so a template (black)
-    /// symbol would be invisible.
+    /// symbol would be invisible. `rotation` turns the glyph; `squashX` (< 1) narrows it,
+    /// which the scissors uses to look "closed" for the snip animation. The hotspot is
+    /// the image centre so the scissors' pivot sits on the cut point.
     private static var symbolCursorCache: [String: NSCursor] = [:]
-    private static func symbolCursor(_ name: String, hotSpotCentered: Bool = true) -> NSCursor {
-        if let cached = symbolCursorCache[name] { return cached }
+    private static func symbolCursor(_ name: String, rotation: CGFloat = 0, squashX: CGFloat = 1) -> NSCursor {
+        let key = "\(name)|\(rotation)|\(squashX)"
+        if let cached = symbolCursorCache[key] { return cached }
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return .arrow }
-        let size = symbol.size
-        let image = NSImage(size: size)
+        let symbolSize = symbol.size
+        // A square canvas so rotation never clips a corner.
+        let side = ceil(max(symbolSize.width, symbolSize.height) * 1.5)
+        let canvas = NSSize(width: side, height: side)
+        let image = NSImage(size: canvas)
         image.lockFocus()
+        let transform = NSAffineTransform()
+        transform.translateX(by: side / 2, yBy: side / 2)
+        transform.rotate(byDegrees: rotation)
+        transform.scaleX(by: squashX, yBy: 1)
+        transform.translateX(by: -symbolSize.width / 2, yBy: -symbolSize.height / 2)
+        transform.concat()
         NSColor.white.set()
-        symbol.draw(at: .zero, from: NSRect(origin: .zero, size: size),
+        symbol.draw(at: .zero, from: NSRect(origin: .zero, size: symbolSize),
                     operation: .sourceOver, fraction: 1.0)
-        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        NSRect(origin: .zero, size: symbolSize).fill(using: .sourceAtop)
         image.unlockFocus()
-        let hot = hotSpotCentered ? NSPoint(x: size.width / 2, y: size.height / 2) : NSPoint(x: 3, y: 3)
-        let cursor = NSCursor(image: image, hotSpot: hot)
-        symbolCursorCache[name] = cursor
+        let cursor = NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
+        symbolCursorCache[key] = cursor
         return cursor
     }
+
+    /// The split tool's scissors, rotated 90° left so the blade pivot is the cut point.
+    private static var scissorsCursor: NSCursor { symbolCursor("scissors", rotation: 90) }
+    /// The same scissors "closed" — blades squashed together — for the snip on click.
+    private static var scissorsSnipCursor: NSCursor { symbolCursor("scissors", rotation: 90, squashX: 0.4) }
 
     /// The cursor a forcing edit tool wants over the lanes; nil for smart (default arrow).
     private var toolCursor: NSCursor? {
         switch editTool {
-        case "split": return Self.symbolCursor("scissors")
+        case "split": return Self.scissorsCursor
         case "zoom": return Self.symbolCursor("magnifyingglass")
         case "selector": return .crosshair
         case "trim": return .resizeLeftRight
         case "grabber": return .openHand
         case "fade": return Self.symbolCursor("line.diagonal")
         default: return nil
+        }
+    }
+
+    /// A quick close-then-open of the scissors so a split click looks like a snip.
+    private func performScissorsSnip() {
+        Self.scissorsSnipCursor.set()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) { [weak self] in
+            guard let self else { return }
+            if self.editTool == "split" { Self.scissorsCursor.set() }
+            self.window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -1157,6 +1188,7 @@ final class TimelineNSView: NSView {
         button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c)
         button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
         button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
+        button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
 
         // Volume fader: a track with a filled portion and a knob.
         let fader = headerFaderRect(index)
@@ -1245,6 +1277,10 @@ final class TimelineNSView: NSView {
     }
     private func headerArmRect(_ index: Int) -> NSRect {
         NSRect(x: 12 + 2 * (Self.headerButtonWidth + 3), y: laneTop(index) + 30,
+               width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+    }
+    private func headerInputMonitorRect(_ index: Int) -> NSRect {
+        NSRect(x: 12 + 3 * (Self.headerButtonWidth + 3), y: laneTop(index) + 30,
                width: Self.headerButtonWidth, height: Self.headerButtonHeight)
     }
     /// The volume fader track spans this rect; the fill maps -60…+6 dB left→right.
@@ -1630,6 +1666,7 @@ struct TimelineView: NSViewRepresentable {
     let onToggleMute: (Int) -> Void
     let onToggleSolo: (Int) -> Void
     let onToggleArm: (Int) -> Void
+    let onToggleInputMonitor: (Int) -> Void
     let onSetVolumeDb: (Int, Float) -> Void
 
     func makeNSView(context: Context) -> TimelineNSView {
@@ -1686,6 +1723,7 @@ struct TimelineView: NSViewRepresentable {
         view.onToggleMute = onToggleMute
         view.onToggleSolo = onToggleSolo
         view.onToggleArm = onToggleArm
+        view.onToggleInputMonitor = onToggleInputMonitor
         view.onSetVolumeDb = onSetVolumeDb
     }
 }
