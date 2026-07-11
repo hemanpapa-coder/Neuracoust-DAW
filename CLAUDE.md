@@ -392,6 +392,32 @@ device the engine actually opened (`status().deviceName`), which is what the 시
 (`outputDeviceCache`) is filtered to `outputChannels > 0` and refreshed on each count
 query.
 
+The **device** tabs (스피커/헤드폰) pick the physical output *interface*; they are
+distinct from the **A/B/C speaker sets** below (see next section), which pick a
+modelled speaker or route to a specific output pair.
+
+## Monitor speaker sets (A/B/C)
+
+Each A/B/C set is a monitor speaker slot on the `Speaker Simulation` module
+(`MonitorDspModule.targetModel{A,B,C}` / `speakerOutput{A,B,C}` / `speakerRoomEq{A,B,C}`).
+Right-clicking a set opens a menu (`MonitorDock.speakerSetMenu`):
+- **스피커 모델** — the ~200-entry catalog ported from the old UI's
+  `speakerModelBaseCatalog()` (`nc_speaker_model_name`). Picking one stores
+  `"Speaker <A/B/C>: <name>"` and clears the slot's physical route — the modelled
+  (spec/virtual) path.
+- **물리 출력** — `None` / `Main 1-2` / `Output 1-2`…`31-32`
+  (`nc_speaker_output_route`). Picking a hardware pair is a raw passthrough: it forces
+  the slot's model to `Flat` and room EQ off, the reference rule. `MonitorOutputRouting`
+  already resolves these routes to real channels in the CoreAudio callback — this just
+  lets the UI set them.
+- **룸 EQ** toggle (disabled while a physical output is selected).
+
+Setters (`nc_monitor_set_speaker_model/output/room_eq`) apply live via `pushModules()`;
+`bridge_transport_smoke` pins the model→"Speaker A:" storage, the physical-output→Flat
+rule, and per-slot isolation. The engine's tone modelling is name-heuristic
+(`speakerToneScore`); the original Monitor DSP app's spec-driven `VirtualMonitorEngine`
+(per-model EQ bands) is not yet ported — model NAME selection is.
+
 ## Snapping
 
 `snapProjectTime` **always** snaps — it has no "snap enabled" flag inside. The default project's timeline quantum is 0.1 s. Deciding whether to snap at all is the caller's job; `EngineController.snap` consults the transport's Snap toggle first.

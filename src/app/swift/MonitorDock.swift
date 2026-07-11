@@ -211,6 +211,9 @@ struct MonitorDock: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    // Right-click a set to pick its real speaker MODEL (spec-based
+                    // virtual monitoring) or route it straight to a physical output.
+                    .contextMenu { speakerSetMenu(set) }
                 }
             }
 
@@ -233,6 +236,46 @@ struct MonitorDock: View {
                 )
             }
         }
+    }
+
+    /// The right-click menu for an A/B/C speaker set: choose its modelled speaker, or a
+    /// physical output pair (which bypasses the model), plus the room-EQ toggle.
+    @ViewBuilder
+    private func speakerSetMenu(_ set: EngineController.SpeakerSet) -> some View {
+        Text("\(set.letter) · \(set.name)")
+        Menu("스피커 모델") {
+            ForEach(engine.speakerModelCatalog, id: \.self) { model in
+                Button {
+                    engine.setSpeakerModel(set.id, model)
+                } label: {
+                    if set.output == "None", set.displayModel == model {
+                        Label(model, systemImage: "checkmark")
+                    } else {
+                        Text(model)
+                    }
+                }
+            }
+        }
+        Menu("물리 출력") {
+            ForEach(engine.speakerOutputRoutes, id: \.self) { route in
+                Button {
+                    engine.setSpeakerOutput(set.id, route)
+                } label: {
+                    if set.output == route {
+                        Label(route, systemImage: "checkmark")
+                    } else {
+                        Text(route)
+                    }
+                }
+            }
+        }
+        Divider()
+        Button {
+            engine.setSpeakerRoomEq(set.id, !set.roomEq)
+        } label: {
+            if set.roomEq { Label("룸 EQ", systemImage: "checkmark") } else { Text("룸 EQ") }
+        }
+        .disabled(set.output != "None")   // physical passthrough has no room EQ
     }
 
     private var headphonePanel: some View {

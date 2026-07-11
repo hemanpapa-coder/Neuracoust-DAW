@@ -738,6 +738,19 @@ void nc_monitor_speaker_output(NCEngine* engine, int slot, char* out, size_t out
 float nc_monitor_speaker_sim_weight(NCEngine* engine, int slot);
 bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot);
 
+// Per-slot (A=0/B=1/C=2) setters. Model is a bare catalog name ("Genelec 8040B (NF)");
+// the bridge stores it as "Speaker X: <name>". Output is a route ("None", "Main 1-2",
+// "Output 3-4", ...) — picking a hardware route forces the slot's model to Flat and
+// room EQ off (physical passthrough), matching the reference. All apply live via
+// pushModules(). The catalog getters back the pickers.
+int  nc_speaker_model_count(void);
+void nc_speaker_model_name(int index, char* out, size_t outLen);
+int  nc_speaker_output_route_count(void);
+void nc_speaker_output_route(int index, char* out, size_t outLen);
+void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);
+void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
+void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
+
 // ---------------------------------------------------------------------------
 // Listen Room
 //

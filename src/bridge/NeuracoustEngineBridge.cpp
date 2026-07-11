@@ -3268,6 +3268,128 @@ bool nc_monitor_speaker_room_eq(NCEngine* engine, int slot) {
     }
 }
 
+namespace {
+
+const char* slotLetter(int slot) { return slot == 1 ? "B" : (slot == 2 ? "C" : "A"); }
+
+std::string* speakerModelFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.targetModelB : slot == 2 ? &m.targetModelC : &m.targetModelA;
+}
+std::string* speakerOutputFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.speakerOutputB : slot == 2 ? &m.speakerOutputC : &m.speakerOutputA;
+}
+bool* speakerRoomEqFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.speakerRoomEqB : slot == 2 ? &m.speakerRoomEqC : &m.speakerRoomEqA;
+}
+
+// The physical monitor output routes, ported verbatim from the old UI's
+// monitorPhysicalOutputRoutes(). "None" means the modelled/virtual path; the rest send
+// the slot straight to a hardware output pair (MonitorOutputRouting resolves them).
+const std::vector<std::string>& speakerOutputRouteCatalog() {
+    static const std::vector<std::string> routes = {
+        "None", "Main 1-2",
+        "Output 1-2", "Output 3-4", "Output 5-6", "Output 7-8",
+        "Output 9-10", "Output 11-12", "Output 13-14", "Output 15-16",
+        "Output 17-18", "Output 19-20", "Output 21-22", "Output 23-24",
+        "Output 25-26", "Output 27-28", "Output 29-30", "Output 31-32",
+    };
+    return routes;
+}
+
+// The speaker-model catalog, ported from the old UI's speakerModelBaseCatalog(). The
+// (NF/MF/LF) suffix is the field category. The name drives the monitor tone model.
+const std::vector<std::string>& speakerModelCatalog() {
+    static const std::vector<std::string> models = {
+        "Flat",
+        "Yamaha NS-10 (NF)", "Yamaha NS-10M (NF)", "Yamaha NS-10M Pro (NF)", "Yamaha NS-10M Studio (NF)", "Yamaha HS3 (NF)", "Yamaha HS4 (NF)", "Yamaha HS5 (NF)", "Yamaha HS7 (NF)", "Yamaha HS8 (NF)", "Yamaha MSP3A (NF)", "Yamaha MSP5 Studio (NF)", "Yamaha MSP7 Studio (NF)",
+        "Auratone 5C Sound Cube (NF)", "Avantone Pro MixCube Active (NF)", "Avantone Pro MixCube Passive (NF)", "Avantone Pro CLA-10 Passive (NF)", "Avantone Pro CLA-10 Active (NF)", "Avantone Pro CLA-10A (NF)", "Avantone Pro CLA-10A Limited Edition (NF)", "Avantone Pro Gauss 7 (NF)",
+        "Genelec 8010A (NF)", "Genelec 8020D (NF)", "Genelec 8030C (NF)", "Genelec 8040B (NF)", "Genelec 8050B (NF)", "Genelec 8320A (NF)", "Genelec 8330A (NF)", "Genelec 8331A (NF)", "Genelec 8341A (MF)", "Genelec 8351B (MF)", "Genelec 8361A (MF)", "Genelec S360A (MF)", "Genelec 1030A (NF)", "Genelec 1031A (MF)", "Genelec 1032A (MF)", "Genelec 1037C (LF)", "Genelec 1038C (LF)",
+        "Neumann KH 80 DSP (NF)", "Neumann KH 120 II (NF)", "Neumann KH 150 (NF)", "Neumann KH 310 (MF)", "Neumann KH 420 (MF)",
+        "ADAM T5V (NF)", "ADAM T7V (NF)", "ADAM T8V (NF)", "ADAM A3X (NF)", "ADAM A4V (NF)", "ADAM A44H (NF)", "ADAM A5X (NF)", "ADAM A7V (NF)", "ADAM A7X (NF)", "ADAM A77H (MF)", "ADAM A8H (MF)", "ADAM S2V (NF)", "ADAM S3V (MF)", "ADAM S3H (MF)", "ADAM S5V (LF)", "ADAM S5H (LF)", "ADAM S6X (LF)",
+        "Focal Alpha 50 Evo (NF)", "Focal Alpha 65 Evo (NF)", "Focal Alpha Twin Evo (MF)", "Focal Shape 40 (NF)", "Focal Shape 50 (NF)", "Focal Shape 65 (NF)", "Focal Solo6 Be (NF)", "Focal Solo6 ST6 (NF)", "Focal Twin6 Be (MF)", "Focal Twin6 ST6 (MF)", "Focal Trio6 Be (MF)", "Focal Trio6 ST6 (MF)", "Focal Trio11 Be (MF)", "Focal SM9 (MF)", "Focal Grande Utopia EM (LF)",
+        "Dynaudio BM5A (NF)", "Dynaudio BM6A (NF)", "Dynaudio BM15A (MF)", "Dynaudio LYD 5 (NF)", "Dynaudio LYD 7 (NF)", "Dynaudio LYD 8 (NF)", "Dynaudio LYD 48 (MF)", "Dynaudio Core 5 (NF)", "Dynaudio Core 7 (NF)", "Dynaudio Core 47 (MF)", "Dynaudio Core 59 (MF)", "Dynaudio M3VE (LF)",
+        "KRK 9000B (NF)", "KRK Rokit 5 G4 (NF)", "KRK Rokit 7 G4 (NF)", "KRK Rokit 8 G4 (NF)", "KRK V4 (NF)", "KRK V6 (NF)", "KRK V8 (NF)", "KRK Expose E8B (MF)",
+        "JBL 305P MkII (NF)", "JBL 306P MkII (NF)", "JBL 308P MkII (NF)", "JBL 705P (NF)", "JBL 708P (MF)", "JBL 4312 (MF)", "JBL 4329P (MF)", "JBL LSR6328P (MF)", "JBL M2 (LF)",
+        "Mackie HR624 (NF)", "Mackie HR824 (NF)", "PreSonus Eris E5 (NF)", "PreSonus Eris E8 (NF)", "Kali LP-6 (NF)", "Kali LP-8 (NF)", "Kali IN-5 (NF)", "Kali IN-8 (MF)",
+        "EVE Audio SC205 (NF)", "EVE Audio SC207 (NF)", "EVE Audio SC307 (MF)", "HEDD Type 05 MK2 (NF)", "HEDD Type 07 MK2 (NF)", "HEDD Type 20 MK2 (MF)", "HEDD Type 30 MK2 (MF)",
+        "Amphion One12 (NF)", "Amphion One15 (NF)", "Amphion One18 (NF)", "Amphion One25A (MF)", "Amphion Two15 (MF)", "Amphion Two18 (MF)",
+        "ATC SCM12 Pro (NF)", "ATC SCM20ASL Pro (NF)", "ATC SCM25A Pro (MF)", "ATC SCM25A (MF)", "ATC SCM45A Pro (MF)", "ATC SCM45A (MF)", "ATC SCM50ASL Pro (MF)", "ATC SCM50A (MF)", "ATC SCM100ASL Pro (LF)", "ATC SCM100A (LF)", "ATC SCM150ASL Pro (LF)",
+        "PMC Result6 (NF)", "PMC twotwo.5 (NF)", "PMC twotwo.6 (NF)", "PMC twotwo.8 (MF)", "PMC 6 (NF)", "PMC 6-2 (MF)", "PMC 8-2 (MF)", "PMC IB1S-AIII (MF)", "PMC MB2S XBD (LF)", "PMC BB6 XBD (LF)",
+        "Barefoot Footprint01 (MF)", "Barefoot Footprint02 (MF)", "Barefoot Footprint03 (NF)", "Barefoot MicroMain26 (MF)", "Barefoot MicroMain27 (MF)", "Barefoot MicroMain45 (MF)", "Barefoot MiniMain12 (LF)", "Barefoot MasterStack12 (LF)",
+        "Quested S7R (NF)", "Quested V2108 (MF)", "Quested VH3208 (LF)", "Ocean Way HR5 (MF)", "Ocean Way HR4 (MF)", "Ocean Way HR3 (LF)", "Ocean Way HR2 (LF)", "Augspurger Duo 8 (MF)", "Augspurger Duo 12 (LF)", "Augspurger Duo 15 (LF)", "Meyer Sound Amie (MF)", "Meyer Sound Bluehorn (LF)",
+        "Kii THREE (MF)", "Dutch & Dutch 8c (MF)", "GGNTKT M1 (MF)", "PSI Audio A17-M (NF)", "PSI Audio A21-M (MF)", "PSI Audio A25-M (MF)", "Manger P1 (MF)", "Unity Audio The Rock MkII (NF)", "Unity Audio Boulder MkIII (MF)",
+        "Klein + Hummel O 300 (MF)", "Tannoy Gold 5 (NF)", "Tannoy Gold 8 (NF)", "Tannoy Reveal 502 (NF)", "Tannoy Reveal 802 (NF)", "Tannoy System 600 (NF)", "Tannoy System 800 (MF)", "Westlake BBSM-10 (MF)", "Westlake BBSM-15 (LF)",
+        "Laptop", "Phone Speaker", "Small Bluetooth Speaker", "TV Speaker", "Car Stereo", "Club PA",
+        "YouTube AAC Preview", "Spotify Ogg Preview", "Apple Music AAC Preview", "Tidal HiFi Preview", "Broadcast Loudness Preview",
+    };
+    return models;
+}
+
+} // namespace
+
+int nc_speaker_model_count() {
+    return static_cast<int>(speakerModelCatalog().size());
+}
+
+void nc_speaker_model_name(int index, char* out, size_t outLen) {
+    const auto& catalog = speakerModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < catalog.size())
+                              ? catalog[static_cast<size_t>(index)] : std::string{});
+}
+
+int nc_speaker_output_route_count() {
+    return static_cast<int>(speakerOutputRouteCatalog().size());
+}
+
+void nc_speaker_output_route(int index, char* out, size_t outLen) {
+    const auto& routes = speakerOutputRouteCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < routes.size())
+                              ? routes[static_cast<size_t>(index)] : std::string{});
+}
+
+void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    const std::string stored = std::string("Speaker ") + slotLetter(slot) + ": " + model;
+    std::string* field = speakerModelFieldForSlot(*module, slot);
+    if (*field == stored) return;
+    *field = stored;
+    // A modelled speaker means the slot is not a raw physical passthrough.
+    *speakerOutputFieldForSlot(*module, slot) = "None";
+    engine->recordStep("Set speaker model");
+    engine->pushModules();
+}
+
+void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route) {
+    if (engine == nullptr || route == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    const std::string value = route;
+    std::string* out = speakerOutputFieldForSlot(*module, slot);
+    if (*out == value) return;
+    *out = value;
+    // Choosing a physical output bypasses the virtual model: force Flat + room EQ off,
+    // the reference rule. "None" leaves the modelled path in place.
+    if (value != "None") {
+        *speakerModelFieldForSlot(*module, slot) = std::string("Speaker ") + slotLetter(slot) + ": Flat";
+        *speakerRoomEqFieldForSlot(*module, slot) = false;
+    }
+    engine->recordStep("Set speaker output");
+    engine->pushModules();
+}
+
+void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled) {
+    if (engine == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    bool* field = speakerRoomEqFieldForSlot(*module, slot);
+    if (*field == enabled) return;
+    *field = enabled;
+    engine->recordStep("Toggle speaker room EQ");
+    engine->pushModules();
+}
+
 // ---------------------------------------------------------------------------
 // Listen Room
 // ---------------------------------------------------------------------------

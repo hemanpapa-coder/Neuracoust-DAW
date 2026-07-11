@@ -2247,6 +2247,45 @@ final class EngineController: ObservableObject {
         reloadMonitorState()
     }
 
+    /// The speaker-model catalog and physical-output routes, read once from the engine.
+    lazy var speakerModelCatalog: [String] = {
+        guard let handle else { return [] }
+        return (0..<Int(nc_speaker_model_count())).map { i in
+            readString { nc_speaker_model_name(Int32(i), $0, $1) }
+        }
+    }()
+    lazy var speakerOutputRoutes: [String] = {
+        guard let handle else { return [] }
+        return (0..<Int(nc_speaker_output_route_count())).map { i in
+            readString { nc_speaker_output_route(Int32(i), $0, $1) }
+        }
+    }()
+
+    /// Assign a speaker MODEL to a slot (spec-based virtual monitoring). Pass a bare
+    /// catalog name; the engine stores the slotted form and clears any physical route.
+    func setSpeakerModel(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        nc_monitor_set_speaker_model(handle, Int32(slot), model)
+        reloadMonitorState()
+        refreshHistory()
+    }
+
+    /// Route a slot straight to a physical output pair (no simulation), or "None" to
+    /// return to the modelled path.
+    func setSpeakerOutput(_ slot: Int, _ route: String) {
+        guard let handle else { return }
+        nc_monitor_set_speaker_output(handle, Int32(slot), route)
+        reloadMonitorState()
+        refreshHistory()
+    }
+
+    func setSpeakerRoomEq(_ slot: Int, _ enabled: Bool) {
+        guard let handle else { return }
+        nc_monitor_set_speaker_room_eq(handle, Int32(slot), enabled)
+        reloadMonitorState()
+        refreshHistory()
+    }
+
     func setModuleEnabled(_ index: Int, _ enabled: Bool) {
         guard let handle else { return }
         nc_monitor_set_module_enabled(handle, Int32(index), enabled)

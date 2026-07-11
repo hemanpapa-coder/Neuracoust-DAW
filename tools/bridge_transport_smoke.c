@@ -531,6 +531,36 @@ int main(void) {
         printf("external dsp core reserve OK\n");
     }
 
+    // --- Speaker set: model catalog + model/output setters ---------------------
+    {
+        char buf[256];
+        if (nc_speaker_model_count() < 100) { fprintf(stderr, "FAIL: model catalog too small (%d)\n", nc_speaker_model_count()); failures++; }
+        if (nc_speaker_output_route_count() != 18) { fprintf(stderr, "FAIL: output routes %d, expected 18\n", nc_speaker_output_route_count()); failures++; }
+        nc_speaker_output_route(0, buf, sizeof buf);
+        if (strcmp(buf, "None") != 0) { fprintf(stderr, "FAIL: route[0] '%s', expected None\n", buf); failures++; }
+
+        // Assign a model to slot A: stored as "Speaker A: <name>", output stays None.
+        nc_monitor_set_speaker_model(engine, 0, "Genelec 8040B (NF)");
+        nc_monitor_speaker_model(engine, 0, buf, sizeof buf);
+        if (strcmp(buf, "Speaker A: Genelec 8040B (NF)") != 0) { fprintf(stderr, "FAIL: model set -> '%s'\n", buf); failures++; }
+        nc_monitor_speaker_output(engine, 0, buf, sizeof buf);
+        if (strcmp(buf, "None") != 0) { fprintf(stderr, "FAIL: model set left output '%s', expected None\n", buf); failures++; }
+
+        // Routing slot A to a physical pair forces its model to Flat and room EQ off.
+        nc_monitor_set_speaker_room_eq(engine, 0, true);
+        nc_monitor_set_speaker_output(engine, 0, "Output 3-4");
+        nc_monitor_speaker_output(engine, 0, buf, sizeof buf);
+        if (strcmp(buf, "Output 3-4") != 0) { fprintf(stderr, "FAIL: output set -> '%s'\n", buf); failures++; }
+        nc_monitor_speaker_model(engine, 0, buf, sizeof buf);
+        if (strcmp(buf, "Speaker A: Flat") != 0) { fprintf(stderr, "FAIL: physical output did not force Flat (%s)\n", buf); failures++; }
+        if (nc_monitor_speaker_room_eq(engine, 0)) { fprintf(stderr, "FAIL: physical output left room EQ on\n"); failures++; }
+
+        // Slot B is untouched by slot A edits.
+        nc_monitor_speaker_output(engine, 1, buf, sizeof buf);
+        if (strcmp(buf, "Output 3-4") == 0) { fprintf(stderr, "FAIL: slot A output leaked to slot B\n"); failures++; }
+        printf("speaker set model/output OK\n");
+    }
+
     nc_engine_stop(engine);
     nc_engine_destroy(engine);
 
