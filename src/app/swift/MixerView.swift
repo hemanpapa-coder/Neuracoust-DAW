@@ -522,12 +522,17 @@ struct ChannelStrip: View {
                 .frame(width: 34, height: 132)
 
             HStack(spacing: 2) {
-                VerticalMeter(peak: track.peakLeft)
-                VerticalMeter(peak: track.peakRight)
+                VerticalMeter(peak: meterPeakLeft)
+                VerticalMeter(peak: meterPeakRight)
             }
             .frame(height: 132)
         }
     }
+
+    // The Master strip has no per-track signal of its own — it is the sum bus, so its
+    // meter reads the engine's summed output peak (the same thing MASTER METER shows).
+    private var meterPeakLeft: Float { track.kind == .master ? engine.outputPeakLeft : track.peakLeft }
+    private var meterPeakRight: Float { track.kind == .master ? engine.outputPeakRight : track.peakRight }
 
     private var volumeReadout: some View {
         HStack(spacing: 2) {
@@ -610,7 +615,7 @@ struct ChannelStrip: View {
     }
 
     private var peakDb: Float {
-        let peak = max(track.peakLeft, track.peakRight)
+        let peak = max(meterPeakLeft, meterPeakRight)
         return peak <= 0.00001 ? FaderScale.silenceDb : Float(peakToDb(peak))
     }
 
