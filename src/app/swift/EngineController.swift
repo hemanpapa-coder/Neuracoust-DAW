@@ -2179,6 +2179,21 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         if nc_tempo_marker_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
     }
+    func moveChord(from: Double, to: Double) {
+        guard let handle else { return }
+        if nc_chord_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
+    }
+    func moveLyric(from: Double, to: Double) {
+        guard let handle else { return }
+        if nc_lyric_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
+    }
+
+    /// Seconds per bar at the project tempo/meter, for the conductor bar's grid.
+    var secondsPerBar: Double {
+        let bpm = Double(max(1, tempoBpm))
+        let beats = Double(max(1, timeSignature.0))
+        return 60.0 / bpm * beats
+    }
 
     func addMarkerAtPlayhead() {
         guard let handle else { return }
