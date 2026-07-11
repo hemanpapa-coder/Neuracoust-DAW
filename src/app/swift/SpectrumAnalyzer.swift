@@ -185,3 +185,66 @@ struct LoudnessView: View {
         }
     }
 }
+
+/// Rolling FFT history for the spectrogram. Each incoming spectrum frame becomes one
+/// column of log-frequency rows; old columns scroll off the left.
+@MainActor
+final class SpectrogramModel: ObservableObject {
+    static let rows = 72
+    static let columns = 220
+    @Published private(set) var frames: [[Float]] = []   // newest last, each is `rows` tall
+
+    private static let minHz = 20.0
+    private static let maxHz = 20_000.0
+    private static let fftSize = 2048.0
+
+    func push(bins: [Float], sampleRate: Double) {
+        guard bins.count > 1, sampleRate > 0 else { return }
+        let binHz = sampleRate / Self.fftSize
+        let logMin = log10(Self.minHz)
+        let logMax = log10(Self.maxHz)
+        var column = [Float](repeating: 0, count: Self.rows)
+        for r in 0..<Self.rows {
+            let f0 = pow(10, logMin + Double(r) / Double(Self.rows) * (logMax - logMin))
+            let f1 = pow(10, logMin + Double(r + 1) / Double(Self.rows) * (logMax - logMin))
+            let lo = max(0, Int(f0 / binHz))
+            let hi = min(bins.count - 1, max(lo, Int(f1 / binHz)))
+            var m: Float = 0
+            if lo <= hi { for b in lo...hi { m = max(m, bins[b]) } }
+            column[r] = m
+        }
+        frames.append(column)
+        if frames.count > Self.columns { frames.removeFirst(frames.count - Self.columns) }
+    }
+}
+
+/// A scrolling spectrogram: time on X, log frequency on Y (low at the bottom), colour is
+/// frequency-mapped with brightness by level — the reference "waterfall" look.
+struct SpectrogramView: View {
+    @ObservedObject var model: SpectrogramModel
+
+    var body: some View {
+        Canvas { context, size in
+            let frames = model.frames
+            guard !frames.isEmpty else { return }
+            let rows = SpectrogramModel.rows
+            let colW = size.width / CGFloat(SpectrogramModel.columns)
+            let rowH = size.height / CGFloat(rows)
+            let startX = size.width - CGFloat(frames.count) * colW
+            for (c, column) in frames.enumerated() {
+                let x = startX + CGFloat(c) * colW
+                for r in 0..<rows {
+                    let level = column[r]
+                    guard level > 0.02 else { continue }
+                    let y = size.height - CGFloat(r + 1) * rowH
+                    let hue = 0.66 - Double(r) / Double(rows) * 0.66   // low=red, high=violet-ish
+                    let color = Color(hue: hue, saturation: 0.85,
+                                      brightness: Double(min(1, level * 1.2)))
+                    context.fill(Path(CGRect(x: x, y: y, width: colW + 0.5, height: rowH + 0.5)),
+                                 with: .color(color))
+                }
+            }
+        }
+        .background(Color.black)
+    }
+}
