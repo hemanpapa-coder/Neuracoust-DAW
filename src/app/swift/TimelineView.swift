@@ -213,6 +213,10 @@ final class TimelineNSView: NSView {
 
     private var drag = Drag.none
 
+    /// The live cursor point during a clip move, so a ghost can follow it into the target
+    /// lane — the visual feedback that the clip is being carried.
+    private var dragCursor: NSPoint?
+
     /// The lanes scroll under a fixed ruler. An NSScrollView would carry the ruler
     /// away with them, so the view owns the offset itself.
     private var scrollY: CGFloat = 0
@@ -328,6 +332,64 @@ final class TimelineNSView: NSView {
         let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
         let top = laneTop(clip.laneIndex) + 6
         return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+    }
+
+    /// While a clip is being carried across lanes, draw a translucent ghost of it at the
+    /// lane under the cursor (or a "new track" band below the last lane), so the drag
+    /// visibly follows the pointer vertically as well as horizontally.
+    private func drawDragGhost(_ context: CGContext) {
+        guard let cursor = dragCursor else { return }
+        var draggedIds: [String] = []
+        var anchorLane: Int?
+        switch drag {
+        case .moving(let clipId, _, _, _):
+            draggedIds = [clipId]
+            anchorLane = model.clips.first { $0.id == clipId }?.laneIndex
+        case .movingSelection(let anchorId, _, _, _):
+            draggedIds = model.clips.filter { $0.selected }.map { $0.id }
+            anchorLane = model.clips.first { $0.id == anchorId }?.laneIndex
+        default:
+            return
+        }
+        guard let anchorLane else { return }
+
+        let below = droppedBelowLanes(cursor)
+        let targetLane = below ? model.lanes.count : (laneIndex(at: cursor) ?? anchorLane)
+        let laneDelta = targetLane - anchorLane
+        guard below || laneDelta != 0 else { return }  // horizontal already tracks live
+
+        context.saveGState()
+        context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
+                                width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+
+        // A band on the destination lane (or the new-track strip below the last lane).
+        let bandY = below ? (laneTop(model.lanes.count - 1) + Self.laneHeight) : laneTop(targetLane)
+        NSColor(hex: 0x5f9fd6).withAlphaComponent(0.12).setFill()
+        NSRect(x: lanesRect.minX, y: bandY, width: lanesRect.width, height: Self.laneHeight).fill()
+        if below {
+            NSColor(hex: 0x5f9fd6).withAlphaComponent(0.5).setStroke()
+            let dashed = NSBezierPath(rect: NSRect(x: lanesRect.minX + 2, y: bandY + 2,
+                                                   width: lanesRect.width - 4, height: Self.laneHeight - 4))
+            dashed.setLineDash([5, 3], count: 2, phase: 0)
+            dashed.stroke()
+        }
+
+        for id in draggedIds {
+            guard let clip = model.clips.first(where: { $0.id == id }) else { continue }
+            let destLane = below ? model.lanes.count : clip.laneIndex + laneDelta
+            let destTop: CGFloat = destLane >= model.lanes.count
+                ? laneTop(model.lanes.count - 1) + Self.laneHeight + 6
+                : laneTop(max(0, destLane)) + 6
+            let base = clipRect(clip)
+            let ghost = NSRect(x: base.minX, y: destTop, width: base.width, height: Self.laneHeight - 12)
+            NSColor(hex: 0x9b7fd4).withAlphaComponent(0.35).setFill()
+            let path = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
+            path.fill()
+            NSColor(hex: 0xc9b8f0).withAlphaComponent(0.8).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        context.restoreGState()
     }
 
     /// Topmost clip under the point, searched back to front.
@@ -691,6 +753,8 @@ final class TimelineNSView: NSView {
             drag = .marquee(origin: origin, current: point)
             needsDisplay = true
         case .moving(let clipId, let grabOffset, let startX, let unlocked):
+            dragCursor = point
+            needsDisplay = true
             if unlocked {
                 onMoveClip?(clipId, snapped(time - grabOffset))
             } else if abs(point.x - startX) > Self.axisLockThreshold {
@@ -704,6 +768,8 @@ final class TimelineNSView: NSView {
             // Locked and inside the dead zone: hold the horizontal position; the lane
             // still resolves from the cursor Y at drop.
         case .movingSelection(let anchorId, let grabOffset, let startX, let unlocked):
+            dragCursor = point
+            needsDisplay = true
             guard let anchor = model.clips.first(where: { $0.id == anchorId }) else { break }
             if unlocked {
                 onMoveSelection?(snapped(time - grabOffset) - anchor.startSeconds)
@@ -788,6 +854,7 @@ final class TimelineNSView: NSView {
             break
         }
         drag = .none
+        if dragCursor != nil { dragCursor = nil; needsDisplay = true }
     }
 
     private func snapped(_ seconds: Double) -> Double {
@@ -1021,6 +1088,7 @@ final class TimelineNSView: NSView {
         drawLaneHeaders(context)
         drawGrid(context)
         drawClips(context)
+        drawDragGhost(context)
         drawMidiRegions(context)
         drawAutomation(context)
         // Last, so a marker's hairline is not painted over by the clips it lines up with.
