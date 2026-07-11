@@ -2125,6 +2125,11 @@ final class EngineController: ObservableObject {
     @Published private(set) var chords: [ConductorEvent] = []
     @Published private(set) var lyrics: [ConductorEvent] = []
     @Published private(set) var tempoMarkers: [ConductorEvent] = []
+    /// Positional time-signature (meter) changes, backed by the project's timeSignatureMap.
+    @Published private(set) var meterEvents: [ConductorEvent] = []
+    /// Positional key changes. The engine has no key field, so — like `musicalKey` — these
+    /// live app-side and are persisted with the settings (label is e.g. "Am", "F#").
+    @Published private(set) var keyEvents: [ConductorEvent] = []
     /// Musical key shown in the conductor bar. Engine has no key field yet, so this is
     /// app-level (saved with the settings), display context for now.
     @Published var musicalKey: String = "C"
@@ -2152,6 +2157,10 @@ final class EngineController: ObservableObject {
         tempoMarkers = (0..<Int(nc_tempo_marker_count(handle))).map { i in
             ConductorEvent(id: i, timeSeconds: nc_tempo_marker_time(handle, Int32(i)),
                            label: String(format: "%.0f", nc_tempo_marker_bpm(handle, Int32(i))))
+        }
+        meterEvents = (0..<Int(nc_time_sig_count(handle))).map { i in
+            ConductorEvent(id: i, timeSeconds: nc_time_sig_time(handle, Int32(i)),
+                           label: "\(nc_time_sig_numerator(handle, Int32(i)))/\(nc_time_sig_denominator(handle, Int32(i)))")
         }
     }
 
@@ -2186,6 +2195,64 @@ final class EngineController: ObservableObject {
     func moveLyric(from: Double, to: Double) {
         guard let handle else { return }
         if nc_lyric_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
+    }
+
+    /// Add / change a time-signature. `text` is "num/den" (e.g. "3/4"); a bare number is
+    /// taken as the numerator over 4.
+    func addMeter(at seconds: Double, text: String) {
+        guard let handle else { return }
+        let parts = text.split(separator: "/")
+        let num = Int(parts.first.map(String.init) ?? "") ?? timeSignature.numerator
+        let den = parts.count > 1 ? (Int(parts[1]) ?? timeSignature.denominator) : timeSignature.denominator
+        if nc_time_sig_add(handle, seconds, Int32(max(1, num)), Int32(max(1, den))) {
+            reloadConductor(); refreshHistory()
+            // Keep the summary field in sync when the change lands at the very start.
+            if seconds < 0.01 { timeSignature = (num, den) }
+        }
+    }
+    func deleteMeter(at seconds: Double) {
+        guard let handle else { return }
+        if nc_time_sig_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
+    }
+    func moveMeter(from: Double, to: Double) {
+        guard let handle else { return }
+        if nc_time_sig_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
+    }
+
+    // Positional key changes (app-side, persisted with settings).
+    private var keyEventStore: [(seconds: Double, label: String)] = [] { didSet { publishKeyEvents() }}
+    private func publishKeyEvents() {
+        keyEvents = keyEventStore.sorted { $0.seconds < $1.seconds }.enumerated().map {
+            ConductorEvent(id: $0.offset, timeSeconds: $0.element.seconds, label: $0.element.label)
+        }
+    }
+    func addKey(at seconds: Double, name: String) {
+        let label = name.isEmpty ? musicalKey : name
+        keyEventStore.removeAll { abs($0.seconds - seconds) < 0.05 }
+        keyEventStore.append((seconds, label))
+        if seconds < 0.01 { musicalKey = label }
+        persistKeyEvents()
+    }
+    func deleteKey(at seconds: Double) {
+        keyEventStore.removeAll { abs($0.seconds - seconds) <= markerTolerance }
+        persistKeyEvents()
+    }
+    func moveKey(from: Double, to: Double) {
+        guard let i = keyEventStore.firstIndex(where: { abs($0.seconds - from) <= markerTolerance }) else { return }
+        keyEventStore[i].seconds = max(0, snap(to))
+        persistKeyEvents()
+    }
+    private func persistKeyEvents() {
+        let encoded = keyEventStore.map { "\($0.seconds):\($0.label)" }.joined(separator: "|")
+        UserDefaults.standard.set(encoded, forKey: SettingsKey.keyEvents)
+    }
+    private func restoreKeyEvents() {
+        guard let s = UserDefaults.standard.string(forKey: SettingsKey.keyEvents), !s.isEmpty else { return }
+        keyEventStore = s.split(separator: "|").compactMap { pair in
+            let kv = pair.split(separator: ":", maxSplits: 1)
+            guard kv.count == 2, let t = Double(kv[0]) else { return nil }
+            return (t, String(kv[1]))
+        }
     }
 
     /// Seconds per bar at the project tempo/meter, for the conductor bar's grid.
@@ -2813,6 +2880,7 @@ final class EngineController: ObservableObject {
         static let soloSelect = "nc.soloSelectMode"
         static let dockAnalyzer = "nc.dockAnalyzerKind"
         static let musicalKey = "nc.musicalKey"
+        static let keyEvents = "nc.keyEvents"
         static let editTool = "nc.editTool"
         static let soloMonitor = "nc.soloMonitorMode"
         static let click = "nc.clickEnabled"
@@ -2878,6 +2946,7 @@ final class EngineController: ObservableObject {
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
         if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
+        restoreKeyEvents()
         if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
         if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
         if d.object(forKey: SettingsKey.click) != nil, d.bool(forKey: SettingsKey.click) != clickEnabled { toggleClick() }

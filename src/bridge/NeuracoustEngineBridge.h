@@ -550,6 +550,14 @@ double nc_tempo_marker_bpm(NCEngine* engine, int index);
 bool nc_tempo_marker_add(NCEngine* engine, double timeSeconds, double bpm);
 bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol);
 
+int nc_time_sig_count(NCEngine* engine);
+double nc_time_sig_time(NCEngine* engine, int index);
+int nc_time_sig_numerator(NCEngine* engine, int index);
+int nc_time_sig_denominator(NCEngine* engine, int index);
+bool nc_time_sig_add(NCEngine* engine, double timeSeconds, int numerator, int denominator);
+bool nc_time_sig_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
+bool nc_time_sig_delete(NCEngine* engine, double timeSeconds, double tol);
+
 // ---------------------------------------------------------------------------
 // Automation
 //

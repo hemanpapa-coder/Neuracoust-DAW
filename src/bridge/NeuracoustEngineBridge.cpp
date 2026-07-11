@@ -2349,6 +2349,61 @@ bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol) {
     return true;
 }
 
+// --- Time-signature (meter) changes: positional edits over project.timeSignatureMap. ---
+int nc_time_sig_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.timeSignatureMap.size());
+}
+double nc_time_sig_time(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.timeSignatureMap.size()) return 0.0;
+    return engine->project.timeSignatureMap[static_cast<size_t>(index)].timeSeconds;
+}
+int nc_time_sig_numerator(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.timeSignatureMap.size()) return 4;
+    return engine->project.timeSignatureMap[static_cast<size_t>(index)].numerator;
+}
+int nc_time_sig_denominator(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.timeSignatureMap.size()) return 4;
+    return engine->project.timeSignatureMap[static_cast<size_t>(index)].denominator;
+}
+bool nc_time_sig_add(NCEngine* engine, double timeSeconds, int numerator, int denominator) {
+    if (engine == nullptr || numerator < 1 || denominator < 1) return false;
+    auto& map = engine->project.timeSignatureMap;
+    for (auto& m : map) {
+        if (std::abs(m.timeSeconds - timeSeconds) < 1e-4) {   // replace one already at this time
+            m.numerator = numerator; m.denominator = denominator;
+            engine->reconcileProject(); engine->recordStep("Time signature"); return true;
+        }
+    }
+    map.push_back({timeSeconds, numerator, denominator});
+    std::sort(map.begin(), map.end(), [](const auto& a, const auto& b) { return a.timeSeconds < b.timeSeconds; });
+    engine->reconcileProject();
+    engine->recordStep("Add time signature");
+    return true;
+}
+bool nc_time_sig_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds) {
+    if (engine == nullptr) return false;
+    auto& map = engine->project.timeSignatureMap;
+    for (auto& m : map) {
+        if (m.timeSeconds > 1e-6 && std::abs(m.timeSeconds - fromSeconds) <= tol) {   // never move the anchor at 0
+            m.timeSeconds = std::max(0.0, toSeconds);
+            std::sort(map.begin(), map.end(), [](const auto& a, const auto& b) { return a.timeSeconds < b.timeSeconds; });
+            engine->reconcileProject(); engine->recordStep("Move time signature"); return true;
+        }
+    }
+    return false;
+}
+bool nc_time_sig_delete(NCEngine* engine, double timeSeconds, double tol) {
+    if (engine == nullptr) return false;
+    auto& map = engine->project.timeSignatureMap;
+    for (size_t i = 0; i < map.size(); ++i) {
+        if (map[i].timeSeconds > 1e-6 && std::abs(map[i].timeSeconds - timeSeconds) <= tol) {   // keep the anchor at 0
+            map.erase(map.begin() + static_cast<long>(i));
+            engine->reconcileProject(); engine->recordStep("Delete time signature"); return true;
+        }
+    }
+    return false;
+}
+
 bool nc_automation_parameter_supported(const char* parameterId) {
     return isVolumeParameter(parameterId) || isPanParameter(parameterId);
 }

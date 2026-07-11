@@ -298,6 +298,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/GlobalTracksBar.swift
         src/app/swift/SpectrumAnalyzer.swift
         src/app/swift/MetalSpectrumView.swift
+        src/app/swift/MetalGridView.swift
         src/app/swift/AnalyzerWindow.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
@@ -588,3 +589,7 @@ endif()
 
 add_executable(neuracoust_spectrum_pipeline_probe tests/SpectrumPipelineProbe.cpp)
 target_link_libraries(neuracoust_spectrum_pipeline_probe PRIVATE neuracoust_daw_core)
+
+add_executable(neuracoust_time_sig_bridge_smoke tests/TimeSignatureBridgeSmoke.cpp)
+target_link_libraries(neuracoust_time_sig_bridge_smoke PRIVATE neuracoust_daw_core)
+add_test(NAME time_sig_bridge_smoke COMMAND neuracoust_time_sig_bridge_smoke)
