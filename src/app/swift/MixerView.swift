@@ -293,7 +293,7 @@ struct ChannelStrip: View {
                     autoFadeSection
                     // The master has no sends; pad to the sends' height so its pan / buttons
                     // / fader drop to the same rows as the channels'.
-                    Color.clear.frame(height: 38)
+                    Color.clear.frame(height: 47)
                 } else if showSends && track.kind.showsSends {
                     sendSection
                 }

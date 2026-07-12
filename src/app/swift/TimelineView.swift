@@ -1739,7 +1739,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     private func automationToggleRect(_ index: Int) -> NSRect {
-        NSRect(x: Self.headerWidth - 26, y: laneTop(index) + 10, width: 18, height: 14)
+        // Sits in the M/S/R/I button row, after the automation-mode chip.
+        NSRect(x: 125, y: laneTop(index) + 30, width: 18, height: Self.headerButtonHeight)
     }
 
     /// The track-name band in the header — double-click here to rename.
@@ -1810,7 +1811,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
     /// Small square top-right of the header that shows/cycles the automation mode.
     private func headerAutomationModeRect(_ index: Int) -> NSRect {
-        NSRect(x: Self.headerWidth - 46, y: laneTop(index) + 10, width: 16, height: 14)
+        // Continues the M/S/R/I row: after the "I" button (ends x101), gap 3.
+        NSRect(x: 12 + 4 * (Self.headerButtonWidth + 3), y: laneTop(index) + 30, width: 18, height: Self.headerButtonHeight)
     }
 
     // Inline volume fader, pan bar and stereo meter, drawn horizontally under the buttons.
