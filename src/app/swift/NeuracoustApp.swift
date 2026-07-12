@@ -337,6 +337,8 @@ private struct EditView: View {
                     onAddSend: { engine.addSend($0, to: $1) },
                     onRemoveSend: { engine.removeSend($0, slot: $1) },
                     onSetSendGain: { engine.setSendGain($0, slot: $1, gainDb: $2) },
+                    onSetSendPan: { engine.setSendPan($0, slot: $1, pan: $2) },
+                    onSetSendPreFader: { engine.setSendPreFader($0, slot: $1, pre: $2) },
                     onAddAux: { engine.addAuxTrack() },
                     onSendBusOptions: { engine.sendBusOptions($0) }
                 )

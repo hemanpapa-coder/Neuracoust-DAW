@@ -50,6 +50,50 @@ enum FaderScale {
     ]
 }
 
+/// Shared send-control choices, so the mixer strip and the edit-window track header offer
+/// the exact same level and pan options — Pro Tools sends carry both.
+enum SendControls {
+    static let levels: [Int] = [0, -3, -6, -12, -18, -24, -36]
+    static let pans: [(label: String, value: Float)] = [
+        ("L100", -1), ("L75", -0.75), ("L50", -0.5), ("L25", -0.25),
+        ("C", 0), ("R25", 0.25), ("R50", 0.5), ("R75", 0.75), ("R100", 1),
+    ]
+}
+
+func sendPanLabel(_ pan: Float) -> String {
+    let v = Int((abs(pan) * 100).rounded())
+    if v == 0 { return "C" }
+    return pan < 0 ? "L\(v)" : "R\(v)"
+}
+
+/// The send menu (level / pan / pre-post / remove), reused by the mixer strip so every
+/// SwiftUI caller shows identical options.
+struct SendMenuContent: View {
+    let engine: EngineController
+    let trackId: Int
+    let slot: Int
+    let send: EngineController.TrackSend
+
+    var body: some View {
+        Text(send.bus)
+        Menu("레벨") {
+            ForEach(SendControls.levels, id: \.self) { db in
+                Button("\(db) dB") { engine.setSendGain(trackId, slot: slot, gainDb: Float(db)) }
+            }
+        }
+        Menu("팬") {
+            ForEach(SendControls.pans, id: \.label) { pan in
+                Button(pan.label) { engine.setSendPan(trackId, slot: slot, pan: pan.value) }
+            }
+        }
+        Button(send.preFader ? "포스트 페이더로" : "프리 페이더로") {
+            engine.setSendPreFader(trackId, slot: slot, pre: !send.preFader)
+        }
+        Divider()
+        Button("센드 제거", role: .destructive) { engine.removeSend(trackId, slot: slot) }
+    }
+}
+
 /// dB scale drawn beside a fader. Marks sit at their real positions on the throw,
 /// not evenly spaced — otherwise the 0 dB label does not line up with a 0 dB cap.
 struct FaderScaleMarks: View {

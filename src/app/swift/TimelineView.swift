@@ -58,7 +58,7 @@ struct TimelineModel: Equatable {
     }
 
     struct InsertChip: Equatable { let name: String; let bypassed: Bool; let isEmpty: Bool }
-    struct SendChip: Equatable { let label: String }
+    struct SendChip: Equatable { let label: String; var preFader: Bool = false }
 
     struct Clip: Equatable {
         let id: String
@@ -156,6 +156,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onAddSend: ((Int, String) -> Void)?           // trackId, bus
     var onRemoveSend: ((Int, Int) -> Void)?
     var onSetSendGain: ((Int, Int, Float) -> Void)?
+    var onSetSendPan: ((Int, Int, Float) -> Void)?
+    var onSetSendPreFader: ((Int, Int, Bool) -> Void)?
     var onAddAux: (() -> Void)?
     var onSendBusOptions: ((Int) -> [String])?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
@@ -1598,15 +1600,32 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let sends = model.lanes[lane].sends
         let menu = NSMenu()
         if slot < min(2, sends.count) {
+            let send = sends[slot]
             let level = NSMenuItem(title: "레벨", action: nil, keyEquivalent: "")
             let sub = NSMenu()
-            for db in [0, -3, -6, -12, -18, -24] {
+            for db in SendControls.levels {
                 let it = NSMenuItem(title: "\(db) dB", action: #selector(sendSetGainMenu(_:)), keyEquivalent: "")
                 it.target = self; it.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: Float(db))
                 sub.addItem(it)
             }
             level.submenu = sub
             menu.addItem(level)
+
+            let panItem = NSMenuItem(title: "팬", action: nil, keyEquivalent: "")
+            let panSub = NSMenu()
+            for pan in SendControls.pans {
+                let it = NSMenuItem(title: pan.label, action: #selector(sendSetPanMenu(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: pan.value)
+                panSub.addItem(it)
+            }
+            panItem.submenu = panSub
+            menu.addItem(panItem)
+
+            let pf = NSMenuItem(title: send.preFader ? "포스트 페이더로" : "프리 페이더로",
+                                action: #selector(sendPreFaderMenu(_:)), keyEquivalent: "")
+            pf.target = self; pf.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: send.preFader ? 0 : 1)
+            menu.addItem(pf)
+
             menu.addItem(.separator())
             let rm = NSMenuItem(title: "센드 제거", action: #selector(sendRemoveMenu(_:)), keyEquivalent: "")
             rm.target = self; rm.representedObject = HeaderMenuRef(track: trackId, slot: slot)
@@ -1627,6 +1646,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     @objc private func sendSetGainMenu(_ s: NSMenuItem) {
         guard let r = s.representedObject as? HeaderMenuRef else { return }
         onSetSendGain?(r.track, r.slot, r.gain)
+    }
+    @objc private func sendSetPanMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onSetSendPan?(r.track, r.slot, r.gain)     // gain field carries the pan value here
+    }
+    @objc private func sendPreFaderMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onSetSendPreFader?(r.track, r.slot, r.gain > 0.5)
     }
     @objc private func sendRemoveMenu(_ s: NSMenuItem) {
         guard let r = s.representedObject as? HeaderMenuRef else { return }
@@ -2173,6 +2200,8 @@ struct TimelineView: NSViewRepresentable {
     var onAddSend: ((Int, String) -> Void)? = nil
     var onRemoveSend: ((Int, Int) -> Void)? = nil
     var onSetSendGain: ((Int, Int, Float) -> Void)? = nil
+    var onSetSendPan: ((Int, Int, Float) -> Void)? = nil
+    var onSetSendPreFader: ((Int, Int, Bool) -> Void)? = nil
     var onAddAux: (() -> Void)? = nil
     var onSendBusOptions: ((Int) -> [String])? = nil
 
@@ -2201,6 +2230,8 @@ struct TimelineView: NSViewRepresentable {
         view.onAddSend = onAddSend
         view.onRemoveSend = onRemoveSend
         view.onSetSendGain = onSetSendGain
+        view.onSetSendPan = onSetSendPan
+        view.onSetSendPreFader = onSetSendPreFader
         view.onAddAux = onAddAux
         view.onSendBusOptions = onSendBusOptions
         view.onZoom = onZoom

@@ -400,16 +400,9 @@ struct ChannelStrip: View {
 
             ForEach(Array(track.sends.enumerated()), id: \.offset) { idx, send in
                 Menu {
-                    Text(send.bus)
-                    Menu("레벨") {
-                        ForEach([0, -3, -6, -12, -18, -24], id: \.self) { db in
-                            Button("\(db) dB") { engine.setSendGain(track.id, slot: idx, gainDb: Float(db)) }
-                        }
-                    }
-                    Divider()
-                    Button("센드 제거", role: .destructive) { engine.removeSend(track.id, slot: idx) }
+                    SendMenuContent(engine: engine, trackId: track.id, slot: idx, send: send)
                 } label: {
-                    sendChip("\(send.bus) · \(Int(send.gainDb))dB", filled: true)
+                    sendChip("\(send.bus) · \(Int(send.gainDb))dB · \(sendPanLabel(send.pan))", filled: true)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)

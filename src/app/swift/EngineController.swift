@@ -96,6 +96,8 @@ final class EngineController: ObservableObject {
     struct TrackSend: Hashable {
         let bus: String
         let gainDb: Float
+        var pan: Float = 0
+        var preFader: Bool = false
     }
 
     struct Track: Identifiable {
@@ -1091,7 +1093,9 @@ final class EngineController: ObservableObject {
                 }(),
                 sends: (0..<sendCount).map { slot in
                     TrackSend(bus: readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) },
-                              gainDb: nc_track_send_gain_db(handle, i, Int32(slot)))
+                              gainDb: nc_track_send_gain_db(handle, i, Int32(slot)),
+                              pan: nc_track_send_pan(handle, i, Int32(slot)),
+                              preFader: nc_track_send_pre_fader(handle, i, Int32(slot)))
                 }
             )
         }
@@ -1437,7 +1441,8 @@ final class EngineController: ObservableObject {
                                               TimelineModel.InsertChip(name: $0.name, bypassed: $0.bypassed, isEmpty: $0.isEmpty)
                                           },
                                           sends: track.sends.map {
-                                              TimelineModel.SendChip(label: "\($0.bus) \(Int($0.gainDb))")
+                                              TimelineModel.SendChip(label: "\($0.bus) \(Int($0.gainDb)) \(sendPanLabel($0.pan))",
+                                                                     preFader: $0.preFader)
                                           })
             },
             clips: clips.compactMap { clip in
@@ -2663,6 +2668,20 @@ final class EngineController: ObservableObject {
     func setSendGain(_ id: Int, slot: Int, gainDb: Float) {
         guard let handle else { return }
         nc_track_set_send_gain_db(handle, Int32(id), Int32(slot), gainDb)
+        reloadTracks()
+        refreshHistory()
+    }
+
+    func setSendPan(_ id: Int, slot: Int, pan: Float) {
+        guard let handle else { return }
+        nc_track_set_send_pan(handle, Int32(id), Int32(slot), pan)
+        reloadTracks()
+        refreshHistory()
+    }
+
+    func setSendPreFader(_ id: Int, slot: Int, pre: Bool) {
+        guard let handle else { return }
+        nc_track_set_send_pre_fader(handle, Int32(id), Int32(slot), pre)
         reloadTracks()
         refreshHistory()
     }

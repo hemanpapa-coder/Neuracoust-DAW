@@ -1116,6 +1116,38 @@ void nc_track_set_send_gain_db(NCEngine* engine, int index, int slot, float db) 
     engine->reconcileProject();
 }
 
+float nc_track_send_pan(NCEngine* engine, int index, int slot) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return 0.0f;
+    return track->sends[static_cast<size_t>(slot)].pan;
+}
+
+void nc_track_set_send_pan(NCEngine* engine, int index, int slot, float pan) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return;
+    neuracoust::daw::TrackSendState send = track->sends[static_cast<size_t>(slot)];
+    send.pan = std::max(-1.0f, std::min(1.0f, pan));
+    if (!neuracoust::daw::setTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot), send)) return;
+    engine->recordStep("Set send pan");
+    engine->reconcileProject();
+}
+
+bool nc_track_send_pre_fader(NCEngine* engine, int index, int slot) {
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return false;
+    return track->sends[static_cast<size_t>(slot)].preFader;
+}
+
+void nc_track_set_send_pre_fader(NCEngine* engine, int index, int slot, bool pre) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return;
+    neuracoust::daw::TrackSendState send = track->sends[static_cast<size_t>(slot)];
+    send.preFader = pre;
+    if (!neuracoust::daw::setTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot), send)) return;
+    engine->recordStep(pre ? "Send pre-fader" : "Send post-fader");
+    engine->reconcileProject();
+}
+
 void nc_track_remove_send(NCEngine* engine, int index, int slot) {
     auto* track = trackAt(engine, index);
     if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->sends.size()) return;

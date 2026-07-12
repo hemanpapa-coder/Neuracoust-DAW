@@ -284,6 +284,10 @@ int  nc_track_send_option_count(NCEngine* engine, int index);
 void nc_track_send_option(NCEngine* engine, int index, int i, char* out, size_t outLen);
 bool nc_track_add_send(NCEngine* engine, int index, const char* busName);
 void nc_track_set_send_gain_db(NCEngine* engine, int index, int slot, float db);
+float nc_track_send_pan(NCEngine* engine, int index, int slot);
+void nc_track_set_send_pan(NCEngine* engine, int index, int slot, float pan);
+bool nc_track_send_pre_fader(NCEngine* engine, int index, int slot);
+void nc_track_set_send_pre_fader(NCEngine* engine, int index, int slot, bool pre);
 void nc_track_remove_send(NCEngine* engine, int index, int slot);
 
 // ---------------------------------------------------------------------------
