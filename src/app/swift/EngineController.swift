@@ -89,7 +89,8 @@ final class EngineController: ObservableObject {
     static let channelWidthMax: CGFloat = channelWidthDefault
     @Published var channelWidths: [Int: CGFloat] = [:]
 
-    func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthDefault }
+    // Strips start narrow (small) by default; the corner toggle widens them to large.
+    func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthMin }
 
     func setChannelWidth(trackIds: [Int], width: CGFloat) {
         let w = min(Self.channelWidthMax, max(Self.channelWidthMin, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))

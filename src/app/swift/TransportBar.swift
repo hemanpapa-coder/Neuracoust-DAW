@@ -202,6 +202,8 @@ struct TransportBar: View {
         HStack(spacing: Theme.Space.sm) {
             toggle("Loop", isOn: engine.loopEnabled, tint: Theme.Palette.green) { engine.toggleLoop() }
             toggle("Click", isOn: engine.clickEnabled, tint: Theme.Palette.amber) { engine.toggleClick() }
+            // Shuffle / Slip / Spot / Grid are a separate group (edit modes), so a divider.
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 18)
             editModePicker
         }
     }

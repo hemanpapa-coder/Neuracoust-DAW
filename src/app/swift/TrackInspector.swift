@@ -46,9 +46,11 @@ private struct PanelColumnHeader: View {
 struct ChannelColumn: View {
     @EnvironmentObject private var engine: EngineController
 
-    // Uniform, fixed — the column stays the same size whatever track is selected and
-    // whatever per-track width that channel uses in the mixer.
-    private let stripWidth = EngineController.channelWidthDefault
+    // Follows the selected channel's actual mixer width, so the small/large toggle set
+    // in the mixer is reflected here too.
+    private var stripWidth: CGFloat {
+        engine.inspectedTrack.map { engine.channelWidthFor($0.id) } ?? EngineController.channelWidthMin
+    }
     private var columnWidth: CGFloat { stripWidth + 12 }
 
     var body: some View {
@@ -172,7 +174,8 @@ struct TrackInspector: View {
         Button(action: action) {
             Group {
                 if label == "●" {
-                    Image(systemName: "circle").font(.system(size: 12, weight: .bold))
+                    // Match the transport / mixer record circle exactly (size 10, regular).
+                    Image(systemName: "circle").font(.system(size: 10))
                 } else {
                     Text(label).font(Theme.Font.ui(10, .semibold))
                 }

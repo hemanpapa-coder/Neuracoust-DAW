@@ -780,7 +780,9 @@ struct ChannelStrip: View {
                 // Record arms as a hollow circle (like the transport record key), ~2× the
                 // old dot; everything else is a plain letter in the same font.
                 if title == "●" {
-                    Image(systemName: "circle").font(.system(size: 11, weight: .bold))
+                    // Same as the transport record key: circle, size 10, regular weight,
+                    // centred — so it reads identically everywhere.
+                    Image(systemName: "circle").font(.system(size: 10))
                 } else {
                     Text(title).font(Theme.Font.ui(9, .semibold))
                 }
