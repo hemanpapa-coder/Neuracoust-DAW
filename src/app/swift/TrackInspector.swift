@@ -49,7 +49,7 @@ struct ChannelColumn: View {
     // Uniform, fixed — the column stays the same size whatever track is selected and
     // whatever per-track width that channel uses in the mixer.
     private let stripWidth = EngineController.channelWidthDefault
-    private var columnWidth: CGFloat { stripWidth + 28 }
+    private var columnWidth: CGFloat { stripWidth + 12 }
 
     var body: some View {
         VStack(spacing: 0) {
