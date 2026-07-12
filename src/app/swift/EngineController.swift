@@ -1432,7 +1432,13 @@ final class EngineController: ObservableObject {
                                           pan: track.pan,
                                           peakLeft: track.peakLeft,
                                           peakRight: track.peakRight,
-                                          automation: automation)
+                                          automation: automation,
+                                          inserts: track.inserts.prefix(4).map {
+                                              TimelineModel.InsertChip(name: $0.name, bypassed: $0.bypassed, isEmpty: $0.isEmpty)
+                                          },
+                                          sends: track.sends.map {
+                                              TimelineModel.SendChip(label: "\($0.bus) \(Int($0.gainDb))")
+                                          })
             },
             clips: clips.compactMap { clip in
                 guard let lane = laneIndex[clip.trackName] else { return nil }

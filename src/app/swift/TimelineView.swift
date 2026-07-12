@@ -51,7 +51,14 @@ struct TimelineModel: Equatable {
         var peakRight: Float = 0
         /// nil while the lane's automation is folded away.
         var automation: Automation?
+        /// The channel-strip inserts and sends, shown in the header like Pro Tools' edit
+        /// window. Inserts are the first few slots; sends are the active ones.
+        var inserts: [InsertChip] = []
+        var sends: [SendChip] = []
     }
+
+    struct InsertChip: Equatable { let name: String; let bypassed: Bool; let isEmpty: Bool }
+    struct SendChip: Equatable { let label: String }
 
     struct Clip: Equatable {
         let id: String
@@ -141,6 +148,16 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     var onSeek: ((Double) -> Void)?
     var onToggleTimebase: ((RulerTimebase) -> Void)?
+    // Lane-header inserts / sends (Pro Tools edit-window channel strip).
+    var onBrowseInsert: ((Int) -> Void)?              // trackId — open the plugin browser
+    var onToggleInsertEditor: ((Int, Int) -> Void)?   // trackId, slot
+    var onBypassInsert: ((Int, Int) -> Void)?
+    var onRemoveInsert: ((Int, Int) -> Void)?
+    var onAddSend: ((Int, String) -> Void)?           // trackId, bus
+    var onRemoveSend: ((Int, Int) -> Void)?
+    var onSetSendGain: ((Int, Int, Float) -> Void)?
+    var onAddAux: (() -> Void)?
+    var onSendBusOptions: ((Int) -> [String])?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
@@ -271,7 +288,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     static let rangeStripHeight: CGFloat = 12
     /// Grab radius around each range edge for its ruler handle.
     static let rangeHandleWidth: CGFloat = 9
-    static let laneHeight: CGFloat = 78
+    static let laneHeight: CGFloat = 106
     static let automationHeight: CGFloat = 54
     static let headerWidth: CGFloat = 150
 
@@ -593,6 +610,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     onSelectLane?(lane)
                     onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
                     drag = .headerFader(trackId: trackId)
+                } else if let slot = headerInsertSlotHit(lane, point: point) {
+                    handleInsertClick(trackId: trackId, lane: lane, slot: slot, command: event.modifierFlags.contains(.command))
+                } else if let s = headerSendSlotHit(lane, point: point) {
+                    handleSendClick(trackId: trackId, lane: lane, slot: s, event: event)
                 } else {
                     onSelectLane?(lane)
                 }
@@ -1256,9 +1277,30 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         return 256
     }
 
-    /// Right-clicking the ruler chooses which timebases it shows (마디 / 시간 / 샘플).
+    /// Right-clicking the ruler chooses which timebases it shows (마디 / 시간 / 샘플);
+    /// right-clicking a filled insert chip opens its edit menu.
     override func rightMouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if point.x < Self.headerWidth, let lane = laneIndex(at: point),
+           let slot = headerInsertSlotHit(lane, point: point) {
+            let inserts = model.lanes[lane].inserts
+            let trackId = model.lanes[lane].trackId
+            if slot < inserts.count && !inserts[slot].isEmpty {
+                let menu = NSMenu()
+                let open = NSMenuItem(title: "에디터 열기", action: #selector(insertOpenMenu(_:)), keyEquivalent: "")
+                open.target = self; open.representedObject = HeaderMenuRef(track: trackId, slot: slot); menu.addItem(open)
+                let byp = NSMenuItem(title: inserts[slot].bypassed ? "바이패스 해제" : "바이패스",
+                                     action: #selector(insertBypassMenu(_:)), keyEquivalent: "")
+                byp.target = self; byp.representedObject = HeaderMenuRef(track: trackId, slot: slot); menu.addItem(byp)
+                menu.addItem(.separator())
+                let rem = NSMenuItem(title: "제거", action: #selector(insertRemoveMenu(_:)), keyEquivalent: "")
+                rem.target = self; rem.representedObject = HeaderMenuRef(track: trackId, slot: slot); menu.addItem(rem)
+                NSMenu.popUpContextMenu(menu, with: event, for: self)
+                return
+            } else {
+                onBrowseInsert?(trackId); return
+            }
+        }
         guard point.y < rulerHeight else { super.rightMouseDown(with: event); return }
         let menu = NSMenu()
         menu.addItem({ let h = NSMenuItem(title: "눈금자 표시", action: nil, keyEquivalent: ""); h.isEnabled = false; return h }())
@@ -1451,6 +1493,162 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
         meterBar(lane.peakLeft, atY: meter.minY)
         meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
+
+        drawHeaderInsertsSends(lane, index: index)
+    }
+
+    /// The Pro-Tools-style inserts row and sends row under the lane's fader/meter.
+    private func drawHeaderInsertsSends(_ lane: TimelineModel.Lane, index: Int) {
+        func chip(_ rect: NSRect, text: String, fill: NSColor, stroke: NSColor, textColor: NSColor,
+                  dashed: Bool = false, strike: Bool = false) {
+            fill.setFill()
+            let path = NSBezierPath(roundedRect: rect, xRadius: 2.5, yRadius: 2.5)
+            path.fill()
+            stroke.setStroke()
+            if dashed { path.setLineDash([2, 2], count: 2, phase: 0) }
+            path.lineWidth = 0.75
+            path.stroke()
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .medium),
+                .foregroundColor: textColor,
+            ]
+            let truncated = truncatedChipText(text, width: rect.width - 4, attrs: attrs)
+            let size = (truncated as NSString).size(withAttributes: attrs)
+            (truncated as NSString).draw(at: NSPoint(x: rect.minX + 3, y: rect.midY - size.height / 2), withAttributes: attrs)
+            if strike {
+                NSColor(hex: 0x9a8f7e).setStroke()
+                let line = NSBezierPath()
+                line.move(to: NSPoint(x: rect.minX + 3, y: rect.midY))
+                line.line(to: NSPoint(x: rect.minX + 3 + size.width, y: rect.midY))
+                line.lineWidth = 0.75
+                line.stroke()
+            }
+        }
+
+        // Inserts (labelled i on the far left of the row).
+        for slot in 0..<Self.headerInsertSlots {
+            let rect = headerInsertRect(index, slot: slot)
+            let ins = slot < lane.inserts.count ? lane.inserts[slot] : nil
+            let filled = ins != nil && !(ins!.isEmpty)
+            if filled {
+                let bypassed = ins!.bypassed
+                chip(rect, text: ins!.name,
+                     fill: NSColor(hex: 0x2f3b34).withAlphaComponent(bypassed ? 0.5 : 1),
+                     stroke: NSColor(hex: 0x5f9fd6).withAlphaComponent(bypassed ? 0.4 : 0.7),
+                     textColor: NSColor(hex: bypassed ? 0x6f6a60 : 0xbcd0e0),
+                     strike: bypassed)
+            } else {
+                chip(rect, text: ["A", "B", "C", "D"][slot],
+                     fill: NSColor(hex: 0x231e18), stroke: NSColor(hex: 0x3a332b),
+                     textColor: NSColor(hex: 0x5a5145), dashed: true)
+            }
+        }
+
+        // Sends: active sends then a trailing "+".
+        let sendCount = min(2, lane.sends.count)
+        for i in 0..<sendCount {
+            let rect = headerSendRect(index, slot: i)
+            chip(rect, text: lane.sends[i].label,
+                 fill: NSColor(hex: 0x25322f), stroke: NSColor(hex: 0x35bfa8).withAlphaComponent(0.6),
+                 textColor: NSColor(hex: 0x9fe4d6))
+        }
+        let plusRect = headerSendRect(index, slot: sendCount)
+        chip(plusRect, text: "+ 센드", fill: NSColor(hex: 0x231e18),
+             stroke: NSColor(hex: 0x3a332b), textColor: NSColor(hex: 0x6a6154), dashed: true)
+    }
+
+    private func truncatedChipText(_ text: String, width: CGFloat, attrs: [NSAttributedString.Key: Any]) -> String {
+        var s = text
+        while (s as NSString).size(withAttributes: attrs).width > width && s.count > 1 {
+            s = String(s.dropLast())
+        }
+        return s
+    }
+
+    // MARK: header inserts/sends interaction
+
+    private func headerInsertSlotHit(_ lane: Int, point: NSPoint) -> Int? {
+        for slot in 0..<Self.headerInsertSlots where headerInsertRect(lane, slot: slot).contains(point) { return slot }
+        return nil
+    }
+    private func headerSendSlotHit(_ lane: Int, point: NSPoint) -> Int? {
+        let count = min(2, model.lanes[lane].sends.count) + 1     // existing sends + the "+"
+        for slot in 0..<count where headerSendRect(lane, slot: slot).contains(point) { return slot }
+        return nil
+    }
+
+    private final class HeaderMenuRef: NSObject {
+        let track: Int, slot: Int; let gain: Float; let bus: String
+        init(track: Int, slot: Int = -1, gain: Float = 0, bus: String = "") {
+            self.track = track; self.slot = slot; self.gain = gain; self.bus = bus
+        }
+    }
+
+    private func handleInsertClick(trackId: Int, lane: Int, slot: Int, command: Bool) {
+        onSelectLane?(lane)
+        let inserts = model.lanes[lane].inserts
+        let filled = slot < inserts.count && !inserts[slot].isEmpty
+        if !filled { onBrowseInsert?(trackId); return }
+        if command { onBypassInsert?(trackId, slot); return }   // Pro Tools ⌘-click = bypass
+        onToggleInsertEditor?(trackId, slot)                    // left-click a filled insert opens its editor
+    }
+
+    private func handleSendClick(trackId: Int, lane: Int, slot: Int, event: NSEvent) {
+        onSelectLane?(lane)
+        let sends = model.lanes[lane].sends
+        let menu = NSMenu()
+        if slot < min(2, sends.count) {
+            let level = NSMenuItem(title: "레벨", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for db in [0, -3, -6, -12, -18, -24] {
+                let it = NSMenuItem(title: "\(db) dB", action: #selector(sendSetGainMenu(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: Float(db))
+                sub.addItem(it)
+            }
+            level.submenu = sub
+            menu.addItem(level)
+            menu.addItem(.separator())
+            let rm = NSMenuItem(title: "센드 제거", action: #selector(sendRemoveMenu(_:)), keyEquivalent: "")
+            rm.target = self; rm.representedObject = HeaderMenuRef(track: trackId, slot: slot)
+            menu.addItem(rm)
+        } else {
+            for bus in (onSendBusOptions?(trackId) ?? []) {
+                let it = NSMenuItem(title: bus, action: #selector(sendAddMenu(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, bus: bus)
+                menu.addItem(it)
+            }
+            if !(onSendBusOptions?(trackId) ?? []).isEmpty { menu.addItem(.separator()) }
+            let aux = NSMenuItem(title: "Aux 버스 만들기", action: #selector(sendAddAuxMenu(_:)), keyEquivalent: "")
+            aux.target = self; menu.addItem(aux)
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func sendSetGainMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onSetSendGain?(r.track, r.slot, r.gain)
+    }
+    @objc private func sendRemoveMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onRemoveSend?(r.track, r.slot)
+    }
+    @objc private func sendAddMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onAddSend?(r.track, r.bus)
+    }
+    @objc private func sendAddAuxMenu(_ s: NSMenuItem) { onAddAux?() }
+
+    @objc private func insertBypassMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onBypassInsert?(r.track, r.slot)
+    }
+    @objc private func insertRemoveMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onRemoveInsert?(r.track, r.slot)
+    }
+    @objc private func insertOpenMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? HeaderMenuRef else { return }
+        onToggleInsertEditor?(r.track, r.slot)
     }
 
     /// Markers live in the ruler below the range strip; they must not eat the scrub.
@@ -1569,6 +1767,23 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
     private func headerMeterRect(_ index: Int) -> NSRect {
         NSRect(x: 12, y: laneTop(index) + 62, width: Self.headerWidth - 24, height: 7)
+    }
+
+    // Inserts row: four slot chips. Sends row: active send chips plus a "+".
+    static let headerInsertSlots = 4
+    private func headerInsertRect(_ index: Int, slot: Int) -> NSRect {
+        let gap: CGFloat = 3
+        let totalW = Self.headerWidth - 24
+        let w = (totalW - gap * CGFloat(Self.headerInsertSlots - 1)) / CGFloat(Self.headerInsertSlots)
+        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 74, width: w, height: 13)
+    }
+    private func headerSendRect(_ index: Int, slot: Int) -> NSRect {
+        // Up to three chips across the row (existing sends, then the "+").
+        let gap: CGFloat = 3
+        let totalW = Self.headerWidth - 24
+        let count = 3
+        let w = (totalW - gap * CGFloat(count - 1)) / CGFloat(count)
+        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 89, width: w, height: 13)
     }
 
     private static let headerVolMinDb: Float = -60
@@ -1951,6 +2166,15 @@ struct TimelineView: NSViewRepresentable {
     var onRenameTrack: ((Int, String) -> Void)? = nil
     let onSetVolumeDb: (Int, Float) -> Void
     var onToggleTimebase: ((RulerTimebase) -> Void)? = nil
+    var onBrowseInsert: ((Int) -> Void)? = nil
+    var onToggleInsertEditor: ((Int, Int) -> Void)? = nil
+    var onBypassInsert: ((Int, Int) -> Void)? = nil
+    var onRemoveInsert: ((Int, Int) -> Void)? = nil
+    var onAddSend: ((Int, String) -> Void)? = nil
+    var onRemoveSend: ((Int, Int) -> Void)? = nil
+    var onSetSendGain: ((Int, Int, Float) -> Void)? = nil
+    var onAddAux: (() -> Void)? = nil
+    var onSendBusOptions: ((Int) -> [String])? = nil
 
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
@@ -1970,6 +2194,15 @@ struct TimelineView: NSViewRepresentable {
     private func wire(_ view: TimelineNSView) {
         view.onSeek = onSeek
         view.onToggleTimebase = onToggleTimebase
+        view.onBrowseInsert = onBrowseInsert
+        view.onToggleInsertEditor = onToggleInsertEditor
+        view.onBypassInsert = onBypassInsert
+        view.onRemoveInsert = onRemoveInsert
+        view.onAddSend = onAddSend
+        view.onRemoveSend = onRemoveSend
+        view.onSetSendGain = onSetSendGain
+        view.onAddAux = onAddAux
+        view.onSendBusOptions = onSendBusOptions
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange

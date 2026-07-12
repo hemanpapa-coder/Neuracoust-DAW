@@ -329,7 +329,16 @@ private struct EditView: View {
                     onToggleInputMonitor: { engine.toggleTrackInputMonitoring($0) },
                     onRenameTrack: { _ = engine.renameTrack($0, to: $1) },
                     onSetVolumeDb: { engine.setTrackVolume($0, $1) },
-                    onToggleTimebase: { engine.toggleRulerTimebase($0) }
+                    onToggleTimebase: { engine.toggleRulerTimebase($0) },
+                    onBrowseInsert: { engine.openPluginBrowser(forTrack: $0) },
+                    onToggleInsertEditor: { engine.pluginEditors.toggle(trackId: $0, insertIndex: $1) },
+                    onBypassInsert: { engine.toggleInsertBypass(track: $0, slot: $1) },
+                    onRemoveInsert: { engine.removeInsert(track: $0, slot: $1) },
+                    onAddSend: { engine.addSend($0, to: $1) },
+                    onRemoveSend: { engine.removeSend($0, slot: $1) },
+                    onSetSendGain: { engine.setSendGain($0, slot: $1, gainDb: $2) },
+                    onAddAux: { engine.addAuxTrack() },
+                    onSendBusOptions: { engine.sendBusOptions($0) }
                 )
 
                 PianoRollPanel()
