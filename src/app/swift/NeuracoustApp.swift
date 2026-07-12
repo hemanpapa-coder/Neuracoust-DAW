@@ -346,7 +346,7 @@ private struct EditView: View {
                     onSetFades: { engine.setClipFades($0, fadeIn: $1, fadeOut: $2) },
                     onSetGain: { engine.setClipGain($0, $1) },
                     onCommitGain: { engine.commitClipGain($0) },
-                    onSelectLane: { engine.selectLane($0) },
+                    onSelectLane: { engine.selectLane($0, additive: $1) },
                     onMoveClipToLane: { engine.moveClipToLane($0, laneIndex: $1, startSeconds: $2) },
                     onDropClipToNewTrack: { engine.dropClipToNewTrack($0, startSeconds: $1) },
                     onCommitEdit: { engine.commitClipGesture($0) },

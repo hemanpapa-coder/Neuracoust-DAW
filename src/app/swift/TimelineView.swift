@@ -212,7 +212,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
     var onSetGain: ((String, Float) -> Void)?
     var onCommitGain: ((String) -> Void)?                // drag-end: reconcile + record
-    var onSelectLane: ((Int) -> Void)?
+    var onSelectLane: ((Int, Bool) -> Void)?     // (laneIndex, additive/⇧)
     var onMoveClipToLane: ((String, Int, Double) -> Void)?  // (clipId, laneIndex, start)
     var onDropClipToNewTrack: ((String, Double) -> Void)?   // drop past last lane → new track
     var onCommitEdit: ((String) -> Void)?                // step name
@@ -269,9 +269,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case fadingIn(clip: TimelineModel.Clip)
         case fadingOut(clip: TimelineModel.Clip)
         case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
-        /// Dragging the inline volume fader in a lane header.
-        case headerFader(trackId: Int)
-        case headerPan(trackId: Int)
         /// Dragging a lane's bottom edge to resize all lanes.
         case resizingLane(startHeight: CGFloat, startY: CGFloat, laneIndex: Int)
     }
@@ -650,7 +647,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 } else if headerInputMonitorRect(lane).contains(point) {
                     onToggleInputMonitor?(trackId)
                 } else {
-                    onSelectLane?(lane)
+                    onSelectLane?(lane, event.modifierFlags.contains(.shift))
                 }
             } else if let lane = automationIndex(at: point) {
                 // The parameter name is the parameter picker: volume / pan / plug-in params.
@@ -930,11 +927,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             let perPoint = span / Float(max(1, laneHeight(clip.laneIndex) - 12))
             let value = startGainDb - Float(point.y - grabY) * perPoint
             onSetGain?(clip.id, min(Self.gainRange.upperBound, max(Self.gainRange.lowerBound, value)))
-        case .headerFader(let trackId):
-            // The fader's x-mapping is the same for every lane, so index 0 suffices.
-            onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: 0))
-        case .headerPan(let trackId):
-            onSetPan?(trackId, headerPan(atX: point.x, index: 0))
         case .resizingLane(let startHeight, let startY, let laneIndex):
             let raw = startHeight + (point.y - startY)
             let stepped = (raw / Self.laneHeightStep).rounded() * Self.laneHeightStep       // snap to a step
@@ -1009,12 +1001,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitEdit?("Move MIDI region")
         case .resizingRegion:
             onCommitEdit?("Resize MIDI region")
-        case .headerFader(let trackId):
-            onEndTouch?(trackId, "track.volume")
-            onCommitEdit?("Track volume")
-        case .headerPan(let trackId):
-            onEndTouch?(trackId, "track.pan")
-            onCommitEdit?("Track pan")
         case .resizingLane:
             onCommitLaneHeight?()      // persist the new height
         case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
@@ -1545,92 +1531,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
     }
 
-    /// Horizontal inline volume fader with a brushed-metal cap — the compact sibling of the
-    /// mixer's ChannelFader, sharing the same FaderScale taper (0 dB ~78% along).
-    private func drawHeaderFader(index: Int, lane: TimelineModel.Lane) {
-        let fader = headerFaderRect(index)
-
-        // Recessed slot: dark trough + a faint bottom highlight so it reads as inset.
-        NSColor(hex: 0x151009).setFill()
-        NSBezierPath(roundedRect: fader, xRadius: fader.height / 2, yRadius: fader.height / 2).fill()
-        NSColor.white.withAlphaComponent(0.06).setStroke()
-        let rim = NSBezierPath(roundedRect: fader.insetBy(dx: 0.5, dy: 0.5), xRadius: fader.height / 2, yRadius: fader.height / 2)
-        rim.lineWidth = 0.75; rim.stroke()
-
-        let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
-
-        // Filled portion from the left up to the cap, in the track's accent.
-        lane.accent.withAlphaComponent(0.7).setFill()
-        NSBezierPath(roundedRect: NSRect(x: fader.minX, y: fader.midY - 1.5,
-                                         width: max(0, knobX - fader.minX), height: 3),
-                     xRadius: 1.5, yRadius: 1.5).fill()
-
-        // Brushed-metal cap: vertical gradient body, rim, horizontal grip lines, accent tick.
-        let knobW: CGFloat = 11, knobH: CGFloat = 12
-        let knob = NSRect(x: knobX - knobW / 2, y: fader.midY - knobH / 2, width: knobW, height: knobH)
-        let cap = NSBezierPath(roundedRect: knob, xRadius: 3, yRadius: 3)
-        if let g = NSGradient(colors: [NSColor(hex: 0x6a727a), NSColor(hex: 0x363c44), NSColor(hex: 0x181c22)]) {
-            g.draw(in: cap, angle: -90)
-        }
-        NSColor.white.withAlphaComponent(0.30).setStroke(); cap.lineWidth = 0.75; cap.stroke()
-        NSColor.black.withAlphaComponent(0.35).setStroke()
-        for dy in [-3.0, 0.0, 3.0] as [CGFloat] {
-            let l = NSBezierPath()
-            l.move(to: NSPoint(x: knob.minX + 2.5, y: knob.midY + dy))
-            l.line(to: NSPoint(x: knob.maxX - 2.5, y: knob.midY + dy))
-            l.lineWidth = 0.75; l.stroke()
-        }
-        lane.accent.setFill()
-        NSRect(x: knob.midX - 0.75, y: knob.minY + 3, width: 1.5, height: knob.height - 6).fill()
-
-        (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
-            at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
-            withAttributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
-                .foregroundColor: NSColor(hex: 0x867b6a),
-            ])
-    }
-
-    /// Horizontal pan bar with a centre tick, its filled portion running from the middle
-    /// out to the knob — the inline sibling of the mixer's PanSlider.
-    private func drawHeaderPan(index: Int, lane: TimelineModel.Lane) {
-        let bar = headerPanRect(index)
-
-        NSColor(hex: 0x151009).setFill()
-        NSBezierPath(roundedRect: bar, xRadius: bar.height / 2, yRadius: bar.height / 2).fill()
-        NSColor.white.withAlphaComponent(0.06).setStroke()
-        let rim = NSBezierPath(roundedRect: bar.insetBy(dx: 0.5, dy: 0.5), xRadius: bar.height / 2, yRadius: bar.height / 2)
-        rim.lineWidth = 0.75; rim.stroke()
-
-        // Centre reference tick.
-        NSColor.white.withAlphaComponent(0.14).setFill()
-        NSRect(x: bar.midX - 0.5, y: bar.minY + 1, width: 1, height: bar.height - 2).fill()
-
-        let frac = CGFloat((lane.pan + 1) / 2)
-        let knobX = bar.minX + frac * bar.width
-        // Fill from centre to the knob.
-        lane.accent.withAlphaComponent(0.7).setFill()
-        let fillX = min(bar.midX, knobX), fillW = abs(knobX - bar.midX)
-        NSBezierPath(roundedRect: NSRect(x: fillX, y: bar.midY - 1.5, width: fillW, height: 3),
-                     xRadius: 1.5, yRadius: 1.5).fill()
-
-        // Knob.
-        let knobW: CGFloat = 9, knobH: CGFloat = 11
-        let knob = NSRect(x: knobX - knobW / 2, y: bar.midY - knobH / 2, width: knobW, height: knobH)
-        let cap = NSBezierPath(roundedRect: knob, xRadius: 2.5, yRadius: 2.5)
-        if let g = NSGradient(colors: [NSColor(hex: 0x6a727a), NSColor(hex: 0x363c44), NSColor(hex: 0x181c22)]) {
-            g.draw(in: cap, angle: -90)
-        }
-        NSColor.white.withAlphaComponent(0.30).setStroke(); cap.lineWidth = 0.75; cap.stroke()
-
-        (lane.pan == 0 ? "C" : String(format: lane.pan < 0 ? "L%.0f" : "R%.0f", abs(lane.pan) * 100) as NSString).draw(
-            at: NSPoint(x: bar.minX, y: bar.minY - 11),
-            withAttributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
-                .foregroundColor: NSColor(hex: 0x867b6a),
-            ])
-    }
-
     /// The automation-mode chip (R/T/L/W/O), coloured like Pro Tools' mode buttons.
     private func drawHeaderAutomationMode(index: Int, lane: TimelineModel.Lane) {
         let rect = headerAutomationModeRect(index)
@@ -1653,68 +1553,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                                   withAttributes: attrs)
     }
 
-    /// The Pro-Tools-style inserts row and sends row under the lane's fader/meter.
-    private func drawHeaderInsertsSends(_ lane: TimelineModel.Lane, index: Int) {
-        func chip(_ rect: NSRect, text: String, fill: NSColor, stroke: NSColor, textColor: NSColor,
-                  dashed: Bool = false, strike: Bool = false) {
-            fill.setFill()
-            let path = NSBezierPath(roundedRect: rect, xRadius: 2.5, yRadius: 2.5)
-            path.fill()
-            stroke.setStroke()
-            if dashed { path.setLineDash([2, 2], count: 2, phase: 0) }
-            path.lineWidth = 0.75
-            path.stroke()
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .medium),
-                .foregroundColor: textColor,
-            ]
-            let truncated = truncatedChipText(text, width: rect.width - 4, attrs: attrs)
-            let size = (truncated as NSString).size(withAttributes: attrs)
-            (truncated as NSString).draw(at: NSPoint(x: rect.minX + 3, y: rect.midY - size.height / 2), withAttributes: attrs)
-            if strike {
-                NSColor(hex: 0x9a8f7e).setStroke()
-                let line = NSBezierPath()
-                line.move(to: NSPoint(x: rect.minX + 3, y: rect.midY))
-                line.line(to: NSPoint(x: rect.minX + 3 + size.width, y: rect.midY))
-                line.lineWidth = 0.75
-                line.stroke()
-            }
-        }
-
-        // Inserts (labelled i on the far left of the row).
-        for slot in 0..<Self.headerInsertSlots {
-            let rect = headerInsertRect(index, slot: slot)
-            let ins = slot < lane.inserts.count ? lane.inserts[slot] : nil
-            let filled = ins != nil && !(ins!.isEmpty)
-            if filled {
-                let bypassed = ins!.bypassed
-                chip(rect, text: ins!.name,
-                     fill: NSColor(hex: 0x2f3b34).withAlphaComponent(bypassed ? 0.5 : 1),
-                     stroke: NSColor(hex: 0x5f9fd6).withAlphaComponent(bypassed ? 0.4 : 0.7),
-                     textColor: NSColor(hex: bypassed ? 0x6f6a60 : 0xbcd0e0),
-                     strike: bypassed)
-            } else {
-                chip(rect, text: ["A", "B", "C", "D"][slot],
-                     fill: NSColor(hex: 0x231e18), stroke: NSColor(hex: 0x3a332b),
-                     textColor: NSColor(hex: 0x5a5145), dashed: true)
-            }
-        }
-
-        // Sends need another row; only when the lane is tall enough for it.
-        guard laneHeight(index) >= 106 else { return }
-        // Sends: active sends then a trailing "+".
-        let sendCount = min(2, lane.sends.count)
-        for i in 0..<sendCount {
-            let rect = headerSendRect(index, slot: i)
-            chip(rect, text: lane.sends[i].label,
-                 fill: NSColor(hex: 0x25322f), stroke: NSColor(hex: 0x35bfa8).withAlphaComponent(0.6),
-                 textColor: NSColor(hex: 0x9fe4d6))
-        }
-        let plusRect = headerSendRect(index, slot: sendCount)
-        chip(plusRect, text: "+ 센드", fill: NSColor(hex: 0x231e18),
-             stroke: NSColor(hex: 0x3a332b), textColor: NSColor(hex: 0x6a6154), dashed: true)
-    }
-
     private func truncatedChipText(_ text: String, width: CGFloat, attrs: [NSAttributedString.Key: Any]) -> String {
         var s = text
         while (s as NSString).size(withAttributes: attrs).width > width && s.count > 1 {
@@ -1729,74 +1567,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         for slot in 0..<Self.headerInsertSlots where headerInsertRect(lane, slot: slot).contains(point) { return slot }
         return nil
     }
-    private func headerSendSlotHit(_ lane: Int, point: NSPoint) -> Int? {
-        let count = min(2, model.lanes[lane].sends.count) + 1     // existing sends + the "+"
-        for slot in 0..<count where headerSendRect(lane, slot: slot).contains(point) { return slot }
-        return nil
-    }
-
     private final class HeaderMenuRef: NSObject {
         let track: Int, slot: Int; let gain: Float; let bus: String
         init(track: Int, slot: Int = -1, gain: Float = 0, bus: String = "") {
             self.track = track; self.slot = slot; self.gain = gain; self.bus = bus
         }
-    }
-
-    private func handleInsertClick(trackId: Int, lane: Int, slot: Int, command: Bool) {
-        onSelectLane?(lane)
-        let inserts = model.lanes[lane].inserts
-        let filled = slot < inserts.count && !inserts[slot].isEmpty
-        if !filled { onBrowseInsert?(trackId); return }
-        if command { onBypassInsert?(trackId, slot); return }   // Pro Tools ⌘-click = bypass
-        onToggleInsertEditor?(trackId, slot)                    // left-click a filled insert opens its editor
-    }
-
-    private func handleSendClick(trackId: Int, lane: Int, slot: Int, event: NSEvent) {
-        onSelectLane?(lane)
-        let sends = model.lanes[lane].sends
-        let menu = NSMenu()
-        if slot < min(2, sends.count) {
-            let send = sends[slot]
-            let level = NSMenuItem(title: "레벨", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for db in SendControls.levels {
-                let it = NSMenuItem(title: "\(db) dB", action: #selector(sendSetGainMenu(_:)), keyEquivalent: "")
-                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: Float(db))
-                sub.addItem(it)
-            }
-            level.submenu = sub
-            menu.addItem(level)
-
-            let panItem = NSMenuItem(title: "팬", action: nil, keyEquivalent: "")
-            let panSub = NSMenu()
-            for pan in SendControls.pans {
-                let it = NSMenuItem(title: pan.label, action: #selector(sendSetPanMenu(_:)), keyEquivalent: "")
-                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: pan.value)
-                panSub.addItem(it)
-            }
-            panItem.submenu = panSub
-            menu.addItem(panItem)
-
-            let pf = NSMenuItem(title: send.preFader ? "포스트 페이더로" : "프리 페이더로",
-                                action: #selector(sendPreFaderMenu(_:)), keyEquivalent: "")
-            pf.target = self; pf.representedObject = HeaderMenuRef(track: trackId, slot: slot, gain: send.preFader ? 0 : 1)
-            menu.addItem(pf)
-
-            menu.addItem(.separator())
-            let rm = NSMenuItem(title: "센드 제거", action: #selector(sendRemoveMenu(_:)), keyEquivalent: "")
-            rm.target = self; rm.representedObject = HeaderMenuRef(track: trackId, slot: slot)
-            menu.addItem(rm)
-        } else {
-            for bus in (onSendBusOptions?(trackId) ?? []) {
-                let it = NSMenuItem(title: bus, action: #selector(sendAddMenu(_:)), keyEquivalent: "")
-                it.target = self; it.representedObject = HeaderMenuRef(track: trackId, bus: bus)
-                menu.addItem(it)
-            }
-            if !(onSendBusOptions?(trackId) ?? []).isEmpty { menu.addItem(.separator()) }
-            let aux = NSMenuItem(title: "Aux 버스 만들기", action: #selector(sendAddAuxMenu(_:)), keyEquivalent: "")
-            aux.target = self; menu.addItem(aux)
-        }
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     @objc private func sendSetGainMenu(_ s: NSMenuItem) {
@@ -2003,23 +1778,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         NSRect(x: 12 + 3 * (Self.headerButtonWidth + 3), y: laneTop(index) + 30,
                width: Self.headerButtonWidth, height: Self.headerButtonHeight)
     }
-    /// The volume fader track spans this rect; the fill maps -60…+6 dB left→right.
-    private func headerFaderRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 50, width: Self.headerWidth - 24, height: 8)
-    }
-    /// Horizontal pan bar, centre-detented, directly under the fader.
-    private func headerPanRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 61, width: Self.headerWidth - 24, height: 8)
-    }
-    private func headerMeterRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 72, width: Self.headerWidth - 24, height: 7)
-    }
     /// Small square top-right of the header that shows/cycles the automation mode.
     private func headerAutomationModeRect(_ index: Int) -> NSRect {
         NSRect(x: Self.headerWidth - 46, y: laneTop(index) + 10, width: 16, height: 14)
     }
 
-    // Inserts row: four slot chips. Sends row: active send chips plus a "+".
+    // Insert slot hit-testing for the header's right-click context menu: four slot chips.
     static let headerInsertSlots = 4
     private func headerInsertRect(_ index: Int, slot: Int) -> NSRect {
         let gap: CGFloat = 3
@@ -2027,33 +1791,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let w = (totalW - gap * CGFloat(Self.headerInsertSlots - 1)) / CGFloat(Self.headerInsertSlots)
         return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 84, width: w, height: 13)
     }
-    private func headerSendRect(_ index: Int, slot: Int) -> NSRect {
-        // Up to three chips across the row (existing sends, then the "+").
-        let gap: CGFloat = 3
-        let totalW = Self.headerWidth - 24
-        let count = 3
-        let w = (totalW - gap * CGFloat(count - 1)) / CGFloat(count)
-        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 100, width: w, height: 13)
-    }
-
-    // The inline fader uses the same console taper as the mixer, so 0 dB sits ~78% along
-    // and near-unity moves are expanded — not a straight line.
-    private func headerFaderFraction(_ db: Float) -> CGFloat {
-        CGFloat(FaderScale.position(forDb: db))
-    }
-    private func headerFaderDb(atX pointX: CGFloat, index: Int) -> Float {
-        let rect = headerFaderRect(index)
-        let fraction = Double(min(1, max(0, (pointX - rect.minX) / max(1, rect.width))))
-        return FaderScale.db(forPosition: fraction)
-    }
-    /// Pan maps linearly across the bar, −1 (L) … +1 (R), with a small snap to centre.
-    private func headerPan(atX pointX: CGFloat, index: Int) -> Float {
-        let rect = headerPanRect(index)
-        let f = Float(min(1, max(0, (pointX - rect.minX) / max(1, rect.width))))
-        let pan = f * 2 - 1
-        return abs(pan) < 0.06 ? 0 : pan          // centre detent
-    }
-
 
     /// Value axis: the top of the row is the parameter's maximum. Volume uses the same
     /// console taper as the fader (0 dB ~78% up), so where the curve sits matches where
@@ -2430,7 +2167,7 @@ struct TimelineView: NSViewRepresentable {
     let onSetFades: (String, Double, Double) -> Void
     let onSetGain: (String, Float) -> Void
     let onCommitGain: (String) -> Void
-    let onSelectLane: (Int) -> Void
+    let onSelectLane: (Int, Bool) -> Void
     let onMoveClipToLane: (String, Int, Double) -> Void
     let onDropClipToNewTrack: (String, Double) -> Void
     let onCommitEdit: (String) -> Void

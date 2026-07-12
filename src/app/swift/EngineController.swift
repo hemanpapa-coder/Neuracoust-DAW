@@ -1650,7 +1650,7 @@ final class EngineController: ObservableObject {
                 return TimelineModel.Lane(name: track.name,
                                           accent: NSColor.from(track.kind.accent),
                                           muted: track.muted,
-                                          selected: track.id == selectedTrackId,
+                                          selected: selectedMixerTrackIds.contains(track.id),
                                           trackId: track.id,
                                           soloed: track.solo,
                                           armed: track.recordArmed,
@@ -1833,9 +1833,18 @@ final class EngineController: ObservableObject {
     }
 
     /// Lane indices address `laneTracks`, not `tracks` — Master and Monitor are not lanes.
-    func selectLane(_ laneIndex: Int) {
+    /// Click a lane to select its track; ⇧-click adds/removes it from the selection so a
+    /// bottom-edge drag resizes every selected lane's height together.
+    func selectLane(_ laneIndex: Int, additive: Bool = false) {
         guard laneIndex < laneTracks.count else { return }
-        selectedTrackId = laneTracks[laneIndex].id
+        let id = laneTracks[laneIndex].id
+        if additive {
+            if selectedMixerTrackIds.contains(id) { selectedMixerTrackIds.remove(id) }
+            else { selectedMixerTrackIds.insert(id) }
+        } else {
+            selectedMixerTrackIds = [id]
+        }
+        selectedTrackId = id
     }
 
     /// The engine track id for a timeline lane, or nil past the last lane.
@@ -1985,6 +1994,7 @@ final class EngineController: ObservableObject {
         reloadClips()
         refreshHistory()
         selectedTrackId = Int(newIndex)
+        selectedMixerTrackIds = [Int(newIndex)]
     }
 
     /// Reorder a mixer channel: drop `sourceId` before/after `targetId`.
@@ -2001,6 +2011,7 @@ final class EngineController: ObservableObject {
         reloadClips()
         refreshHistory()
         selectedTrackId = tracks.first(where: { $0.name == source.name })?.id ?? selectedTrackId
+        if let id = selectedTrackId { selectedMixerTrackIds = [id] }
     }
 
     func addInstrumentTrack() {
@@ -2029,6 +2040,7 @@ final class EngineController: ObservableObject {
             return
         }
         selectedTrackId = nil
+        selectedMixerTrackIds = []
         selectedClipIds = []
         reloadTracks()
         reloadClips()
