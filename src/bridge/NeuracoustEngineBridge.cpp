@@ -1041,6 +1041,15 @@ float nc_track_send_gain_db(NCEngine* engine, int index, int slot) {
     return track->sends[static_cast<size_t>(slot)].gainDb;
 }
 
+// Reorder a mixer channel: move `sourceName` to sit before/after `targetName`.
+bool nc_track_move_near(NCEngine* engine, const char* sourceName, const char* targetName, bool after) {
+    if (engine == nullptr || sourceName == nullptr || targetName == nullptr) return false;
+    if (!neuracoust::daw::moveTrackNearTrack(engine->project, sourceName, targetName, after)) return false;
+    engine->reconcileProject();
+    engine->recordStep("Reorder mixer channel");
+    return true;
+}
+
 int nc_track_add_aux(NCEngine* engine) {
     if (engine == nullptr) return -1;
     auto& tracks = engine->project.tracks;

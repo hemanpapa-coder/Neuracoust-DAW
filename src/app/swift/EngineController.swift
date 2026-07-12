@@ -1810,6 +1810,22 @@ final class EngineController: ObservableObject {
         selectedTrackId = Int(newIndex)
     }
 
+    /// Reorder a mixer channel: drop `sourceId` before/after `targetId`.
+    func moveTrackNear(_ sourceId: Int, targetId: Int, after: Bool) {
+        guard let handle, sourceId != targetId,
+              let source = tracks.first(where: { $0.id == sourceId }),
+              let target = tracks.first(where: { $0.id == targetId }),
+              source.kind != .master, target.kind != .master else { return }
+        let moved = source.name.withCString { s in
+            target.name.withCString { t in nc_track_move_near(handle, s, t, after) }
+        }
+        guard moved else { return }
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+        selectedTrackId = tracks.first(where: { $0.name == source.name })?.id ?? selectedTrackId
+    }
+
     func addInstrumentTrack() {
         guard let handle, nc_track_add_instrument(handle) >= 0 else { return }
         reloadTracks()

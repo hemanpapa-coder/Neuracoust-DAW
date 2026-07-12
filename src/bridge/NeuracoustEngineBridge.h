@@ -181,6 +181,9 @@ bool nc_track_clear_instrument(NCEngine* engine, int trackIndex);
 int nc_track_duplicate(NCEngine* engine, int trackIndex,
                        bool includeClips, bool includeInserts, bool includeSends);
 
+/// Reorder a mixer channel next to another track (before/after), by name.
+bool nc_track_move_near(NCEngine* engine, const char* sourceName, const char* targetName, bool after);
+
 /// Shuffle (ripple) edit mode. A shuffle move drops the clip and slides its
 /// neighbours to close/open the gap; a shuffle delete removes the range and pulls
 /// later clips left to fill it. Both record their own step.

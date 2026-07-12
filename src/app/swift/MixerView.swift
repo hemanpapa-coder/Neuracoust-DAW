@@ -211,7 +211,10 @@ struct ChannelStrip: View {
 
     @State private var renaming = false
     @State private var draftName = ""
+    @State private var dropTargeted = false
     @FocusState private var nameFieldFocused: Bool
+
+    private var reorderable: Bool { track.kind != .master }
 
     let track: EngineController.Track
     let isChild: Bool
@@ -249,10 +252,17 @@ struct ChannelStrip: View {
                 .fill(stripBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                        .stroke(stripBorder, lineWidth: 1)
+                        .stroke(dropTargeted ? Theme.Palette.accent : stripBorder,
+                                lineWidth: dropTargeted ? 2 : 1)
                 )
         )
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+        // Drop another channel here to reorder it before/after this one (drop side decides).
+        .dropDestination(for: String.self) { items, location in
+            guard reorderable, let first = items.first, let sourceId = Int(first) else { return false }
+            engine.moveTrackNear(sourceId, targetId: track.id, after: location.x > 61)
+            return true
+        } isTargeted: { dropTargeted = $0 && reorderable }
     }
 
     private var stripBackground: Color {
@@ -277,8 +287,9 @@ struct ChannelStrip: View {
 
     // MARK: Sections
 
+    @ViewBuilder
     private var header: some View {
-        VStack(spacing: 0) {
+        let content = VStack(spacing: 0) {
             Rectangle().fill(accent).frame(height: 3)
             HStack(spacing: Theme.Space.sm) {
                 Circle().fill(accent).frame(width: 5, height: 5)
@@ -292,6 +303,13 @@ struct ChannelStrip: View {
             .padding(.horizontal, Theme.Space.md)
             .frame(height: 18)
             .background(accent.opacity(0.13))
+        }
+        .contentShape(Rectangle())
+        // Drag the header to reorder the channel (Master stays put).
+        if reorderable {
+            content.onDrag { NSItemProvider(object: "\(track.id)" as NSString) }
+        } else {
+            content
         }
     }
 
