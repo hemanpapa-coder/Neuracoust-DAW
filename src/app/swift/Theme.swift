@@ -99,14 +99,18 @@ enum Theme {
         static let ui = "Space Grotesk"
         static let mono = "IBM Plex Mono"
 
+        /// Global readability bump — every call site keeps its relative size; this lifts
+        /// the whole UI by a couple of points at once (the text was too small to read).
+        static let sizeBump: CGFloat = 2
+
         // Space Grotesk and IBM Plex Mono are not system fonts. Until they ship in
         // the bundle, Font.custom falls back to the system face at the same size.
         static func ui(_ size: CGFloat, _ weight: SwiftUI.Font.Weight = .regular) -> SwiftUI.Font {
-            .custom(ui, size: size).weight(weight)
+            .custom(ui, size: size + sizeBump).weight(weight)
         }
 
         static func mono(_ size: CGFloat, _ weight: SwiftUI.Font.Weight = .regular) -> SwiftUI.Font {
-            .custom(mono, size: size).weight(weight)
+            .custom(mono, size: size + sizeBump).weight(weight)
         }
     }
 

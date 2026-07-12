@@ -816,21 +816,21 @@ struct ChannelStrip: View {
         // spacing 0 with explicit per-gap padding: the scale ticks hug the fader (3 pt)
         // and the meter ticks hug the meter (1 pt). The single dB readout lives in
         // `volumeReadout` below, not here.
-        // The level meter is now horizontal (above the fader), so the fader sits dead
-        // centre with just its dB legend floated on the left edge.
-        ChannelFader(volumeDb: track.volumeDb,
-                     accent: accent,
-                     onChange: { engine.setTrackVolume(track.id, $0) },
-                     onCommit: {
-                         engine.endAutomationTouch(track.id, "track.volume")
-                         if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
-                     },
-                     onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
-            .frame(width: 18, height: 132)
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .leading) {
-                FaderScaleMarks(capHeight: ChannelFader.capHeight).frame(height: 132)
-            }
+        // The level meter is horizontal (above the fader), so the fader + its dB legend
+        // sit together, centred — the scale hugs the knob (~2 pt) so it stays readable.
+        HStack(spacing: 2) {
+            FaderScaleMarks(capHeight: ChannelFader.capHeight).frame(height: 132)
+            ChannelFader(volumeDb: track.volumeDb,
+                         accent: accent,
+                         onChange: { engine.setTrackVolume(track.id, $0) },
+                         onCommit: {
+                             engine.endAutomationTouch(track.id, "track.volume")
+                             if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
+                         },
+                         onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
+                .frame(width: 18, height: 132)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // The Master strip has no per-track signal of its own — it is the sum bus, so its
@@ -850,6 +850,22 @@ struct ChannelStrip: View {
                                      active: engine.autoFadeOutSeconds > 0)
                     .environmentObject(engine)
                     .frame(width: 30, height: 20)
+                    // The curve is chosen by right-clicking the graph now (the text picker
+                    // below was redundant).
+                    .contextMenu {
+                        Text("페이드 커브")
+                        ForEach(EngineController.autoFadeCurves, id: \.self) { curve in
+                            Button {
+                                engine.setAutoFadeCurve(curve)
+                            } label: {
+                                if curve == engine.autoFadeOutCurve {
+                                    Label(autoFadeCurveLabel(curve), systemImage: "checkmark")
+                                } else {
+                                    Text(autoFadeCurveLabel(curve))
+                                }
+                            }
+                        }
+                    }
                 Button { engine.setAutoFadeSeconds(max(0, engine.autoFadeOutSeconds - 1)) } label: {
                     Text("−").font(Theme.Font.ui(11, .bold)).frame(width: 16, height: 16)
                 }
@@ -870,18 +886,6 @@ struct ChannelStrip: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.Palette.text)
             }
-            Menu {
-                ForEach(EngineController.autoFadeCurves, id: \.self) { curve in
-                    Button(autoFadeCurveLabel(curve)) { engine.setAutoFadeCurve(curve) }
-                }
-            } label: {
-                Text("커브: \(autoFadeCurveLabel(engine.autoFadeOutCurve)) ▾")
-                    .font(Theme.Font.ui(8))
-                    .foregroundStyle(Theme.Palette.textDim)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
         }
     }
 

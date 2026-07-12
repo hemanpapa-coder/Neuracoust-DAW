@@ -3558,7 +3558,7 @@ final class EngineController: ObservableObject {
     @Published var autoFadeOutCurve = "equal_power"
     static let autoFadeCurves = ["equal_power", "s_curve", "linear", "exponential", "logarithmic"]
     /// The length used when auto fade-out is first turned on.
-    static let defaultAutoFadeSeconds = 5.0
+    static let defaultAutoFadeSeconds = 4.0
 
     func setAutoFadeSeconds(_ seconds: Double) {
         guard let handle else { return }
