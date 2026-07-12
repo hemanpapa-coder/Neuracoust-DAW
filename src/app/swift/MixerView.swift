@@ -330,16 +330,24 @@ struct ChannelStrip: View {
                     .frame(width: 2, height: 26)
             )
             .contentShape(Rectangle())
+            // Global coordinate space: the handle sits on the strip's trailing edge, which
+            // moves as the strip resizes — a local-space translation would chase its own
+            // tail and oscillate. Global translation is pure cursor delta, so it's stable.
             .gesture(
-                DragGesture(minimumDistance: 2)
+                DragGesture(minimumDistance: 2, coordinateSpace: .global)
                     .onChanged { value in
                         // A drag on any strip in the mixer selection resizes the whole
-                        // selection together; otherwise just this strip.
-                        let sel = engine.selectedMixerTrackIds
-                        let targets: Set<Int> = (sel.contains(track.id) && sel.count > 1) ? sel : [track.id]
-                        engine.channelWidthDrag = .init(
-                            targets: targets,
-                            width: engine.channelWidthFor(track.id) + value.translation.width)
+                        // selection together; otherwise just this strip. The anchor width is
+                        // captured once (on first change) so the whole gesture is relative to it.
+                        if engine.channelWidthDrag == nil {
+                            let sel = engine.selectedMixerTrackIds
+                            let targets: Set<Int> = (sel.contains(track.id) && sel.count > 1) ? sel : [track.id]
+                            engine.channelWidthDrag = .init(targets: targets,
+                                                            anchorWidth: engine.channelWidthFor(track.id),
+                                                            width: engine.channelWidthFor(track.id))
+                        }
+                        engine.channelWidthDrag?.width =
+                            (engine.channelWidthDrag?.anchorWidth ?? 122) + value.translation.width
                     }
                     .onEnded { _ in
                         if let drag = engine.channelWidthDrag {
@@ -409,12 +417,14 @@ struct ChannelStrip: View {
             .background(accent.opacity(0.13))
         }
         .contentShape(Rectangle())
-        // Click the header to select the strip; ⌘/⇧-click extends the selection.
-        .onTapGesture {
+        // Click the header to select the strip; ⌘/⇧-click extends the selection. A
+        // *simultaneous* tap gesture leaves the drag-to-reorder (`.draggable`) intact —
+        // a plain `.onTapGesture` would consume the press and kill the drag.
+        .simultaneousGesture(TapGesture().onEnded {
             let flags = NSEvent.modifierFlags
             engine.selectMixerTrack(track.id,
                                     additive: flags.contains(.command) || flags.contains(.shift))
-        }
+        })
         // Drag the header to reorder the channel (Master stays put).
         if reorderable {
             content.draggable(ChannelDragPayload(trackId: track.id))
@@ -518,11 +528,12 @@ struct ChannelStrip: View {
         }
     }
 
-    /// Five fixed send slots (A–E), each a bus + level fader + pre/post, Pro Tools style.
-    /// An empty slot offers a bus to assign; a filled one is the SendSlotRow.
+    /// Five fixed send slots (A–E), a pre-allocated region like the inserts above: an
+    /// empty slot is a dashed reserved box that assigns a bus on click; a filled one is
+    /// the SendSlotRow (bus + level fader + pre/post), Pro Tools style.
     private var sendSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("센드")
+            Text("센드 A–E")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
 
@@ -543,7 +554,7 @@ struct ChannelStrip: View {
                         if !options.isEmpty { Divider() }
                         Button("Aux 버스 만들기") { engine.addAuxTrack() }
                     } label: {
-                        sendChip("＋ \(["A", "B", "C", "D", "E"][slot])", filled: false)
+                        emptySendSlot
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -552,22 +563,13 @@ struct ChannelStrip: View {
         }
     }
 
-    private func sendChip(_ text: String, filled: Bool) -> some View {
-        Text(text)
-            .font(Theme.Font.ui(8))
-            .foregroundStyle(filled ? Theme.Palette.teal : Theme.Palette.textFaint)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.Space.md)
-            .frame(height: 16)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                    .fill(filled ? Theme.Palette.teal.opacity(0.14) : Theme.Palette.button)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                            .stroke(Theme.Palette.divider, lineWidth: 1)
-                    )
-            )
+    /// A reserved, dashed send slot — the same look as an empty insert `SlotChip`.
+    private var emptySendSlot: some View {
+        RoundedRectangle(cornerRadius: Theme.Radius.pill)
+            .strokeBorder(Theme.Palette.coolDivider, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(Theme.Palette.background))
+            .frame(height: 14)
+            .contentShape(Rectangle())
     }
 
     private func slotSection(_ title: String, _ items: [String], _ tint: Color) -> some View {
@@ -791,7 +793,7 @@ struct ChannelStrip: View {
 
     private var faderSection: some View {
         HStack(alignment: .top, spacing: 5) {
-            FaderScaleMarks(capHeight: 22)
+            FaderScaleMarks(capHeight: ChannelFader.capHeight)
                 .frame(height: 132)
 
             VStack(spacing: 3) {
@@ -811,8 +813,8 @@ struct ChannelStrip: View {
             }
 
             HStack(spacing: 3) {
-                VerticalMeter(peak: meterPeakLeft)
-                VerticalMeter(peak: meterPeakRight)
+                VerticalMeter(peak: meterPeakLeft, width: 6)
+                VerticalMeter(peak: meterPeakRight, width: 6)
             }
             .frame(height: 132)
 

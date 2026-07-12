@@ -11,14 +11,15 @@ import QuartzCore
 /// the printed legend agree exactly. Position is 0 at the bottom of the throw, 1 at the top.
 enum FaderScale {
     static let silenceDb: Float = -120
-    static let maxDb: Float = 6
+    static let maxDb: Float = 12
 
-    /// (dB, position) anchors, ascending. Unity sits near the top and the 6-dB steps below
-    /// it are near-even with a gentle downward compression — the console/Nuendo look.
+    /// (dB, position) anchors, ascending. The fader boosts to +12 dB at the very top;
+    /// unity (0 dB) sits ~80% up, with the 6-dB steps below near-even and a gentle
+    /// downward compression toward the floor — the console/Nuendo look.
     static let anchors: [(db: Float, pos: Double)] = [
-        (-120, 0.000), (-60, 0.075), (-48, 0.150), (-42, 0.220), (-36, 0.300),
-        (-30, 0.385), (-24, 0.475), (-18, 0.570), (-12, 0.670), (-6, 0.775),
-        (0, 0.885), (6, 1.000),
+        (-120, 0.000), (-60, 0.070), (-48, 0.140), (-42, 0.195), (-36, 0.260),
+        (-30, 0.335), (-24, 0.415), (-18, 0.500), (-12, 0.590), (-6, 0.690),
+        (0, 0.800), (6, 0.900), (12, 1.000),
     ]
 
     static func position(forDb db: Float) -> Double {
@@ -45,10 +46,10 @@ enum FaderScale {
         return maxDb
     }
 
-    // 6-dB legend, 0 at the top: 0 · 6 · 12 · … · 48 (labels are magnitudes).
+    // Signed legend: +12 at the top, unity in the middle, -∞ at the very bottom.
     static let marks: [(String, Float)] = [
-        ("0", 0), ("6", -6), ("12", -12), ("18", -18), ("24", -24),
-        ("30", -30), ("36", -36), ("42", -42), ("48", -48),
+        ("+12", 12), ("+6", 6), ("0", 0), ("-6", -6), ("-12", -12),
+        ("-24", -24), ("-36", -36), ("-48", -48), ("-∞", -120),
     ]
 }
 
@@ -167,15 +168,15 @@ struct FaderScaleMarks: View {
                     Text(label)
                         .font(Theme.Font.mono(7, unity ? .semibold : .regular))
                         .foregroundStyle(Color(hex: unity ? 0xb6bbc2 : 0x8b9096))
-                        .frame(width: 13, alignment: .trailing)
+                        .frame(width: 17, alignment: .trailing)
                     Rectangle()
                         .fill(Color(hex: 0x4a4f56))
                         .frame(width: unity ? 6 : 4, height: 1)
                 }
-                .position(x: 12, y: y)
+                .position(x: 14, y: y)
             }
         }
-        .frame(width: 24)
+        .frame(width: 28)
     }
 }
 
@@ -196,9 +197,12 @@ struct ChannelFader: View {
 
     @State private var dragStartDb: Float?
 
+    /// Shared so the scale marks beside the fader line up with the cap exactly.
+    static let capHeight: CGFloat = 26
+
     var body: some View {
         GeometryReader { geo in
-            let travel = geo.size.height - capHeight
+            let travel = geo.size.height - Self.capHeight
             let capY = travel * (1 - FaderScale.position(forDb: volumeDb))
 
             ZStack(alignment: .top) {
@@ -210,7 +214,7 @@ struct ChannelFader: View {
                     .overlay(alignment: .bottom) {
                         Capsule()
                             .fill(accent.opacity(0.55))
-                            .frame(width: 4, height: max(0, geo.size.height - capY - capHeight / 2))
+                            .frame(width: 4, height: max(0, geo.size.height - capY - Self.capHeight / 2))
                     }
 
                 faderCap
@@ -241,8 +245,6 @@ struct ChannelFader: View {
         }
     }
 
-    private let capHeight: CGFloat = 26
-
     /// The design's cap is a physical knob: two radial gradients plus an inset rim.
     private var faderCap: some View {
         ZStack {
@@ -265,7 +267,7 @@ struct ChannelFader: View {
                 .frame(height: 2)
                 .shadow(color: accent.opacity(0.8), radius: 2)
         }
-        .frame(width: 30, height: capHeight)
+        .frame(width: 30, height: Self.capHeight)
     }
 }
 
@@ -377,24 +379,24 @@ struct VerticalMeter: View {
     }
 }
 
-/// The coloured dB scale beside the meters: headroom marks (>0) amber, 0 and below green.
+/// The dBFS scale beside the meters. A digital peak meter tops out at 0 dBFS — the same
+/// range the bar itself spans (meterFraction maps 0 dBFS → full, -60 dBFS → empty).
 struct MeterScale: View {
-    // (label, dB) — dBFS-style: +16 at top … -36 at the floor.
+    // (label, dBFS) — 0 at the very top, down to the -60 dBFS floor.
     private let marks: [(String, Double)] = [
-        ("16", 16), ("12", 12), ("8", 8), ("0", 0), ("8", -8), ("16", -16), ("24", -24), ("36", -36),
+        ("0", 0), ("-6", -6), ("-12", -12), ("-24", -24), ("-36", -36), ("-48", -48), ("-60", -60),
     ]
-    private let topDb = 16.0, botDb = -36.0
+    private let topDb = 0.0, botDb = -60.0
 
     var body: some View {
         GeometryReader { geo in
             ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
-                let frac = (topDb - m.1) / (topDb - botDb)          // 0 at top
-                let over = m.1 > 0.001
+                let frac = (topDb - m.1) / (topDb - botDb)          // 0 dBFS at top
                 HStack(spacing: 2) {
                     Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 4, height: 1)
                     Text(m.0)
                         .font(Theme.Font.mono(7, m.1 == 0 ? .bold : .regular))
-                        .foregroundStyle(over ? Color(hex: 0xd9a441) : Color(hex: 0x3fb950))
+                        .foregroundStyle(Color(hex: 0x3fb950))
                 }
                 .position(x: 12, y: CGFloat(frac) * geo.size.height)
             }

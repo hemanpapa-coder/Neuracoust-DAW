@@ -98,7 +98,7 @@ final class EngineController: ObservableObject {
     /// Live width-drag preview. While a strip's right edge is dragged, every targeted
     /// strip (the whole mixer selection when the dragged strip is part of it) renders at
     /// `width` until the gesture commits. nil when no drag is in flight.
-    struct ChannelWidthDrag { var targets: Set<Int>; var width: CGFloat }
+    struct ChannelWidthDrag { var targets: Set<Int>; var anchorWidth: CGFloat; var width: CGFloat }
     @Published var channelWidthDrag: ChannelWidthDrag?
 
     /// The Pro-Tools-style record mode chosen from the record button's context menu.
