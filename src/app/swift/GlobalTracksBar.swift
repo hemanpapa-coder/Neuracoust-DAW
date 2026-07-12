@@ -46,6 +46,8 @@ struct GlobalTracksBar: View {
     @State private var heights: [String: CGFloat] = [:]
     @State private var addTarget: AddTarget?
     @State private var dragSeconds: [String: Double] = [:]
+    // Markers dragged far out of the lane vertically — shown as a trash icon, deleted on drop.
+    @State private var markerTrashing: Set<String> = []
     private struct AddTarget: Identifiable { let id = UUID(); let ruler: Ruler; let seconds: Double }
 
     private func height(_ r: Ruler) -> CGFloat { heights[r.rawValue] ?? r.defaultHeight }
@@ -277,20 +279,59 @@ struct GlobalTracksBar: View {
 
     private func markerFlag(time: Double, label: String, laneWidth: CGFloat,
                             onMove: @escaping (Double) -> Void, onDelete: @escaping () -> Void) -> some View {
-        let px = x(dragSeconds["m\(time)"] ?? time, laneWidth)
+        let key = "m\(time)"
+        let px = x(dragSeconds[key] ?? time, laneWidth)
+        let trashing = markerTrashing.contains(key)
+        let pinW: CGFloat = 9
         return Group {
             if px >= Self.headerWidth - 40 && px <= Self.headerWidth + laneWidth {
                 HStack(spacing: 2) {
-                    MarkerPin().fill(Ruler.marker.color).frame(width: 9, height: 12)
-                    if !label.isEmpty {
+                    if trashing {
+                        Image(systemName: "trash.fill").font(.system(size: 10))
+                            .foregroundStyle(Theme.Palette.red)
+                    } else {
+                        MarkerPin().fill(Ruler.marker.color).frame(width: pinW, height: 12)
+                    }
+                    if !label.isEmpty && !trashing {
                         Text(label).font(Theme.Font.mono(9, .medium)).foregroundStyle(Ruler.marker.color).lineLimit(1)
                     }
                 }
-                .offset(x: px - Self.headerWidth)
-                .gesture(dragGesture(key: "m\(time)", start: time, laneWidth: laneWidth, onMove: onMove))
+                // Anchor the pin's tip (its horizontal centre) on the marker time, not the
+                // left corner.
+                .offset(x: px - Self.headerWidth - pinW / 2)
+                .opacity(trashing ? 0.7 : 1)
+                .gesture(markerDragGesture(key: key, start: time, laneWidth: laneWidth,
+                                           onMove: onMove, onDelete: onDelete))
                 .contextMenu { Button("삭제", role: .destructive) { onDelete() } }
             }
         }
+    }
+
+    /// Marker interaction: a plain click seeks the playhead to it; a horizontal drag moves
+    /// it; dragging it far out of the lane (vertically) turns it into a trash icon and
+    /// deletes it on release.
+    private func markerDragGesture(key: String, start: Double, laneWidth: CGFloat,
+                                   onMove: @escaping (Double) -> Void,
+                                   onDelete: @escaping () -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                dragSeconds[key] = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
+                if abs(v.translation.height) > 34 { markerTrashing.insert(key) }
+                else { markerTrashing.remove(key) }
+            }
+            .onEnded { v in
+                let t = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
+                let trash = markerTrashing.contains(key)
+                dragSeconds[key] = nil
+                markerTrashing.remove(key)
+                if trash {
+                    onDelete()
+                } else if abs(v.translation.width) < 3 && abs(v.translation.height) < 3 {
+                    engine.seek(start)            // a click seeks the playhead to the marker
+                } else {
+                    onMove(t)
+                }
+            }
     }
 
     /// A song-form section drawn as a coloured block from its start to the next section
