@@ -3015,6 +3015,11 @@ final class EngineController: ObservableObject {
     /// the poll tick so every strip pulses in sync without its own animation timer.
     @Published private(set) var soloBlinkOn = false
 
+    /// A faster on/off phase for the clip warning: a channel value in the red pulses so a
+    /// momentary overload is caught. Toggled from the poll tick only while something is
+    /// actually clipping, so idle strips do not repaint.
+    @Published private(set) var clipBlinkOn = false
+
     /// Solo is additive here, the way the engine models it — several tracks can be
     /// soloed at once, and Master/Monitor refuse it.
     /// Solo select behaviour set from the Solo button's right-click menu. Additive lets
@@ -3777,6 +3782,14 @@ final class EngineController: ObservableObject {
         // otherwise so idle strips do not repaint. Only publish on a change.
         let blink = anyTrackSoloed && Int(CACurrentMediaTime() * 2.2).isMultiple(of: 2)
         if blink != soloBlinkOn { soloBlinkOn = blink }
+
+        // Clip warning: pulse ~2.6 Hz while any channel (or the master out) is at/over
+        // 0 dBFS. Linear 0.98 ≈ -0.18 dB, just under the strip's red threshold, so a red
+        // readout always has the blink running behind it.
+        let clipping = outputPeakLeft >= 0.98 || outputPeakRight >= 0.98
+            || tracks.contains { max($0.peakLeft, $0.peakRight) >= 0.98 }
+        let cb = clipping && Int(CACurrentMediaTime() * 2.6).isMultiple(of: 2)
+        if cb != clipBlinkOn { clipBlinkOn = cb }
 
         // Live MIDI: keep a keyboard open and drain its notes into armed instruments.
         pumpLiveMidi(handle)

@@ -500,15 +500,6 @@ struct StatusStrip: View {
                     .foregroundStyle(Theme.Palette.red)
             }
 
-            Text("플러그인 / 인서트")
-                .font(Theme.Font.ui(8.5, .medium))
-                .foregroundStyle(Theme.Palette.textSecondary)
-                .padding(.horizontal, Theme.Space.lg)
-                .frame(height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.pill)
-                        .fill(Theme.Palette.buttonProminent)
-                )
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 22)

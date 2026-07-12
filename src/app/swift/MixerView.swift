@@ -967,18 +967,32 @@ struct ChannelStrip: View {
         engine.renameTrack(track.id, to: draftName)
     }
 
-    /// peak is real. GR needs per-insert gain reduction the engine does not publish,
-    /// and per-track DSP time is not exposed either — both read "—" rather than lie.
+    /// The channel's peak value, colour-graded like a console overload LED: green when
+    /// there is headroom, yellow when it is getting hot, red at/over 0 dBFS — and the red
+    /// blinks so a momentary clip is caught. Replaces the old peak/GR/DSP block (GR and DSP
+    /// were never published, so they only ever read "—").
     private var channelStats: some View {
-        VStack(spacing: 1) {
-            statRow("peak", dbLabel(peakDb))
-            statRow("GR", "—")
-            statRow("DSP", "—")
-        }
-        .padding(.horizontal, Theme.Space.md)
-        .padding(.vertical, Theme.Space.sm)
-        .frame(maxWidth: .infinity)
-        .background(Theme.Palette.stripFooter)
+        let db = peakDb
+        let color: Color = db >= Self.clipDb ? Theme.Palette.red
+                         : db >= Self.hotDb ? Theme.Palette.yellow
+                         : Theme.Palette.green
+        // Only the red state blinks; dim it on the off phase.
+        let lit = !(db >= Self.clipDb) || engine.clipBlinkOn
+        return Text(peakValueLabel(db))
+            .font(Theme.Font.mono(9.5, .bold))
+            .foregroundStyle(lit ? color : color.opacity(0.22))
+            .padding(.horizontal, Theme.Space.md)
+            .padding(.vertical, Theme.Space.sm)
+            .frame(maxWidth: .infinity)
+            .background(Theme.Palette.stripFooter)
+    }
+
+    /// Overload thresholds in dBFS.
+    private static let clipDb: Float = -0.1
+    private static let hotDb: Float = -6
+
+    private func peakValueLabel(_ db: Float) -> String {
+        db <= FaderScale.silenceDb ? "-∞" : String(format: "%+.1f", db)
     }
 
     private var peakDb: Float {
@@ -986,17 +1000,6 @@ struct ChannelStrip: View {
         return peak <= 0.00001 ? FaderScale.silenceDb : Float(peakToDb(peak))
     }
 
-    private func statRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(Theme.Palette.textFainter)
-            Spacer()
-            Text(value)
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(value == "—" ? Theme.Palette.textFainter : Theme.Palette.textLabel)
-        }
-    }
 }
 
 /// A tiny preview of the auto fade-out curve: full at the left, silent at the right.
