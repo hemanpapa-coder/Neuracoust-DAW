@@ -311,6 +311,13 @@ private struct EditView: View {
                     onSetAutomationParam: { engine.setAutomationParameter(laneIndex: $0, id: $1) },
                     onSetLaneHeight: { engine.setLaneHeight($0) },
                     onCommitLaneHeight: { engine.commitLaneHeight() },
+                    onFadeCurveOptions: { EngineController.fadeCurves.map { (label: $0.label, id: $0.id) } },
+                    onClipCurrentFades: { id in
+                        let c = engine.clips.first { $0.id == id }
+                        return (inCurve: c?.fadeInCurve ?? "equal_power", outCurve: c?.fadeOutCurve ?? "equal_power")
+                    },
+                    onSetClipFadeInCurve: { engine.setClipFadeInCurve($0, $1) },
+                    onSetClipFadeOutCurve: { engine.setClipFadeOutCurve($0, $1) },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
                     onMoveAutomationPoint: { engine.moveAutomationPoint(laneIndex: $0, pointIndex: $1, timeSeconds: $2, value: $3) },
                     onDeleteAutomationPoint: { engine.deleteAutomationPoint(laneIndex: $0, pointIndex: $1) },

@@ -413,6 +413,10 @@ bool nc_clip_set_gain_db_preview(NCEngine* engine, const char* clipId, float gai
 double nc_clip_fade_in(NCEngine* engine, int index);
 double nc_clip_fade_out(NCEngine* engine, int index);
 bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, double fadeOut);
+bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
+                             const char* inCurve, const char* outCurve);
+void nc_clip_fade_in_curve(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_clip_fade_out_curve(NCEngine* engine, int index, char* out, size_t outLen);
 
 /// Moves a clip onto another track at `startSeconds`, leaving every other clip
 /// where it is. (`shuffleMoveClip` would ripple its neighbours — that is Shuffle

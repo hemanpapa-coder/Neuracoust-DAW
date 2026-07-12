@@ -180,6 +180,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onSetAutomationParam: ((Int, String) -> Void)?
     var onSetLaneHeight: ((CGFloat) -> Void)?
     var onCommitLaneHeight: (() -> Void)?
+    var onFadeCurveOptions: (() -> [(label: String, id: String)])?
+    var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))?
+    var onSetClipFadeInCurve: ((String, String) -> Void)?
+    var onSetClipFadeOutCurve: ((String, String) -> Void)?
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
     var onMoveAutomationPoint: ((Int, Int, Double, Float) -> Void)?  // (lane, point, time, value)
     var onDeleteAutomationPoint: ((Int, Int) -> Void)?   // (lane, point)
@@ -1324,6 +1328,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 onBrowseInsert?(trackId); return
             }
         }
+        if point.x >= Self.headerWidth, point.y >= rulerHeight, let clip = clip(at: point) {
+            showClipFadeMenu(clip, event: event)
+            return
+        }
         guard point.y < rulerHeight else { super.rightMouseDown(with: event); return }
         let menu = NSMenu()
         menu.addItem({ let h = NSMenuItem(title: "눈금자 표시", action: nil, keyEquivalent: ""); h.isEnabled = false; return h }())
@@ -1718,6 +1726,40 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     @objc private func pickAutomationParam(_ s: NSMenuItem) {
         guard let r = s.representedObject as? AutoParamRef else { return }
         onSetAutomationParam?(r.lane, r.id)
+    }
+
+    private final class ClipCurveRef: NSObject { let clipId: String; let curve: String
+        init(_ clipId: String, _ curve: String) { self.clipId = clipId; self.curve = curve } }
+
+    /// Right-click a clip → pick its fade-in / fade-out curve shape.
+    private func showClipFadeMenu(_ clip: TimelineModel.Clip, event: NSEvent) {
+        let opts = onFadeCurveOptions?() ?? []
+        guard !opts.isEmpty else { return }
+        let current = onClipCurrentFades?(clip.id)
+        let menu = NSMenu()
+        func submenu(_ title: String, sel: Selector, selected: String?) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for o in opts {
+                let it = NSMenuItem(title: o.label, action: sel, keyEquivalent: "")
+                it.target = self; it.representedObject = ClipCurveRef(clip.id, o.id)
+                it.state = (selected == o.id) ? .on : .off
+                sub.addItem(it)
+            }
+            item.submenu = sub
+            menu.addItem(item)
+        }
+        submenu("페이드 인 커브", sel: #selector(setFadeInCurveMenu(_:)), selected: current?.inCurve)
+        submenu("페이드 아웃 커브", sel: #selector(setFadeOutCurveMenu(_:)), selected: current?.outCurve)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    @objc private func setFadeInCurveMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? ClipCurveRef else { return }
+        onSetClipFadeInCurve?(r.clipId, r.curve)
+    }
+    @objc private func setFadeOutCurveMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? ClipCurveRef else { return }
+        onSetClipFadeOutCurve?(r.clipId, r.curve)
     }
 
     @objc private func insertBypassMenu(_ s: NSMenuItem) {
@@ -2221,6 +2263,10 @@ struct TimelineView: NSViewRepresentable {
     var onSetAutomationParam: ((Int, String) -> Void)? = nil
     var onSetLaneHeight: ((CGFloat) -> Void)? = nil
     var onCommitLaneHeight: (() -> Void)? = nil
+    var onFadeCurveOptions: (() -> [(label: String, id: String)])? = nil
+    var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))? = nil
+    var onSetClipFadeInCurve: ((String, String) -> Void)? = nil
+    var onSetClipFadeOutCurve: ((String, String) -> Void)? = nil
     let onAddAutomationPoint: (Int, Double, Float) -> Void
     let onMoveAutomationPoint: (Int, Int, Double, Float) -> Void
     let onDeleteAutomationPoint: (Int, Int) -> Void
@@ -2308,6 +2354,10 @@ struct TimelineView: NSViewRepresentable {
         view.onSetAutomationParam = onSetAutomationParam
         view.onSetLaneHeight = onSetLaneHeight
         view.onCommitLaneHeight = onCommitLaneHeight
+        view.onFadeCurveOptions = onFadeCurveOptions
+        view.onClipCurrentFades = onClipCurrentFades
+        view.onSetClipFadeInCurve = onSetClipFadeInCurve
+        view.onSetClipFadeOutCurve = onSetClipFadeOutCurve
         view.onAddAutomationPoint = onAddAutomationPoint
         view.onMoveAutomationPoint = onMoveAutomationPoint
         view.onDeleteAutomationPoint = onDeleteAutomationPoint

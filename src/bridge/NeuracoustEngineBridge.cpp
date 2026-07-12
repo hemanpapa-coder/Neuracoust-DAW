@@ -1688,6 +1688,26 @@ bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, doub
                                                                std::max(0.0, fadeOut)));
 }
 
+bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
+                             const char* inCurve, const char* outCurve) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::setClipFadeCurves(
+        engine->project, clipId,
+        inCurve != nullptr ? inCurve : "equal_power",
+        outCurve != nullptr ? outCurve : "equal_power"));
+}
+
+static void clipFadeCurve(NCEngine* engine, int index, bool wantIn, char* out, size_t outLen) {
+    const auto* clip = clipAt(engine, index);
+    copyText(out, outLen, clip == nullptr ? "" : (wantIn ? clip->fadeInCurve : clip->fadeOutCurve).c_str());
+}
+void nc_clip_fade_in_curve(NCEngine* engine, int index, char* out, size_t outLen) {
+    clipFadeCurve(engine, index, true, out, outLen);
+}
+void nc_clip_fade_out_curve(NCEngine* engine, int index, char* out, size_t outLen) {
+    clipFadeCurve(engine, index, false, out, outLen);
+}
+
 namespace {
 
 const neuracoust::daw::ClipState* findClipById(NCEngine* engine, const std::string& clipId) {

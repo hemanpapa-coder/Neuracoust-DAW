@@ -1365,10 +1365,28 @@ final class EngineController: ObservableObject {
         let sourceOffsetSeconds: Double
         let fadeInSeconds: Double
         let fadeOutSeconds: Double
+        var fadeInCurve: String = "equal_power"
+        var fadeOutCurve: String = "equal_power"
         let gainDb: Float
     }
 
     @Published private(set) var clips: [Clip] = []
+
+    /// Fade shapes the renderer honours (label, engine curve id).
+    static let fadeCurves: [(label: String, id: String)] = [
+        ("등파워", "equal_power"), ("리니어", "linear"), ("지수(느리게)", "slow"), ("로그(빠르게)", "fast"),
+    ]
+
+    func setClipFadeInCurve(_ clipId: String, _ curve: String) {
+        guard let handle, let clip = clips.first(where: { $0.id == clipId }) else { return }
+        _ = curve.withCString { c in clip.fadeOutCurve.withCString { o in nc_clip_set_fade_curves(handle, clipId, c, o) } }
+        reloadClips(); refreshHistory()
+    }
+    func setClipFadeOutCurve(_ clipId: String, _ curve: String) {
+        guard let handle, let clip = clips.first(where: { $0.id == clipId }) else { return }
+        _ = clip.fadeInCurve.withCString { i in curve.withCString { c in nc_clip_set_fade_curves(handle, clipId, i, c) } }
+        reloadClips(); refreshHistory()
+    }
 
     /// Peak envelopes keyed by source path, fetched once per file from the engine.
     /// Cached peaks per source path. `channels` is 1 (draw one envelope from L) or 2
@@ -2652,6 +2670,8 @@ final class EngineController: ObservableObject {
                 sourceOffsetSeconds: nc_clip_source_offset_seconds(handle, i),
                 fadeInSeconds: nc_clip_fade_in(handle, i),
                 fadeOutSeconds: nc_clip_fade_out(handle, i),
+                fadeInCurve: readEngineString { nc_clip_fade_in_curve(handle, i, $0, $1) },
+                fadeOutCurve: readEngineString { nc_clip_fade_out_curve(handle, i, $0, $1) },
                 gainDb: nc_clip_gain_db(handle, i)
             )
         }
