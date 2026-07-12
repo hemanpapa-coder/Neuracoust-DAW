@@ -275,9 +275,9 @@ struct ChannelStrip: View {
             header
 
             VStack(spacing: Theme.Space.md) {
+                if showIO { inputSection }
                 if showInserts && track.kind.showsInserts { insertSection }
                 if showSends && track.kind.showsSends { sendSection }
-                if showIO { ioSection }
                 panSection
                 buttonRow
                 if track.kind.hasSolo { automationModeMenu }
@@ -291,6 +291,13 @@ struct ChannelStrip: View {
 
             nameplate
             channelStats
+
+            // Output routing pinned to the very bottom of the strip.
+            if showIO {
+                outputSection
+                    .padding(.horizontal, Theme.Space.md)
+                    .padding(.bottom, Theme.Space.md)
+            }
         }
         .frame(width: max(92, engine.channelWidthFor(track.id) + widthDragDelta))
         .background(
@@ -545,13 +552,13 @@ struct ChannelStrip: View {
         }
     }
 
-    private var ioSection: some View {
+    /// Input pill — pinned to the top of the strip. A MIDI source for instrument/MIDI
+    /// tracks, a hardware pair otherwise.
+    private var inputSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("I / O")
+            Text("IN")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
-
-            // Input — a MIDI source for instrument/MIDI tracks, a hardware pair otherwise.
             Menu {
                 if track.kind == .instrument || track.kind == .midi {
                     let sources = engine.midiInputs()
@@ -574,8 +581,15 @@ struct ChannelStrip: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+        }
+    }
 
-            // Output — Master or any aux/bus track.
+    /// Output pill — pinned to the bottom of the strip. Master or any aux/bus track.
+    private var outputSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("OUT")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
             Menu {
                 ForEach(engine.outputBusOptions(track.id), id: \.self) { opt in
                     Button(opt) { engine.setTrackOutputBus(track.id, opt) }
