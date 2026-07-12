@@ -63,7 +63,7 @@ final class EngineController: ObservableObject {
     @Published var rulerSamples = false
     /// Shared lane height, dragged from any lane's bottom edge; persisted.
     /// Default lane height, and per-track overrides (so a multi-selection resizes together).
-    @Published var laneHeight: CGFloat = 72
+    @Published var laneHeight: CGFloat = 100
     @Published var laneHeights: [Int: CGFloat] = [:]
 
     func laneHeightFor(_ trackId: Int) -> CGFloat { laneHeights[trackId] ?? laneHeight }
