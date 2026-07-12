@@ -291,6 +291,9 @@ struct ChannelStrip: View {
                 // over an empty gap.
                 if track.kind == .master {
                     autoFadeSection
+                    // The master has no sends; pad to the sends' height so its pan / buttons
+                    // / fader drop to the same rows as the channels'.
+                    Color.clear.frame(height: 38)
                 } else if showSends && track.kind.showsSends {
                     sendSection
                 }
@@ -564,6 +567,7 @@ struct ChannelStrip: View {
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    .frame(maxWidth: .infinity)   // fill the row so the dashed box is visible
                 }
             }
         }
@@ -574,7 +578,7 @@ struct ChannelStrip: View {
         RoundedRectangle(cornerRadius: Theme.Radius.pill)
             .strokeBorder(Theme.Palette.coolDivider, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
             .background(RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(Theme.Palette.background))
-            .frame(height: 14)
+            .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
             .contentShape(Rectangle())
     }
 
@@ -780,9 +784,9 @@ struct ChannelStrip: View {
                 // Record arms as a hollow circle (like the transport record key), ~2× the
                 // old dot; everything else is a plain letter in the same font.
                 if title == "●" {
-                    // Same as the transport record key: circle, size 10, regular weight,
-                    // centred — so it reads identically everywhere.
-                    Image(systemName: "circle").font(.system(size: 10))
+                    // Record circle, a touch smaller than the transport key so it doesn't
+                    // dominate the narrow strip.
+                    Image(systemName: "circle").font(.system(size: 9))
                 } else {
                     Text(title).font(Theme.Font.ui(9, .semibold))
                 }
