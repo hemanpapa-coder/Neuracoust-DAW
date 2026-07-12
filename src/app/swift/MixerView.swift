@@ -256,6 +256,7 @@ struct ChannelStrip: View {
     @State private var renaming = false
     @State private var draftName = ""
     @State private var dropTargeted = false
+    @State private var widthDragDelta: CGFloat = 0
     @FocusState private var nameFieldFocused: Bool
 
     private var reorderable: Bool { track.kind != .master }
@@ -291,7 +292,7 @@ struct ChannelStrip: View {
             nameplate
             channelStats
         }
-        .frame(width: 122)
+        .frame(width: max(92, engine.channelWidthFor(track.id) + widthDragDelta))
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(stripBackground)
@@ -301,6 +302,7 @@ struct ChannelStrip: View {
                                 lineWidth: dropTargeted ? 2 : 1)
                 )
         )
+        .overlay(alignment: .trailing) { widthResizeHandle }
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
         // Drop another channel here to reorder it before/after this one (drop side decides).
         // The dedicated Transferable type never collides with the insert-slot plain-text drop.
@@ -309,6 +311,31 @@ struct ChannelStrip: View {
             engine.moveTrackNear(payload.trackId, targetId: track.id, after: location.x > 61)
             return true
         } isTargeted: { dropTargeted = $0 && reorderable }
+    }
+
+    /// A slim grab strip on the channel's right edge — drag it to widen/narrow the strip
+    /// (snapped to a step, persisted), the mixer sibling of the timeline's lane-height grip.
+    private var widthResizeHandle: some View {
+        Rectangle()
+            .fill(Color.white.opacity(widthDragDelta != 0 ? 0.18 : 0.001))
+            .frame(width: 6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.white.opacity(0.28))
+                    .frame(width: 2, height: 26)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { widthDragDelta = $0.translation.width }
+                    .onEnded { value in
+                        engine.setChannelWidth(trackIds: [track.id],
+                                               width: engine.channelWidthFor(track.id) + value.translation.width)
+                        engine.commitChannelWidth()
+                        widthDragDelta = 0
+                    }
+            )
+            .onHover { NSCursor.resizeLeftRight.set(); if !$0 { NSCursor.arrow.set() } }
     }
 
     private var stripBackground: Color {

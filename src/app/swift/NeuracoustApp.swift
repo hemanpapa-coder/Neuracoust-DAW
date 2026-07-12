@@ -309,7 +309,7 @@ private struct EditView: View {
                             .map { (id: $0.id, name: $0.displayName, on: $0.id == current) }
                     },
                     onSetAutomationParam: { engine.setAutomationParameter(laneIndex: $0, id: $1) },
-                    onSetLaneHeight: { engine.setLaneHeight($0) },
+                    onSetLaneHeight: { engine.setLaneHeight(trackIds: $0, height: $1) },
                     onCommitLaneHeight: { engine.commitLaneHeight() },
                     onFadeCurveOptions: { EngineController.fadeCurves.map { (label: $0.label, id: $0.id) } },
                     onClipCurrentFades: { id in
