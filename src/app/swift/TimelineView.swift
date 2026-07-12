@@ -696,18 +696,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             return
         }
 
-        // The rest of the ruler carries the markers, and otherwise scrubs.
+        // Markers moved to the Global Tracks bar; the ruler just scrubs now.
         if point.y < rulerHeight {
-            if let hit = marker(at: point) {
-                if event.clickCount >= 2 {
-                    onDeleteMarker?(hit.timeSeconds)
-                } else if event.modifierFlags.contains(.shift) {
-                    onSelectBetweenMarkers?(hit.timeSeconds + 0.001)
-                } else {
-                    drag = .movingMarker(fromSeconds: hit.timeSeconds)
-                }
-                return
-            }
             drag = .seeking
             onSeek?(max(0, seconds(atX: point.x)))
             return
@@ -1245,8 +1235,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         drawDragGhost(context)
         drawMidiRegions(context)
         drawAutomation(context)
-        // Last, so a marker's hairline is not painted over by the clips it lines up with.
-        drawMarkers(context)
+        // Markers now live only in the Global Tracks bar's marker lane — the old ruler
+        // flags were a duplicate, so they're no longer drawn here.
 
         // The lane header column sits above the grid but below the playhead.
         NSColor(hex: 0x0b0806).setFill()

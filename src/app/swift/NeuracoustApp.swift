@@ -399,47 +399,44 @@ private struct EditView: View {
 
             let hasSelection = !engine.selectedClipIds.isEmpty
 
-            zoomButton("분할 (B)", enabled: hasSelection) {
+            iconButton("square.split.2x1", help: "분할 (B)", enabled: hasSelection) {
                 engine.splitSelectedClipsAtPlayhead()
             }
-            zoomButton("붙이기 (H)", enabled: hasSelection || engine.hasEditRange) {
+            iconButton("arrow.triangle.merge", help: "붙이기 (H)", enabled: hasSelection || engine.hasEditRange) {
                 engine.healSelectedClips()
             }
-            zoomButton("삭제", enabled: hasSelection) {
+            iconButton("trash", help: "삭제", enabled: hasSelection) {
                 engine.deleteSelectedClips()
             }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomButton("복사", enabled: hasSelection) { engine.copySelectedClips() }
-            zoomButton("잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
-            zoomButton("붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
-            zoomButton("복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
+            iconButton("doc.on.doc", help: "복사", enabled: hasSelection) { engine.copySelectedClips() }
+            iconButton("scissors", help: "잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
+            iconButton("doc.on.clipboard", help: "붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
+            iconButton("plus.square.on.square", help: "복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomButton("마커 (⌘M)") { engine.addMarkerAtPlayhead() }
+            iconButton("mappin", help: "마커 (⌘M)") { engine.addMarkerAtPlayhead() }
 
-            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
-
-            // Range edits act on the loop range, dragged out along the top of the ruler.
+            // The four range edits live under one menu — the icons alone couldn't tell
+            // them apart from the clip ops.
             let hasRange = engine.hasEditRange
-            zoomButton("구간 복사", enabled: hasRange) { engine.copyRange() }
-            zoomButton("구간 잘라내기", enabled: hasRange) { engine.cutRange() }
-            zoomButton("구간 지우기", enabled: hasRange) { engine.clearRange() }
-            zoomButton("구간 분리", enabled: hasRange) { engine.separateRange() }
-
-            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
-
-            zoomButton("+오디오") { engine.addAudioTrack() }
-            zoomButton("+악기") { engine.addInstrumentTrack() }
-            zoomButton("트랙 삭제", enabled: engine.canDeleteSelectedTrack) {
-                engine.deleteSelectedTrack()
+            iconMenu("rectangle.dashed", help: "구간 편집", enabled: hasRange) {
+                Button("구간 복사") { engine.copyRange() }
+                Button("구간 잘라내기") { engine.cutRange() }
+                Button("구간 지우기") { engine.clearRange() }
+                Button("구간 분리") { engine.separateRange() }
             }
 
-            Text(String(format: "%.1f s 표시 · 드래그: 이동 · 가장자리: 트림 · B: 분할 · Delete: 삭제", engine.visibleDuration))
-                .font(Theme.Font.mono(8))
-                .foregroundStyle(Theme.Palette.textFainter)
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
+            iconButton("waveform.badge.plus", help: "오디오 트랙 추가") { engine.addAudioTrack() }
+            iconButton("pianokeys", help: "악기 트랙 추가") { engine.addInstrumentTrack() }
+            iconButton("rectangle.badge.minus", help: "트랙 삭제", enabled: engine.canDeleteSelectedTrack) {
+                engine.deleteSelectedTrack()
+            }
 
             Spacer()
         }
@@ -519,6 +516,45 @@ private struct EditView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    /// A uniform icon button for the edit toolbar — every action is a same-size glyph
+    /// with a tooltip carrying the name.
+    private func iconButton(_ systemImage: String, help: String, enabled: Bool = true,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(enabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+                .frame(width: 26, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain).disabled(!enabled).help(help)
+    }
+
+    /// Same look as iconButton, but opens a menu (used to group the range edits).
+    private func iconMenu<Content: View>(_ systemImage: String, help: String, enabled: Bool = true,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        Menu {
+            content()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(enabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+                .frame(width: 26, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(!enabled).help(help)
     }
 
     private func zoomButton(_ title: String,
