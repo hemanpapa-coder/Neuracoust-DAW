@@ -160,7 +160,7 @@ struct TrackInspector: View {
             if track.kind.hasSolo {
                 stateButton("S", on: track.solo, onColor: Theme.Palette.yellow) { engine.toggleTrackSolo(track.id) }
                 stateButton("●", on: track.recordArmed, onColor: Theme.Palette.red) { engine.toggleTrackArm(track.id) }
-                stateButton("🔊", on: track.inputMonitoring, onColor: Theme.Palette.accent) {
+                stateButton("I", on: track.inputMonitoring, onColor: Theme.Palette.accent) {
                     engine.toggleTrackInputMonitoring(track.id)
                 }
             }
@@ -170,8 +170,13 @@ struct TrackInspector: View {
 
     private func stateButton(_ label: String, on: Bool, onColor: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label)
-                .font(Theme.Font.ui(10, .semibold))
+            Group {
+                if label == "●" {
+                    Image(systemName: "circle").font(.system(size: 12, weight: .bold))
+                } else {
+                    Text(label).font(Theme.Font.ui(10, .semibold))
+                }
+            }
                 .foregroundStyle(on ? Color.black.opacity(0.85) : Theme.Palette.textMuted)
                 .frame(maxWidth: .infinity)
                 .frame(height: 22)
@@ -231,7 +236,26 @@ struct TrackInspector: View {
                             onChange: { engine.setTrackVolume(track.id, $0) },
                             onCommit: { engine.recordGesture("볼륨") })
                 .frame(height: 14)
+            inspectorFaderScale
         }
+    }
+
+    /// The channel fader's dB legend, laid out horizontally under the Inspector fader —
+    /// the same FaderScale taper (+12 at the right … -∞ at the left).
+    private var inspectorFaderScale: some View {
+        let marks: [(String, Float)] = [("+12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("-∞", -120)]
+        return GeometryReader { geo in
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
+                let x = geo.size.width * CGFloat(FaderScale.position(forDb: m.1))
+                VStack(spacing: 1) {
+                    Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 1, height: 2)
+                    Text(m.0).font(Theme.Font.mono(6)).foregroundStyle(Theme.Palette.textFaint)
+                }
+                .fixedSize()
+                .position(x: min(geo.size.width - 7, max(7, x)), y: 5)
+            }
+        }
+        .frame(height: 11)
     }
 
     @ViewBuilder

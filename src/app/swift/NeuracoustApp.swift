@@ -387,9 +387,9 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomButton("줌-") { engine.zoomTimeline(by: 1.5) }
-            zoomButton("맞춤") { engine.fitTimeline() }
-            zoomButton("줌+") { engine.zoomTimeline(by: 1 / 1.5) }
+            zoomIconButton("minus.magnifyingglass", help: "축소") { engine.zoomTimeline(by: 1.5) }
+            zoomIconButton("arrow.up.left.and.down.right.magnifyingglass", help: "화면 맞춤") { engine.fitTimeline() }
+            zoomIconButton("plus.magnifyingglass", help: "확대") { engine.zoomTimeline(by: 1 / 1.5) }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
@@ -497,6 +497,25 @@ private struct EditView: View {
                 .help(tool.label)
             }
         }
+    }
+
+    /// Icon variant for the zoom controls: magnifier −/+ and a fit-to-window glyph.
+    private func zoomIconButton(_ systemImage: String, help: String,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .frame(width: 26, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(Theme.Palette.button)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func zoomButton(_ title: String,

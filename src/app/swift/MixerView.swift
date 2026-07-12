@@ -776,19 +776,26 @@ struct ChannelStrip: View {
                              blink: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(Theme.Font.ui(9, .semibold))
-                .foregroundStyle(on || blink ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
-                .frame(maxWidth: .infinity)
-                .frame(height: 20)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                        .fill(on ? tint : (blink ? tint.opacity(0.6) : Theme.Palette.button))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                                .stroke(Theme.Palette.border, lineWidth: 1)
-                        )
-                )
+            Group {
+                // Record arms as a hollow circle (like the transport record key), ~2× the
+                // old dot; everything else is a plain letter in the same font.
+                if title == "●" {
+                    Image(systemName: "circle").font(.system(size: 11, weight: .bold))
+                } else {
+                    Text(title).font(Theme.Font.ui(9, .semibold))
+                }
+            }
+            .foregroundStyle(on || blink ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                    .fill(on ? tint : (blink ? tint.opacity(0.6) : Theme.Palette.button))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.clip)
+                            .stroke(Theme.Palette.border, lineWidth: 1)
+                    )
+            )
         }
         .buttonStyle(.plain)
     }
