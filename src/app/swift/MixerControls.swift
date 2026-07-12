@@ -270,7 +270,9 @@ struct ChannelFader: View {
                 .frame(height: 2)
                 .shadow(color: accent.opacity(0.8), radius: 2)
         }
-        .frame(width: 30, height: Self.capHeight)
+        // A slim cap frees horizontal room, letting the fader + meter sit further left
+        // (the meter numbers may pass behind the cap, which is fine).
+        .frame(width: 16, height: Self.capHeight)
     }
 }
 

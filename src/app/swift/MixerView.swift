@@ -828,7 +828,7 @@ struct ChannelStrip: View {
                              if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
                          },
                          onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
-                .frame(width: 32, height: 132)
+                .frame(width: 18, height: 132)
                 .padding(.trailing, 3)
 
             // Meter scale moved to the LEFT of the meter so its numbers stay visible
