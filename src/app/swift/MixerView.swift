@@ -258,11 +258,18 @@ struct ChannelStrip: View {
         )
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
         // Drop another channel here to reorder it before/after this one (drop side decides).
-        .dropDestination(for: String.self) { items, location in
-            guard reorderable, let first = items.first, let sourceId = Int(first) else { return false }
-            engine.moveTrackNear(sourceId, targetId: track.id, after: location.x > 61)
+        // Same NSItemProvider/loadObject path the insert-slot drag uses, so it fires reliably.
+        .onDrop(of: [.plainText],
+                isTargeted: Binding(get: { dropTargeted }, set: { dropTargeted = $0 && reorderable })) { providers, location in
+            guard reorderable, let provider = providers.first else { return false }
+            let after = location.x > 61
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                if let text = object as? String, let sourceId = Int(text) {
+                    DispatchQueue.main.async { engine.moveTrackNear(sourceId, targetId: track.id, after: after) }
+                }
+            }
             return true
-        } isTargeted: { dropTargeted = $0 && reorderable }
+        }
     }
 
     private var stripBackground: Color {
