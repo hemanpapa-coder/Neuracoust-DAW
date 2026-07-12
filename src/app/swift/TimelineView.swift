@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+/// The timebases the ruler can show. Any subset may be visible at once.
+enum RulerTimebase: Int, CaseIterable {
+    case bars, time, samples
+    var label: String {
+        switch self {
+        case .bars: return "마디"
+        case .time: return "시간"
+        case .samples: return "샘플"
+        }
+    }
+}
+
 /// What the timeline needs to draw one frame. A value type so the AppKit view can
 /// diff it cheaply and skip redraws.
 struct TimelineModel: Equatable {
@@ -59,6 +71,11 @@ struct TimelineModel: Equatable {
     var clips: [Clip] = []
     var tempoBpm: Int = 120
     var beatsPerBar: Int = 4
+    var sampleRate: Double = 48000
+    /// Which timebases the ruler shows, top to bottom. Any subset may be on at once.
+    var rulerBars: Bool = true
+    var rulerTime: Bool = true
+    var rulerSamples: Bool = false
 
     /// Seconds at the left edge, and seconds across the visible width.
     var visibleStart: Double = 0
@@ -123,6 +140,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     var onSeek: ((Double) -> Void)?
+    var onToggleTimebase: ((RulerTimebase) -> Void)?
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
@@ -235,7 +253,20 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private var dropLaneIndex: Int?
     private var dropSeconds: Double = 0
 
-    static let rulerHeight: CGFloat = 30
+    /// One row per enabled timebase (bars / time / samples), below the range strip.
+    static let timebaseRowHeight: CGFloat = 13
+    /// The enabled timebases, top to bottom. Always at least the bar ruler.
+    var enabledTimebases: [RulerTimebase] {
+        var t: [RulerTimebase] = []
+        if model.rulerBars { t.append(.bars) }
+        if model.rulerTime { t.append(.time) }
+        if model.rulerSamples { t.append(.samples) }
+        return t.isEmpty ? [.bars] : t
+    }
+    /// The ruler grows with the number of timebases shown.
+    var rulerHeight: CGFloat {
+        Self.rangeStripHeight + CGFloat(enabledTimebases.count) * Self.timebaseRowHeight
+    }
     /// The top slice of the ruler sets the loop/edit range; below it the ruler scrubs.
     static let rangeStripHeight: CGFloat = 12
     /// Grab radius around each range edge for its ruler handle.
@@ -285,9 +316,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private var lanesRect: NSRect {
         NSRect(x: Self.headerWidth,
-               y: Self.rulerHeight,
+               y: rulerHeight,
                width: max(0, bounds.width - Self.headerWidth),
-               height: max(0, bounds.height - Self.rulerHeight))
+               height: max(0, bounds.height - rulerHeight))
     }
 
     private func x(forSeconds seconds: Double) -> CGFloat {
@@ -314,7 +345,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// Lanes are no longer a uniform stack: an open automation lane adds to the one
     /// above it, so every vertical position has to be accumulated.
     private func laneTop(_ index: Int) -> CGFloat {
-        var top = Self.rulerHeight - scrollY
+        var top = rulerHeight - scrollY
         for lane in model.lanes.prefix(index) {
             top += Self.laneHeight
             if lane.automation != nil { top += Self.automationHeight }
@@ -328,7 +359,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     private var maximumScrollY: CGFloat {
-        max(0, contentHeight - (bounds.height - Self.rulerHeight))
+        max(0, contentHeight - (bounds.height - rulerHeight))
     }
 
     private func automationRect(_ index: Int) -> NSRect? {
@@ -362,8 +393,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 ? laneTop(model.lanes.count - 1) + Self.laneHeight + 6
                 : laneTop(laneIndex(at: cursor) ?? clip.laneIndex) + 6
             context.saveGState()
-            context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
-                                    width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+            context.clip(to: NSRect(x: lanesRect.minX, y: rulerHeight,
+                                    width: lanesRect.width, height: bounds.height - rulerHeight))
             let ghost = NSRect(x: left, y: destTop, width: width, height: Self.laneHeight - 12)
             NSColor(hex: 0x35BFA8).withAlphaComponent(0.35).setFill()
             let path = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
@@ -398,8 +429,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard below || laneDelta != 0 else { return }  // horizontal already tracks live
 
         context.saveGState()
-        context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
-                                width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+        context.clip(to: NSRect(x: lanesRect.minX, y: rulerHeight,
+                                width: lanesRect.width, height: bounds.height - rulerHeight))
 
         // A band on the destination lane (or the new-track strip below the last lane).
         let bandY = below ? (laneTop(model.lanes.count - 1) + Self.laneHeight) : laneTop(targetLane)
@@ -451,8 +482,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func drawMidiRegions(_ context: CGContext) {
         context.saveGState()
-        context.clip(to: NSRect(x: lanesRect.minX, y: Self.rulerHeight,
-                                width: lanesRect.width, height: bounds.height - Self.rulerHeight))
+        context.clip(to: NSRect(x: lanesRect.minX, y: rulerHeight,
+                                width: lanesRect.width, height: bounds.height - rulerHeight))
 
         for region in model.midiRegions {
             let rect = regionRect(region)
@@ -508,7 +539,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     /// Which lane a point falls in — its clip row, not its automation row.
     private func laneIndex(at point: NSPoint) -> Int? {
-        guard point.y >= Self.rulerHeight else { return nil }
+        guard point.y >= rulerHeight else { return nil }
         for index in model.lanes.indices {
             let top = laneTop(index)
             if point.y >= top && point.y < top + Self.laneHeight {
@@ -521,8 +552,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// True when a drop lands below the last lane, in the empty lane area — the cue to
     /// spin up a new track for the clip.
     private func droppedBelowLanes(_ point: NSPoint) -> Bool {
-        guard point.y >= Self.rulerHeight, !model.lanes.isEmpty else {
-            return point.y >= Self.rulerHeight && model.lanes.isEmpty
+        guard point.y >= rulerHeight, !model.lanes.isEmpty else {
+            return point.y >= rulerHeight && model.lanes.isEmpty
         }
         let lastBottom = laneTop(model.lanes.count - 1) + Self.laneHeight
         return point.y >= lastBottom
@@ -613,7 +644,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
 
         // The rest of the ruler carries the markers, and otherwise scrubs.
-        if point.y < Self.rulerHeight {
+        if point.y < rulerHeight {
             if let hit = marker(at: point) {
                 if event.clickCount >= 2 {
                     onDeleteMarker?(hit.timeSeconds)
@@ -630,7 +661,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
 
         // Edit tools that act over the lanes regardless of what is under the cursor.
-        if point.y >= Self.rulerHeight {
+        if point.y >= rulerHeight {
             if editTool == "zoom" {
                 zoomAtCursor(point, out: event.modifierFlags.contains(.option))
                 return
@@ -1062,7 +1093,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// name column, left of the lanes — lands at 0 s, so dragging a file onto the
     /// track drops it at the start of the timeline.
     private func dropTarget(at point: NSPoint) -> (lane: Int, seconds: Double)? {
-        guard point.y >= Self.rulerHeight else { return nil }
+        guard point.y >= rulerHeight else { return nil }
         let seconds = point.x < lanesRect.minX ? 0 : max(0, seconds(atX: point.x))
         if let lane = laneIndex(at: point) {
             return (lane, seconds)
@@ -1174,8 +1205,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let tint = model.loopEnabled ? NSColor(hex: 0x5cb87a) : NSColor(hex: 0x9a8f80)
 
         tint.withAlphaComponent(0.08).setFill()
-        NSRect(x: left, y: Self.rulerHeight, width: right - left,
-               height: bounds.height - Self.rulerHeight).fill()
+        NSRect(x: left, y: rulerHeight, width: right - left,
+               height: bounds.height - rulerHeight).fill()
 
         tint.withAlphaComponent(0.55).setFill()
         NSRect(x: left, y: 0, width: right - left, height: Self.rangeStripHeight).fill()
@@ -1225,36 +1256,101 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         return 256
     }
 
+    /// Right-clicking the ruler chooses which timebases it shows (마디 / 시간 / 샘플).
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard point.y < rulerHeight else { super.rightMouseDown(with: event); return }
+        let menu = NSMenu()
+        menu.addItem({ let h = NSMenuItem(title: "눈금자 표시", action: nil, keyEquivalent: ""); h.isEnabled = false; return h }())
+        for tb in RulerTimebase.allCases {
+            let item = NSMenuItem(title: tb.label, action: #selector(toggleTimebaseMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = tb.rawValue
+            item.state = timebaseEnabled(tb) ? .on : .off
+            menu.addItem(item)
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func toggleTimebaseMenu(_ sender: NSMenuItem) {
+        if let tb = RulerTimebase(rawValue: sender.tag) { onToggleTimebase?(tb) }
+    }
+
+    private func timebaseEnabled(_ tb: RulerTimebase) -> Bool {
+        switch tb {
+        case .bars: return model.rulerBars
+        case .time: return model.rulerTime
+        case .samples: return model.rulerSamples
+        }
+    }
+
     private func drawRuler(_ context: CGContext) {
         NSColor(hex: 0x332c26).setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: Self.rulerHeight).fill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: rulerHeight).fill()
 
         let secondsPerBar = 60.0 / Double(model.tempoBpm) * Double(model.beatsPerBar)
         let step = barStep()
-
         let firstBar = max(0, Int((model.visibleStart / secondsPerBar).rounded(.down)))
         let lastBar = Int(((model.visibleStart + model.visibleDuration) / secondsPerBar).rounded(.up))
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium),
-            .foregroundColor: NSColor(hex: 0x867b6a),
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .medium),
+            .foregroundColor: NSColor(hex: 0x9a8f7e),
+        ]
+        let tagAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 7, weight: .bold),
+            .foregroundColor: NSColor(hex: 0x6a6154),
         ]
 
-        var bar = firstBar - firstBar % step
-        while bar <= lastBar {
-            let position = x(forSeconds: Double(bar) * secondsPerBar)
-            if position >= lanesRect.minX - 1 {
-                NSColor(hex: 0x574d40).setFill()
-                NSRect(x: position, y: Self.rulerHeight - 8, width: 1, height: 8).fill()
-
-                let label = "\(bar + 1)" as NSString
-                label.draw(at: NSPoint(x: position + 4, y: 6), withAttributes: attributes)
+        // One row per enabled timebase, all aligned to the same bar ticks.
+        for (rowIndex, timebase) in enabledTimebases.enumerated() {
+            let rowTop = Self.rangeStripHeight + CGFloat(rowIndex) * Self.timebaseRowHeight
+            if rowIndex > 0 {
+                NSColor(hex: 0x28221c).setFill()
+                NSRect(x: 0, y: rowTop, width: bounds.width, height: 1).fill()
             }
-            bar += step
+            // A tiny row tag at the far left so each timebase is identified.
+            (timebase.label as NSString).draw(at: NSPoint(x: 4, y: rowTop + 2.5), withAttributes: tagAttrs)
+
+            var bar = firstBar - firstBar % step
+            while bar <= lastBar {
+                let seconds = Double(bar) * secondsPerBar
+                let position = x(forSeconds: seconds)
+                if position >= lanesRect.minX - 1 {
+                    NSColor(hex: 0x574d40).setFill()
+                    NSRect(x: position, y: rowTop, width: 1, height: 5).fill()
+                    let label = rulerLabel(for: timebase, bar: bar, seconds: seconds) as NSString
+                    label.draw(at: NSPoint(x: position + 3, y: rowTop + 2.5), withAttributes: labelAttrs)
+                }
+                bar += step
+            }
         }
 
         NSColor(hex: 0x0b0806).setFill()
-        NSRect(x: 0, y: Self.rulerHeight - 1, width: bounds.width, height: 1).fill()
+        NSRect(x: 0, y: rulerHeight - 1, width: bounds.width, height: 1).fill()
+    }
+
+    private func rulerLabel(for timebase: RulerTimebase, bar: Int, seconds: Double) -> String {
+        switch timebase {
+        case .bars:
+            return "\(bar + 1)"
+        case .time:
+            let total = max(0, seconds)
+            let m = Int(total) / 60
+            let s = Int(total) % 60
+            let ms = Int((total - Double(Int(total))) * 1000)
+            return ms == 0 ? String(format: "%d:%02d", m, s) : String(format: "%d:%02d.%03d", m, s, ms)
+        case .samples:
+            let samples = Int((seconds * (model.sampleRate > 0 ? model.sampleRate : 48000)).rounded())
+            // Group thousands so large counts stay readable.
+            var digits = String(samples), out = "", count = 0
+            for ch in digits.reversed() {
+                if count > 0 && count % 3 == 0 { out.append(",") }
+                out.append(ch); count += 1
+            }
+            digits = String(out.reversed())
+            return digits
+        }
     }
 
     private func drawLaneHeaders(_ context: CGContext) {
@@ -1264,8 +1360,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         ]
 
         context.saveGState()
-        context.clip(to: NSRect(x: 0, y: Self.rulerHeight,
-                                width: bounds.width, height: bounds.height - Self.rulerHeight))
+        context.clip(to: NSRect(x: 0, y: rulerHeight,
+                                width: bounds.width, height: bounds.height - rulerHeight))
 
         for (index, lane) in model.lanes.enumerated() {
             let rect = NSRect(x: 0,
@@ -1362,7 +1458,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func markerFlagRect(_ marker: TimelineModel.Marker) -> NSRect {
         NSRect(x: x(forSeconds: marker.timeSeconds), y: Self.rangeStripHeight,
-               width: Self.markerFlagWidth, height: Self.rulerHeight - Self.rangeStripHeight)
+               width: Self.markerFlagWidth, height: rulerHeight - Self.rangeStripHeight)
     }
 
     private func marker(at point: NSPoint) -> TimelineModel.Marker? {
@@ -1380,8 +1476,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
             // A hairline all the way down, so a marker can be lined up with a clip.
             NSColor(hex: 0xe6a23c).withAlphaComponent(0.22).setFill()
-            NSRect(x: position, y: Self.rulerHeight, width: 1,
-                   height: bounds.height - Self.rulerHeight).fill()
+            NSRect(x: position, y: rulerHeight, width: 1,
+                   height: bounds.height - rulerHeight).fill()
 
             let flag = markerFlagRect(marker)
             NSColor(hex: 0xe6a23c).setFill()
@@ -1854,6 +1950,7 @@ struct TimelineView: NSViewRepresentable {
     let onToggleInputMonitor: (Int) -> Void
     var onRenameTrack: ((Int, String) -> Void)? = nil
     let onSetVolumeDb: (Int, Float) -> Void
+    var onToggleTimebase: ((RulerTimebase) -> Void)? = nil
 
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
@@ -1872,6 +1969,7 @@ struct TimelineView: NSViewRepresentable {
 
     private func wire(_ view: TimelineNSView) {
         view.onSeek = onSeek
+        view.onToggleTimebase = onToggleTimebase
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange

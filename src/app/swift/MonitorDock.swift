@@ -282,7 +282,9 @@ struct MonitorDock: View {
             if let set = engine.activeSpeakerSet {
                 VStack(alignment: .leading, spacing: Theme.Space.md) {
                     StatRow(label: "스피커 모델", value: set.displayModel, valueColor: Theme.Palette.textSecondary)
-                    StatRow(label: "물리 출력", value: set.output, valueColor: Theme.Palette.ioValue)
+                    if !engine.speakerSimulationActive {
+                        StatRow(label: "물리 출력", value: set.output, valueColor: Theme.Palette.ioValue)
+                    }
                     StatRow(label: "시뮬 가중치",
                             value: String(format: "%.0f · %@", set.simWeight * 100, set.roomEq ? "룸 EQ" : "직결"),
                             valueColor: Theme.Palette.purpleLight)
@@ -307,15 +309,19 @@ struct MonitorDock: View {
         Text("\(set.letter) · \(set.name)")
         modelMenu("스피커 모델", catalog: engine.speakerModelCatalog,
                   selected: set.output == "None" ? set.displayModel : "") { engine.setSpeakerModel(set.id, $0) }
-        Menu("물리 출력") {
-            ForEach(engine.speakerOutputRoutes, id: \.self) { route in
-                Button {
-                    engine.setSpeakerOutput(set.id, route)
-                } label: {
-                    if set.output == route {
-                        Label(route, systemImage: "checkmark")
-                    } else {
-                        Text(route)
+        // Physical output is a raw passthrough that bypasses the modelled path, so it is
+        // only offered when Speaker Simulation is off (photo-2 context).
+        if !engine.speakerSimulationActive {
+            Menu("물리 출력") {
+                ForEach(engine.speakerOutputRoutes, id: \.self) { route in
+                    Button {
+                        engine.setSpeakerOutput(set.id, route)
+                    } label: {
+                        if set.output == route {
+                            Label(route, systemImage: "checkmark")
+                        } else {
+                            Text(route)
+                        }
                     }
                 }
             }

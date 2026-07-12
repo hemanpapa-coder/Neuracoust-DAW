@@ -328,7 +328,8 @@ private struct EditView: View {
                     onToggleArm: { engine.toggleTrackArm($0) },
                     onToggleInputMonitor: { engine.toggleTrackInputMonitoring($0) },
                     onRenameTrack: { _ = engine.renameTrack($0, to: $1) },
-                    onSetVolumeDb: { engine.setTrackVolume($0, $1) }
+                    onSetVolumeDb: { engine.setTrackVolume($0, $1) },
+                    onToggleTimebase: { engine.toggleRulerTimebase($0) }
                 )
 
                 PianoRollPanel()

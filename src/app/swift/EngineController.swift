@@ -57,6 +57,10 @@ final class EngineController: ObservableObject {
     @Published var clickEnabled = false
     @Published var snapEnabled = true
     @Published var recording = false
+    /// Which timebases the timeline ruler shows (bars / time / samples). Any subset.
+    @Published var rulerBars = true
+    @Published var rulerTime = true
+    @Published var rulerSamples = false
 
     /// The Pro-Tools-style record mode chosen from the record button's context menu.
     /// It is the configuration the recording engine will use — the engine does not yet
@@ -651,6 +655,13 @@ final class EngineController: ObservableObject {
     }
 
     @Published private(set) var monitorModules: [MonitorModule] = []
+
+    /// True while the Speaker Simulation monitor-DSP module is enabled. Routing a speaker
+    /// set to a physical output is a raw passthrough that bypasses the simulation, so the
+    /// speaker-set menu hides 물리 출력 while this is on.
+    var speakerSimulationActive: Bool {
+        monitorModules.contains { $0.enabled && $0.name.localizedCaseInsensitiveContains("Speaker Simulation") }
+    }
     @Published private(set) var speakerSets: [SpeakerSet] = []
     @Published private(set) var activeSpeakerSlot = 0
     @Published private(set) var monitorVolumeDb: Float = -6
@@ -1439,6 +1450,10 @@ final class EngineController: ObservableObject {
             },
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
+            sampleRate: sampleRate > 0 ? sampleRate : 48000,
+            rulerBars: rulerBars,
+            rulerTime: rulerTime,
+            rulerSamples: rulerSamples,
             visibleStart: visibleStart,
             visibleDuration: visibleDuration,
             markers: markers.map { TimelineModel.Marker(name: $0.name, timeSeconds: $0.timeSeconds) },
@@ -1466,6 +1481,20 @@ final class EngineController: ObservableObject {
             rangeEnd: loopEndSeconds,
             loopEnabled: loopEnabled
         )
+    }
+
+    /// Toggle one of the ruler's timebases; at least one stays on.
+    func toggleRulerTimebase(_ which: RulerTimebase) {
+        switch which {
+        case .bars: rulerBars.toggle()
+        case .time: rulerTime.toggle()
+        case .samples: rulerSamples.toggle()
+        }
+        if !rulerBars && !rulerTime && !rulerSamples { rulerBars = true }   // never all off
+        let d = UserDefaults.standard
+        d.set(rulerBars, forKey: SettingsKey.rulerBars)
+        d.set(rulerTime, forKey: SettingsKey.rulerTime)
+        d.set(rulerSamples, forKey: SettingsKey.rulerSamples)
     }
 
     // MARK: - Clip editing
@@ -2958,6 +2987,9 @@ final class EngineController: ObservableObject {
         static let musicalKey = "nc.musicalKey"
         static let keyEvents = "nc.keyEvents"
         static let songForm = "nc.songForm"
+        static let rulerBars = "nc.rulerBars"
+        static let rulerTime = "nc.rulerTime"
+        static let rulerSamples = "nc.rulerSamples"
         static let editTool = "nc.editTool"
         static let soloMonitor = "nc.soloMonitorMode"
         static let click = "nc.clickEnabled"
@@ -3027,6 +3059,9 @@ final class EngineController: ObservableObject {
         if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
         restoreKeyEvents()
         restoreSongForm()
+        if d.object(forKey: SettingsKey.rulerBars) != nil { rulerBars = d.bool(forKey: SettingsKey.rulerBars) }
+        if d.object(forKey: SettingsKey.rulerTime) != nil { rulerTime = d.bool(forKey: SettingsKey.rulerTime) }
+        if d.object(forKey: SettingsKey.rulerSamples) != nil { rulerSamples = d.bool(forKey: SettingsKey.rulerSamples) }
         if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
         if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
         if d.object(forKey: SettingsKey.click) != nil, d.bool(forKey: SettingsKey.click) != clickEnabled { toggleClick() }
