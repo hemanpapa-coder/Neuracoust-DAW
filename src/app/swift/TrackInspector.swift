@@ -112,7 +112,7 @@ struct TrackInspector: View {
                 Spacer()
             }
         }
-        .frame(width: 258)
+        .frame(width: 172)
         .background(Theme.Palette.rail)
     }
 

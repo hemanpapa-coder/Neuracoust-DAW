@@ -314,12 +314,15 @@ struct ChannelStrip: View {
             nameplate
             channelStats
 
-            // Output routing pinned to the very bottom of the strip. Extra trailing space
-            // reserves the bottom-right corner for the width grip so they never overlap.
+            // Output routing pinned to the very bottom of the strip. A divider + top gap
+            // separates it from the stats block above (they were reading as overlapped),
+            // and the extra trailing space reserves the bottom-right corner for the grip.
             if showIO {
+                Rectangle().fill(Theme.Palette.deepBorder).frame(height: 1)
                 outputSection
                     .padding(.leading, Theme.Space.md)
                     .padding(.trailing, 22)
+                    .padding(.top, Theme.Space.sm)
                     .padding(.bottom, Theme.Space.md)
             }
         }

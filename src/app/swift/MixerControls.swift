@@ -390,11 +390,30 @@ struct HorizontalMeter: View {
     let peakLeft: Float
     let peakRight: Float
 
+    // 0 dBFS at the right (full), down to the -60 floor — same mapping as the bar fill.
+    private static let marks: [(String, Double)] = [("0", 0), ("-12", -12), ("-24", -24), ("-48", -48)]
+
     var body: some View {
         VStack(spacing: 2) {
             bar(peakLeft)
             bar(peakRight)
+            scale
         }
+    }
+
+    private var scale: some View {
+        GeometryReader { geo in
+            ForEach(Array(Self.marks.enumerated()), id: \.offset) { _, m in
+                let x = geo.size.width * ((m.1 + 60) / 60)
+                VStack(spacing: 1) {
+                    Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 1, height: 2)
+                    Text(m.0).font(Theme.Font.mono(5)).foregroundStyle(Color(hex: 0x6f7c68))
+                }
+                .fixedSize()
+                .position(x: min(geo.size.width - 5, max(6, x)), y: 5)
+            }
+        }
+        .frame(height: 10)
     }
 
     private func bar(_ peak: Float) -> some View {
