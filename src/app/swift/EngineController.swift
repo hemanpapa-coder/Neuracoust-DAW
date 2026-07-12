@@ -1623,6 +1623,7 @@ final class EngineController: ObservableObject {
                                           pan: track.pan,
                                           peakLeft: track.peakLeft,
                                           peakRight: track.peakRight,
+                                          automationMode: track.automationMode,
                                           automation: automation,
                                           inserts: track.inserts.prefix(4).map {
                                               TimelineModel.InsertChip(name: $0.name, bypassed: $0.bypassed, isEmpty: $0.isEmpty)

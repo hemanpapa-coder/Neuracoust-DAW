@@ -49,6 +49,8 @@ struct TimelineModel: Equatable {
         var pan: Float = 0
         var peakLeft: Float = 0
         var peakRight: Float = 0
+        /// Read / Touch / Latch / Write / Off — drawn as a coloured letter the user cycles.
+        var automationMode: String = "read"
         /// nil while the lane's automation is folded away.
         var automation: Automation?
         /// The channel-strip inserts and sends, shown in the header like Pro Tools' edit
@@ -56,7 +58,7 @@ struct TimelineModel: Equatable {
         var inserts: [InsertChip] = []
         var sends: [SendChip] = []
         /// This lane's height. Per-track so a multi-selection can be resized together.
-        var height: CGFloat = 106
+        var height: CGFloat = 118
     }
 
     struct InsertChip: Equatable { let name: String; let bypassed: Bool; let isEmpty: Bool }
@@ -82,7 +84,7 @@ struct TimelineModel: Equatable {
     var beatsPerBar: Int = 4
     var sampleRate: Double = 48000
     /// Shared, adjustable lane height (drag a lane's bottom edge to change it).
-    var laneHeight: CGFloat = 106
+    var laneHeight: CGFloat = 118
     /// Which timebases the ruler shows, top to bottom. Any subset may be on at once.
     var rulerBars: Bool = true
     var rulerTime: Bool = true
@@ -223,6 +225,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onToggleInputMonitor: ((Int) -> Void)?           // trackId
     var onRenameTrack: ((Int, String) -> Void)?          // (trackId, newName)
     var onSetVolumeDb: ((Int, Float) -> Void)?           // (trackId, db) — continuous
+    var onSetPan: ((Int, Float) -> Void)?                // (trackId, pan −1…1) — continuous
+    var onCycleAutomationMode: ((Int) -> Void)?          // trackId — Read→Touch→Latch→Write→Off
+    /// A header fader/pan was grabbed / released, so Touch/Latch automation can punch in.
+    var onBeginTouch: ((Int, String) -> Void)?           // (trackId, "track.volume"/"track.pan")
+    var onEndTouch: ((Int, String) -> Void)?             // (trackId, param)
 
     /// Grab zone at each end of a clip.
     private static let trimHandleWidth: CGFloat = 8
@@ -264,6 +271,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
         /// Dragging the inline volume fader in a lane header.
         case headerFader(trackId: Int)
+        case headerPan(trackId: Int)
         /// Dragging a lane's bottom edge to resize all lanes.
         case resizingLane(startHeight: CGFloat, startY: CGFloat, laneIndex: Int)
     }
@@ -631,6 +639,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     beginRenamingLane(lane)
                 } else if automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
+                } else if headerAutomationModeRect(lane).contains(point) {
+                    onCycleAutomationMode?(trackId)
                 } else if headerMuteRect(lane).contains(point) {
                     onToggleMute?(trackId)
                 } else if headerSoloRect(lane).contains(point) {
@@ -641,8 +651,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     onToggleInputMonitor?(trackId)
                 } else if headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
                     onSelectLane?(lane)
+                    onBeginTouch?(trackId, "track.volume")
                     onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
                     drag = .headerFader(trackId: trackId)
+                } else if headerPanRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
+                    onSelectLane?(lane)
+                    onBeginTouch?(trackId, "track.pan")
+                    onSetPan?(trackId, headerPan(atX: point.x, index: lane))
+                    drag = .headerPan(trackId: trackId)
                 } else if let slot = headerInsertSlotHit(lane, point: point) {
                     handleInsertClick(trackId: trackId, lane: lane, slot: slot, command: event.modifierFlags.contains(.command))
                 } else if let s = headerSendSlotHit(lane, point: point) {
@@ -931,6 +947,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case .headerFader(let trackId):
             // The fader's x-mapping is the same for every lane, so index 0 suffices.
             onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: 0))
+        case .headerPan(let trackId):
+            onSetPan?(trackId, headerPan(atX: point.x, index: 0))
         case .resizingLane(let startHeight, let startY, let laneIndex):
             let raw = startHeight + (point.y - startY)
             let stepped = (raw / Self.laneHeightStep).rounded() * Self.laneHeightStep       // snap to a step
@@ -1005,8 +1023,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitEdit?("Move MIDI region")
         case .resizingRegion:
             onCommitEdit?("Resize MIDI region")
-        case .headerFader:
+        case .headerFader(let trackId):
+            onEndTouch?(trackId, "track.volume")
             onCommitEdit?("Track volume")
+        case .headerPan(let trackId):
+            onEndTouch?(trackId, "track.pan")
+            onCommitEdit?("Track pan")
         case .resizingLane:
             onCommitLaneHeight?()      // persist the new height
         case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
@@ -1480,6 +1502,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
                 ])
 
+            // The automation-mode chip sits just left of the "A" toggle.
+            drawHeaderAutomationMode(index: index, lane: lane)
+
             drawLaneHeaderStrip(lane, index: index)
 
             NSColor(hex: 0x1b1611).setFill()
@@ -1527,11 +1552,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
         }
 
-        if laneH >= 64 {
+        if laneH >= 62 {
             drawHeaderFader(index: index, lane: lane)
         }
 
-        if laneH >= 74 {
+        if laneH >= 73 {
+            drawHeaderPan(index: index, lane: lane)
+        }
+
+        if laneH >= 83 {
             // Stereo peak meter: L bar on top, R below, so a stereo track reads as stereo.
             let meter = headerMeterRect(index)
             NSColor(hex: 0x140f0a).setFill()
@@ -1550,7 +1579,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
         }
 
-        if laneH >= 92 { drawHeaderInsertsSends(lane, index: index) }
+        if laneH >= 100 { drawHeaderInsertsSends(lane, index: index) }
     }
 
     /// Horizontal inline volume fader with a brushed-metal cap — the compact sibling of the
@@ -1597,6 +1626,68 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
                 .foregroundColor: NSColor(hex: 0x867b6a),
             ])
+    }
+
+    /// Horizontal pan bar with a centre tick, its filled portion running from the middle
+    /// out to the knob — the inline sibling of the mixer's PanSlider.
+    private func drawHeaderPan(index: Int, lane: TimelineModel.Lane) {
+        let bar = headerPanRect(index)
+
+        NSColor(hex: 0x151009).setFill()
+        NSBezierPath(roundedRect: bar, xRadius: bar.height / 2, yRadius: bar.height / 2).fill()
+        NSColor.white.withAlphaComponent(0.06).setStroke()
+        let rim = NSBezierPath(roundedRect: bar.insetBy(dx: 0.5, dy: 0.5), xRadius: bar.height / 2, yRadius: bar.height / 2)
+        rim.lineWidth = 0.75; rim.stroke()
+
+        // Centre reference tick.
+        NSColor.white.withAlphaComponent(0.14).setFill()
+        NSRect(x: bar.midX - 0.5, y: bar.minY + 1, width: 1, height: bar.height - 2).fill()
+
+        let frac = CGFloat((lane.pan + 1) / 2)
+        let knobX = bar.minX + frac * bar.width
+        // Fill from centre to the knob.
+        lane.accent.withAlphaComponent(0.7).setFill()
+        let fillX = min(bar.midX, knobX), fillW = abs(knobX - bar.midX)
+        NSBezierPath(roundedRect: NSRect(x: fillX, y: bar.midY - 1.5, width: fillW, height: 3),
+                     xRadius: 1.5, yRadius: 1.5).fill()
+
+        // Knob.
+        let knobW: CGFloat = 9, knobH: CGFloat = 11
+        let knob = NSRect(x: knobX - knobW / 2, y: bar.midY - knobH / 2, width: knobW, height: knobH)
+        let cap = NSBezierPath(roundedRect: knob, xRadius: 2.5, yRadius: 2.5)
+        if let g = NSGradient(colors: [NSColor(hex: 0x6a727a), NSColor(hex: 0x363c44), NSColor(hex: 0x181c22)]) {
+            g.draw(in: cap, angle: -90)
+        }
+        NSColor.white.withAlphaComponent(0.30).setStroke(); cap.lineWidth = 0.75; cap.stroke()
+
+        (lane.pan == 0 ? "C" : String(format: lane.pan < 0 ? "L%.0f" : "R%.0f", abs(lane.pan) * 100) as NSString).draw(
+            at: NSPoint(x: bar.minX, y: bar.minY - 11),
+            withAttributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
+                .foregroundColor: NSColor(hex: 0x867b6a),
+            ])
+    }
+
+    /// The automation-mode chip (R/T/L/W/O), coloured like Pro Tools' mode buttons.
+    private func drawHeaderAutomationMode(index: Int, lane: TimelineModel.Lane) {
+        let rect = headerAutomationModeRect(index)
+        let (letter, color): (String, UInt32)
+        switch lane.automationMode {
+        case "write": (letter, color) = ("W", 0xe5484d)
+        case "touch": (letter, color) = ("T", 0xf4d35e)
+        case "latch": (letter, color) = ("L", 0xe6a23c)
+        case "off":   (letter, color) = ("O", 0x6a6157)
+        default:      (letter, color) = ("R", 0x5fb85f)     // read
+        }
+        NSColor(hex: color).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
+            .foregroundColor: NSColor(hex: 0x14100a),
+        ]
+        let sz = (letter as NSString).size(withAttributes: attrs)
+        (letter as NSString).draw(at: NSPoint(x: rect.midX - sz.width / 2, y: rect.midY - sz.height / 2),
+                                  withAttributes: attrs)
     }
 
     /// The Pro-Tools-style inserts row and sends row under the lane's fader/meter.
@@ -1951,10 +2042,18 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
     /// The volume fader track spans this rect; the fill maps -60…+6 dB left→right.
     private func headerFaderRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 52, width: Self.headerWidth - 24, height: 8)
+        NSRect(x: 12, y: laneTop(index) + 50, width: Self.headerWidth - 24, height: 8)
+    }
+    /// Horizontal pan bar, centre-detented, directly under the fader.
+    private func headerPanRect(_ index: Int) -> NSRect {
+        NSRect(x: 12, y: laneTop(index) + 61, width: Self.headerWidth - 24, height: 8)
     }
     private func headerMeterRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 62, width: Self.headerWidth - 24, height: 7)
+        NSRect(x: 12, y: laneTop(index) + 72, width: Self.headerWidth - 24, height: 7)
+    }
+    /// Small square top-right of the header that shows/cycles the automation mode.
+    private func headerAutomationModeRect(_ index: Int) -> NSRect {
+        NSRect(x: Self.headerWidth - 46, y: laneTop(index) + 10, width: 16, height: 14)
     }
 
     // Inserts row: four slot chips. Sends row: active send chips plus a "+".
@@ -1963,7 +2062,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let gap: CGFloat = 3
         let totalW = Self.headerWidth - 24
         let w = (totalW - gap * CGFloat(Self.headerInsertSlots - 1)) / CGFloat(Self.headerInsertSlots)
-        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 74, width: w, height: 13)
+        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 84, width: w, height: 13)
     }
     private func headerSendRect(_ index: Int, slot: Int) -> NSRect {
         // Up to three chips across the row (existing sends, then the "+").
@@ -1971,7 +2070,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let totalW = Self.headerWidth - 24
         let count = 3
         let w = (totalW - gap * CGFloat(count - 1)) / CGFloat(count)
-        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 89, width: w, height: 13)
+        return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 100, width: w, height: 13)
     }
 
     // The inline fader uses the same console taper as the mixer, so 0 dB sits ~78% along
@@ -1984,21 +2083,42 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let fraction = Double(min(1, max(0, (pointX - rect.minX) / max(1, rect.width))))
         return FaderScale.db(forPosition: fraction)
     }
+    /// Pan maps linearly across the bar, −1 (L) … +1 (R), with a small snap to centre.
+    private func headerPan(atX pointX: CGFloat, index: Int) -> Float {
+        let rect = headerPanRect(index)
+        let f = Float(min(1, max(0, (pointX - rect.minX) / max(1, rect.width))))
+        let pan = f * 2 - 1
+        return abs(pan) < 0.06 ? 0 : pan          // centre detent
+    }
 
 
-    /// Value axis: the top of the row is the parameter's maximum.
-    private func automationY(_ value: Float, in rect: NSRect, _ automation: TimelineModel.Automation) -> CGFloat {
+    /// Value axis: the top of the row is the parameter's maximum. Volume uses the same
+    /// console taper as the fader (0 dB ~78% up), so where the curve sits matches where
+    /// the fader sits — a level set on the fader draws at the same height it was recorded.
+    private func automationFraction(_ value: Float, _ automation: TimelineModel.Automation) -> CGFloat {
+        if automation.parameterId == "track.volume" {
+            return CGFloat(FaderScale.position(forDb: value))
+        }
         let span = automation.range.upperBound - automation.range.lowerBound
-        let fraction = (value - automation.range.lowerBound) / max(0.0001, span)
-        return rect.maxY - 6 - CGFloat(fraction) * (rect.height - 12)
+        return CGFloat((value - automation.range.lowerBound) / max(0.0001, span))
+    }
+    private func automationValueFor(_ fraction: CGFloat, _ automation: TimelineModel.Automation) -> Float {
+        if automation.parameterId == "track.volume" {
+            return FaderScale.db(forPosition: Double(min(1, max(0, fraction))))
+        }
+        let span = automation.range.upperBound - automation.range.lowerBound
+        let value = automation.range.lowerBound + Float(fraction) * span
+        return min(automation.range.upperBound, max(automation.range.lowerBound, value))
+    }
+
+    private func automationY(_ value: Float, in rect: NSRect, _ automation: TimelineModel.Automation) -> CGFloat {
+        rect.maxY - 6 - automationFraction(value, automation) * (rect.height - 12)
     }
 
     private func automationValue(atY pointY: CGFloat, in rect: NSRect,
                                  _ automation: TimelineModel.Automation) -> Float {
-        let span = automation.range.upperBound - automation.range.lowerBound
-        let fraction = Float((rect.maxY - 6 - pointY) / max(1, rect.height - 12))
-        let value = automation.range.lowerBound + fraction * span
-        return min(automation.range.upperBound, max(automation.range.lowerBound, value))
+        let fraction = (rect.maxY - 6 - pointY) / max(1, rect.height - 12)
+        return automationValueFor(fraction, automation)
     }
 
     private static let automationHandleRadius: CGFloat = 4
@@ -2358,6 +2478,10 @@ struct TimelineView: NSViewRepresentable {
     let onToggleInputMonitor: (Int) -> Void
     var onRenameTrack: ((Int, String) -> Void)? = nil
     let onSetVolumeDb: (Int, Float) -> Void
+    var onSetPan: ((Int, Float) -> Void)? = nil
+    var onCycleAutomationMode: ((Int) -> Void)? = nil
+    var onBeginTouch: ((Int, String) -> Void)? = nil
+    var onEndTouch: ((Int, String) -> Void)? = nil
     var onToggleTimebase: ((RulerTimebase) -> Void)? = nil
     var onBrowseInsert: ((Int) -> Void)? = nil
     var onToggleInsertEditor: ((Int, Int) -> Void)? = nil
@@ -2449,5 +2573,9 @@ struct TimelineView: NSViewRepresentable {
         view.onToggleInputMonitor = onToggleInputMonitor
         view.onRenameTrack = onRenameTrack
         view.onSetVolumeDb = onSetVolumeDb
+        view.onSetPan = onSetPan
+        view.onCycleAutomationMode = onCycleAutomationMode
+        view.onBeginTouch = onBeginTouch
+        view.onEndTouch = onEndTouch
     }
 }
