@@ -610,21 +610,29 @@ struct ChannelStrip: View {
     }
 
     private var faderSection: some View {
-        HStack(alignment: .top, spacing: Theme.Space.sm) {
-            FaderScaleMarks(capHeight: 26)
+        HStack(alignment: .top, spacing: 5) {
+            FaderScaleMarks(capHeight: 22)
                 .frame(height: 132)
 
-            ChannelFader(volumeDb: track.volumeDb,
-                         accent: accent,
-                         onChange: { engine.setTrackVolume(track.id, $0) },
-                         onCommit: { engine.recordGesture("Volume " + track.name) })
-                .frame(width: 34, height: 132)
+            VStack(spacing: 3) {
+                ChannelFader(volumeDb: track.volumeDb,
+                             accent: accent,
+                             onChange: { engine.setTrackVolume(track.id, $0) },
+                             onCommit: { engine.recordGesture("Volume " + track.name) })
+                    .frame(width: 32, height: 132)
+                // Numeric value readout beneath the fader, like the reference.
+                Text(dbLabel(track.volumeDb))
+                    .font(Theme.Font.mono(10, .semibold))
+                    .foregroundStyle(Theme.Palette.textBright)
+            }
 
-            HStack(spacing: 2) {
+            HStack(spacing: 3) {
                 VerticalMeter(peak: meterPeakLeft)
                 VerticalMeter(peak: meterPeakRight)
             }
             .frame(height: 132)
+
+            MeterScale().frame(height: 132)
         }
     }
 
@@ -839,10 +847,11 @@ struct MasterMeterPanel: View {
                 .frame(width: 16, height: 210)
 
                 HStack(spacing: 3) {
-                    VerticalMeter(peak: engine.outputPeakLeft, segments: 60)
-                    VerticalMeter(peak: engine.outputPeakRight, segments: 60)
+                    VerticalMeter(peak: engine.outputPeakLeft, width: 14)
+                    VerticalMeter(peak: engine.outputPeakRight, width: 14)
                 }
                 .frame(height: 210)
+                MeterScale().frame(height: 210)
             }
 
             VStack(spacing: Theme.Space.sm) {

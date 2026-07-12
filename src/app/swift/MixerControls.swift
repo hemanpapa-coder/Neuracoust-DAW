@@ -11,12 +11,14 @@ import QuartzCore
 /// the printed legend agree exactly. Position is 0 at the bottom of the throw, 1 at the top.
 enum FaderScale {
     static let silenceDb: Float = -120
-    static let maxDb: Float = 10
+    static let maxDb: Float = 6
 
-    /// (dB, position) anchors, ascending. Gaps shrink downward: 0→-5 is the widest.
+    /// (dB, position) anchors, ascending. Unity sits near the top and the 6-dB steps below
+    /// it are near-even with a gentle downward compression — the console/Nuendo look.
     static let anchors: [(db: Float, pos: Double)] = [
-        (-120, 0.000), (-40, 0.054), (-30, 0.114), (-20, 0.206),
-        (-10, 0.344), (-5, 0.528), (0, 0.780), (5, 0.895), (10, 1.000),
+        (-120, 0.000), (-60, 0.075), (-48, 0.150), (-42, 0.220), (-36, 0.300),
+        (-30, 0.385), (-24, 0.475), (-18, 0.570), (-12, 0.670), (-6, 0.775),
+        (0, 0.885), (6, 1.000),
     ]
 
     static func position(forDb db: Float) -> Double {
@@ -43,10 +45,10 @@ enum FaderScale {
         return maxDb
     }
 
-    // Console-style legend: dense near unity, compressing below, ∞ at the true floor.
+    // 6-dB legend, 0 at the top: 0 · 6 · 12 · … · 48 (labels are magnitudes).
     static let marks: [(String, Float)] = [
-        ("10", 10), ("5", 5), ("0", 0), ("5", -5), ("10", -10),
-        ("20", -20), ("30", -30), ("40", -40), ("∞", silenceDb),
+        ("0", 0), ("6", -6), ("12", -12), ("18", -18), ("24", -24),
+        ("30", -30), ("36", -36), ("42", -42), ("48", -48),
     ]
 }
 
@@ -107,12 +109,12 @@ struct FaderScaleMarks: View {
                 let unity = db == 0
                 HStack(spacing: 2.5) {
                     Text(label)
-                        .font(Theme.Font.mono(6.5, unity ? .bold : .regular))
-                        .foregroundStyle(Color(hex: unity ? 0xc0b49c : 0x7a6f5f))
+                        .font(Theme.Font.mono(7, unity ? .semibold : .regular))
+                        .foregroundStyle(Color(hex: unity ? 0xb6bbc2 : 0x8b9096))
                         .frame(width: 13, alignment: .trailing)
                     Rectangle()
-                        .fill(Color(hex: unity ? 0x8a7d68 : 0x574d40))
-                        .frame(width: unity ? 7 : 4, height: unity ? 1.5 : 1)
+                        .fill(Color(hex: 0x4a4f56))
+                        .frame(width: unity ? 6 : 4, height: 1)
                 }
                 .position(x: 12, y: y)
             }
@@ -181,43 +183,32 @@ struct ChannelFader: View {
         }
     }
 
-    private let capHeight: CGFloat = 26
+    private let capHeight: CGFloat = 22
 
-    /// A modern take on the classic brushed-metal console cap: a metallic body with grip
-    /// ribs, a brighter central grip band, and the accent line as the value indicator.
+    /// A brushed-silver console cap with horizontal grip ridges and a darker centre line —
+    /// matching the reference.
     private var faderCap: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: 4)
                 .fill(LinearGradient(
-                    colors: [Color(hex: 0x646c74), Color(hex: 0x363c44), Color(hex: 0x14181d)],
+                    colors: [Color(hex: 0xe2e5e9), Color(hex: 0xaab0b8), Color(hex: 0x7f858d), Color(hex: 0xc2c7cd)],
                     startPoint: .top, endPoint: .bottom))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(LinearGradient(colors: [.white.opacity(0.35), .black.opacity(0.45)],
-                                               startPoint: .top, endPoint: .bottom), lineWidth: 1))
-                .shadow(color: .black.opacity(0.55), radius: 3, y: 2)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.55), lineWidth: 0.75))
+                .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
 
-            // Grip ribs across the whole cap.
-            VStack(spacing: 3) {
-                ForEach(0..<5, id: \.self) { _ in
-                    Rectangle().fill(Color.black.opacity(0.30)).frame(height: 0.75)
-                        .overlay(Rectangle().fill(Color.white.opacity(0.10)).frame(height: 0.75).offset(y: -0.75))
+            // Horizontal grip ridges.
+            VStack(spacing: 1.5) {
+                ForEach(0..<6, id: \.self) { _ in
+                    Rectangle().fill(Color.black.opacity(0.22)).frame(height: 0.75)
+                        .overlay(Rectangle().fill(Color.white.opacity(0.5)).frame(height: 0.75).offset(y: 0.9))
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
 
-            // Central grip band + accent indicator line.
-            ZStack {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(LinearGradient(colors: [Color(hex: 0xd0d4d9), Color(hex: 0x9299a1), Color(hex: 0xb7bcc2)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .frame(height: 9)
-                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black.opacity(0.25), lineWidth: 0.5))
-                Rectangle().fill(accent).frame(height: 2).shadow(color: accent.opacity(0.9), radius: 2)
-            }
-            .padding(.horizontal, 2)
+            // Darker centre seam (the value indicator line).
+            Rectangle().fill(Color(hex: 0x6d7681)).frame(height: 1.5)
         }
-        .frame(width: 34, height: capHeight)
+        .frame(width: 32, height: capHeight)
     }
 }
 
@@ -271,54 +262,83 @@ struct PanSlider: View {
 /// The unified dot level meter. Dense dot segments show the moving level (VU-style bar);
 /// a single bright dot holds the peak for ~1 s before falling. Used everywhere so every
 /// meter in the app reads the same way.
+/// Vertical level meter: a solid orange gradient bar rising from the bottom, with a red
+/// peak-hold cap that lights the headroom zone — matching the reference hardware look.
 struct VerticalMeter: View {
     let peak: Float
-    /// Dot count. Dense by default (~2× the old meter) for a finer read.
-    var segments = 48
+    var width: CGFloat = 12
 
     @State private var held: Float = 0
     @State private var heldAt: CFTimeInterval = 0
     private let clock = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
+    /// Fraction of the throw above which the meter is into headroom (red).
+    private let redZone: CGFloat = 0.88
+
     var body: some View {
         GeometryReader { geo in
-            let level = meterFraction(peak)
-            let lit = Int((level * Double(segments)).rounded())
-            let peakSeg = held > 0.0005 ? max(1, Int((meterFraction(held) * Double(segments)).rounded())) : 0
-            let dotH = max(1, (geo.size.height - CGFloat(segments - 1)) / CGFloat(segments))
-            VStack(spacing: 1) {
-                ForEach(0..<segments, id: \.self) { index in
-                    let fromBottom = segments - index          // 1…segments
-                    let isLit = fromBottom <= lit
-                    let isPeak = fromBottom == peakSeg
-                    RoundedRectangle(cornerRadius: dotH / 2)
-                        .fill(isPeak ? peakColor(index)
-                              : (isLit ? segmentColor(index) : Theme.Palette.recess))
-                        .frame(height: dotH)
+            let h = geo.size.height
+            let level = CGFloat(meterFraction(peak))
+            let heldLevel = CGFloat(meterFraction(held))
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x141519))
+                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black.opacity(0.9), lineWidth: 1))
+
+                // Orange body up to the current level; the part in the red zone turns red.
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(LinearGradient(colors: [Color(hex: 0xff7a12), Color(hex: 0xff8a1e), Color(hex: 0xffb24d)],
+                                         startPoint: .bottom, endPoint: .top))
+                    .frame(height: max(0, min(level, redZone) * h))
+                if level > redZone {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(LinearGradient(colors: [Color(hex: 0xff5a4d), Color(hex: 0xff3b30)],
+                                             startPoint: .bottom, endPoint: .top))
+                        .frame(height: (level - redZone) * h)
+                        .offset(y: -redZone * h)
+                }
+
+                // Peak-hold cap.
+                if held > 0.0005 {
+                    Rectangle()
+                        .fill(heldLevel > redZone ? Color(hex: 0xff3b30) : Color(hex: 0xffd08a))
+                        .frame(height: 2.5)
+                        .offset(y: -(heldLevel * h) + 1.25)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 2))
         }
-        .frame(width: 6)
+        .frame(width: width)
         .onReceive(clock) { _ in
-            // Peak hold: jump up instantly, hold ~1 s, then fall.
             let now = CACurrentMediaTime()
             if peak >= held { held = peak; heldAt = now }
             else if now - heldAt > 1.0 { held = max(0, held - 0.035) }
         }
     }
+}
 
-    private func segmentColor(_ fromTop: Int) -> Color {
-        let fraction = Double(fromTop) / Double(segments)
-        if fraction < 0.12 { return Theme.Palette.red }
-        if fraction < 0.32 { return Theme.Palette.yellow }
-        return Theme.Palette.green
-    }
-    /// The held-peak dot is a brighter version of its zone's colour.
-    private func peakColor(_ fromTop: Int) -> Color {
-        let fraction = Double(fromTop) / Double(segments)
-        if fraction < 0.12 { return Color(hex: 0xff6b6b) }
-        if fraction < 0.32 { return Color(hex: 0xffe27a) }
-        return Color(hex: 0x9be89b)
+/// The coloured dB scale beside the meters: headroom marks (>0) amber, 0 and below green.
+struct MeterScale: View {
+    // (label, dB) — dBFS-style: +16 at top … -36 at the floor.
+    private let marks: [(String, Double)] = [
+        ("16", 16), ("12", 12), ("8", 8), ("0", 0), ("8", -8), ("16", -16), ("24", -24), ("36", -36),
+    ]
+    private let topDb = 16.0, botDb = -36.0
+
+    var body: some View {
+        GeometryReader { geo in
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
+                let frac = (topDb - m.1) / (topDb - botDb)          // 0 at top
+                let over = m.1 > 0.001
+                HStack(spacing: 2) {
+                    Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 4, height: 1)
+                    Text(m.0)
+                        .font(Theme.Font.mono(7, m.1 == 0 ? .bold : .regular))
+                        .foregroundStyle(over ? Color(hex: 0xd9a441) : Color(hex: 0x3fb950))
+                }
+                .position(x: 12, y: CGFloat(frac) * geo.size.height)
+            }
+        }
+        .frame(width: 22)
     }
 }
 
