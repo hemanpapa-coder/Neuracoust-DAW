@@ -95,6 +95,12 @@ final class EngineController: ObservableObject {
         UserDefaults.standard.set(encoded, forKey: SettingsKey.channelWidth)
     }
 
+    /// Live width-drag preview. While a strip's right edge is dragged, every targeted
+    /// strip (the whole mixer selection when the dragged strip is part of it) renders at
+    /// `width` until the gesture commits. nil when no drag is in flight.
+    struct ChannelWidthDrag { var targets: Set<Int>; var width: CGFloat }
+    @Published var channelWidthDrag: ChannelWidthDrag?
+
     /// The Pro-Tools-style record mode chosen from the record button's context menu.
     /// It is the configuration the recording engine will use — the engine does not yet
     /// capture input to disk, so choosing a mode stages it rather than arming a take.
@@ -1541,6 +1547,25 @@ final class EngineController: ObservableObject {
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
     @Published var selectedClipIds: Set<String> = []
     @Published var selectedTrackId: Int?
+
+    /// Mixer strip selection — a set, distinct from the timeline's single `selectedTrackId`
+    /// (which it keeps in sync with the last-clicked strip so the lane highlights too).
+    /// Click selects one; ⌘/⇧-click toggles. A width drag on any selected strip resizes
+    /// the whole set together.
+    @Published var selectedMixerTrackIds: Set<Int> = []
+
+    func selectMixerTrack(_ trackId: Int, additive: Bool) {
+        if additive {
+            if selectedMixerTrackIds.contains(trackId) {
+                selectedMixerTrackIds.remove(trackId)
+            } else {
+                selectedMixerTrackIds.insert(trackId)
+            }
+        } else {
+            selectedMixerTrackIds = [trackId]
+        }
+        selectedTrackId = trackId
+    }
 
     /// Fades and clip gain edit one clip at a time; they hide on a multi-selection.
     var selectedClipId: String? { selectedClipIds.count == 1 ? selectedClipIds.first : nil }

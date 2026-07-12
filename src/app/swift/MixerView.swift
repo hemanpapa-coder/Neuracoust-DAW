@@ -60,7 +60,6 @@ struct MixerView: View {
                     ForEach(columns, id: \.id) { column in
                         column.view
                     }
-                    MasterMeterPanel()
                 }
                 .padding(Theme.Space.xl)
             }
@@ -256,7 +255,6 @@ struct ChannelStrip: View {
     @State private var renaming = false
     @State private var draftName = ""
     @State private var dropTargeted = false
-    @State private var widthDragDelta: CGFloat = 0
     @FocusState private var nameFieldFocused: Bool
 
     private var reorderable: Bool { track.kind != .master }
@@ -299,14 +297,13 @@ struct ChannelStrip: View {
                     .padding(.bottom, Theme.Space.md)
             }
         }
-        .frame(width: max(92, engine.channelWidthFor(track.id) + widthDragDelta))
+        .frame(width: stripWidth)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(stripBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                        .stroke(dropTargeted ? Theme.Palette.accent : stripBorder,
-                                lineWidth: dropTargeted ? 2 : 1)
+                        .stroke(strokeColor, lineWidth: dropTargeted || isSelected ? 2 : 1)
                 )
         )
         .overlay(alignment: .trailing) { widthResizeHandle }
@@ -323,8 +320,9 @@ struct ChannelStrip: View {
     /// A slim grab strip on the channel's right edge — drag it to widen/narrow the strip
     /// (snapped to a step, persisted), the mixer sibling of the timeline's lane-height grip.
     private var widthResizeHandle: some View {
-        Rectangle()
-            .fill(Color.white.opacity(widthDragDelta != 0 ? 0.18 : 0.001))
+        let dragging = engine.channelWidthDrag?.targets.contains(track.id) == true
+        return Rectangle()
+            .fill(Color.white.opacity(dragging ? 0.18 : 0.001))
             .frame(width: 6)
             .overlay(
                 RoundedRectangle(cornerRadius: 1)
@@ -334,15 +332,41 @@ struct ChannelStrip: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 2)
-                    .onChanged { widthDragDelta = $0.translation.width }
-                    .onEnded { value in
-                        engine.setChannelWidth(trackIds: [track.id],
-                                               width: engine.channelWidthFor(track.id) + value.translation.width)
-                        engine.commitChannelWidth()
-                        widthDragDelta = 0
+                    .onChanged { value in
+                        // A drag on any strip in the mixer selection resizes the whole
+                        // selection together; otherwise just this strip.
+                        let sel = engine.selectedMixerTrackIds
+                        let targets: Set<Int> = (sel.contains(track.id) && sel.count > 1) ? sel : [track.id]
+                        engine.channelWidthDrag = .init(
+                            targets: targets,
+                            width: engine.channelWidthFor(track.id) + value.translation.width)
+                    }
+                    .onEnded { _ in
+                        if let drag = engine.channelWidthDrag {
+                            engine.setChannelWidth(trackIds: Array(drag.targets), width: drag.width)
+                            engine.commitChannelWidth()
+                        }
+                        engine.channelWidthDrag = nil
                     }
             )
             .onHover { NSCursor.resizeLeftRight.set(); if !$0 { NSCursor.arrow.set() } }
+    }
+
+    /// Selected (a `⌘/⇧`-extendable set); the last-clicked strip also drives the timeline.
+    private var isSelected: Bool { engine.selectedMixerTrackIds.contains(track.id) }
+
+    private var strokeColor: Color {
+        if dropTargeted { return Theme.Palette.accent }
+        if isSelected { return accent }
+        return stripBorder
+    }
+
+    /// Width honours a live multi-selection drag preview before it commits.
+    private var stripWidth: CGFloat {
+        if let drag = engine.channelWidthDrag, drag.targets.contains(track.id) {
+            return min(220, max(92, drag.width))
+        }
+        return max(92, engine.channelWidthFor(track.id))
     }
 
     private var stripBackground: Color {
@@ -385,6 +409,12 @@ struct ChannelStrip: View {
             .background(accent.opacity(0.13))
         }
         .contentShape(Rectangle())
+        // Click the header to select the strip; ⌘/⇧-click extends the selection.
+        .onTapGesture {
+            let flags = NSEvent.modifierFlags
+            engine.selectMixerTrack(track.id,
+                                    additive: flags.contains(.command) || flags.contains(.shift))
+        }
         // Drag the header to reorder the channel (Master stays put).
         if reorderable {
             content.draggable(ChannelDragPayload(trackId: track.id))
@@ -970,104 +1000,5 @@ private struct AutoFadeCurvePreview: View {
                        lineWidth: 1.5)
         }
         .background(RoundedRectangle(cornerRadius: 3).fill(Theme.Palette.recess))
-    }
-}
-
-/// Dorrough-style master meter beside the strips.
-struct MasterMeterPanel: View {
-    @EnvironmentObject private var engine: EngineController
-
-    private static let marks = ["0", "4", "8", "12", "16", "20", "24", "30", "40"]
-
-    var body: some View {
-        VStack(spacing: Theme.Space.lg) {
-            HStack(spacing: Theme.Space.md) {
-                Circle().fill(Theme.Palette.amber).frame(width: 5, height: 5)
-                Text("MASTER METER")
-                    .font(Theme.Font.mono(7.5, .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(Theme.Palette.amber)
-            }
-
-            HStack(alignment: .top, spacing: Theme.Space.md) {
-                VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(Self.marks, id: \.self) { mark in
-                        Text(mark)
-                            .font(Theme.Font.mono(6))
-                            .foregroundStyle(Color(hex: 0x7a6f5f))
-                        if mark != Self.marks.last { Spacer(minLength: 0) }
-                    }
-                }
-                .frame(width: 16, height: 210)
-
-                HStack(spacing: 3) {
-                    VerticalMeter(peak: engine.outputPeakLeft, width: 14)
-                    VerticalMeter(peak: engine.outputPeakRight, width: 14)
-                }
-                .frame(height: 210)
-                MeterScale().frame(height: 210)
-            }
-
-            VStack(spacing: Theme.Space.sm) {
-                labelledRow("PEAK", ["Auto", "Hold", "Reset"], active: 0)
-                labelledRow("OVERS", ["Display", "Reset"], active: 0)
-                labelledRow("MODE", ["Phase", "Sum/Diff", "Left/Right"], active: 2)
-            }
-
-            HStack(spacing: Theme.Space.lg) {
-                led("PHASE", lit: engine.phaseCorrelation < 0, tint: Theme.Palette.yellow)
-                led("OVERS", lit: max(engine.outputPeakLeft, engine.outputPeakRight) >= 0.999,
-                    tint: Theme.Palette.red)
-            }
-        }
-        .padding(Theme.Space.xl)
-        .frame(width: 168)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                .fill(Color(hex: 0x31291a))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                        .stroke(Color(hex: 0x5a4526), lineWidth: 1)
-                )
-        )
-    }
-
-    /// The button rows are display-only until the engine exposes meter modes.
-    private func labelledRow(_ title: String, _ items: [String], active: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(Theme.Font.mono(6))
-                .foregroundStyle(Theme.Palette.textFaint)
-            HStack(spacing: 2) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    Text(item)
-                        .font(Theme.Font.ui(8))
-                        .foregroundStyle(index == active ? Theme.Palette.amber : Theme.Palette.textMuted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .fill(index == active ? Color(hex: 0x2a2113) : Theme.Palette.button)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                        .stroke(index == active ? Color(hex: 0x4d3a20) : Theme.Palette.divider,
-                                                lineWidth: 1)
-                                )
-                        )
-                }
-            }
-        }
-    }
-
-    private func led(_ title: String, lit: Bool, tint: Color) -> some View {
-        HStack(spacing: Theme.Space.sm) {
-            Circle()
-                .fill(lit ? tint : Theme.Palette.recess)
-                .frame(width: 6, height: 6)
-                .shadow(color: lit ? tint.opacity(0.8) : .clear, radius: 3)
-            Text(title)
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(Theme.Palette.textFaint)
-        }
     }
 }

@@ -286,7 +286,9 @@ struct MonitorDock: View {
                         StatRow(label: "물리 출력", value: set.output, valueColor: Theme.Palette.ioValue)
                     }
                     StatRow(label: "시뮬 가중치",
-                            value: String(format: "%.0f · %@", set.simWeight * 100, set.roomEq ? "룸 EQ" : "직결"),
+                            value: engine.speakerSimulationActive
+                                ? String(format: "%.0f", set.simWeight * 100)
+                                : String(format: "%.0f · %@", set.simWeight * 100, set.roomEq ? "룸 EQ" : "직결"),
                             valueColor: Theme.Palette.purpleLight)
                 }
                 .padding(9)
@@ -326,13 +328,17 @@ struct MonitorDock: View {
                 }
             }
         }
-        Divider()
-        Button {
-            engine.setSpeakerRoomEq(set.id, !set.roomEq)
-        } label: {
-            if set.roomEq { Label("룸 EQ", systemImage: "checkmark") } else { Text("룸 EQ") }
+        // Room EQ is a correction on a physical passthrough — speaker *simulation*
+        // already models the room/speaker character, so it is not offered there.
+        if !engine.speakerSimulationActive {
+            Divider()
+            Button {
+                engine.setSpeakerRoomEq(set.id, !set.roomEq)
+            } label: {
+                if set.roomEq { Label("룸 EQ", systemImage: "checkmark") } else { Text("룸 EQ") }
+            }
+            .disabled(set.output != "None")   // physical passthrough has no room EQ
         }
-        .disabled(set.output != "None")   // physical passthrough has no room EQ
     }
 
     private var headphonePanel: some View {
