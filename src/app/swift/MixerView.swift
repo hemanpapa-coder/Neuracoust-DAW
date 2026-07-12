@@ -1,34 +1,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A private drag type for reordering whole mixer channels — kept distinct from the
-/// insert-slot drag (which is plain text) so a channel dropped over another strip's insert
-/// area is not swallowed by that slot's drop handler.
-let kChannelReorderUTI = "com.neuracoust.channel-reorder"
+/// A registered, app-private drag type for reordering whole mixer channels — distinct from
+/// the insert-slot drag (plain text), so a channel dropped over another strip's insert area
+/// is not swallowed by that slot's drop handler. Registering the type (exportedAs) is what
+/// makes the drag/drop match reliably, which the earlier ad-hoc identifier did not.
+extension UTType {
+    static let neuracoustChannelReorder = UTType(exportedAs: "com.neuracoust.channel-reorder")
+}
 
-/// Drop target for reordering a mixer channel next to `targetId` (drop side = before/after).
-struct ChannelReorderDrop: DropDelegate {
-    let targetId: Int
-    let reorderable: Bool
-    let engine: EngineController
-    @Binding var targeted: Bool
-
-    func validateDrop(info: DropInfo) -> Bool {
-        reorderable && info.hasItemsConforming(to: [kChannelReorderUTI])
-    }
-    func dropEntered(info: DropInfo) { if reorderable { targeted = true } }
-    func dropExited(info: DropInfo) { targeted = false }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool {
-        targeted = false
-        guard reorderable, let item = info.itemProviders(for: [kChannelReorderUTI]).first else { return false }
-        let after = info.location.x > 61
-        item.loadDataRepresentation(forTypeIdentifier: kChannelReorderUTI) { data, _ in
-            if let data, let s = String(data: data, encoding: .utf8), let sourceId = Int(s) {
-                DispatchQueue.main.async { engine.moveTrackNear(sourceId, targetId: targetId, after: after) }
-            }
-        }
-        return true
+/// The dragged payload: which track (by id) is being moved.
+struct ChannelDragPayload: Codable, Transferable {
+    let trackId: Int
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .neuracoustChannelReorder)
     }
 }
 
@@ -317,10 +302,12 @@ struct ChannelStrip: View {
         )
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
         // Drop another channel here to reorder it before/after this one (drop side decides).
-        // Uses a dedicated drag type so it never collides with the insert-slot drop.
-        .onDrop(of: [kChannelReorderUTI],
-                delegate: ChannelReorderDrop(targetId: track.id, reorderable: reorderable,
-                                             engine: engine, targeted: $dropTargeted))
+        // The dedicated Transferable type never collides with the insert-slot plain-text drop.
+        .dropDestination(for: ChannelDragPayload.self) { items, location in
+            guard reorderable, let payload = items.first else { return false }
+            engine.moveTrackNear(payload.trackId, targetId: track.id, after: location.x > 61)
+            return true
+        } isTargeted: { dropTargeted = $0 && reorderable }
     }
 
     private var stripBackground: Color {
@@ -365,14 +352,7 @@ struct ChannelStrip: View {
         .contentShape(Rectangle())
         // Drag the header to reorder the channel (Master stays put).
         if reorderable {
-            content.onDrag {
-                let provider = NSItemProvider()
-                provider.registerDataRepresentation(forTypeIdentifier: kChannelReorderUTI, visibility: .ownProcess) { done in
-                    done(Data("\(track.id)".utf8), nil)
-                    return nil
-                }
-                return provider
-            }
+            content.draggable(ChannelDragPayload(trackId: track.id))
         } else {
             content
         }
