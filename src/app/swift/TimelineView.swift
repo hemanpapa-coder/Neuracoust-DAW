@@ -1496,21 +1496,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
 
         if laneHeight >= 64 {
-            // Volume fader: a track with a filled portion and a knob.
-            let fader = headerFaderRect(index)
-            NSColor(hex: 0x1a150f).setFill()
-            NSBezierPath(roundedRect: fader, xRadius: 2, yRadius: 2).fill()
-            let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
-            NSColor(hex: 0x4a4038).setFill()
-            NSRect(x: fader.minX, y: fader.midY - 1, width: knobX - fader.minX, height: 2).fill()
-            lane.accent.setFill()
-            NSBezierPath(ovalIn: NSRect(x: knobX - 4, y: fader.midY - 4, width: 8, height: 8)).fill()
-            (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
-                at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
-                withAttributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
-                    .foregroundColor: NSColor(hex: 0x867b6a),
-                ])
+            drawHeaderFader(index: index, lane: lane)
         }
 
         if laneHeight >= 74 {
@@ -1533,6 +1519,52 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
 
         if laneHeight >= 92 { drawHeaderInsertsSends(lane, index: index) }
+    }
+
+    /// Horizontal inline volume fader with a brushed-metal cap — the compact sibling of the
+    /// mixer's ChannelFader, sharing the same FaderScale taper (0 dB ~78% along).
+    private func drawHeaderFader(index: Int, lane: TimelineModel.Lane) {
+        let fader = headerFaderRect(index)
+
+        // Recessed slot: dark trough + a faint bottom highlight so it reads as inset.
+        NSColor(hex: 0x151009).setFill()
+        NSBezierPath(roundedRect: fader, xRadius: fader.height / 2, yRadius: fader.height / 2).fill()
+        NSColor.white.withAlphaComponent(0.06).setStroke()
+        let rim = NSBezierPath(roundedRect: fader.insetBy(dx: 0.5, dy: 0.5), xRadius: fader.height / 2, yRadius: fader.height / 2)
+        rim.lineWidth = 0.75; rim.stroke()
+
+        let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
+
+        // Filled portion from the left up to the cap, in the track's accent.
+        lane.accent.withAlphaComponent(0.7).setFill()
+        NSBezierPath(roundedRect: NSRect(x: fader.minX, y: fader.midY - 1.5,
+                                         width: max(0, knobX - fader.minX), height: 3),
+                     xRadius: 1.5, yRadius: 1.5).fill()
+
+        // Brushed-metal cap: vertical gradient body, rim, horizontal grip lines, accent tick.
+        let knobW: CGFloat = 11, knobH: CGFloat = 12
+        let knob = NSRect(x: knobX - knobW / 2, y: fader.midY - knobH / 2, width: knobW, height: knobH)
+        let cap = NSBezierPath(roundedRect: knob, xRadius: 3, yRadius: 3)
+        if let g = NSGradient(colors: [NSColor(hex: 0x6a727a), NSColor(hex: 0x363c44), NSColor(hex: 0x181c22)]) {
+            g.draw(in: cap, angle: -90)
+        }
+        NSColor.white.withAlphaComponent(0.30).setStroke(); cap.lineWidth = 0.75; cap.stroke()
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        for dy in [-3.0, 0.0, 3.0] as [CGFloat] {
+            let l = NSBezierPath()
+            l.move(to: NSPoint(x: knob.minX + 2.5, y: knob.midY + dy))
+            l.line(to: NSPoint(x: knob.maxX - 2.5, y: knob.midY + dy))
+            l.lineWidth = 0.75; l.stroke()
+        }
+        lane.accent.setFill()
+        NSRect(x: knob.midX - 0.75, y: knob.minY + 3, width: 1.5, height: knob.height - 6).fill()
+
+        (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
+            at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
+            withAttributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
+                .foregroundColor: NSColor(hex: 0x867b6a),
+            ])
     }
 
     /// The Pro-Tools-style inserts row and sends row under the lane's fader/meter.
