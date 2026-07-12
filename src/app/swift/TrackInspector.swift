@@ -85,6 +85,7 @@ struct TrackInspector: View {
 
     @State private var renaming = false
     @State private var draftName = ""
+    @State private var routingExpanded = true
     @FocusState private var nameFocused: Bool
 
     private var track: EngineController.Track? { engine.inspectedTrack }
@@ -101,7 +102,6 @@ struct TrackInspector: View {
                         volumeRow(track)
                         panRow(track)
                         routingSection(track)
-                        collapsedSections
                     }
                     .padding(Theme.Space.lg)
                 }
@@ -282,30 +282,29 @@ struct TrackInspector: View {
     @ViewBuilder
     private func routingSection(_ track: EngineController.Track) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("라우팅").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
-
-            if track.kind == .audio {
-                routingMenu(icon: "arrow.down.right", tint: Theme.Palette.green, label: "입력",
-                            current: track.inputBus.isEmpty ? "없음" : track.inputBus,
-                            options: engine.audioInputOptions()) { engine.setTrackInputBus(track.id, $0) }
-            }
-            routingMenu(icon: "arrow.up.right", tint: Theme.Palette.amber, label: "출력",
-                        current: track.outputBus.isEmpty ? "Master" : track.outputBus,
-                        options: engine.outputBusOptions(track.id)) { engine.setTrackOutputBus(track.id, $0) }
-        }
-    }
-
-    /// Sections the design lays out but the engine doesn't back yet — shown collapsed,
-    /// exactly as the mockup renders them, rather than faked as working controls.
-    private var collapsedSections: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.md) {
-            Rectangle().fill(Theme.Palette.divider).frame(height: 1).padding(.vertical, 2)
-            ForEach(["트랙 프리셋", "트랙 버전", "퀵 컨트롤", "노트패드"], id: \.self) { title in
-                HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: "chevron.right").font(.system(size: 7)).foregroundStyle(Theme.Palette.textFaint)
-                    Text(title).font(Theme.Font.ui(9.5)).foregroundStyle(Theme.Palette.textMuted)
+            // Cubase-style disclosure header: click the triangle to fold the input/output
+            // routing in and out.
+            Button { withAnimation(.easeInOut(duration: 0.15)) { routingExpanded.toggle() } } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: routingExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textMuted)
+                    Text("라우팅").font(Theme.Font.ui(10, .semibold)).foregroundStyle(Theme.Palette.textSecondary)
                     Spacer(minLength: 0)
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if routingExpanded {
+                if track.kind == .audio {
+                    routingMenu(icon: "arrow.down.right", tint: Theme.Palette.green, label: "입력",
+                                current: track.inputBus.isEmpty ? "없음" : track.inputBus,
+                                options: engine.audioInputOptions()) { engine.setTrackInputBus(track.id, $0) }
+                }
+                routingMenu(icon: "arrow.up.right", tint: Theme.Palette.amber, label: "출력",
+                            current: track.outputBus.isEmpty ? "Master" : track.outputBus,
+                            options: engine.outputBusOptions(track.id)) { engine.setTrackOutputBus(track.id, $0) }
             }
         }
     }
