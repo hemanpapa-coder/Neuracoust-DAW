@@ -1904,7 +1904,13 @@ bool isPanParameter(const char* parameterId) {
     return parameterId != nullptr && std::strcmp(parameterId, kPanParameterId) == 0;
 }
 
-/// The points behind a parameter, wherever the track happens to keep them.
+/// Plugin-insert automation lanes are keyed "insert.<slot>.<paramId>".
+bool isPluginAutomationParameter(const char* parameterId) {
+    return parameterId != nullptr && std::strncmp(parameterId, "insert.", 7) == 0;
+}
+
+/// The points behind a parameter, wherever the track happens to keep them. Volume has its
+/// own vector; everything else — pan and plugin-insert lanes — is a generic lane keyed by id.
 const std::vector<neuracoust::daw::AutomationPointState>* automationPoints(
     NCEngine* engine, int trackIndex, const char* parameterId) {
     const auto* track = trackAt(engine, trackIndex);
@@ -1914,11 +1920,9 @@ const std::vector<neuracoust::daw::AutomationPointState>* automationPoints(
     if (isVolumeParameter(parameterId)) {
         return &track->volumeAutomation;
     }
-    if (isPanParameter(parameterId)) {
-        for (const auto& lane : track->automationLanes) {
-            if (lane.parameterId == kPanParameterId) {
-                return &lane.points;
-            }
+    for (const auto& lane : track->automationLanes) {
+        if (lane.parameterId == parameterId) {
+            return &lane.points;
         }
     }
     return nullptr;
@@ -2439,7 +2443,42 @@ bool nc_time_sig_delete(NCEngine* engine, double timeSeconds, double tol) {
 }
 
 bool nc_automation_parameter_supported(const char* parameterId) {
-    return isVolumeParameter(parameterId) || isPanParameter(parameterId);
+    return isVolumeParameter(parameterId) || isPanParameter(parameterId)
+        || isPluginAutomationParameter(parameterId);
+}
+
+// Evaluate a lane's points (linear) at a time; returns fallback for an empty lane.
+static float evalAutomationPoints(const std::vector<neuracoust::daw::AutomationPointState>& pts,
+                                  double t, float fallback) {
+    if (pts.empty()) return fallback;
+    if (t <= pts.front().timeSeconds) return pts.front().value;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        if (t <= pts[i].timeSeconds) {
+            const auto& a = pts[i - 1]; const auto& b = pts[i];
+            const double span = b.timeSeconds - a.timeSeconds;
+            if (span <= 0.0) return b.value;
+            const double u = (t - a.timeSeconds) / span;
+            return static_cast<float>(a.value + (b.value - a.value) * u);
+        }
+    }
+    return pts.back().value;
+}
+
+// Drive every plugin-insert automation lane to its value at `timeSeconds`, pushing the
+// result into the live graph (fine-grained, no history, no rebuild). Called each UI tick
+// while the transport runs, so a drawn plugin curve is actually heard.
+void nc_apply_plugin_automation(NCEngine* engine, double timeSeconds) {
+    if (engine == nullptr) return;
+    for (const auto& track : engine->project.tracks) {
+        for (const auto& lane : track.automationLanes) {
+            if (lane.parameterId.rfind("insert.", 0) != 0 || lane.points.empty()) continue;
+            int slot = -1; unsigned int pid = 0;
+            if (std::sscanf(lane.parameterId.c_str(), "insert.%d.%u", &slot, &pid) != 2 || slot < 0) continue;
+            const float v = std::max(0.0f, std::min(1.0f, evalAutomationPoints(lane.points, timeSeconds, 0.0f)));
+            engine->engine.updateTrackVst3Parameter(track.name, static_cast<size_t>(slot),
+                                                    static_cast<uint32_t>(pid), "", v);
+        }
+    }
 }
 
 int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId) {
@@ -2473,8 +2512,9 @@ bool nc_track_automation_add(NCEngine* engine, int trackIndex, const char* param
     const bool changed =
         isVolumeParameter(parameterId)
             ? neuracoust::daw::setTrackVolumeAutomationPoint(engine->project, trackName, timeSeconds, value)
-            : neuracoust::daw::setTrackAutomationLanePoint(engine->project, trackName, kPanParameterId,
-                                                           "Pan", timeSeconds, value);
+            : neuracoust::daw::setTrackAutomationLanePoint(engine->project, trackName, parameterId,
+                                                           isPanParameter(parameterId) ? "Pan" : parameterId,
+                                                           timeSeconds, value);
     return applyAutomationEdit(engine, changed, "Automation point");
 }
 
@@ -2490,7 +2530,7 @@ bool nc_track_automation_move(NCEngine* engine, int trackIndex, const char* para
         isVolumeParameter(parameterId)
             ? neuracoust::daw::moveTrackVolumeAutomationPoint(engine->project, trackName, index,
                                                               timeSeconds, value)
-            : neuracoust::daw::moveTrackAutomationLanePoint(engine->project, trackName, kPanParameterId,
+            : neuracoust::daw::moveTrackAutomationLanePoint(engine->project, trackName, parameterId,
                                                             index, timeSeconds, value);
     return applyAutomationEdit(engine, changed, nullptr);
 }
@@ -2506,7 +2546,7 @@ bool nc_track_automation_delete(NCEngine* engine, int trackIndex, const char* pa
         isVolumeParameter(parameterId)
             ? neuracoust::daw::deleteTrackVolumeAutomationPoint(engine->project, trackName, index)
             : neuracoust::daw::deleteTrackAutomationLanePoint(engine->project, trackName,
-                                                              kPanParameterId, index);
+                                                              parameterId, index);
     return applyAutomationEdit(engine, changed, "Delete automation point");
 }
 
@@ -2522,7 +2562,7 @@ int nc_track_automation_clear_range(NCEngine* engine, int trackIndex, const char
             ? neuracoust::daw::deleteTrackVolumeAutomationPointsInRange(engine->project, trackName,
                                                                         startSeconds, endSeconds)
             : neuracoust::daw::deleteTrackAutomationLanePointsInRange(engine->project, trackName,
-                                                                      kPanParameterId,
+                                                                      parameterId,
                                                                       startSeconds, endSeconds);
     applyAutomationEdit(engine, removed > 0, "Clear automation");
     return static_cast<int>(removed);

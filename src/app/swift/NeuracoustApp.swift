@@ -302,6 +302,13 @@ private struct EditView: View {
                     onSelectBetweenMarkers: { engine.selectBetweenMarkers(around: $0) },
                     onToggleAutomation: { engine.toggleAutomation(laneIndex: $0) },
                     onCycleAutomationParameter: { engine.cycleAutomationParameter(laneIndex: $0) },
+                    onAutomationParamOptions: { lane in
+                        let current = engine.laneTracks.indices.contains(lane)
+                            ? engine.automationLanes[engine.laneTracks[lane].id]?.id : nil
+                        return engine.automationParameterOptions(laneIndex: lane)
+                            .map { (id: $0.id, name: $0.displayName, on: $0.id == current) }
+                    },
+                    onSetAutomationParam: { engine.setAutomationParameter(laneIndex: $0, id: $1) },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
                     onMoveAutomationPoint: { engine.moveAutomationPoint(laneIndex: $0, pointIndex: $1, timeSeconds: $2, value: $3) },
                     onDeleteAutomationPoint: { engine.deleteAutomationPoint(laneIndex: $0, pointIndex: $1) },

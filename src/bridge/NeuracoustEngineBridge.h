@@ -579,6 +579,9 @@ bool nc_time_sig_delete(NCEngine* engine, double timeSeconds, double tol);
 
 /// False for a parameter the sound would ignore.
 bool nc_automation_parameter_supported(const char* parameterId);
+/// Drive all plugin-insert automation lanes ("insert.<slot>.<paramId>") to the given time,
+/// pushing values into the live graph. Call each tick while the transport runs.
+void nc_apply_plugin_automation(NCEngine* engine, double timeSeconds);
 
 int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId);
 double nc_track_automation_time(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);

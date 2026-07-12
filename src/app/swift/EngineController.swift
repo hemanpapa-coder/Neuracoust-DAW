@@ -1415,11 +1415,14 @@ final class EngineController: ObservableObject {
             lanes: lanes.map { track in
                 var automation: TimelineModel.Automation?
                 if let parameter = automationLanes[track.id] {
+                    let fallback: Float = parameter.isVolume ? track.volumeDb
+                                        : parameter.isPan ? track.pan
+                                        : (parameter.pluginFallback ?? 0.5)
                     automation = TimelineModel.Automation(
-                        parameterId: parameter.rawValue,
+                        parameterId: parameter.id,
                         displayName: parameter.displayName,
                         range: parameter.range,
-                        fallback: parameter == .volume ? track.volumeDb : track.pan,
+                        fallback: fallback,
                         points: automationPoints(trackId: track.id, parameter))
                 }
                 return TimelineModel.Lane(name: track.name,
@@ -2412,12 +2415,20 @@ final class EngineController: ObservableObject {
 
     /// Only what the renderer actually reads. Storing anything else would draw a
     /// curve that does nothing to the sound.
-    enum AutomationParameter: String, CaseIterable {
-        case volume = "track.volume"
-        case pan = "track.pan"
+    /// A target the timeline can automate: the track's volume or pan, or one of its
+    /// insert plug-in's parameters (id "insert.<slot>.<paramId>").
+    struct AutomationParameter: Equatable, Hashable {
+        let id: String
+        let displayName: String
+        let range: ClosedRange<Float>
+        var pluginFallback: Float? = nil
 
-        var displayName: String { self == .volume ? "볼륨 (dB)" : "팬" }
-        var range: ClosedRange<Float> { self == .volume ? -60...12 : -1...1 }
+        var isVolume: Bool { id == "track.volume" }
+        var isPan: Bool { id == "track.pan" }
+        var isPlugin: Bool { id.hasPrefix("insert.") }
+
+        static let volume = AutomationParameter(id: "track.volume", displayName: "볼륨 (dB)", range: -60...12)
+        static let pan = AutomationParameter(id: "track.pan", displayName: "팬", range: -1...1)
     }
 
     /// Which lanes have their automation folded out, and on which parameter.
@@ -2433,22 +2444,53 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Volume, pan, then every parameter of the track's loaded inserts — the picker list.
+    func automationParameterOptions(laneIndex: Int) -> [AutomationParameter] {
+        guard laneIndex < laneTracks.count else { return [.volume, .pan] }
+        return [.volume, .pan] + insertAutomationParameters(trackId: laneTracks[laneIndex].id)
+    }
+
+    func insertAutomationParameters(trackId: Int) -> [AutomationParameter] {
+        guard let handle else { return [] }
+        var out: [AutomationParameter] = []
+        for slot in 0..<5 {
+            let count = Int(nc_track_insert_param_count(handle, Int32(trackId), Int32(slot)))
+            guard count > 0 else { continue }
+            for p in 0..<count {
+                let pid = nc_track_insert_param_id(handle, Int32(trackId), Int32(slot), Int32(p))
+                let name = readEngineString { nc_track_insert_param_name(handle, Int32(trackId), Int32(slot), Int32(p), $0, $1) }
+                let val = Float(nc_track_insert_param_value(handle, Int32(trackId), Int32(slot), Int32(p)))
+                out.append(AutomationParameter(id: "insert.\(slot).\(pid)",
+                                               displayName: "\(["A","B","C","D","E"][slot]): \(name)",
+                                               range: 0...1, pluginFallback: val))
+            }
+        }
+        return out
+    }
+
+    func setAutomationParameter(laneIndex: Int, id: String) {
+        guard laneIndex < laneTracks.count else { return }
+        let options = automationParameterOptions(laneIndex: laneIndex)
+        guard let picked = options.first(where: { $0.id == id }) else { return }
+        automationLanes[laneTracks[laneIndex].id] = picked
+    }
+
     func cycleAutomationParameter(laneIndex: Int) {
         guard laneIndex < laneTracks.count,
               let current = automationLanes[laneTracks[laneIndex].id] else { return }
-        let all = AutomationParameter.allCases
-        let next = all[(all.firstIndex(of: current)! + 1) % all.count]
-        automationLanes[laneTracks[laneIndex].id] = next
+        let all = automationParameterOptions(laneIndex: laneIndex)
+        guard let i = all.firstIndex(where: { $0.id == current.id }) else { return }
+        automationLanes[laneTracks[laneIndex].id] = all[(i + 1) % all.count]
     }
 
     private func automationPoints(trackId: Int, _ parameter: AutomationParameter)
         -> [TimelineModel.Automation.Point] {
         guard let handle else { return [] }
-        let count = Int(nc_track_automation_count(handle, Int32(trackId), parameter.rawValue))
+        let count = Int(nc_track_automation_count(handle, Int32(trackId), parameter.id))
         return (0..<count).map { index in
             TimelineModel.Automation.Point(
-                timeSeconds: nc_track_automation_time(handle, Int32(trackId), parameter.rawValue, Int32(index)),
-                value: nc_track_automation_value(handle, Int32(trackId), parameter.rawValue, Int32(index)))
+                timeSeconds: nc_track_automation_time(handle, Int32(trackId), parameter.id, Int32(index)),
+                value: nc_track_automation_value(handle, Int32(trackId), parameter.id, Int32(index)))
         }
     }
 
@@ -2456,7 +2498,7 @@ final class EngineController: ObservableObject {
         guard let handle, laneIndex < laneTracks.count else { return }
         let trackId = laneTracks[laneIndex].id
         guard let parameter = automationLanes[trackId],
-              nc_track_automation_add(handle, Int32(trackId), parameter.rawValue, timeSeconds, value)
+              nc_track_automation_add(handle, Int32(trackId), parameter.id, timeSeconds, value)
         else { return }
         reloadTracks()
         refreshHistory()
@@ -2467,7 +2509,7 @@ final class EngineController: ObservableObject {
         guard let handle, laneIndex < laneTracks.count else { return }
         let trackId = laneTracks[laneIndex].id
         guard let parameter = automationLanes[trackId],
-              nc_track_automation_move(handle, Int32(trackId), parameter.rawValue,
+              nc_track_automation_move(handle, Int32(trackId), parameter.id,
                                        Int32(pointIndex), timeSeconds, value)
         else { return }
         reloadTracks()
@@ -2477,7 +2519,7 @@ final class EngineController: ObservableObject {
         guard let handle, laneIndex < laneTracks.count else { return }
         let trackId = laneTracks[laneIndex].id
         guard let parameter = automationLanes[trackId],
-              nc_track_automation_delete(handle, Int32(trackId), parameter.rawValue, Int32(pointIndex))
+              nc_track_automation_delete(handle, Int32(trackId), parameter.id, Int32(pointIndex))
         else { return }
         reloadTracks()
         refreshHistory()
@@ -3428,6 +3470,9 @@ final class EngineController: ObservableObject {
         }
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        // Drive any plugin-parameter automation lanes to the playhead, so a drawn plug-in
+        // curve is heard live. (Volume/pan are baked by the renderer; this covers inserts.)
+        if transportRunning { nc_apply_plugin_automation(handle, playheadSeconds) }
         applyTrackMeters(status)
 
         // Pulse the solo-implied blink ~2 Hz while any track is soloed; hold it off

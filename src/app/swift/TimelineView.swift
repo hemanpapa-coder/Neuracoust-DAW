@@ -174,6 +174,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onSelectBetweenMarkers: ((Double) -> Void)?
     var onToggleAutomation: ((Int) -> Void)?             // lane index
     var onCycleAutomationParameter: ((Int) -> Void)?     // lane index
+    var onAutomationParamOptions: ((Int) -> [(id: String, name: String, on: Bool)])?
+    var onSetAutomationParam: ((Int, String) -> Void)?
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
     var onMoveAutomationPoint: ((Int, Int, Double, Float) -> Void)?  // (lane, point, time, value)
     var onDeleteAutomationPoint: ((Int, Int) -> Void)?   // (lane, point)
@@ -620,8 +622,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     onSelectLane?(lane)
                 }
             } else if let lane = automationIndex(at: point) {
-                // The parameter name doubles as the parameter picker.
-                onCycleAutomationParameter?(lane)
+                // The parameter name is the parameter picker: volume / pan / plug-in params.
+                showAutomationParamMenu(lane: lane, event: event)
             }
             return
         }
@@ -1665,6 +1667,31 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
     @objc private func sendAddAuxMenu(_ s: NSMenuItem) { onAddAux?() }
 
+    private final class AutoParamRef: NSObject { let lane: Int; let id: String
+        init(_ lane: Int, _ id: String) { self.lane = lane; self.id = id } }
+
+    /// Pick what an automation lane targets: track volume / pan, or a plug-in parameter.
+    private func showAutomationParamMenu(lane: Int, event: NSEvent) {
+        let options = onAutomationParamOptions?(lane) ?? []
+        guard !options.isEmpty else { onCycleAutomationParameter?(lane); return }
+        let menu = NSMenu()
+        let header = NSMenuItem(title: "오토메이션 파라미터", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for opt in options {
+            let it = NSMenuItem(title: opt.name, action: #selector(pickAutomationParam(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = AutoParamRef(lane, opt.id)
+            it.state = opt.on ? .on : .off
+            menu.addItem(it)
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    @objc private func pickAutomationParam(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? AutoParamRef else { return }
+        onSetAutomationParam?(r.lane, r.id)
+    }
+
     @objc private func insertBypassMenu(_ s: NSMenuItem) {
         guard let r = s.representedObject as? HeaderMenuRef else { return }
         onBypassInsert?(r.track, r.slot)
@@ -2165,6 +2192,8 @@ struct TimelineView: NSViewRepresentable {
     let onSelectBetweenMarkers: (Double) -> Void
     let onToggleAutomation: (Int) -> Void
     let onCycleAutomationParameter: (Int) -> Void
+    var onAutomationParamOptions: ((Int) -> [(id: String, name: String, on: Bool)])? = nil
+    var onSetAutomationParam: ((Int, String) -> Void)? = nil
     let onAddAutomationPoint: (Int, Double, Float) -> Void
     let onMoveAutomationPoint: (Int, Int, Double, Float) -> Void
     let onDeleteAutomationPoint: (Int, Int) -> Void
@@ -2248,6 +2277,8 @@ struct TimelineView: NSViewRepresentable {
         view.onSelectBetweenMarkers = onSelectBetweenMarkers
         view.onToggleAutomation = onToggleAutomation
         view.onCycleAutomationParameter = onCycleAutomationParameter
+        view.onAutomationParamOptions = onAutomationParamOptions
+        view.onSetAutomationParam = onSetAutomationParam
         view.onAddAutomationPoint = onAddAutomationPoint
         view.onMoveAutomationPoint = onMoveAutomationPoint
         view.onDeleteAutomationPoint = onDeleteAutomationPoint
