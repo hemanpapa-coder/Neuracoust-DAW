@@ -324,6 +324,7 @@ private struct EditView: View {
                     onSetAutomationParam: { engine.setAutomationParameter(laneIndex: $0, id: $1) },
                     onSetLaneHeight: { engine.setLaneHeight(trackIds: $0, height: $1) },
                     onCommitLaneHeight: { engine.commitLaneHeight() },
+                    onReorderTrack: { engine.moveTrackNear($0, targetId: $1, after: $2) },
                     onFadeCurveOptions: { EngineController.fadeCurves.map { (label: $0.label, id: $0.id) } },
                     onClipCurrentFades: { id in
                         let c = engine.clips.first { $0.id == id }

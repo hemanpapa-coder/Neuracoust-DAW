@@ -1,22 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A registered, app-private drag type for reordering whole mixer channels — distinct from
-/// the insert-slot drag (plain text), so a channel dropped over another strip's insert area
-/// is not swallowed by that slot's drop handler. Registering the type (exportedAs) is what
-/// makes the drag/drop match reliably, which the earlier ad-hoc identifier did not.
-extension UTType {
-    static let neuracoustChannelReorder = UTType(exportedAs: "com.neuracoust.channel-reorder")
-}
-
-/// The dragged payload: which track (by id) is being moved.
-struct ChannelDragPayload: Codable, Transferable {
-    let trackId: Int
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .neuracoustChannelReorder)
-    }
-}
-
 /// Drag a filled insert slot onto another to reorder it (track inserts only).
 private struct InsertDragDrop: ViewModifier {
     let isMaster: Bool
@@ -260,10 +244,29 @@ struct ChannelStrip: View {
 
     @State private var renaming = false
     @State private var draftName = ""
-    @State private var dropTargeted = false
+    @State private var reorderDX: CGFloat = 0
     @FocusState private var nameFieldFocused: Bool
 
     private var reorderable: Bool { track.kind != .master }
+
+    /// Reorder by dragging the strip's header sideways. SwiftUI's `.draggable` never fired
+    /// reliably here, so this maps the drag distance to a number of strip-widths and moves
+    /// the channel that many slots — the mixer and the timeline share `moveTrackNear`, so
+    /// either one reorders both.
+    private var reorderGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { reorderDX = $0.translation.width }
+            .onEnded { value in
+                reorderDX = 0
+                let ordered = engine.tracks.filter { $0.kind != .master }
+                guard let src = ordered.firstIndex(where: { $0.id == track.id }) else { return }
+                let step = Int((value.translation.width / (stripWidth + Theme.Space.md)).rounded())
+                guard step != 0 else { return }
+                let dst = max(0, min(ordered.count - 1, src + step))
+                guard dst != src else { return }
+                engine.moveTrackNear(track.id, targetId: ordered[dst].id, after: step > 0)
+            }
+    }
 
     let track: EngineController.Track
     let isChild: Bool
@@ -336,19 +339,15 @@ struct ChannelStrip: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                .strokeBorder(strokeColor, lineWidth: dropTargeted || isSelected ? 2 : 1)
+                .strokeBorder(strokeColor, lineWidth: isSelected ? 2 : 1)
         )
         // Width grip lives at the bottom-right corner (by the footer), not the ambiguous
         // mid-right edge. Hidden in the fixed-width Channel column.
         .overlay(alignment: .bottomTrailing) { if fixedWidth == nil { widthResizeHandle } }
-        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-        // Drop another channel here to reorder it before/after this one (drop side decides).
-        // The dedicated Transferable type never collides with the insert-slot plain-text drop.
-        .dropDestination(for: ChannelDragPayload.self) { items, location in
-            guard reorderable, let payload = items.first else { return false }
-            engine.moveTrackNear(payload.trackId, targetId: track.id, after: location.x > 61)
-            return true
-        } isTargeted: { dropTargeted = $0 && reorderable }
+        .shadow(color: .black.opacity(reorderDX != 0 ? 0.45 : 0.25), radius: reorderDX != 0 ? 8 : 3, y: 2)
+        // Lift and follow the cursor while its header is being dragged sideways to reorder.
+        .offset(x: fixedWidth == nil ? reorderDX : 0)
+        .zIndex(reorderDX != 0 ? 10 : 0)
     }
 
     /// A corner toggle — click to switch this channel (and the whole mixer selection)
@@ -379,7 +378,6 @@ struct ChannelStrip: View {
     private var isSelected: Bool { engine.selectedMixerTrackIds.contains(track.id) }
 
     private var strokeColor: Color {
-        if dropTargeted { return Theme.Palette.accent }
         if isSelected { return accent }
         return stripBorder
     }
@@ -433,10 +431,10 @@ struct ChannelStrip: View {
             .background(accent.opacity(0.13))
         }
         .contentShape(Rectangle())
-        // The header is drag-only (reorder). Selecting the strip lives on the nameplate,
-        // so no tap gesture competes with `.draggable` here (that was killing the drag).
+        // The header is the reorder grip. Selecting the strip lives on the nameplate, so
+        // no tap gesture competes with the drag here.
         if reorderable {
-            content.draggable(ChannelDragPayload(trackId: track.id))
+            content.gesture(reorderGesture)
         } else {
             content
         }

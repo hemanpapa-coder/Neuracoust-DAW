@@ -184,6 +184,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onSetAutomationParam: ((Int, String) -> Void)?
     var onSetLaneHeight: (([Int], CGFloat) -> Void)?
     var onCommitLaneHeight: (() -> Void)?
+    var onReorderTrack: ((Int, Int, Bool) -> Void)?   // (sourceTrackId, targetTrackId, after)
     var onFadeCurveOptions: (() -> [(label: String, id: String)])?
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))?
     var onSetClipFadeInCurve: ((String, String) -> Void)?
@@ -274,6 +275,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
         /// Dragging a lane's bottom edge to resize all lanes.
         case resizingLane(startHeight: CGFloat, startY: CGFloat, laneIndex: Int)
+        /// Dragging a lane header up/down to reorder the track (mixer follows).
+        case reorderingLane(trackId: Int, laneIndex: Int, startY: CGFloat, currentY: CGFloat)
     }
 
     /// Clip gain is drawn as a horizontal line across this dB span.
@@ -313,8 +316,17 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// Grab radius around each range edge for its ruler handle.
     static let rangeHandleWidth: CGFloat = 9
     static let defaultLaneHeight: CGFloat = 100
-    static let minLaneHeight: CGFloat = 40
+    static let minLaneHeight: CGFloat = 30
     static let maxLaneHeight: CGFloat = 320
+    /// Progressive-disclosure thresholds for the inline lane-header strip. Shrinking a
+    /// lane hides its controls in tiers rather than clipping them: full (fader+pan+meter)
+    /// → buttons only (M/S/R/I + automation chips) → name only.
+    static let laneFaderMinHeight: CGFloat = 90
+    static let laneButtonsMinHeight: CGFloat = 50
+    /// The fader / pan / meter row is only drawn (and hit-tested) at/above this height.
+    func laneShowsFaderRow(_ index: Int) -> Bool { laneHeight(index) >= Self.laneFaderMinHeight }
+    /// The M/S/R/I buttons + automation chips are only drawn at/above this height.
+    func laneShowsButtons(_ index: Int) -> Bool { laneHeight(index) >= Self.laneButtonsMinHeight }
     /// Per-track height — drag a lane's bottom edge to resize (snapped to a step). Falls back
     /// to the shared default for out-of-range indices.
     func laneHeight(_ index: Int) -> CGFloat {
@@ -637,30 +649,36 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     drag = .resizingLane(startHeight: laneHeight(lane), startY: point.y, laneIndex: lane)
                 } else if event.clickCount >= 2 && nameRect(lane).contains(point) {
                     beginRenamingLane(lane)
-                } else if automationToggleRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
-                } else if headerAutomationModeRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && headerAutomationModeRect(lane).contains(point) {
                     onCycleAutomationMode?(trackId)
-                } else if headerMuteRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && headerMuteRect(lane).contains(point) {
                     onToggleMute?(trackId)
-                } else if headerSoloRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && headerSoloRect(lane).contains(point) {
                     onToggleSolo?(trackId)
-                } else if headerArmRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && headerArmRect(lane).contains(point) {
                     onToggleArm?(trackId)
-                } else if headerInputMonitorRect(lane).contains(point) {
+                } else if laneShowsButtons(lane) && headerInputMonitorRect(lane).contains(point) {
                     onToggleInputMonitor?(trackId)
-                } else if headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
+                } else if laneShowsFaderRow(lane) && headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
                     onSelectLane?(lane, false)
                     onBeginTouch?(trackId, "track.volume")
                     onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
                     drag = .headerFader(trackId: trackId)
-                } else if headerPanRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
+                } else if laneShowsFaderRow(lane) && headerPanRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
                     onSelectLane?(lane, false)
                     onBeginTouch?(trackId, "track.pan")
                     onSetPan?(trackId, headerPan(atX: point.x, index: lane))
                     drag = .headerPan(trackId: trackId)
                 } else {
                     onSelectLane?(lane, event.modifierFlags.contains(.shift))
+                    // Body of the header with no modifier: a vertical drag reorders the
+                    // track. Stays a plain select if the cursor never leaves the dead zone.
+                    if !event.modifierFlags.contains(.shift) {
+                        drag = .reorderingLane(trackId: trackId, laneIndex: lane,
+                                               startY: point.y, currentY: point.y)
+                    }
                 }
             } else if let lane = automationIndex(at: point) {
                 // The parameter name is the parameter picker: volume / pan / plug-in params.
@@ -945,6 +963,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 ? model.lanes.filter { $0.selected }.map { $0.trackId }
                 : [dragged.trackId]
             onSetLaneHeight?(targets, h)
+        case .reorderingLane(let trackId, let laneIndex, let startY, _):
+            drag = .reorderingLane(trackId: trackId, laneIndex: laneIndex, startY: startY, currentY: point.y)
+            needsDisplay = true          // redraw the insertion line
         }
     }
 
@@ -1016,6 +1037,17 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitEdit?("Track pan")
         case .resizingLane:
             onCommitLaneHeight?()      // persist the new height
+        case .reorderingLane(let trackId, let sourceLane, let startY, _):
+            // Only a real vertical drag reorders; a tiny move was just the select. Use the
+            // live drop point (mouseDragged may coalesce and leave the stored Y stale).
+            if abs(point.y - startY) > 8, let target = laneIndex(at: point),
+               target != sourceLane, target < model.lanes.count {
+                let targetId = model.lanes[target].trackId
+                // Dropped on the lower half of the target lane → land after it.
+                let mid = laneTop(target) + laneHeight(target) / 2
+                onReorderTrack?(trackId, targetId, point.y > mid)
+            }
+            needsDisplay = true
         case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -1266,6 +1298,24 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         NSRect(x: Self.headerWidth - 1, y: 0, width: 1, height: bounds.height).fill()
 
         drawMarquee(context)
+        drawReorderIndicator(context)
+    }
+
+    /// While a lane header is dragged up/down, a bright bar marks where the track will
+    /// land — the Nuendo track-list insertion line.
+    private func drawReorderIndicator(_ context: CGContext) {
+        guard case .reorderingLane(_, let sourceLane, let startY, let currentY) = drag,
+              abs(currentY - startY) > 8, let target = laneIndex(at: NSPoint(x: 10, y: currentY)),
+              target < model.lanes.count else { return }
+        let mid = laneTop(target) + laneHeight(target) / 2
+        let y = currentY > mid ? laneTop(target) + laneHeight(target) : laneTop(target)
+        NSColor(hex: 0x5f9fd6).setFill()
+        NSRect(x: 0, y: y - 1, width: Self.headerWidth, height: 2).fill()
+        // Dim the dragged lane's header so it reads as "picked up".
+        if sourceLane < model.lanes.count {
+            NSColor(hex: 0x5f9fd6).withAlphaComponent(0.14).setFill()
+            NSRect(x: 0, y: laneTop(sourceLane), width: Self.headerWidth, height: laneHeight(sourceLane)).fill()
+        }
     }
 
     /// A band across every lane, plus a solid grip in the ruler strip that set it.
@@ -1483,19 +1533,23 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             (lane.name as NSString).draw(at: NSPoint(x: 30, y: rect.minY + 10),
                                          withAttributes: nameAttributes)
 
-            // The button that folds the automation row out from under the lane.
-            let toggle = automationToggleRect(index)
-            NSColor(hex: lane.automation != nil ? 0x5f9fd6 : 0x453d34).setFill()
-            NSBezierPath(roundedRect: toggle, xRadius: 3, yRadius: 3).fill()
-            ("A" as NSString).draw(
-                at: NSPoint(x: toggle.minX + 5, y: toggle.minY + 1),
-                withAttributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
-                    .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
-                ])
+            // Buttons + automation chips only above the buttons threshold; below it the
+            // header is name-only.
+            if laneShowsButtons(index) {
+                // The button that folds the automation row out from under the lane.
+                let toggle = automationToggleRect(index)
+                NSColor(hex: lane.automation != nil ? 0x5f9fd6 : 0x453d34).setFill()
+                NSBezierPath(roundedRect: toggle, xRadius: 3, yRadius: 3).fill()
+                ("A" as NSString).draw(
+                    at: NSPoint(x: toggle.minX + 5, y: toggle.minY + 1),
+                    withAttributes: [
+                        .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
+                        .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
+                    ])
 
-            // The automation-mode chip sits just left of the "A" toggle.
-            drawHeaderAutomationMode(index: index, lane: lane)
+                // The automation-mode chip sits just left of the "A" toggle.
+                drawHeaderAutomationMode(index: index, lane: lane)
+            }
 
             drawLaneHeaderStrip(lane, index: index)
 
@@ -1535,12 +1589,18 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
                 withAttributes: attrs)
         }
+        // Name-only tier: nothing below the name.
+        guard laneShowsButtons(index) else { return }
+
         // Mute / solo / arm / monitor, then the inline horizontal fader, pan bar and
         // stereo meter under them.
         button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
         button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
         button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
         button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
+
+        // Fader / pan / meter tier: hidden on the first shrink step (buttons-only).
+        guard laneShowsFaderRow(index) else { return }
 
         drawHeaderFader(index: index, lane: lane)
         drawHeaderPan(index: index, lane: lane)
@@ -2254,6 +2314,7 @@ struct TimelineView: NSViewRepresentable {
     var onSetAutomationParam: ((Int, String) -> Void)? = nil
     var onSetLaneHeight: (([Int], CGFloat) -> Void)? = nil
     var onCommitLaneHeight: (() -> Void)? = nil
+    var onReorderTrack: ((Int, Int, Bool) -> Void)? = nil
     var onFadeCurveOptions: (() -> [(label: String, id: String)])? = nil
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))? = nil
     var onSetClipFadeInCurve: ((String, String) -> Void)? = nil
@@ -2349,6 +2410,7 @@ struct TimelineView: NSViewRepresentable {
         view.onSetAutomationParam = onSetAutomationParam
         view.onSetLaneHeight = onSetLaneHeight
         view.onCommitLaneHeight = onCommitLaneHeight
+        view.onReorderTrack = onReorderTrack
         view.onFadeCurveOptions = onFadeCurveOptions
         view.onClipCurrentFades = onClipCurrentFades
         view.onSetClipFadeInCurve = onSetClipFadeInCurve
