@@ -135,6 +135,8 @@ struct ChannelFader: View {
     let onChange: (Float) -> Void
     /// Fires once when the drag ends, so one drag is one undo step.
     var onCommit: () -> Void = {}
+    /// Fires when the cap is grabbed (for automation touch/latch).
+    var onBegin: () -> Void = {}
 
     @State private var dragStartDb: Float?
 
@@ -164,7 +166,7 @@ struct ChannelFader: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let start = dragStartDb ?? volumeDb
-                        if dragStartDb == nil { dragStartDb = start }
+                        if dragStartDb == nil { dragStartDb = start; onBegin() }
                         let delta = -drag.translation.height / max(1, travel)
                         let position = FaderScale.position(forDb: start) + Double(delta)
                         onChange(FaderScale.db(forPosition: position))
@@ -183,32 +185,31 @@ struct ChannelFader: View {
         }
     }
 
-    private let capHeight: CGFloat = 22
+    private let capHeight: CGFloat = 26
 
-    /// A brushed-silver console cap with horizontal grip ridges and a darker centre line —
-    /// matching the reference.
+    /// The design's cap is a physical knob: two radial gradients plus an inset rim.
     private var faderCap: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4)
-                .fill(LinearGradient(
-                    colors: [Color(hex: 0xe2e5e9), Color(hex: 0xaab0b8), Color(hex: 0x7f858d), Color(hex: 0xc2c7cd)],
-                    startPoint: .top, endPoint: .bottom))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.55), lineWidth: 0.75))
+                .fill(
+                    RadialGradient(
+                        colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
+                        center: UnitPoint(x: 0.5, y: 0.65),
+                        startRadius: 1, endRadius: 26
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
                 .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
 
-            // Horizontal grip ridges.
-            VStack(spacing: 1.5) {
-                ForEach(0..<6, id: \.self) { _ in
-                    Rectangle().fill(Color.black.opacity(0.22)).frame(height: 0.75)
-                        .overlay(Rectangle().fill(Color.white.opacity(0.5)).frame(height: 0.75).offset(y: 0.9))
-                }
-            }
-            .padding(.horizontal, 4)
-
-            // Darker centre seam (the value indicator line).
-            Rectangle().fill(Color(hex: 0x6d7681)).frame(height: 1.5)
+            Rectangle()
+                .fill(accent)
+                .frame(height: 2)
+                .shadow(color: accent.opacity(0.8), radius: 2)
         }
-        .frame(width: 32, height: capHeight)
+        .frame(width: 30, height: capHeight)
     }
 }
 
@@ -218,6 +219,9 @@ struct PanSlider: View {
     let accent: Color
     let onChange: (Float) -> Void
     var onCommit: () -> Void = {}
+    var onBegin: () -> Void = {}
+
+    @State private var dragging = false
 
     var body: some View {
         GeometryReader { geo in
@@ -242,12 +246,13 @@ struct PanSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
+                        if !dragging { dragging = true; onBegin() }
                         let fraction = min(1, max(0, drag.location.x / geo.size.width))
                         var value = Float(fraction * 2 - 1)
                         if abs(value) < 0.05 { value = 0 }   // centre detent
                         onChange(value)
                     }
-                    .onEnded { _ in onCommit() }
+                    .onEnded { _ in dragging = false; onCommit() }
             )
             .highPriorityGesture(TapGesture(count: 2).onEnded {
                 onChange(0)

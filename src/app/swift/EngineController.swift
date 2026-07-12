@@ -1154,14 +1154,12 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_track_set_volume_db(handle, Int32(id), db)
         syncTrack(id)
-        writeAutomationLive(id, "track.volume", db)
     }
 
     func setTrackPan(_ id: Int, _ pan: Float) {
         guard let handle else { return }
         nc_track_set_pan(handle, Int32(id), pan)
         syncTrack(id)
-        writeAutomationLive(id, "track.pan", pan)
     }
 
     // MARK: Automation modes (Off / Read / Touch / Latch / Write)
@@ -1183,53 +1181,69 @@ final class EngineController: ObservableObject {
     /// True once any live automation was written this playback pass — records one undo step
     /// and reloads the drawn lanes when the transport stops.
     private var automationPassDirty = false
-    /// Per (track,param) last playhead written, so continuous writing thins to ~30 Hz.
-    private var lastAutoWriteAt: [String: Double] = [:]
+    /// Params ("trackId:param") the user is currently holding (mouse down on the control).
+    private var touchingAuto: Set<String> = []
+    /// Latch params still writing their last value after the touch was released.
+    private var latchedAuto: Set<String> = []
+    /// Per-key previous playhead written, so a sweep erases (prev, now] each tick.
+    private var autoWritePrev: [String: Double] = [:]
 
-    /// Called from a fader/pan gesture: while playing in a writing mode, lay down points.
-    private func writeAutomationLive(_ trackId: Int, _ param: String, _ value: Float) {
-        guard transportRunning else { return }
-        let mode = automationMode(trackId)
-        guard mode == "write" || mode == "touch" || mode == "latch" else { return }
-        writeAutomationPoint(trackId, param, value)
+    /// The mixer control tells us when a fader/pan is grabbed and released, so Touch/Latch
+    /// can write the held value (even motionless) and not be tugged by fader-follow.
+    func beginAutomationTouch(_ trackId: Int, _ param: String) {
+        let key = "\(trackId):\(param)"
+        touchingAuto.insert(key)
+        latchedAuto.remove(key)
+        autoWritePrev[key] = playheadSeconds
+    }
+    func endAutomationTouch(_ trackId: Int, _ param: String) {
+        let key = "\(trackId):\(param)"
+        touchingAuto.remove(key)
+        if automationMode(trackId) == "latch" { latchedAuto.insert(key) }   // latch holds until stop
     }
 
-    private func writeAutomationPoint(_ trackId: Int, _ param: String, _ value: Float) {
+    private func sweepWrite(_ trackId: Int, _ param: String, _ value: Float) {
         guard let handle else { return }
         let key = "\(trackId):\(param)"
         let now = playheadSeconds
-        if let last = lastAutoWriteAt[key], abs(now - last) < 0.03 { return }   // thin to ~30 Hz
-        lastAutoWriteAt[key] = now
-        _ = param.withCString { nc_track_automation_write(handle, Int32(trackId), $0, now, value) }
+        let prev = autoWritePrev[key] ?? now
+        if abs(now - prev) < 0.03 && autoWritePrev[key] != nil { return }    // thin to ~30 Hz
+        _ = param.withCString { nc_track_automation_write_sweep(handle, Int32(trackId), $0, prev, now, value) }
+        autoWritePrev[key] = now
         automationPassDirty = true
     }
 
-    /// Each tick while playing: Write tracks keep laying down the current value; Read/Touch/
-    /// Latch tracks follow their automation so the fader/pan visibly moves.
+    /// Each tick while playing. Per track/param: Write always overwrites the current value;
+    /// Touch/Latch overwrite while the control is held (or, for Latch, still latched); every
+    /// non-writing state follows the played-back automation so the control visibly moves.
     private func serviceAutomation() {
         guard let handle, transportRunning else { return }
         let now = playheadSeconds
         for track in tracks where track.kind.hasSolo {
-            switch track.automationMode {
-            case "write":
-                writeAutomationPoint(track.id, "track.volume", track.volumeDb)
-                writeAutomationPoint(track.id, "track.pan", track.pan)
-            case "read", "touch", "latch":
-                // Fader-follow: reflect the played-back automation on the control.
-                let v = nc_track_automation_value_at(handle, Int32(track.id), "track.volume", now, track.volumeDb)
-                let p = nc_track_automation_value_at(handle, Int32(track.id), "track.pan", now, track.pan)
-                if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
-                    if abs(tracks[idx].volumeDb - v) > 0.05 { tracks[idx].volumeDb = v }
-                    if abs(tracks[idx].pan - p) > 0.002 { tracks[idx].pan = p }
+            let mode = track.automationMode
+            for (param, value) in [("track.volume", track.volumeDb), ("track.pan", track.pan)] {
+                let key = "\(track.id):\(param)"
+                let touching = touchingAuto.contains(key)
+                let latched = latchedAuto.contains(key)
+                let writing = mode == "write"
+                    || ((mode == "touch" || mode == "latch") && touching)
+                    || (mode == "latch" && latched)
+                if writing {
+                    sweepWrite(track.id, param, value)                 // held control stays; old curve erased
+                } else if mode == "read" || ((mode == "touch" || mode == "latch") && !touching && !latched) {
+                    let auto = nc_track_automation_value_at(handle, Int32(track.id), param, now, value)
+                    if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
+                        if param == "track.volume" { if abs(tracks[idx].volumeDb - auto) > 0.05 { tracks[idx].volumeDb = auto } }
+                        else { if abs(tracks[idx].pan - auto) > 0.002 { tracks[idx].pan = auto } }
+                    }
                 }
-            default: break
             }
         }
     }
 
     /// On stop, commit the live-written automation as one undo step and refresh the lanes.
     private func finishAutomationPass() {
-        lastAutoWriteAt.removeAll()
+        touchingAuto.removeAll(); latchedAuto.removeAll(); autoWritePrev.removeAll()
         guard automationPassDirty else { return }
         automationPassDirty = false
         reloadTracks()

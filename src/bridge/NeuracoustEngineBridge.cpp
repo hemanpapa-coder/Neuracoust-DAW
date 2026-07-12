@@ -2587,6 +2587,28 @@ bool nc_track_automation_write(NCEngine* engine, int trackIndex,
     return changed;
 }
 
+// Write mode / a moving Touch pass: erase existing points the playhead has just swept over
+// (fromExclusive, toInclusive] and drop the new value at `toInclusive`. No history step.
+bool nc_track_automation_write_sweep(NCEngine* engine, int trackIndex, const char* parameterId,
+                                     double fromExclusive, double toInclusive, float value) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || !nc_automation_parameter_supported(parameterId)) return false;
+    const std::string trackName = track->name;
+    if (toInclusive > fromExclusive + 1e-6) {
+        const double eraseStart = fromExclusive + 1e-4;        // keep the previous tick's point
+        if (isVolumeParameter(parameterId))
+            neuracoust::daw::deleteTrackVolumeAutomationPointsInRange(engine->project, trackName, eraseStart, toInclusive);
+        else
+            neuracoust::daw::deleteTrackAutomationLanePointsInRange(engine->project, trackName, parameterId, eraseStart, toInclusive);
+    }
+    const bool added = isVolumeParameter(parameterId)
+        ? neuracoust::daw::setTrackVolumeAutomationPoint(engine->project, trackName, toInclusive, value)
+        : neuracoust::daw::setTrackAutomationLanePoint(engine->project, trackName, parameterId,
+              isPanParameter(parameterId) ? "Pan" : parameterId, toInclusive, value);
+    engine->reconcileProject();
+    return added;
+}
+
 int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId) {
     const auto* points = automationPoints(engine, trackIndex, parameterId);
     return points != nullptr ? static_cast<int>(points->size()) : 0;

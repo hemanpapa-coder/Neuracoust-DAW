@@ -40,6 +40,21 @@ int main() {
     check(std::abs(nc_track_automation_value_at(e, 0, "track.pan", 1.0, 0.0f) - 0.4f) < 1e-3,
           "written pan reads back");
 
+    // Write-sweep erases old points in the passed range (Write mode overwrites).
+    nc_track_automation_add(e, 0, "track.pan", 0.5, 0.1f);
+    nc_track_automation_add(e, 0, "track.pan", 1.5, 0.2f);
+    nc_track_automation_add(e, 0, "track.pan", 2.5, 0.3f);   // outside the sweep, must survive
+    check(nc_track_automation_write_sweep(e, 0, "track.pan", 0.4, 1.6, 0.9f), "sweep-write over (0.4,1.6]");
+    // Points at 0.5 and 1.5 erased; a new one at 1.6; 2.5 untouched.
+    check(std::abs(nc_track_automation_value_at(e, 0, "track.pan", 1.6, 0.0f) - 0.9f) < 1e-3, "swept value at 1.6");
+    check(std::abs(nc_track_automation_value_at(e, 0, "track.pan", 2.5, 0.0f) - 0.3f) < 1e-3, "point outside sweep survives");
+    bool oldGone = true;
+    for (int i = 0; i < nc_track_automation_count(e, 0, "track.pan"); ++i) {
+        const double t = nc_track_automation_time(e, 0, "track.pan", i);
+        if (t > 0.45 && t < 1.55) oldGone = false;   // no original points left inside the sweep
+    }
+    check(oldGone, "old points inside the sweep are erased");
+
     nc_engine_destroy(e);
     printf(failures == 0 ? "ALL PASS\n" : "%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;

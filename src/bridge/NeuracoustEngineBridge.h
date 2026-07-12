@@ -609,6 +609,8 @@ float nc_track_automation_value_at(NCEngine* engine, int trackIndex,
                                    const char* parameterId, double timeSeconds, float fallback);
 bool nc_track_automation_write(NCEngine* engine, int trackIndex,
                                const char* parameterId, double timeSeconds, float value);
+bool nc_track_automation_write_sweep(NCEngine* engine, int trackIndex, const char* parameterId,
+                                     double fromExclusive, double toInclusive, float value);
 
 /// Adds a point, or replaces the one already sitting at that time. Records a step.
 bool nc_track_automation_add(NCEngine* engine, int trackIndex, const char* parameterId,

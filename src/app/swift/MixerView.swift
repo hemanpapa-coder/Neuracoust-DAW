@@ -597,7 +597,11 @@ struct ChannelStrip: View {
             PanSlider(pan: track.pan,
                       accent: accent,
                       onChange: { engine.setTrackPan(track.id, $0) },
-                      onCommit: { engine.recordGesture("Pan " + track.name) })
+                      onCommit: {
+                          engine.endAutomationTouch(track.id, "track.pan")
+                          if !engine.transportRunning { engine.recordGesture("Pan " + track.name) }
+                      },
+                      onBegin: { engine.beginAutomationTouch(track.id, "track.pan") })
         }
     }
 
@@ -720,7 +724,11 @@ struct ChannelStrip: View {
                 ChannelFader(volumeDb: track.volumeDb,
                              accent: accent,
                              onChange: { engine.setTrackVolume(track.id, $0) },
-                             onCommit: { engine.recordGesture("Volume " + track.name) })
+                             onCommit: {
+                                 engine.endAutomationTouch(track.id, "track.volume")
+                                 if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
+                             },
+                             onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
                     .frame(width: 32, height: 132)
                 // Numeric value readout beneath the fader, like the reference.
                 Text(dbLabel(track.volumeDb))
