@@ -445,8 +445,11 @@ private struct EditView: View {
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 30)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.Palette.ruler)
+        // Buttons keep their size; when the window is too narrow they run off the right
+        // edge and are simply clipped, rather than shrinking/truncating.
+        .clipped()
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.Palette.border).frame(height: 1)
         }
@@ -525,6 +528,7 @@ private struct EditView: View {
             Text(title)
                 .font(Theme.Font.ui(9, .medium))
                 .foregroundStyle(enabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+                .fixedSize()                                    // keep full size; overflow clips
                 .padding(.horizontal, Theme.Space.lg)
                 .frame(height: 20)
                 .background(
