@@ -418,6 +418,10 @@ target_link_libraries(neuracoust_remote_core_server PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_daw_render tools/neuracoust_daw_render.cpp)
 target_link_libraries(neuracoust_daw_render PRIVATE neuracoust_daw_core)
 
+add_executable(neuracoust_audio_measure_harness tools/audio_measure_harness.cpp)
+target_link_libraries(neuracoust_audio_measure_harness PRIVATE neuracoust_daw_core)
+add_test(NAME audio_measure_harness COMMAND neuracoust_audio_measure_harness)
+
 add_executable(neuracoust_bridge_transport_smoke tools/bridge_transport_smoke.c)
 target_link_libraries(neuracoust_bridge_transport_smoke PRIVATE neuracoust_daw_core)
 
