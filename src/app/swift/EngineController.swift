@@ -63,7 +63,7 @@ final class EngineController: ObservableObject {
     @Published var rulerSamples = false
     /// Shared lane height, dragged from any lane's bottom edge; persisted.
     /// Default lane height, and per-track overrides (so a multi-selection resizes together).
-    @Published var laneHeight: CGFloat = 106
+    @Published var laneHeight: CGFloat = 72
     @Published var laneHeights: [Int: CGFloat] = [:]
 
     func laneHeightFor(_ trackId: Int) -> CGFloat { laneHeights[trackId] ?? laneHeight }
@@ -1566,6 +1566,19 @@ final class EngineController: ObservableObject {
         }
         selectedTrackId = trackId
     }
+
+    /// The track shown in the Channel column and the Inspector — the last-clicked
+    /// selection, falling back to the first mixer track so the panels are never empty.
+    var inspectedTrack: Track? {
+        if let id = selectedTrackId, let t = tracks.first(where: { $0.id == id }) { return t }
+        return mixerTracks.first
+    }
+
+    /// Nuendo-style Edit-view side panels, toggled from the transport bar. The Channel
+    /// column reuses the mixer's `ChannelStrip`; the Inspector is its own view.
+    @Published var showChannelColumn = true
+    @Published var showInspector = true
+    @Published var showMonitorDock = true
 
     /// Fades and clip gain edit one clip at a time; they hide on a multi-selection.
     var selectedClipId: String? { selectedClipIds.count == 1 ? selectedClipIds.first : nil }

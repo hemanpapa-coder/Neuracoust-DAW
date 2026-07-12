@@ -58,7 +58,7 @@ struct TimelineModel: Equatable {
         var inserts: [InsertChip] = []
         var sends: [SendChip] = []
         /// This lane's height. Per-track so a multi-selection can be resized together.
-        var height: CGFloat = 118
+        var height: CGFloat = 72
     }
 
     struct InsertChip: Equatable { let name: String; let bypassed: Bool; let isEmpty: Bool }
@@ -84,7 +84,7 @@ struct TimelineModel: Equatable {
     var beatsPerBar: Int = 4
     var sampleRate: Double = 48000
     /// Shared, adjustable lane height (drag a lane's bottom edge to change it).
-    var laneHeight: CGFloat = 118
+    var laneHeight: CGFloat = 72
     /// Which timebases the ruler shows, top to bottom. Any subset may be on at once.
     var rulerBars: Bool = true
     var rulerTime: Bool = true
@@ -312,7 +312,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     static let rangeStripHeight: CGFloat = 12
     /// Grab radius around each range edge for its ruler handle.
     static let rangeHandleWidth: CGFloat = 9
-    static let defaultLaneHeight: CGFloat = 106
+    static let defaultLaneHeight: CGFloat = 72
     static let minLaneHeight: CGFloat = 40
     static let maxLaneHeight: CGFloat = 320
     /// Per-track height — drag a lane's bottom edge to resize (snapped to a step). Falls back
@@ -649,20 +649,6 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     onToggleArm?(trackId)
                 } else if headerInputMonitorRect(lane).contains(point) {
                     onToggleInputMonitor?(trackId)
-                } else if headerFaderRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
-                    onSelectLane?(lane)
-                    onBeginTouch?(trackId, "track.volume")
-                    onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: lane))
-                    drag = .headerFader(trackId: trackId)
-                } else if headerPanRect(lane).insetBy(dx: 0, dy: -5).contains(point) {
-                    onSelectLane?(lane)
-                    onBeginTouch?(trackId, "track.pan")
-                    onSetPan?(trackId, headerPan(atX: point.x, index: lane))
-                    drag = .headerPan(trackId: trackId)
-                } else if let slot = headerInsertSlotHit(lane, point: point) {
-                    handleInsertClick(trackId: trackId, lane: lane, slot: slot, command: event.modifierFlags.contains(.command))
-                } else if let s = headerSendSlotHit(lane, point: point) {
-                    handleSendClick(trackId: trackId, lane: lane, slot: s, event: event)
                 } else {
                     onSelectLane?(lane)
                 }
@@ -1488,7 +1474,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             lane.accent.setFill()
             NSRect(x: 0, y: rect.minY, width: lane.selected ? 5 : 3, height: rect.height).fill()
 
-            (lane.name as NSString).draw(at: NSPoint(x: 12, y: rect.minY + 10),
+            // Track number, then the name — the Nuendo track-list header.
+            ("\(index + 1)" as NSString).draw(
+                at: NSPoint(x: 11, y: rect.minY + 11),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .medium),
+                    .foregroundColor: NSColor(hex: 0x8c8175),
+                ])
+            (lane.name as NSString).draw(at: NSPoint(x: 30, y: rect.minY + 10),
                                          withAttributes: nameAttributes)
 
             // The button that folds the automation row out from under the lane.
@@ -1543,43 +1536,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
                 withAttributes: attrs)
         }
-        // The strip degrades gracefully as the lane shrinks: rows drop out from the bottom.
-        let laneH = laneHeight(index)
-        if laneH >= 48 {
-            button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
-            button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
-            button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
-            button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
-        }
-
-        if laneH >= 62 {
-            drawHeaderFader(index: index, lane: lane)
-        }
-
-        if laneH >= 73 {
-            drawHeaderPan(index: index, lane: lane)
-        }
-
-        if laneH >= 83 {
-            // Stereo peak meter: L bar on top, R below, so a stereo track reads as stereo.
-            let meter = headerMeterRect(index)
-            NSColor(hex: 0x140f0a).setFill()
-            NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
-            let barHeight = (meter.height - 1) / 2
-            func meterBar(_ level: Float, atY y: CGFloat) {
-                guard level > 0.0001 else { return }
-                let l = min(1, max(0, CGFloat(level)))
-                let color = l > 0.9 ? NSColor(hex: 0xe5484d)
-                          : l > 0.7 ? NSColor(hex: 0xe6a23c)
-                          : NSColor(hex: 0x5fb85f)
-                color.setFill()
-                NSRect(x: meter.minX, y: y, width: meter.width * l, height: barHeight).fill()
-            }
-            meterBar(lane.peakLeft, atY: meter.minY)
-            meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
-        }
-
-        if laneH >= 100 { drawHeaderInsertsSends(lane, index: index) }
+        // Nuendo-style slim header: just the mute / solo / arm / monitor buttons.
+        // The fader, pan, meter, inserts and sends live in the Channel column, the
+        // Inspector and the mixer now — the lane header stays compact.
+        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
+        button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
+        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
+        button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
     }
 
     /// Horizontal inline volume fader with a brushed-metal cap — the compact sibling of the
@@ -1976,7 +1939,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     /// The track-name band in the header — double-click here to rename.
     private func nameRect(_ index: Int) -> NSRect {
-        NSRect(x: 10, y: laneTop(index) + 6, width: Self.headerWidth - 40, height: 22)
+        NSRect(x: 28, y: laneTop(index) + 6, width: Self.headerWidth - 74, height: 22)
     }
 
     private var renameField: NSTextField?

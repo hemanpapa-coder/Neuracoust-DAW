@@ -137,10 +137,11 @@ struct RootView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
-
-                MonitorDock()
-                    .frame(width: Theme.monitorDockWidth)
+                if engine.showMonitorDock {
+                    Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
+                    MonitorDock()
+                        .frame(width: Theme.monitorDockWidth)
+                }
             }
         }
         .background(Theme.Palette.background)
@@ -277,6 +278,17 @@ private struct EditView: View {
             Rectangle()
                 .fill(Theme.Palette.rail)
                 .frame(width: Theme.toolRailWidth)
+
+            // Nuendo-style side columns: the Channel (existing mixer strip) and the
+            // Inspector, both following the selected track and toggled from the transport.
+            if engine.showChannelColumn {
+                ChannelColumn()
+                Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
+            }
+            if engine.showInspector {
+                TrackInspector()
+                Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
+            }
 
             VStack(spacing: 0) {
                 toolbar

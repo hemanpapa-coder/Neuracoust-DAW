@@ -64,6 +64,7 @@ struct TransportBar: View {
             Spacer(minLength: Theme.Space.xl)
             inputMeters
             masterMeter
+            panelToggles
             viewTabs
         }
         .padding(.horizontal, Theme.Space.xxl)
@@ -401,6 +402,37 @@ struct TransportBar: View {
             }
         }
         .frame(height: 6)
+    }
+
+    /// Icon toggles for the side panels. Channel and Inspector are Edit-view only (they
+    /// don't exist in the Mix tab); the Monitor dock shows in both, so its toggle stays.
+    private var panelToggles: some View {
+        HStack(spacing: 2) {
+            if engine.viewTab == .edit {
+                panelChip("slider.vertical.3", "Channel", on: engine.showChannelColumn) { engine.showChannelColumn.toggle() }
+                panelChip("info.circle", "Inspector", on: engine.showInspector) { engine.showInspector.toggle() }
+            }
+            panelChip("hifispeaker.2.fill", "Monitor", on: engine.showMonitorDock) { engine.showMonitorDock.toggle() }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.surface))
+    }
+
+    private func panelChip(_ symbol: String, _ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(on ? Theme.Palette.accent : Theme.Palette.textDim)
+                .frame(width: 28, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(on ? Color(hex: 0x20282e) : .clear)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(on ? Color(hex: 0x2c4657) : .clear, lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("\(label) 패널 표시/숨김")
     }
 
     private var viewTabs: some View {
