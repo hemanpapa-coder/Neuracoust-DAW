@@ -209,22 +209,23 @@ struct TransportBar: View {
     /// Pro Tools edit modes replace the old Snap on/off: Grid snaps, Slip is free,
     /// Shuffle ripples, Spot places by typed time.
     private var editModePicker: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: Theme.Space.sm) {
             ForEach(EngineController.EditMode.allCases) { mode in
                 let active = engine.editMode == mode
                 Button { engine.editMode = mode } label: {
                     Text(mode.label)
-                        .font(Theme.Font.ui(8.5, .medium))
+                        .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(active ? Theme.Palette.accent : Theme.Palette.textFaint)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 9)
                         .frame(height: 24)
                         .background(
                             RoundedRectangle(cornerRadius: Theme.Radius.button)
                                 .fill(active ? Theme.Palette.accent.opacity(0.14) : Theme.Palette.button)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                                        .stroke(active ? Theme.Palette.accent.opacity(0.5) : Theme.Palette.border, lineWidth: 1)
                                 )
+                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
                         )
                 }
                 .buttonStyle(.plain)
@@ -250,6 +251,7 @@ struct TransportBar: View {
                             RoundedRectangle(cornerRadius: Theme.Radius.button)
                                 .stroke(isOn ? tint.opacity(0.5) : Theme.Palette.border, lineWidth: 1)
                         )
+                        .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
                 )
         }
         .buttonStyle(.plain)

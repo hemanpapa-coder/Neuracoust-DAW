@@ -463,9 +463,9 @@ private struct EditView: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "grid").font(.system(size: 9))
-                Text("그리드: \(engine.gridUnit.label)").font(Theme.Font.mono(10))
+            HStack(spacing: 4) {
+                Text("#").font(Theme.Font.mono(11, .semibold))
+                Text(engine.gridUnit.label).font(Theme.Font.mono(10))
             }
             .foregroundStyle(Theme.Palette.textSecondary)
             .padding(.horizontal, 8).frame(height: 22)

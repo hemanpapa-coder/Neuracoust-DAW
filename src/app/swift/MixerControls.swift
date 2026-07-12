@@ -390,8 +390,10 @@ struct HorizontalMeter: View {
     let peakLeft: Float
     let peakRight: Float
 
-    // 0 dBFS at the right (full), down to the -60 floor — same mapping as the bar fill.
-    private static let marks: [(String, Double)] = [("0", 0), ("-12", -12), ("-24", -24), ("-48", -48)]
+    // 0 dBFS at the right (full), down to the floor. Sparse on purpose so the numbers
+    // never crowd at narrow widths — 0 kept prominent, the top of the meter is what
+    // matters most.
+    private static let marks: [(String, Double)] = [("0", 0), ("-24", -24), ("-48", -48)]
 
     var body: some View {
         VStack(spacing: 2) {
