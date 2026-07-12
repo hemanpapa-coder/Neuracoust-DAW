@@ -386,6 +386,10 @@ void nc_clip_color(NCEngine* engine, int index, char* out, size_t outLen);
 /// Snaps `seconds` to the project's grid. It always snaps — there is no "snap
 /// enabled" flag inside. Decide whether to call it.
 double nc_project_snap_time(NCEngine* engine, double seconds);
+void nc_project_set_edit_mode(NCEngine* engine, const char* mode);
+void nc_project_set_grid_unit(NCEngine* engine, const char* unit);
+void nc_project_grid_unit(NCEngine* engine, char* out, size_t outLen);
+double nc_project_grid_quantum_seconds(NCEngine* engine);
 
 bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds);
 bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds);

@@ -369,6 +369,10 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
+            gridMenu
+
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
+
             let hasSelection = !engine.selectedClipIds.isEmpty
 
             zoomButton("분할 (B)", enabled: hasSelection) {
@@ -425,6 +429,28 @@ private struct EditView: View {
     }
 
     /// The edit-tool picker: each tool forces a mouse behaviour in the timeline.
+    private var gridMenu: some View {
+        Menu {
+            ForEach(EngineController.GridUnit.allCases) { unit in
+                Button {
+                    engine.setGridUnit(unit)
+                } label: {
+                    if engine.gridUnit == unit { Label(unit.label, systemImage: "checkmark") } else { Text(unit.label) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "grid").font(.system(size: 9))
+                Text("그리드: \(engine.gridUnit.label)").font(Theme.Font.mono(10))
+            }
+            .foregroundStyle(Theme.Palette.textSecondary)
+            .padding(.horizontal, 8).frame(height: 22)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Palette.button))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("그리드 해상도 (스냅 단위)")
+    }
+
     private var toolSelector: some View {
         HStack(spacing: 2) {
             ForEach(EngineController.EditTool.allCases) { tool in

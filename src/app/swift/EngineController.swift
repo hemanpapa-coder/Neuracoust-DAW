@@ -607,7 +607,31 @@ final class EngineController: ObservableObject {
         }
     }
     @Published var editMode: EditMode = .grid {
-        didSet { snapEnabled = (editMode == .grid) }
+        didSet {
+            snapEnabled = (editMode == .grid)
+            if let handle { nc_project_set_edit_mode(handle, editMode.rawValue.capitalized) }
+        }
+    }
+
+    /// Grid resolution (snap quantum) used while in Grid mode.
+    enum GridUnit: String, CaseIterable, Identifiable {
+        case bar = "1 bar", beat = "1 beat", quarter = "1/4 beat"
+        case eighth = "1/8 beat", sixteenth = "1/16 beat", tenth = "0.1s", frame = "1 frame"
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .bar: return "1 마디"; case .beat: return "1 비트"; case .quarter: return "1/4"
+            case .eighth: return "1/8"; case .sixteenth: return "1/16"; case .tenth: return "0.1초"; case .frame: return "1 프레임"
+            }
+        }
+    }
+    @Published var gridUnit: GridUnit = .beat
+
+    func setGridUnit(_ unit: GridUnit) {
+        gridUnit = unit
+        guard let handle else { return }
+        _ = unit.rawValue.withCString { nc_project_set_grid_unit(handle, $0) }
+        UserDefaults.standard.set(unit.rawValue, forKey: SettingsKey.gridUnit)
     }
 
     /// Spot mode surfaces this sheet: the clip awaiting an exact placement time.
@@ -3055,6 +3079,7 @@ final class EngineController: ObservableObject {
         static let monitorPathMode = "nc.monitorPathMode"
         static let outputMode = "nc.outputMode"
         static let editMode = "nc.editMode"
+        static let gridUnit = "nc.gridUnit"
         static let soloSelect = "nc.soloSelectMode"
         static let dockAnalyzer = "nc.dockAnalyzerKind"
         static let musicalKey = "nc.musicalKey"
@@ -3089,6 +3114,7 @@ final class EngineController: ObservableObject {
         d.set(monitorPathMode, forKey: SettingsKey.monitorPathMode)
         d.set(outputMode == .speaker ? "speaker" : "headphone", forKey: SettingsKey.outputMode)
         d.set(editMode.rawValue, forKey: SettingsKey.editMode)
+        d.set(gridUnit.rawValue, forKey: SettingsKey.gridUnit)
         d.set(soloSelectMode.rawValue, forKey: SettingsKey.soloSelect)
         d.set(dockAnalyzerKind.rawValue, forKey: SettingsKey.dockAnalyzer)
         d.set(musicalKey, forKey: SettingsKey.musicalKey)
@@ -3128,6 +3154,12 @@ final class EngineController: ObservableObject {
             outputMode = (om == "headphone") ? .headphone : .speaker
         }
         if let em = d.string(forKey: SettingsKey.editMode), let mode = EditMode(rawValue: em) { editMode = mode }
+        if let gu = d.string(forKey: SettingsKey.gridUnit), let unit = GridUnit(rawValue: gu) { gridUnit = unit }
+        // Push the snap configuration into the engine so its quantum matches the UI.
+        if let handle {
+            nc_project_set_edit_mode(handle, editMode.rawValue.capitalized)
+            _ = gridUnit.rawValue.withCString { nc_project_set_grid_unit(handle, $0) }
+        }
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
         if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }

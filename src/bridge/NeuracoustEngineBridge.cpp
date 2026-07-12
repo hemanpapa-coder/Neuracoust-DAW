@@ -1496,6 +1496,21 @@ double nc_project_snap_time(NCEngine* engine, double seconds) {
     return neuracoust::daw::snapProjectTime(engine->project, seconds);
 }
 
+void nc_project_set_edit_mode(NCEngine* engine, const char* mode) {
+    if (engine == nullptr || mode == nullptr) return;
+    engine->project.editMode = mode;
+}
+void nc_project_set_grid_unit(NCEngine* engine, const char* unit) {
+    if (engine == nullptr || unit == nullptr) return;
+    engine->project.gridUnit = unit;
+}
+void nc_project_grid_unit(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.gridUnit.c_str() : "");
+}
+double nc_project_grid_quantum_seconds(NCEngine* engine) {
+    return engine == nullptr ? 0.0 : neuracoust::daw::projectTimelineQuantumSeconds(engine->project);
+}
+
 namespace {
 
 /// The renderer does not read project.clips. It rebuilds them from trackPlaylists
