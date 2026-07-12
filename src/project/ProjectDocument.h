@@ -168,6 +168,10 @@ struct ProjectDocument {
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     std::string grooveFeel = "straight";
+    // Pan law for mono tracks: "-3dB" / "-4.5dB" / "-6dB" constant-power, or "legacy" (the
+    // old linear balance). New projects default to constant-power; projects saved before
+    // this field existed load as "legacy" so their balance is preserved.
+    std::string panLaw = "-4.5dB";
     double grooveSwingAmount = 0.0;
     std::string metronomeSubdivision = "auto";
     std::string detectedKey = "C";

@@ -110,10 +110,38 @@ struct MixerView: View {
                 chip("센드", $showSends)
                 chip("다이나믹", $showDynamics)
             }
+
+            panLawMenu
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 34)
         .background(Theme.Palette.ruler)
+    }
+
+    private static let panLaws: [(id: String, label: String)] = [
+        ("-3dB", "−3 dB"), ("-4.5dB", "−4.5 dB"), ("-6dB", "−6 dB"), ("legacy", "레거시(선형)"),
+    ]
+
+    private var panLawMenu: some View {
+        Menu {
+            Text("팬 법칙 (모노 트랙)")
+            ForEach(Self.panLaws, id: \.id) { law in
+                Button {
+                    engine.setPanLaw(law.id)
+                } label: {
+                    if engine.panLaw == law.id { Label(law.label, systemImage: "checkmark") } else { Text(law.label) }
+                }
+            }
+        } label: {
+            let current = Self.panLaws.first { $0.id == engine.panLaw }?.label ?? engine.panLaw
+            Text("팬: \(current)")
+                .font(Theme.Font.ui(9.5))
+                .foregroundStyle(Theme.Palette.textMuted)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("모노 트랙 팬 법칙 (프로젝트 설정)")
     }
 
     private func chip(_ title: String, _ binding: Binding<Bool>) -> some View {

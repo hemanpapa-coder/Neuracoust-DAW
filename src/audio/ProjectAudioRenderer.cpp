@@ -617,6 +617,8 @@ void mixTimelineFrame(const ProjectAudioRenderPlan& plan,
         if (track != nullptr) {
             processorInput.gainDb = effectiveTrackVolumeDb(plan, *track, timelineSeconds);
             processorInput.pan = automationLaneValueAt(*track, "track.pan", timelineSeconds, track->pan);
+            processorInput.panLaw = plan.panLaw;
+            processorInput.isMonoTrack = track->channelFormat == "mono";
             processorInput.sends = track->sends;
         }
         const auto processedRoute = processMixerRouteProcessors(processorInput);
@@ -1142,12 +1144,15 @@ void applyActiveTrackVst3InsertsToStereoBlock(const ProjectAudioRenderPlan& plan
             auto dryRight = dryInsertInput[bufferIndex + 1];
             auto processedLeft = trackAudio.interleavedSamples[bufferIndex];
             auto processedRight = trackAudio.interleavedSamples[bufferIndex + 1];
+            const bool trackIsMono = track.channelFormat == "mono";
             const auto dryPostFader = applyMixerGainPan({dryLeft, dryRight},
                                                         effectiveTrackVolumeDb(plan, track, timelineSeconds),
-                                                        automationLaneValueAt(track, "track.pan", timelineSeconds, track.pan));
+                                                        automationLaneValueAt(track, "track.pan", timelineSeconds, track.pan),
+                                                        plan.panLaw, trackIsMono);
             const auto processedPostFader = applyMixerGainPan({processedLeft, processedRight},
                                                               effectiveTrackVolumeDb(plan, track, timelineSeconds),
-                                                              automationLaneValueAt(track, "track.pan", timelineSeconds, track.pan));
+                                                              automationLaneValueAt(track, "track.pan", timelineSeconds, track.pan),
+                                                              plan.panLaw, trackIsMono);
             dryLeft = dryPostFader.left;
             dryRight = dryPostFader.right;
             processedLeft = processedPostFader.left;
@@ -1315,6 +1320,7 @@ bool makeProjectAudioRenderPlan(const ProjectDocument& project, ProjectAudioRend
     rebuildProjectClipsFromActivePlaylists(effectiveProject);
     plan = {};
     plan.sampleRate = effectiveProject.sampleRate > 0.0 ? effectiveProject.sampleRate : 48000.0;
+    plan.panLaw = effectiveProject.panLaw.empty() ? "legacy" : effectiveProject.panLaw;
     plan.tempoBpm = std::max(20.0, std::min(400.0, static_cast<double>(effectiveProject.tempoBpm)));
     plan.loopEnabled = effectiveProject.loopEnabled;
     plan.loopStartSeconds = std::max(0.0, effectiveProject.loopStartSeconds);
@@ -2020,6 +2026,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             if (track != nullptr) {
                 processorInput.gainDb = effectiveTrackVolumeDb(plan, *track, timelineSeconds);
                 processorInput.pan = automationLaneValueAt(*track, "track.pan", timelineSeconds, track->pan);
+                processorInput.panLaw = plan.panLaw;
+                processorInput.isMonoTrack = track->channelFormat == "mono";
                 processorInput.sends = track->sends;
             }
             const auto processedRoute = processMixerRouteProcessors(processorInput);

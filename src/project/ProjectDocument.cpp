@@ -1913,6 +1913,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"timeSignatureNumerator\": " << project.timeSignatureNumerator << ",\n";
     out << "  \"timeSignatureDenominator\": " << project.timeSignatureDenominator << ",\n";
     out << "  \"grooveFeel\": \"" << escapeJsonString(project.grooveFeel.empty() ? "straight" : project.grooveFeel) << "\",\n";
+    out << "  \"panLaw\": \"" << escapeJsonString(project.panLaw.empty() ? "legacy" : project.panLaw) << "\",\n";
     out << "  \"grooveSwingAmount\": " << project.grooveSwingAmount << ",\n";
     out << "  \"metronomeSubdivision\": \"" << escapeJsonString(project.metronomeSubdivision.empty() ? "auto" : project.metronomeSubdivision) << "\",\n";
     out << "  \"detectedKey\": \"" << escapeJsonString(project.detectedKey.empty() ? "C" : project.detectedKey) << "\",\n";
@@ -2369,6 +2370,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.grooveFeel = trim(stringAfterKey(text, "grooveFeel"));
     if (parsed.grooveFeel != "straight" && parsed.grooveFeel != "shuffle" && parsed.grooveFeel != "triplet") {
         parsed.grooveFeel = "straight";
+    }
+    parsed.panLaw = trim(stringAfterKey(text, "panLaw"));
+    if (parsed.panLaw != "-3dB" && parsed.panLaw != "-4.5dB" &&
+        parsed.panLaw != "-6dB" && parsed.panLaw != "legacy") {
+        parsed.panLaw = "legacy";   // absent/unknown → keep old projects' linear balance
     }
     parsed.grooveSwingAmount = finiteRange(numberAfterKey(text, "grooveSwingAmount", 0.0), 0.0, 0.0, 1.0);
     parsed.metronomeSubdivision = trim(stringAfterKey(text, "metronomeSubdivision"));
@@ -3850,6 +3856,7 @@ bool writeImportedMediaManifest(const ProjectDocument& project,
     out << "    \"barCount\": " << importBarCount << ",\n";
     out << "    \"beatCount\": " << importNotatedBeatCount << ",\n";
     out << "    \"grooveFeel\": \"" << escapeJsonString(project.grooveFeel.empty() ? "straight" : project.grooveFeel) << "\",\n";
+    out << "    \"panLaw\": \"" << escapeJsonString(project.panLaw.empty() ? "legacy" : project.panLaw) << "\",\n";
     out << "    \"grooveSwingAmount\": " << project.grooveSwingAmount << ",\n";
     out << "    \"detectedKey\": \"" << escapeJsonString(project.detectedKey.empty() ? "C" : project.detectedKey) << "\",\n";
     out << "    \"detectedKeyMode\": \"" << escapeJsonString(project.detectedKeyMode.empty() ? "major" : project.detectedKeyMode) << "\",\n";

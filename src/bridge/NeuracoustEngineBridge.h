@@ -393,6 +393,8 @@ void nc_project_set_edit_mode(NCEngine* engine, const char* mode);
 void nc_project_set_grid_unit(NCEngine* engine, const char* unit);
 void nc_project_grid_unit(NCEngine* engine, char* out, size_t outLen);
 double nc_project_grid_quantum_seconds(NCEngine* engine);
+void nc_project_pan_law(NCEngine* engine, char* out, size_t outLen);
+void nc_project_set_pan_law(NCEngine* engine, const char* law);
 
 bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds);
 bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds);

@@ -1085,8 +1085,19 @@ final class EngineController: ObservableObject {
     // MARK: - Tracks
 
     /// Structure only. Peaks come from the tick; volume/pan/mute follow the setters.
+    /// Pan law for mono tracks (project setting): "-3dB" / "-4.5dB" / "-6dB" / "legacy".
+    @Published private(set) var panLaw: String = "legacy"
+
+    func setPanLaw(_ law: String) {
+        guard let handle else { return }
+        _ = law.withCString { nc_project_set_pan_law(handle, $0) }
+        panLaw = readEngineString { nc_project_pan_law(handle, $0, $1) }
+        refreshHistory()
+    }
+
     private func reloadTracks() {
         guard let handle else { return }
+        panLaw = readEngineString { nc_project_pan_law(handle, $0, $1) }
 
         tracks = (0..<Int(nc_track_count(handle))).map { index in
             let i = Int32(index)

@@ -58,6 +58,7 @@ struct ProjectAudioRenderPlan {
     float monitorInputTrimDb = -9.0f;
     bool delayCompensationEnabled = true;
     unsigned int delayCompensationSamples = 0;
+    std::string panLaw = "legacy";
     bool transportRecordingActive = false;
     bool hasMissingMedia = false;
     std::vector<InsertState> activeVst3Inserts;

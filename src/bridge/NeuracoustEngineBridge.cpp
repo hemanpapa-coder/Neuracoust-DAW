@@ -1516,6 +1516,19 @@ void nc_project_set_grid_unit(NCEngine* engine, const char* unit) {
 void nc_project_grid_unit(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->project.gridUnit.c_str() : "");
 }
+
+void nc_project_pan_law(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.panLaw.c_str() : "");
+}
+void nc_project_set_pan_law(NCEngine* engine, const char* law) {
+    if (engine == nullptr || law == nullptr) return;
+    const std::string value = law;
+    if (value != "-3dB" && value != "-4.5dB" && value != "-6dB" && value != "legacy") return;
+    if (engine->project.panLaw == value) return;
+    engine->project.panLaw = value;
+    engine->reconcileProject();
+    engine->recordStep("Set pan law");
+}
 double nc_project_grid_quantum_seconds(NCEngine* engine) {
     return engine == nullptr ? 0.0 : neuracoust::daw::projectTimelineQuantumSeconds(engine->project);
 }

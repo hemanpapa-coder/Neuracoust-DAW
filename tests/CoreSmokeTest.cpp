@@ -4913,7 +4913,9 @@ int main() {
     assert(neuracoust::daw::makeProjectAudioRenderPlan(monoRenderProject, renderPlan, error));
     neuracoust::daw::renderProjectAudioBlock(renderPlan, 0, 1, renderBlock);
     assert(std::abs(renderBlock[0] - renderBlock[1]) < 0.0001f);
-    assert(renderBlock[0] > 0.37f && renderBlock[0] < 0.38f);
+    // Mono track, centre pan under the default constant-power (-4.5 dB) law: 0.5946x, not
+    // the old linear 1.0x. (The legacy law keeps the old value; see setTrackPan tests.)
+    assert(renderBlock[0] > 0.22f && renderBlock[0] < 0.23f);
     std::vector<float> monoPreFaderBlock;
     assert(neuracoust::daw::renderTrackPreFaderStereoBlock(renderPlan, "Audio 1", 0, 1, monoPreFaderBlock));
     assert(monoPreFaderBlock.size() == 2);

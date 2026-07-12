@@ -23,6 +23,10 @@ struct MixerRouteProcessorInput {
     float gainDb = 0.0f;
     float pan = 0.0f;
     bool applyRouteFaderPan = true;
+    // Pan law + whether this is a mono track — mono tracks take the constant-power law,
+    // stereo tracks keep the linear balance regardless of law.
+    std::string panLaw = "legacy";
+    bool isMonoTrack = false;
     std::vector<TrackSendState> sends;
 };
 
@@ -31,7 +35,8 @@ struct MixerRouteProcessorOutput {
     std::vector<MixerSendTapFrame> sendTaps;
 };
 
-MixerStereoFrame applyMixerGainPan(MixerStereoFrame frame, float gainDb, float pan);
+MixerStereoFrame applyMixerGainPan(MixerStereoFrame frame, float gainDb, float pan,
+                                   const std::string& panLaw = "legacy", bool isMonoTrack = false);
 MixerStereoFrame applyMixerMasterGainBalance(MixerStereoFrame frame, float gainDb, float balance);
 MixerRouteProcessorOutput processMixerRouteProcessors(const MixerRouteProcessorInput& input);
 
