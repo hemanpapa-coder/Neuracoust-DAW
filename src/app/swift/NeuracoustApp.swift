@@ -275,12 +275,9 @@ private struct EditView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Rectangle()
-                .fill(Theme.Palette.rail)
-                .frame(width: Theme.toolRailWidth)
-
-            // Nuendo-style side columns: the Channel (existing mixer strip) and the
-            // Inspector, both following the selected track and toggled from the transport.
+            // Nuendo-style side columns sit at the far left (like the mixer), so the edit
+            // window's left margin matches it — the edit-tool rail moved in front of the
+            // timeline where it belongs.
             if engine.showChannelColumn {
                 ChannelColumn()
                 Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
@@ -289,6 +286,10 @@ private struct EditView: View {
                 TrackInspector()
                 Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
             }
+
+            Rectangle()
+                .fill(Theme.Palette.rail)
+                .frame(width: Theme.toolRailWidth)
 
             VStack(spacing: 0) {
                 toolbar

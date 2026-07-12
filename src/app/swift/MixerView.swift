@@ -348,47 +348,28 @@ struct ChannelStrip: View {
         } isTargeted: { dropTargeted = $0 && reorderable }
     }
 
-    /// A slim grab strip on the channel's right edge — drag it to widen/narrow the strip
-    /// (snapped to a step, persisted), the mixer sibling of the timeline's lane-height grip.
+    /// A corner toggle — click to switch this channel (and the whole mixer selection)
+    /// between the default (large) and the narrow (small) width. Two states, no free
+    /// widening past the default.
     private var widthResizeHandle: some View {
-        let dragging = engine.channelWidthDrag?.targets.contains(track.id) == true
-        return HStack(spacing: 2) {
-            Capsule().fill(Color.white.opacity(dragging ? 0.75 : 0.45)).frame(width: 1.5, height: 9)
-            Capsule().fill(Color.white.opacity(dragging ? 0.75 : 0.45)).frame(width: 1.5, height: 9)
+        let isNarrow = engine.channelWidthFor(track.id) <= EngineController.channelWidthMin + 1
+        return Button {
+            let sel = engine.selectedMixerTrackIds
+            let targets: [Int] = (sel.contains(track.id) && sel.count > 1) ? Array(sel) : [track.id]
+            engine.setChannelWidth(trackIds: targets,
+                                   width: isNarrow ? EngineController.channelWidthDefault : EngineController.channelWidthMin)
+            engine.commitChannelWidth()
+        } label: {
+            Text(isNarrow ? "‹ ›" : "› ‹")
+                .font(Theme.Font.mono(7, .bold))
+                .foregroundStyle(Color.white.opacity(0.5))
+                .frame(width: 16, height: 15)
+                .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.06)))
         }
-        .frame(width: 15, height: 15)
-        .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(dragging ? 0.16 : 0.06)))
+        .buttonStyle(.plain)
         .padding(.trailing, 3)
         .padding(.bottom, 7)
-        .contentShape(Rectangle())
-            // Global coordinate space: the handle sits on the strip's trailing edge, which
-            // moves as the strip resizes — a local-space translation would chase its own
-            // tail and oscillate. Global translation is pure cursor delta, so it's stable.
-            .gesture(
-                DragGesture(minimumDistance: 2, coordinateSpace: .global)
-                    .onChanged { value in
-                        // A drag on any strip in the mixer selection resizes the whole
-                        // selection together; otherwise just this strip. The anchor width is
-                        // captured once (on first change) so the whole gesture is relative to it.
-                        if engine.channelWidthDrag == nil {
-                            let sel = engine.selectedMixerTrackIds
-                            let targets: Set<Int> = (sel.contains(track.id) && sel.count > 1) ? sel : [track.id]
-                            engine.channelWidthDrag = .init(targets: targets,
-                                                            anchorWidth: engine.channelWidthFor(track.id),
-                                                            width: engine.channelWidthFor(track.id))
-                        }
-                        engine.channelWidthDrag?.width =
-                            (engine.channelWidthDrag?.anchorWidth ?? 122) + value.translation.width
-                    }
-                    .onEnded { _ in
-                        if let drag = engine.channelWidthDrag {
-                            engine.setChannelWidth(trackIds: Array(drag.targets), width: drag.width)
-                            engine.commitChannelWidth()
-                        }
-                        engine.channelWidthDrag = nil
-                    }
-            )
-            .onHover { NSCursor.resizeLeftRight.set(); if !$0 { NSCursor.arrow.set() } }
+        .help(isNarrow ? "채널 넓게" : "채널 좁게")
     }
 
     /// Selected (a `⌘/⇧`-extendable set); the last-clicked strip also drives the timeline.

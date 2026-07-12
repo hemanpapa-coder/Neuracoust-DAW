@@ -85,7 +85,8 @@ final class EngineController: ObservableObject {
     // Width narrows left-right only (height is unchanged); the strip keeps every element,
     // the scales just tuck behind the fader cap as it tightens.
     static let channelWidthMin: CGFloat = 72
-    static let channelWidthMax: CGFloat = 200
+    // No free widening past the default — the width toggle is small ↔ large only.
+    static let channelWidthMax: CGFloat = channelWidthDefault
     @Published var channelWidths: [Int: CGFloat] = [:]
 
     func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthDefault }

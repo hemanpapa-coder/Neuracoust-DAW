@@ -336,12 +336,19 @@ struct InspectorHFader: View {
                 Capsule().fill(LinearGradient(colors: [accent.opacity(0.5), accent],
                                               startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(6, geo.size.width * pos))
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(LinearGradient(colors: [Color(hex: 0xc9c0b1), Color(hex: 0x8a8074)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .frame(width: 11, height: 16)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.5), lineWidth: 1))
-                    .offset(x: max(0, min(geo.size.width - 11, geo.size.width * pos - 5.5)))
+                // The same physical cap as the channel fader, laid on its side (a
+                // vertical accent line, since this fader travels left-right).
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(RadialGradient(colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
+                                             center: UnitPoint(x: 0.5, y: 0.35), startRadius: 1, endRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                    Rectangle().fill(accent).frame(width: 2)
+                        .shadow(color: accent.opacity(0.8), radius: 2)
+                }
+                .frame(width: 12, height: 18)
+                .offset(x: max(0, min(geo.size.width - 12, geo.size.width * pos - 6)))
             }
             .contentShape(Rectangle())
             .gesture(
