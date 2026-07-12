@@ -602,6 +602,14 @@ int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* para
 double nc_track_automation_time(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);
 float nc_track_automation_value(NCEngine* engine, int trackIndex, const char* parameterId, int pointIndex);
 
+// Automation modes (per track) + live write / evaluate for touch/latch/write and fader-follow.
+void nc_track_automation_mode(NCEngine* engine, int trackIndex, char* out, size_t outLen);
+void nc_track_set_automation_mode(NCEngine* engine, int trackIndex, const char* mode);
+float nc_track_automation_value_at(NCEngine* engine, int trackIndex,
+                                   const char* parameterId, double timeSeconds, float fallback);
+bool nc_track_automation_write(NCEngine* engine, int trackIndex,
+                               const char* parameterId, double timeSeconds, float value);
+
 /// Adds a point, or replaces the one already sitting at that time. Records a step.
 bool nc_track_automation_add(NCEngine* engine, int trackIndex, const char* parameterId,
                              double timeSeconds, float value);

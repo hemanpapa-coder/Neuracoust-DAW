@@ -279,6 +279,7 @@ struct ChannelStrip: View {
                 if showIO { ioSection }
                 panSection
                 buttonRow
+                if track.kind.hasSolo { automationModeMenu }
                 faderSection
                 volumeReadout
                 if track.kind == .master { autoFadeSection }
@@ -598,6 +599,44 @@ struct ChannelStrip: View {
                       onChange: { engine.setTrackPan(track.id, $0) },
                       onCommit: { engine.recordGesture("Pan " + track.name) })
         }
+    }
+
+    private func automationModeColor(_ mode: String) -> Color {
+        switch mode {
+        case "write": return Theme.Palette.red
+        case "touch", "latch": return Theme.Palette.yellow
+        case "off": return Theme.Palette.textFaint
+        default: return Theme.Palette.green            // read
+        }
+    }
+
+    /// Pro Tools-style automation mode selector (Read / Touch / Latch / Write / Off).
+    private var automationModeMenu: some View {
+        let mode = track.automationMode
+        let label = EngineController.automationModes.first { $0.id == mode }?.label ?? "Read"
+        return Menu {
+            Text("오토메이션 모드")
+            ForEach(EngineController.automationModes, id: \.id) { m in
+                Button {
+                    engine.setAutomationMode(track.id, m.id)
+                } label: {
+                    if mode == m.id { Label(m.label, systemImage: "checkmark") } else { Text(m.label) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Circle().fill(automationModeColor(mode)).frame(width: 5, height: 5)
+                Text(label.uppercased())
+                    .font(Theme.Font.mono(7.5, .semibold))
+                    .foregroundStyle(automationModeColor(mode))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 15)
+            .background(RoundedRectangle(cornerRadius: 3).fill(automationModeColor(mode).opacity(0.14)))
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(automationModeColor(mode).opacity(0.35), lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .help("오토메이션 모드")
     }
 
     private var buttonRow: some View {

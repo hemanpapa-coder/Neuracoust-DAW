@@ -345,6 +345,7 @@ float automationValueAt(const std::vector<AutomationPointState>& points, double 
 }
 
 float automationLaneValueAt(const TrackState& track, const std::string& parameterId, double timeSeconds, float fallback) {
+    if (track.automationMode == "off") return fallback;   // Off ignores written automation
     auto laneIt = std::find_if(track.automationLanes.begin(), track.automationLanes.end(), [&](const AutomationLaneState& lane) {
         return lane.parameterId == parameterId;
     });
@@ -379,7 +380,9 @@ bool trackPlaybackMuted(const ProjectAudioRenderPlan& plan, const TrackState& tr
 }
 
 float effectiveTrackVolumeDb(const ProjectAudioRenderPlan& plan, const TrackState& track, double timeSeconds) {
-    float volumeDb = automationValueAt(track.volumeAutomation, timeSeconds, track.volumeDb);
+    float volumeDb = track.automationMode == "off"
+        ? track.volumeDb
+        : automationValueAt(track.volumeAutomation, timeSeconds, track.volumeDb);
     const TrackState* controlMaster = vcaControlMasterForTrack(plan, track);
     if (controlMaster != nullptr) {
         volumeDb += automationValueAt(controlMaster->volumeAutomation, timeSeconds, controlMaster->volumeDb);

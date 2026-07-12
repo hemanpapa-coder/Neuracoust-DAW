@@ -2546,6 +2546,47 @@ void nc_apply_plugin_automation(NCEngine* engine, double timeSeconds) {
     }
 }
 
+// --- Automation modes (Off / Read / Touch / Latch / Write / Trim), per track. ---
+void nc_track_automation_mode(NCEngine* engine, int trackIndex, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    copyText(out, outLen, track != nullptr ? track->automationMode.c_str() : "read");
+}
+void nc_track_set_automation_mode(NCEngine* engine, int trackIndex, const char* mode) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || mode == nullptr) return;
+    const std::string value = mode;
+    if (value != "off" && value != "read" && value != "touch" &&
+        value != "latch" && value != "write" && value != "trim") return;
+    if (track->automationMode == value) return;
+    track->automationMode = value;
+    engine->reconcileProject();
+    engine->recordStep("Automation mode");
+}
+
+// Evaluate an automation lane at a time (for fader-follow in Read). `fallback` is returned
+// when the track has no points for that parameter.
+float nc_track_automation_value_at(NCEngine* engine, int trackIndex,
+                                   const char* parameterId, double timeSeconds, float fallback) {
+    const auto* points = automationPoints(engine, trackIndex, parameterId);
+    if (points == nullptr || points->empty()) return fallback;
+    return evalAutomationPoints(*points, timeSeconds, fallback);
+}
+
+// Write one automation point during a live pass — no history step, so the whole
+// touch/latch/write pass folds into a single undo the UI records when it ends.
+bool nc_track_automation_write(NCEngine* engine, int trackIndex,
+                               const char* parameterId, double timeSeconds, float value) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || !nc_automation_parameter_supported(parameterId)) return false;
+    const std::string trackName = track->name;
+    const bool changed = isVolumeParameter(parameterId)
+        ? neuracoust::daw::setTrackVolumeAutomationPoint(engine->project, trackName, timeSeconds, value)
+        : neuracoust::daw::setTrackAutomationLanePoint(engine->project, trackName, parameterId,
+              isPanParameter(parameterId) ? "Pan" : parameterId, timeSeconds, value);
+    if (changed) engine->reconcileProject();
+    return changed;
+}
+
 int nc_track_automation_count(NCEngine* engine, int trackIndex, const char* parameterId) {
     const auto* points = automationPoints(engine, trackIndex, parameterId);
     return points != nullptr ? static_cast<int>(points->size()) : 0;

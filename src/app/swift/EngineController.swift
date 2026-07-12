@@ -119,6 +119,7 @@ final class EngineController: ObservableObject {
         var solo: Bool
         var recordArmed: Bool
         var inputMonitoring: Bool
+        var automationMode: String = "read"
         var inserts: [InsertSlot]
         /// What turns this track's MIDI notes into sound. Empty on every other kind.
         var instrumentName: String
@@ -1118,6 +1119,7 @@ final class EngineController: ObservableObject {
                 solo: nc_track_solo(handle, i),
                 recordArmed: nc_track_record_armed(handle, i),
                 inputMonitoring: nc_track_input_monitoring(handle, i),
+                automationMode: readEngineString { nc_track_automation_mode(handle, i, $0, $1) },
                 inserts: (0..<insertCount).map { slot in
                     let s = Int32(slot)
                     return InsertSlot(
@@ -1152,12 +1154,86 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_track_set_volume_db(handle, Int32(id), db)
         syncTrack(id)
+        writeAutomationLive(id, "track.volume", db)
     }
 
     func setTrackPan(_ id: Int, _ pan: Float) {
         guard let handle else { return }
         nc_track_set_pan(handle, Int32(id), pan)
         syncTrack(id)
+        writeAutomationLive(id, "track.pan", pan)
+    }
+
+    // MARK: Automation modes (Off / Read / Touch / Latch / Write)
+
+    static let automationModes: [(id: String, label: String)] = [
+        ("read", "Read"), ("touch", "Touch"), ("latch", "Latch"), ("write", "Write"), ("off", "Off"),
+    ]
+
+    func automationMode(_ trackId: Int) -> String {
+        tracks.first { $0.id == trackId }?.automationMode ?? "read"
+    }
+    func setAutomationMode(_ trackId: Int, _ mode: String) {
+        guard let handle else { return }
+        _ = mode.withCString { nc_track_set_automation_mode(handle, Int32(trackId), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// True once any live automation was written this playback pass — records one undo step
+    /// and reloads the drawn lanes when the transport stops.
+    private var automationPassDirty = false
+    /// Per (track,param) last playhead written, so continuous writing thins to ~30 Hz.
+    private var lastAutoWriteAt: [String: Double] = [:]
+
+    /// Called from a fader/pan gesture: while playing in a writing mode, lay down points.
+    private func writeAutomationLive(_ trackId: Int, _ param: String, _ value: Float) {
+        guard transportRunning else { return }
+        let mode = automationMode(trackId)
+        guard mode == "write" || mode == "touch" || mode == "latch" else { return }
+        writeAutomationPoint(trackId, param, value)
+    }
+
+    private func writeAutomationPoint(_ trackId: Int, _ param: String, _ value: Float) {
+        guard let handle else { return }
+        let key = "\(trackId):\(param)"
+        let now = playheadSeconds
+        if let last = lastAutoWriteAt[key], abs(now - last) < 0.03 { return }   // thin to ~30 Hz
+        lastAutoWriteAt[key] = now
+        _ = param.withCString { nc_track_automation_write(handle, Int32(trackId), $0, now, value) }
+        automationPassDirty = true
+    }
+
+    /// Each tick while playing: Write tracks keep laying down the current value; Read/Touch/
+    /// Latch tracks follow their automation so the fader/pan visibly moves.
+    private func serviceAutomation() {
+        guard let handle, transportRunning else { return }
+        let now = playheadSeconds
+        for track in tracks where track.kind.hasSolo {
+            switch track.automationMode {
+            case "write":
+                writeAutomationPoint(track.id, "track.volume", track.volumeDb)
+                writeAutomationPoint(track.id, "track.pan", track.pan)
+            case "read", "touch", "latch":
+                // Fader-follow: reflect the played-back automation on the control.
+                let v = nc_track_automation_value_at(handle, Int32(track.id), "track.volume", now, track.volumeDb)
+                let p = nc_track_automation_value_at(handle, Int32(track.id), "track.pan", now, track.pan)
+                if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
+                    if abs(tracks[idx].volumeDb - v) > 0.05 { tracks[idx].volumeDb = v }
+                    if abs(tracks[idx].pan - p) > 0.002 { tracks[idx].pan = p }
+                }
+            default: break
+            }
+        }
+    }
+
+    /// On stop, commit the live-written automation as one undo step and refresh the lanes.
+    private func finishAutomationPass() {
+        lastAutoWriteAt.removeAll()
+        guard automationPassDirty else { return }
+        automationPassDirty = false
+        reloadTracks()
+        recordGesture("Automation")
     }
 
     func recordGesture(_ stepName: String) {
@@ -3545,7 +3621,9 @@ final class EngineController: ObservableObject {
             + Int(status.activeRemoteDspTrackInserts)
 
         running = status.running
+        let wasTransportRunning = transportRunning
         transportRunning = status.transportRunning
+        if wasTransportRunning && !transportRunning { finishAutomationPass() }
         // Ballistic meters: snap up to a new peak, decay down. Without the decay a held
         // engine peak stays lit after stop; with it the meter always falls to silence.
         outputPeakLeft = max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay)
@@ -3572,6 +3650,7 @@ final class EngineController: ObservableObject {
         // Drive any plugin-parameter automation lanes to the playhead, so a drawn plug-in
         // curve is heard live. (Volume/pan are baked by the renderer; this covers inserts.)
         if transportRunning { nc_apply_plugin_automation(handle, playheadSeconds) }
+        serviceAutomation()
         applyTrackMeters(status)
 
         // Pulse the solo-implied blink ~2 Hz while any track is soloed; hold it off

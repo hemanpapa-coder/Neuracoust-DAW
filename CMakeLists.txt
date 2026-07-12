@@ -613,3 +613,7 @@ add_test(NAME track_reorder_bridge_smoke COMMAND neuracoust_track_reorder_bridge
 add_executable(neuracoust_pan_law_smoke tests/PanLawSmoke.cpp)
 target_link_libraries(neuracoust_pan_law_smoke PRIVATE neuracoust_daw_core)
 add_test(NAME pan_law_smoke COMMAND neuracoust_pan_law_smoke)
+
+add_executable(neuracoust_automation_mode_bridge_smoke tests/AutomationModeBridgeSmoke.cpp)
+target_link_libraries(neuracoust_automation_mode_bridge_smoke PRIVATE neuracoust_daw_core)
+add_test(NAME automation_mode_bridge_smoke COMMAND neuracoust_automation_mode_bridge_smoke)
