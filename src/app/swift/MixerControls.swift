@@ -384,6 +384,34 @@ struct VerticalMeter: View {
     }
 }
 
+/// A compact horizontal input meter — L over R (stereo). Sits at the top of the strip,
+/// right under the input, so signal is visible before the fader. 0 dBFS = full width.
+struct HorizontalMeter: View {
+    let peakLeft: Float
+    let peakRight: Float
+
+    var body: some View {
+        VStack(spacing: 2) {
+            bar(peakLeft)
+            bar(peakRight)
+        }
+    }
+
+    private func bar(_ peak: Float) -> some View {
+        GeometryReader { geo in
+            let f = CGFloat(meterFraction(peak))
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1).fill(Color(hex: 0x140f0a))
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(LinearGradient(colors: [Color(hex: 0x46d17f), Color(hex: 0xe6d24a), Color(hex: 0xff5252)],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(0, geo.size.width * f))
+            }
+        }
+        .frame(height: 4)
+    }
+}
+
 /// The dBFS scale beside the meters. A digital peak meter tops out at 0 dBFS — the same
 /// range the bar itself spans (meterFraction maps 0 dBFS → full, -60 dBFS → empty).
 struct MeterScale: View {

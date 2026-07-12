@@ -82,12 +82,16 @@ final class EngineController: ObservableObject {
     /// together), snapped to a step, persisted.
     static let channelWidthDefault: CGFloat = 122
     static let channelWidthStep: CGFloat = 12
+    // Width narrows left-right only (height is unchanged); the strip keeps every element,
+    // the scales just tuck behind the fader cap as it tightens.
+    static let channelWidthMin: CGFloat = 72
+    static let channelWidthMax: CGFloat = 200
     @Published var channelWidths: [Int: CGFloat] = [:]
 
     func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthDefault }
 
     func setChannelWidth(trackIds: [Int], width: CGFloat) {
-        let w = min(220, max(92, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))
+        let w = min(Self.channelWidthMax, max(Self.channelWidthMin, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))
         for id in trackIds { channelWidths[id] = w }
     }
     func commitChannelWidth() {
@@ -3172,7 +3176,7 @@ final class EngineController: ObservableObject {
             )
         }
 
-        let names = ["Mains", "Nearfield", "Grot Box"]
+        let names = ["니어필드", "미드필드", "라지필드"]
         speakerSets = (0..<3).map { slot in
             let s = Int32(slot)
             return SpeakerSet(

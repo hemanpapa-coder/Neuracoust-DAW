@@ -283,6 +283,8 @@ struct ChannelStrip: View {
 
             VStack(spacing: Theme.Space.md) {
                 if showIO { inputSection }
+                // Horizontal input meter (L/R) right under the input, before the inserts.
+                HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
                 if showInserts && track.kind.showsInserts { insertSection }
                 // Master has no sends; its auto fade-out takes that upper slot so the fader
                 // drops down and lines up with the channel faders instead of floating high
@@ -294,7 +296,10 @@ struct ChannelStrip: View {
                 }
                 panSection
                 buttonRow
-                if track.kind.hasSolo { automationModeMenu }
+                if track.kind.hasSolo || track.kind == .master { automationModeMenu }
+                // Output (post-plugin) meter — horizontal, right above the fader. The one
+                // under the input is the incoming meter; this one is after the inserts.
+                HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
                 faderSection
                 volumeReadout
                 if showDynamics { dynamicsSelector }
@@ -396,9 +401,9 @@ struct ChannelStrip: View {
     private var stripWidth: CGFloat {
         if let fixedWidth { return fixedWidth }
         if let drag = engine.channelWidthDrag, drag.targets.contains(track.id) {
-            return min(220, max(92, drag.width))
+            return min(EngineController.channelWidthMax, max(EngineController.channelWidthMin, drag.width))
         }
-        return max(92, engine.channelWidthFor(track.id))
+        return max(EngineController.channelWidthMin, engine.channelWidthFor(track.id))
     }
 
     private var stripBackground: Color {
@@ -441,15 +446,8 @@ struct ChannelStrip: View {
             .background(accent.opacity(0.13))
         }
         .contentShape(Rectangle())
-        // Click the header to select the strip; ⌘/⇧-click extends the selection. A
-        // *simultaneous* tap gesture leaves the drag-to-reorder (`.draggable`) intact —
-        // a plain `.onTapGesture` would consume the press and kill the drag.
-        .simultaneousGesture(TapGesture().onEnded {
-            let flags = NSEvent.modifierFlags
-            engine.selectMixerTrack(track.id,
-                                    additive: flags.contains(.command) || flags.contains(.shift))
-        })
-        // Drag the header to reorder the channel (Master stays put).
+        // The header is drag-only (reorder). Selecting the strip lives on the nameplate,
+        // so no tap gesture competes with `.draggable` here (that was killing the drag).
         if reorderable {
             content.draggable(ChannelDragPayload(trackId: track.id))
         } else {
@@ -815,34 +813,21 @@ struct ChannelStrip: View {
         // spacing 0 with explicit per-gap padding: the scale ticks hug the fader (3 pt)
         // and the meter ticks hug the meter (1 pt). The single dB readout lives in
         // `volumeReadout` below, not here.
-        HStack(alignment: .top, spacing: 0) {
-            FaderScaleMarks(capHeight: ChannelFader.capHeight)
-                .frame(height: 132)
-                .padding(.trailing, 3)
-
-            ChannelFader(volumeDb: track.volumeDb,
-                         accent: accent,
-                         onChange: { engine.setTrackVolume(track.id, $0) },
-                         onCommit: {
-                             engine.endAutomationTouch(track.id, "track.volume")
-                             if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
-                         },
-                         onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
-                .frame(width: 18, height: 132)
-                .padding(.trailing, 3)
-
-            // Meter scale moved to the LEFT of the meter so its numbers stay visible
-            // (only the fader cap may clip them occasionally).
-            MeterScale()
-                .frame(height: 132)
-                .padding(.trailing, 1)
-
-            HStack(spacing: 3) {
-                VerticalMeter(peak: meterPeakLeft, width: 4)
-                VerticalMeter(peak: meterPeakRight, width: 4)
+        // The level meter is now horizontal (above the fader), so the fader sits dead
+        // centre with just its dB legend floated on the left edge.
+        ChannelFader(volumeDb: track.volumeDb,
+                     accent: accent,
+                     onChange: { engine.setTrackVolume(track.id, $0) },
+                     onCommit: {
+                         engine.endAutomationTouch(track.id, "track.volume")
+                         if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
+                     },
+                     onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
+            .frame(width: 18, height: 132)
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .leading) {
+                FaderScaleMarks(capHeight: ChannelFader.capHeight).frame(height: 132)
             }
-            .frame(height: 132)
-        }
     }
 
     // The Master strip has no per-track signal of its own — it is the sum bus, so its
@@ -954,14 +939,7 @@ struct ChannelStrip: View {
                         if !focused { commitRename() }
                     }
             } else {
-                Text(track.name)
-                    .lineLimit(1)
-                    .onTapGesture(count: 2) {
-                        guard !track.kind.isMasterish else { return }
-                        draftName = track.name
-                        renaming = true
-                        nameFieldFocused = true
-                    }
+                Text(track.name).lineLimit(1)
             }
         }
         .font(Theme.Font.ui(10, .bold))
@@ -969,6 +947,19 @@ struct ChannelStrip: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, Theme.Space.md)
         .background(accent.opacity(0.16))
+        .contentShape(Rectangle())
+        // Click the nameplate to select the strip (⌘/⇧ extends); double-click renames.
+        .onTapGesture(count: 2) {
+            guard !track.kind.isMasterish else { return }
+            draftName = track.name
+            renaming = true
+            nameFieldFocused = true
+        }
+        .onTapGesture {
+            let flags = NSEvent.modifierFlags
+            engine.selectMixerTrack(track.id,
+                                    additive: flags.contains(.command) || flags.contains(.shift))
+        }
     }
 
     private func commitRename() {
