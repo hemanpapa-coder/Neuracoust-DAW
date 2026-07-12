@@ -62,6 +62,9 @@ struct MixerView: View {
                     }
                 }
                 .padding(Theme.Space.xl)
+                // Size the row to the tallest strip's content so the maxHeight strips
+                // equalize to that, not to the whole window.
+                .fixedSize(horizontal: false, vertical: true)
             }
             .scrollIndicators(.visible)
 
@@ -245,6 +248,9 @@ struct MixerView: View {
             showSends: showSends,
             showDynamics: showDynamics
         )
+        // Every mixer strip shares the tallest one's height (Master included), so adding
+        // inserts/sends to one channel grows them all together.
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -287,26 +293,34 @@ struct ChannelStrip: View {
             .padding(.horizontal, Theme.Space.md)
             .padding(.vertical, Theme.Space.lg)
 
+            // Absorbs the extra height when siblings are taller, so every strip in the
+            // mixer shares the tallest one's height and the footer stays pinned to the bottom.
+            Spacer(minLength: 0)
+
             nameplate
             channelStats
 
-            // Output routing pinned to the very bottom of the strip.
+            // Output routing pinned to the very bottom of the strip. Extra trailing space
+            // reserves the bottom-right corner for the width grip so they never overlap.
             if showIO {
                 outputSection
-                    .padding(.horizontal, Theme.Space.md)
+                    .padding(.leading, Theme.Space.md)
+                    .padding(.trailing, 22)
                     .padding(.bottom, Theme.Space.md)
             }
         }
         .frame(width: stripWidth)
-        .background(
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(stripBackground))
+        // Clip content to the rounded card so the header's accent bar doesn't poke square
+        // corners out past the (rounded) selection outline.
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel))
+        .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                .fill(stripBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                        .stroke(strokeColor, lineWidth: dropTargeted || isSelected ? 2 : 1)
-                )
+                .strokeBorder(strokeColor, lineWidth: dropTargeted || isSelected ? 2 : 1)
         )
-        .overlay(alignment: .trailing) { widthResizeHandle }
+        // Width grip lives at the bottom-right corner (by the footer), not the ambiguous
+        // mid-right edge.
+        .overlay(alignment: .bottomTrailing) { widthResizeHandle }
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
         // Drop another channel here to reorder it before/after this one (drop side decides).
         // The dedicated Transferable type never collides with the insert-slot plain-text drop.
@@ -321,15 +335,15 @@ struct ChannelStrip: View {
     /// (snapped to a step, persisted), the mixer sibling of the timeline's lane-height grip.
     private var widthResizeHandle: some View {
         let dragging = engine.channelWidthDrag?.targets.contains(track.id) == true
-        return Rectangle()
-            .fill(Color.white.opacity(dragging ? 0.18 : 0.001))
-            .frame(width: 6)
-            .overlay(
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.white.opacity(0.28))
-                    .frame(width: 2, height: 26)
-            )
-            .contentShape(Rectangle())
+        return HStack(spacing: 2) {
+            Capsule().fill(Color.white.opacity(dragging ? 0.75 : 0.45)).frame(width: 1.5, height: 9)
+            Capsule().fill(Color.white.opacity(dragging ? 0.75 : 0.45)).frame(width: 1.5, height: 9)
+        }
+        .frame(width: 15, height: 15)
+        .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(dragging ? 0.16 : 0.06)))
+        .padding(.trailing, 3)
+        .padding(.bottom, 7)
+        .contentShape(Rectangle())
             // Global coordinate space: the handle sits on the strip's trailing edge, which
             // moves as the strip resizes — a local-space translation would chase its own
             // tail and oscillate. Global translation is pure cursor delta, so it's stable.
@@ -792,31 +806,31 @@ struct ChannelStrip: View {
     }
 
     private var faderSection: some View {
-        HStack(alignment: .top, spacing: 5) {
+        // spacing 0 with explicit per-gap padding: the scale ticks hug the fader (3 pt)
+        // and the meter ticks hug the meter (1 pt). The single dB readout lives in
+        // `volumeReadout` below, not here.
+        HStack(alignment: .top, spacing: 0) {
             FaderScaleMarks(capHeight: ChannelFader.capHeight)
                 .frame(height: 132)
+                .padding(.trailing, 3)
 
-            VStack(spacing: 3) {
-                ChannelFader(volumeDb: track.volumeDb,
-                             accent: accent,
-                             onChange: { engine.setTrackVolume(track.id, $0) },
-                             onCommit: {
-                                 engine.endAutomationTouch(track.id, "track.volume")
-                                 if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
-                             },
-                             onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
-                    .frame(width: 32, height: 132)
-                // Numeric value readout beneath the fader, like the reference.
-                Text(dbLabel(track.volumeDb))
-                    .font(Theme.Font.mono(10, .semibold))
-                    .foregroundStyle(Theme.Palette.textBright)
-            }
+            ChannelFader(volumeDb: track.volumeDb,
+                         accent: accent,
+                         onChange: { engine.setTrackVolume(track.id, $0) },
+                         onCommit: {
+                             engine.endAutomationTouch(track.id, "track.volume")
+                             if !engine.transportRunning { engine.recordGesture("Volume " + track.name) }
+                         },
+                         onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
+                .frame(width: 32, height: 132)
+                .padding(.trailing, 5)
 
             HStack(spacing: 3) {
                 VerticalMeter(peak: meterPeakLeft, width: 6)
                 VerticalMeter(peak: meterPeakRight, width: 6)
             }
             .frame(height: 132)
+            .padding(.trailing, 1)
 
             MeterScale().frame(height: 132)
         }
@@ -893,6 +907,10 @@ struct ChannelStrip: View {
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
         }
+        // Centre in a fixed span so the value changing width (0.0 → -56.2 → -∞) never
+        // resizes the strip while dragging the fader.
+        .lineLimit(1)
+        .frame(maxWidth: .infinity)
     }
 
     private var dynamicsSelector: some View {

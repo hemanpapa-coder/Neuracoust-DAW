@@ -253,15 +253,15 @@ struct TrackInspector: View {
 
     @ViewBuilder
     private func routingSection(_ track: EngineController.Track) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+        VStack(alignment: .leading, spacing: 5) {
             Text("라우팅").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
 
             if track.kind == .audio {
-                routingMenu(icon: "arrow.down.right", tint: Theme.Palette.green,
-                            current: track.inputBus.isEmpty ? "입력 없음" : track.inputBus,
+                routingMenu(icon: "arrow.down.right", tint: Theme.Palette.green, label: "입력",
+                            current: track.inputBus.isEmpty ? "없음" : track.inputBus,
                             options: engine.audioInputOptions()) { engine.setTrackInputBus(track.id, $0) }
             }
-            routingMenu(icon: "arrow.up.right", tint: Theme.Palette.amber,
+            routingMenu(icon: "arrow.up.right", tint: Theme.Palette.amber, label: "출력",
                         current: track.outputBus.isEmpty ? "Master" : track.outputBus,
                         options: engine.outputBusOptions(track.id)) { engine.setTrackOutputBus(track.id, $0) }
         }
@@ -282,7 +282,7 @@ struct TrackInspector: View {
         }
     }
 
-    private func routingMenu(icon: String, tint: Color, current: String,
+    private func routingMenu(icon: String, tint: Color, label: String, current: String,
                              options: [String], pick: @escaping (String) -> Void) -> some View {
         Menu {
             ForEach(options, id: \.self) { option in
@@ -294,15 +294,26 @@ struct TrackInspector: View {
             }
         } label: {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: icon).font(.system(size: 9)).foregroundStyle(tint)
-                Text(current).font(Theme.Font.ui(10)).foregroundStyle(Theme.Palette.text).lineLimit(1)
+                Image(systemName: icon).font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)
+                Text(label)
+                    .font(Theme.Font.ui(9.5))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                Text(current)
+                    .font(Theme.Font.ui(10, .medium))
+                    .foregroundStyle(Theme.Palette.textBright)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.down").font(.system(size: 7)).foregroundStyle(Theme.Palette.textFaint)
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textMuted)
             }
-            .padding(.horizontal, Theme.Space.md)
-            .frame(height: 22)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.recess)
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button).stroke(Theme.Palette.divider, lineWidth: 1)))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .fill(Theme.Palette.button)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .stroke(Theme.Palette.coolDivider, lineWidth: 1))
+            )
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
     }
