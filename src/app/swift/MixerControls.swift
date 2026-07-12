@@ -96,6 +96,62 @@ struct SendMenuContent: View {
     }
 }
 
+/// One fixed send slot on a strip: a pre/post toggle, the destination bus name, and a
+/// horizontal send-level fader with its dB value — the send equivalent of an insert slot.
+struct SendSlotRow: View {
+    let bus: String
+    let gainDb: Float
+    let preFader: Bool
+    let onGain: (Float) -> Void
+    var onCommitGain: () -> Void = {}
+    let onTogglePrePost: () -> Void
+
+    @State private var dragStart: Float?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Button(action: onTogglePrePost) {
+                Text(preFader ? "PRE" : "PST")
+                    .font(Theme.Font.mono(6, .bold))
+                    .foregroundStyle(preFader ? Theme.Palette.yellow : Theme.Palette.teal)
+                    .frame(width: 20, height: 15)
+                    .background(RoundedRectangle(cornerRadius: 2)
+                        .fill((preFader ? Theme.Palette.yellow : Theme.Palette.teal).opacity(0.16)))
+            }
+            .buttonStyle(.plain)
+            .help(preFader ? "프리 페이더" : "포스트 페이더")
+
+            GeometryReader { geo in
+                let frac = CGFloat(FaderScale.position(forDb: gainDb))
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2).fill(Theme.Palette.recess)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Theme.Palette.teal.opacity(0.45))
+                        .frame(width: max(0, geo.size.width * frac))
+                    HStack(spacing: 0) {
+                        Text(bus).font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textSecondary)
+                            .lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 2)
+                        Text(dbLabel(gainDb)).font(Theme.Font.mono(6.5)).foregroundStyle(Theme.Palette.textDim)
+                    }
+                    .padding(.horizontal, 4)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { drag in
+                            if dragStart == nil { dragStart = gainDb }
+                            let pos = Double(min(1, max(0, drag.location.x / max(1, geo.size.width))))
+                            onGain(FaderScale.db(forPosition: pos))
+                        }
+                        .onEnded { _ in dragStart = nil; onCommitGain() }
+                )
+            }
+            .frame(height: 15)
+        }
+    }
+}
+
 /// dB scale drawn beside a fader. Marks sit at their real positions on the throw,
 /// not evenly spaced — otherwise the 0 dB label does not line up with a 0 dB cap.
 struct FaderScaleMarks: View {

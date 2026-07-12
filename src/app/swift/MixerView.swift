@@ -454,36 +454,37 @@ struct ChannelStrip: View {
         }
     }
 
-    /// Sends: each existing send is a menu (change level / remove); the last row adds
-    /// one, offering the aux/bus tracks — or making an Aux bus if there are none yet.
+    /// Five fixed send slots (A–E), each a bus + level fader + pre/post, Pro Tools style.
+    /// An empty slot offers a bus to assign; a filled one is the SendSlotRow.
     private var sendSection: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("센드")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
 
-            ForEach(Array(track.sends.enumerated()), id: \.offset) { idx, send in
-                Menu {
-                    SendMenuContent(engine: engine, trackId: track.id, slot: idx, send: send)
-                } label: {
-                    sendChip("\(send.bus) · \(Int(send.gainDb))dB · \(sendPanLabel(send.pan))", filled: true)
+            ForEach(0..<5, id: \.self) { slot in
+                if slot < track.sends.count {
+                    let send = track.sends[slot]
+                    SendSlotRow(bus: send.bus, gainDb: send.gainDb, preFader: send.preFader,
+                                onGain: { engine.setSendGain(track.id, slot: slot, gainDb: $0) },
+                                onCommitGain: { engine.recordGesture("Send level") },
+                                onTogglePrePost: { engine.setSendPreFader(track.id, slot: slot, pre: !send.preFader) })
+                        .contextMenu { SendMenuContent(engine: engine, trackId: track.id, slot: slot, send: send) }
+                } else {
+                    Menu {
+                        let options = engine.sendBusOptions(track.id)
+                        ForEach(options, id: \.self) { bus in
+                            Button(bus) { engine.addSend(track.id, to: bus) }
+                        }
+                        if !options.isEmpty { Divider() }
+                        Button("Aux 버스 만들기") { engine.addAuxTrack() }
+                    } label: {
+                        sendChip("＋ \(["A", "B", "C", "D", "E"][slot])", filled: false)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
             }
-
-            Menu {
-                let options = engine.sendBusOptions(track.id)
-                ForEach(options, id: \.self) { bus in
-                    Button(bus) { engine.addSend(track.id, to: bus) }
-                }
-                if !options.isEmpty { Divider() }
-                Button("Aux 버스 만들기") { engine.addAuxTrack() }
-            } label: {
-                sendChip("+ 센드", filled: false)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
         }
     }
 
@@ -614,19 +615,12 @@ struct ChannelStrip: View {
         }
     }
 
-    /// Pro Tools-style automation mode selector (Read / Touch / Latch / Write / Off).
+    /// Pro Tools-style automation mode button: click cycles the mode; right-click picks one.
     private var automationModeMenu: some View {
         let mode = track.automationMode
         let label = EngineController.automationModes.first { $0.id == mode }?.label ?? "Read"
-        return Menu {
-            Text("오토메이션 모드")
-            ForEach(EngineController.automationModes, id: \.id) { m in
-                Button {
-                    engine.setAutomationMode(track.id, m.id)
-                } label: {
-                    if mode == m.id { Label(m.label, systemImage: "checkmark") } else { Text(m.label) }
-                }
-            }
+        return Button {
+            engine.cycleAutomationMode(track.id)
         } label: {
             HStack(spacing: 3) {
                 Circle().fill(automationModeColor(mode)).frame(width: 5, height: 5)
@@ -639,8 +633,17 @@ struct ChannelStrip: View {
             .background(RoundedRectangle(cornerRadius: 3).fill(automationModeColor(mode).opacity(0.14)))
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(automationModeColor(mode).opacity(0.35), lineWidth: 0.5))
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .help("오토메이션 모드")
+        .buttonStyle(.plain)
+        .contextMenu {
+            ForEach(EngineController.automationModes, id: \.id) { m in
+                Button {
+                    engine.setAutomationMode(track.id, m.id)
+                } label: {
+                    if mode == m.id { Label(m.label, systemImage: "checkmark") } else { Text(m.label) }
+                }
+            }
+        }
+        .help("클릭: 모드 순환 · 우클릭: 모드 선택")
     }
 
     private var buttonRow: some View {

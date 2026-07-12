@@ -1178,6 +1178,14 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Click-cycle Read → Touch → Latch → Write → Off → Read.
+    func cycleAutomationMode(_ trackId: Int) {
+        let ids = Self.automationModes.map(\.id)
+        let current = automationMode(trackId)
+        let next = ids[((ids.firstIndex(of: current) ?? 0) + 1) % ids.count]
+        setAutomationMode(trackId, next)
+    }
+
     /// True once any live automation was written this playback pass — records one undo step
     /// and reloads the drawn lanes when the transport stops.
     private var automationPassDirty = false
