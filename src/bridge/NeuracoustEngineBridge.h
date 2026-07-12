@@ -420,6 +420,8 @@ double nc_clip_fade_out(NCEngine* engine, int index);
 bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, double fadeOut);
 bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
                              const char* inCurve, const char* outCurve);
+/// Turn a same-track overlap around this clip into a crossfade (no history step).
+bool nc_clip_apply_crossfades(NCEngine* engine, const char* clipId);
 void nc_clip_fade_in_curve(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_clip_fade_out_curve(NCEngine* engine, int index, char* out, size_t outLen);
 

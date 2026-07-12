@@ -1891,7 +1891,19 @@ final class EngineController: ObservableObject {
                 break
             }
         }
+        // Overlapping a clip onto a same-track neighbour becomes a crossfade, folded into
+        // this one move step (Pro Tools' auto-crossfade on overlap).
+        if stepName == "Move clip" { applyCrossfadesForSelection() }
         recordGesture(stepName)
+    }
+
+    /// Auto-crossfade any same-track overlaps created by the moved selection. Reloads once;
+    /// records no step of its own so it merges into the caller's gesture.
+    private func applyCrossfadesForSelection() {
+        guard let handle else { return }
+        var changed = false
+        for id in selectedClipIds where nc_clip_apply_crossfades(handle, id) { changed = true }
+        if changed { reloadClips() }
     }
 
     // MARK: Clipboard

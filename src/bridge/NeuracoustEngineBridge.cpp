@@ -1710,6 +1710,14 @@ bool nc_clip_set_fades(NCEngine* engine, const char* clipId, double fadeIn, doub
                                                                std::max(0.0, fadeOut)));
 }
 
+// Turn any same-track overlap around `clipId` into a crossfade (fade-out on the earlier
+// clip, fade-in on the later, which the renderer sums). No history step — the caller folds
+// it into the move gesture. Returns true if it changed anything.
+bool nc_clip_apply_crossfades(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::applyAutomaticClipCrossfades(engine->project, clipId));
+}
+
 bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
                              const char* inCurve, const char* outCurve) {
     if (engine == nullptr || clipId == nullptr) return false;
