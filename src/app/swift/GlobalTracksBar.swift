@@ -39,13 +39,8 @@ struct GlobalTracksBar: View {
             case .lyric:  return "text.quote"
             }
         }
-        var defaultHeight: CGFloat {
-            switch self {
-            case .songForm: return 24
-            case .lyric, .chord: return 22
-            default: return 20
-            }
-        }
+        // Uniform so the left accent rail and rows read as an even, aligned column.
+        var defaultHeight: CGFloat { 22 }
     }
 
     @State private var heights: [String: CGFloat] = [:]
@@ -130,23 +125,24 @@ struct GlobalTracksBar: View {
             Button {
                 addTarget = AddTarget(ruler: ruler, seconds: max(0, engine.snap(engine.playheadSeconds)))
             } label: {
+                // Restrained neutral chip — only the "+" glyph carries the ruler colour.
                 Image(systemName: "plus")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(ruler.color)
                     .frame(width: 15, height: 15)
-                    .background(RoundedRectangle(cornerRadius: 3.5).fill(ruler.color.opacity(0.16)))
-                    .overlay(RoundedRectangle(cornerRadius: 3.5).stroke(ruler.color.opacity(0.30), lineWidth: 0.5))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(hex: 0x221d17)))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(hex: 0x39322a), lineWidth: 0.75))
             }
             .buttonStyle(.plain)
             .help("\(ruler.rawValue) 추가 (재생 위치)")
         }
-        .padding(.leading, 11).padding(.trailing, 6)
+        .padding(.leading, 13).padding(.trailing, 6)
         .frame(width: Self.headerWidth, alignment: .leading)
         .background(Color(hex: 0x2c2820))
-        // Full-height accent flush to the left edge: the per-ruler colours stack into one
-        // continuous, vertically-aligned strip rather than ragged short bars.
+        // A 2px full-height accent flush to the left edge: the per-ruler colours stack into
+        // one continuous, vertically-aligned rail rather than ragged short bars.
         .overlay(alignment: .leading) {
-            Rectangle().fill(ruler.color).frame(width: 3)
+            Rectangle().fill(ruler.color).frame(width: 2)
         }
         .overlay(alignment: .trailing) {
             Rectangle().fill(Color.black.opacity(0.45)).frame(width: 1)
@@ -178,7 +174,7 @@ struct GlobalTracksBar: View {
     /// The draggable separator below a ruler, which resizes that ruler's height.
     private func separator(below ruler: Ruler) -> some View {
         ZStack {
-            Rectangle().fill(Color.black.opacity(0.55)).frame(height: Self.sepHeight)
+            Rectangle().fill(Color.black.opacity(0.28)).frame(height: Self.sepHeight)
             Color.clear.frame(height: 5).contentShape(Rectangle())
                 .onHover { inside in
                     if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
