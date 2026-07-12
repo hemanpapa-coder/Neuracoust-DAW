@@ -2,42 +2,48 @@ import SwiftUI
 import Combine
 import QuartzCore
 
-/// Maps dB to fader travel.
+/// Maps dB to fader travel with a real mixing-console taper — not a straight line.
 ///
-/// The bottom of the throw is real silence, not -60 dB with an -∞ label on it. The
-/// engine clamps volume to -120 dB, so that is the floor. A straight line from -120
-/// would waste most of the throw on inaudible values, so the bottom 6% collapses
-/// -120…-60 and the rest runs linearly from -60 to +12 — where mixing actually happens.
+/// Physical spacing is widest around unity and compresses as it descends: the 0→-5
+/// step is the tallest, then -5→-10, -10→-20, -20→-30, -30→-40 each shorter than the
+/// last, and -40…-120 collapses into the last sliver above the ∞ floor. The law is a
+/// piecewise-linear interpolation over hand-tuned anchor points, so the drag feel and
+/// the printed legend agree exactly. Position is 0 at the bottom of the throw, 1 at the top.
 enum FaderScale {
     static let silenceDb: Float = -120
-    static let minDb: Float = -60
-    static let maxDb: Float = 12
+    static let maxDb: Float = 10
 
-    /// Fraction of the throw given to the -120…-60 collapse.
-    private static let tailFraction = 0.06
+    /// (dB, position) anchors, ascending. Gaps shrink downward: 0→-5 is the widest.
+    static let anchors: [(db: Float, pos: Double)] = [
+        (-120, 0.000), (-40, 0.054), (-30, 0.114), (-20, 0.206),
+        (-10, 0.344), (-5, 0.528), (0, 0.780), (5, 0.895), (10, 1.000),
+    ]
 
-    /// 0 at the bottom of the throw, 1 at the top.
     static func position(forDb db: Float) -> Double {
         let clamped = min(maxDb, max(silenceDb, db))
-        if clamped <= minDb {
-            let tail = Double((clamped - silenceDb) / (minDb - silenceDb))
-            return tail * tailFraction
+        for i in 1..<anchors.count {
+            let lo = anchors[i - 1], hi = anchors[i]
+            if clamped <= hi.db {
+                let t = Double((clamped - lo.db) / (hi.db - lo.db))
+                return lo.pos + t * (hi.pos - lo.pos)
+            }
         }
-        let head = Double((clamped - minDb) / (maxDb - minDb))
-        return tailFraction + head * (1 - tailFraction)
+        return 1
     }
 
     static func db(forPosition position: Double) -> Float {
         let clamped = min(1, max(0, position))
-        if clamped <= tailFraction {
-            let tail = Float(clamped / tailFraction)
-            return silenceDb + tail * (minDb - silenceDb)
+        for i in 1..<anchors.count {
+            let lo = anchors[i - 1], hi = anchors[i]
+            if clamped <= hi.pos {
+                let t = Float((clamped - lo.pos) / (hi.pos - lo.pos))
+                return lo.db + t * (hi.db - lo.db)
+            }
         }
-        let head = Float((clamped - tailFraction) / (1 - tailFraction))
-        return minDb + head * (maxDb - minDb)
+        return maxDb
     }
 
-    // Console-style legend: dense near unity, spreading below, ∞ at the true floor.
+    // Console-style legend: dense near unity, compressing below, ∞ at the true floor.
     static let marks: [(String, Float)] = [
         ("10", 10), ("5", 5), ("0", 0), ("5", -5), ("10", -10),
         ("20", -20), ("30", -30), ("40", -40), ("∞", silenceDb),
