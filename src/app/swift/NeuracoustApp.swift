@@ -535,7 +535,7 @@ private struct EditView: View {
                             .stroke(Theme.Palette.divider, lineWidth: 1))
                 )
         }
-        .buttonStyle(.plain).disabled(!enabled).help(help)
+        .buttonStyle(.plain).disabled(!enabled).help(engine.helpMode ? help : "")
     }
 
     /// Same look as iconButton, but opens a menu (used to group the range edits).
@@ -555,7 +555,7 @@ private struct EditView: View {
                             .stroke(Theme.Palette.divider, lineWidth: 1))
                 )
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(!enabled).help(help)
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(!enabled).help(engine.helpMode ? help : "")
     }
 
     private func zoomButton(_ title: String,

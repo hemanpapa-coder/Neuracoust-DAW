@@ -67,6 +67,7 @@ struct TransportBar: View {
             masterMeter
             panelToggles
             viewTabs
+            helpChip
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 52)
@@ -438,6 +439,24 @@ struct TransportBar: View {
         }
         .buttonStyle(.plain)
         .help("\(label) 패널 표시/숨김")
+    }
+
+    /// Help toggle: while lit, every icon control shows a hover tooltip explaining it.
+    private var helpChip: some View {
+        Button { engine.helpMode.toggle() } label: {
+            Image(systemName: "questionmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(engine.helpMode ? Theme.Palette.deepBorder : Theme.Palette.textDim)
+                .frame(width: 28, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(engine.helpMode ? Theme.Palette.accent : .clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.surface))
+        .help(engine.helpMode ? "도움말 모드 끄기" : "도움말 모드: 켜면 버튼에 마우스를 올렸을 때 설명이 나옵니다")
     }
 
     private var viewTabs: some View {

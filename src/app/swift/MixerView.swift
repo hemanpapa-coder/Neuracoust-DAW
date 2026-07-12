@@ -76,10 +76,10 @@ struct MixerView: View {
                 .foregroundStyle(Theme.Palette.textLabel)
 
             HStack(spacing: Theme.Space.sm) {
-                chip("I/O", $showIO)
-                chip("인서트", $showInserts)
-                chip("센드", $showSends)
-                chip("다이나믹", $showDynamics)
+                chip("cable.connector", "입출력 라우팅 (I/O) 표시", $showIO)
+                chip("square.stack.3d.up.fill", "인서트 슬롯 표시", $showInserts)
+                chip("arrow.up.forward", "센드 표시", $showSends)
+                chip("waveform.path", "다이나믹스 표시", $showDynamics)
             }
 
             panLawMenu
@@ -115,13 +115,12 @@ struct MixerView: View {
         .help("모노 트랙 팬 법칙 (프로젝트 설정)")
     }
 
-    private func chip(_ title: String, _ binding: Binding<Bool>) -> some View {
+    private func chip(_ systemImage: String, _ help: String, _ binding: Binding<Bool>) -> some View {
         Button { binding.wrappedValue.toggle() } label: {
-            Text(title)
-                .font(Theme.Font.ui(10.5))
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(binding.wrappedValue ? Theme.Palette.accent : Theme.Palette.textMuted)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
+                .frame(width: 30, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.button)
                         .fill(binding.wrappedValue ? Color(hex: 0x20282e) : Theme.Palette.button)
@@ -132,6 +131,7 @@ struct MixerView: View {
                 )
         }
         .buttonStyle(.plain)
+        .help(engine.helpMode ? help : "")
     }
 
     // MARK: Routing banner

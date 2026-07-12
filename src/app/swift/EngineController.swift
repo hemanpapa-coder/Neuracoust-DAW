@@ -50,6 +50,9 @@ final class EngineController: ObservableObject {
 
     // UI state the engine knows nothing about.
     @Published var viewTab: ViewTab = .edit
+    /// Help mode: while on, controls carry hover tooltips describing what they do. Off by
+    /// default so the tooltips don't nag during normal work.
+    @Published var helpMode = false
     @Published var loopEnabled = false
     /// The loop range doubles as the edit range, the way the old UI used it.
     @Published private(set) var loopStartSeconds: Double = 0
