@@ -61,6 +61,11 @@ final class EngineController: ObservableObject {
     @Published var rulerBars = true
     @Published var rulerTime = true
     @Published var rulerSamples = false
+    /// Shared lane height, dragged from any lane's bottom edge; persisted.
+    @Published var laneHeight: CGFloat = 106
+
+    func setLaneHeight(_ h: CGFloat) { laneHeight = min(320, max(40, h)) }
+    func commitLaneHeight() { UserDefaults.standard.set(Double(laneHeight), forKey: SettingsKey.laneHeight) }
 
     /// The Pro-Tools-style record mode chosen from the record button's context menu.
     /// It is the configuration the recording engine will use — the engine does not yet
@@ -1465,6 +1470,7 @@ final class EngineController: ObservableObject {
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
             sampleRate: sampleRate > 0 ? sampleRate : 48000,
+            laneHeight: laneHeight,
             rulerBars: rulerBars,
             rulerTime: rulerTime,
             rulerSamples: rulerSamples,
@@ -3057,6 +3063,7 @@ final class EngineController: ObservableObject {
         static let rulerBars = "nc.rulerBars"
         static let rulerTime = "nc.rulerTime"
         static let rulerSamples = "nc.rulerSamples"
+        static let laneHeight = "nc.laneHeight"
         static let editTool = "nc.editTool"
         static let soloMonitor = "nc.soloMonitorMode"
         static let click = "nc.clickEnabled"
@@ -3129,6 +3136,7 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.rulerBars) != nil { rulerBars = d.bool(forKey: SettingsKey.rulerBars) }
         if d.object(forKey: SettingsKey.rulerTime) != nil { rulerTime = d.bool(forKey: SettingsKey.rulerTime) }
         if d.object(forKey: SettingsKey.rulerSamples) != nil { rulerSamples = d.bool(forKey: SettingsKey.rulerSamples) }
+        if d.object(forKey: SettingsKey.laneHeight) != nil { setLaneHeight(CGFloat(d.double(forKey: SettingsKey.laneHeight))) }
         if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
         if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
         if d.object(forKey: SettingsKey.click) != nil, d.bool(forKey: SettingsKey.click) != clickEnabled { toggleClick() }

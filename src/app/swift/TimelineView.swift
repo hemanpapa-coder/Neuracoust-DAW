@@ -79,6 +79,8 @@ struct TimelineModel: Equatable {
     var tempoBpm: Int = 120
     var beatsPerBar: Int = 4
     var sampleRate: Double = 48000
+    /// Shared, adjustable lane height (drag a lane's bottom edge to change it).
+    var laneHeight: CGFloat = 106
     /// Which timebases the ruler shows, top to bottom. Any subset may be on at once.
     var rulerBars: Bool = true
     var rulerTime: Bool = true
@@ -176,6 +178,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onCycleAutomationParameter: ((Int) -> Void)?     // lane index
     var onAutomationParamOptions: ((Int) -> [(id: String, name: String, on: Bool)])?
     var onSetAutomationParam: ((Int, String) -> Void)?
+    var onSetLaneHeight: ((CGFloat) -> Void)?
+    var onCommitLaneHeight: (() -> Void)?
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
     var onMoveAutomationPoint: ((Int, Int, Double, Float) -> Void)?  // (lane, point, time, value)
     var onDeleteAutomationPoint: ((Int, Int) -> Void)?   // (lane, point)
@@ -254,6 +258,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case gaining(clip: TimelineModel.Clip, grabY: CGFloat, startGainDb: Float)
         /// Dragging the inline volume fader in a lane header.
         case headerFader(trackId: Int)
+        /// Dragging a lane's bottom edge to resize all lanes.
+        case resizingLane(startHeight: CGFloat, startY: CGFloat)
     }
 
     /// Clip gain is drawn as a horizontal line across this dB span.
@@ -292,7 +298,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     static let rangeStripHeight: CGFloat = 12
     /// Grab radius around each range edge for its ruler handle.
     static let rangeHandleWidth: CGFloat = 9
-    static let laneHeight: CGFloat = 106
+    static let defaultLaneHeight: CGFloat = 106
+    static let minLaneHeight: CGFloat = 40
+    static let maxLaneHeight: CGFloat = 320
+    /// Lanes share one adjustable height — drag any lane's bottom edge to resize, so tracks
+    /// can be made tall for detailed waveform editing. Value is carried on the model.
+    var laneHeight: CGFloat { min(Self.maxLaneHeight, max(Self.minLaneHeight, model.laneHeight)) }
     static let automationHeight: CGFloat = 54
     static let headerWidth: CGFloat = 150
 
@@ -368,7 +379,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private func laneTop(_ index: Int) -> CGFloat {
         var top = rulerHeight - scrollY
         for lane in model.lanes.prefix(index) {
-            top += Self.laneHeight
+            top += laneHeight
             if lane.automation != nil { top += Self.automationHeight }
         }
         return top
@@ -376,7 +387,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     /// How far the lanes reach below the ruler, at scroll offset zero.
     private var contentHeight: CGFloat {
-        model.lanes.reduce(0) { $0 + Self.laneHeight + ($1.automation != nil ? Self.automationHeight : 0) }
+        model.lanes.reduce(0) { $0 + laneHeight + ($1.automation != nil ? Self.automationHeight : 0) }
     }
 
     private var maximumScrollY: CGFloat {
@@ -385,7 +396,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func automationRect(_ index: Int) -> NSRect? {
         guard index < model.lanes.count, model.lanes[index].automation != nil else { return nil }
-        return NSRect(x: 0, y: laneTop(index) + Self.laneHeight,
+        return NSRect(x: 0, y: laneTop(index) + laneHeight,
                       width: bounds.width, height: Self.automationHeight)
     }
 
@@ -393,7 +404,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let left = x(forSeconds: clip.startSeconds)
         let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
         let top = laneTop(clip.laneIndex) + 6
-        return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+        return NSRect(x: left, y: top, width: max(2, right - left), height: laneHeight - 12)
     }
 
     /// While a clip is being carried across lanes, draw a translucent ghost of it at the
@@ -411,12 +422,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             let left = x(forSeconds: dropStart)
             let width = clipRect(clip).width
             let destTop: CGFloat = below
-                ? laneTop(model.lanes.count - 1) + Self.laneHeight + 6
+                ? laneTop(model.lanes.count - 1) + laneHeight + 6
                 : laneTop(laneIndex(at: cursor) ?? clip.laneIndex) + 6
             context.saveGState()
             context.clip(to: NSRect(x: lanesRect.minX, y: rulerHeight,
                                     width: lanesRect.width, height: bounds.height - rulerHeight))
-            let ghost = NSRect(x: left, y: destTop, width: width, height: Self.laneHeight - 12)
+            let ghost = NSRect(x: left, y: destTop, width: width, height: laneHeight - 12)
             NSColor(hex: 0x35BFA8).withAlphaComponent(0.35).setFill()
             let path = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
             path.fill()
@@ -454,13 +465,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                                 width: lanesRect.width, height: bounds.height - rulerHeight))
 
         // A band on the destination lane (or the new-track strip below the last lane).
-        let bandY = below ? (laneTop(model.lanes.count - 1) + Self.laneHeight) : laneTop(targetLane)
+        let bandY = below ? (laneTop(model.lanes.count - 1) + laneHeight) : laneTop(targetLane)
         NSColor(hex: 0x5f9fd6).withAlphaComponent(0.12).setFill()
-        NSRect(x: lanesRect.minX, y: bandY, width: lanesRect.width, height: Self.laneHeight).fill()
+        NSRect(x: lanesRect.minX, y: bandY, width: lanesRect.width, height: laneHeight).fill()
         if below {
             NSColor(hex: 0x5f9fd6).withAlphaComponent(0.5).setStroke()
             let dashed = NSBezierPath(rect: NSRect(x: lanesRect.minX + 2, y: bandY + 2,
-                                                   width: lanesRect.width - 4, height: Self.laneHeight - 4))
+                                                   width: lanesRect.width - 4, height: laneHeight - 4))
             dashed.setLineDash([5, 3], count: 2, phase: 0)
             dashed.stroke()
         }
@@ -469,10 +480,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             guard let clip = model.clips.first(where: { $0.id == id }) else { continue }
             let destLane = below ? model.lanes.count : clip.laneIndex + laneDelta
             let destTop: CGFloat = destLane >= model.lanes.count
-                ? laneTop(model.lanes.count - 1) + Self.laneHeight + 6
+                ? laneTop(model.lanes.count - 1) + laneHeight + 6
                 : laneTop(max(0, destLane)) + 6
             let base = clipRect(clip)
-            let ghost = NSRect(x: base.minX, y: destTop, width: base.width, height: Self.laneHeight - 12)
+            let ghost = NSRect(x: base.minX, y: destTop, width: base.width, height: laneHeight - 12)
             NSColor(hex: 0x9b7fd4).withAlphaComponent(0.35).setFill()
             let path = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
             path.fill()
@@ -494,7 +505,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let left = x(forSeconds: region.startSeconds)
         let right = x(forSeconds: region.startSeconds + region.durationSeconds)
         let top = laneTop(region.laneIndex) + 6
-        return NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+        return NSRect(x: left, y: top, width: max(2, right - left), height: laneHeight - 12)
     }
 
     private func region(at point: NSPoint) -> TimelineModel.MidiRegion? {
@@ -563,7 +574,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard point.y >= rulerHeight else { return nil }
         for index in model.lanes.indices {
             let top = laneTop(index)
-            if point.y >= top && point.y < top + Self.laneHeight {
+            if point.y >= top && point.y < top + laneHeight {
                 return index
             }
         }
@@ -576,7 +587,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard point.y >= rulerHeight, !model.lanes.isEmpty else {
             return point.y >= rulerHeight && model.lanes.isEmpty
         }
-        let lastBottom = laneTop(model.lanes.count - 1) + Self.laneHeight
+        let lastBottom = laneTop(model.lanes.count - 1) + laneHeight
         return point.y >= lastBottom
     }
 
@@ -598,7 +609,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         if point.x < Self.headerWidth {
             if let lane = laneIndex(at: point) {
                 let trackId = model.lanes[lane].trackId
-                if event.clickCount >= 2 && nameRect(lane).contains(point) {
+                if abs(point.y - (laneTop(lane) + laneHeight)) <= 4 {
+                    // Grab the lane's bottom edge to resize all lanes.
+                    drag = .resizingLane(startHeight: laneHeight, startY: point.y)
+                } else if event.clickCount >= 2 && nameRect(lane).contains(point) {
                     beginRenamingLane(lane)
                 } else if automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
@@ -896,12 +910,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case .gaining(let clip, let grabY, let startGainDb):
             // The full clip height spans the gain range; dragging up is louder.
             let span = Self.gainRange.upperBound - Self.gainRange.lowerBound
-            let perPoint = span / Float(max(1, Self.laneHeight - 12))
+            let perPoint = span / Float(max(1, laneHeight - 12))
             let value = startGainDb - Float(point.y - grabY) * perPoint
             onSetGain?(clip.id, min(Self.gainRange.upperBound, max(Self.gainRange.lowerBound, value)))
         case .headerFader(let trackId):
             // The fader's x-mapping is the same for every lane, so index 0 suffices.
             onSetVolumeDb?(trackId, headerFaderDb(atX: point.x, index: 0))
+        case .resizingLane(let startHeight, let startY):
+            let h = min(Self.maxLaneHeight, max(Self.minLaneHeight, startHeight + (point.y - startY)))
+            onSetLaneHeight?(h)
         }
     }
 
@@ -967,6 +984,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitEdit?("Resize MIDI region")
         case .headerFader:
             onCommitEdit?("Track volume")
+        case .resizingLane:
+            onCommitLaneHeight?()      // persist the new height
         case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
@@ -1147,8 +1166,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         dropBandLayer.frame = CGRect(x: lanesRect.minX, y: top,
-                                     width: lanesRect.width, height: Self.laneHeight)
-        dropLineLayer.frame = CGRect(x: dropX - 1, y: top, width: 3, height: Self.laneHeight)
+                                     width: lanesRect.width, height: laneHeight)
+        dropLineLayer.frame = CGRect(x: dropX - 1, y: top, width: 3, height: laneHeight)
         dropBandLayer.isHidden = false
         dropLineLayer.isHidden = false
         CATransaction.commit()
@@ -1413,7 +1432,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             let rect = NSRect(x: 0,
                               y: laneTop(index),
                               width: Self.headerWidth,
-                              height: Self.laneHeight)
+                              height: laneHeight)
             NSColor(hex: lane.selected ? 0x3d352e : 0x332c26).setFill()
             rect.fill()
 
@@ -1460,45 +1479,52 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
                 withAttributes: attrs)
         }
-        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
-        button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
-        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
-        button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
-
-        // Volume fader: a track with a filled portion and a knob.
-        let fader = headerFaderRect(index)
-        NSColor(hex: 0x1a150f).setFill()
-        NSBezierPath(roundedRect: fader, xRadius: 2, yRadius: 2).fill()
-        let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
-        NSColor(hex: 0x4a4038).setFill()
-        NSRect(x: fader.minX, y: fader.midY - 1, width: knobX - fader.minX, height: 2).fill()
-        lane.accent.setFill()
-        NSBezierPath(ovalIn: NSRect(x: knobX - 4, y: fader.midY - 4, width: 8, height: 8)).fill()
-        (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
-            at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
-            withAttributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
-                .foregroundColor: NSColor(hex: 0x867b6a),
-            ])
-
-        // Stereo peak meter: L bar on top, R below, so a stereo track reads as stereo.
-        let meter = headerMeterRect(index)
-        NSColor(hex: 0x140f0a).setFill()
-        NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
-        let barHeight = (meter.height - 1) / 2
-        func meterBar(_ level: Float, atY y: CGFloat) {
-            guard level > 0.0001 else { return }
-            let l = min(1, max(0, CGFloat(level)))
-            let color = l > 0.9 ? NSColor(hex: 0xe5484d)
-                      : l > 0.7 ? NSColor(hex: 0xe6a23c)
-                      : NSColor(hex: 0x5fb85f)
-            color.setFill()
-            NSRect(x: meter.minX, y: y, width: meter.width * l, height: barHeight).fill()
+        // The strip degrades gracefully as the lane shrinks: rows drop out from the bottom.
+        if laneHeight >= 48 {
+            button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
+            button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
+            button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
+            button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
         }
-        meterBar(lane.peakLeft, atY: meter.minY)
-        meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
 
-        drawHeaderInsertsSends(lane, index: index)
+        if laneHeight >= 64 {
+            // Volume fader: a track with a filled portion and a knob.
+            let fader = headerFaderRect(index)
+            NSColor(hex: 0x1a150f).setFill()
+            NSBezierPath(roundedRect: fader, xRadius: 2, yRadius: 2).fill()
+            let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
+            NSColor(hex: 0x4a4038).setFill()
+            NSRect(x: fader.minX, y: fader.midY - 1, width: knobX - fader.minX, height: 2).fill()
+            lane.accent.setFill()
+            NSBezierPath(ovalIn: NSRect(x: knobX - 4, y: fader.midY - 4, width: 8, height: 8)).fill()
+            (String(format: "%+.0f", lane.volumeDb) as NSString).draw(
+                at: NSPoint(x: fader.maxX - 22, y: fader.minY - 11),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .regular),
+                    .foregroundColor: NSColor(hex: 0x867b6a),
+                ])
+        }
+
+        if laneHeight >= 74 {
+            // Stereo peak meter: L bar on top, R below, so a stereo track reads as stereo.
+            let meter = headerMeterRect(index)
+            NSColor(hex: 0x140f0a).setFill()
+            NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
+            let barHeight = (meter.height - 1) / 2
+            func meterBar(_ level: Float, atY y: CGFloat) {
+                guard level > 0.0001 else { return }
+                let l = min(1, max(0, CGFloat(level)))
+                let color = l > 0.9 ? NSColor(hex: 0xe5484d)
+                          : l > 0.7 ? NSColor(hex: 0xe6a23c)
+                          : NSColor(hex: 0x5fb85f)
+                color.setFill()
+                NSRect(x: meter.minX, y: y, width: meter.width * l, height: barHeight).fill()
+            }
+            meterBar(lane.peakLeft, atY: meter.minY)
+            meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
+        }
+
+        if laneHeight >= 92 { drawHeaderInsertsSends(lane, index: index) }
     }
 
     /// The Pro-Tools-style inserts row and sends row under the lane's fader/meter.
@@ -1548,6 +1574,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             }
         }
 
+        // Sends need another row; only when the lane is tall enough for it.
+        guard laneHeight >= 106 else { return }
         // Sends: active sends then a trailing "+".
         let sendCount = min(2, lane.sends.count)
         for i in 0..<sendCount {
@@ -1840,18 +1868,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         return NSRect(x: 12 + CGFloat(slot) * (w + gap), y: laneTop(index) + 89, width: w, height: 13)
     }
 
-    private static let headerVolMinDb: Float = -60
-    private static let headerVolMaxDb: Float = 6
-
+    // The inline fader uses the same console taper as the mixer, so 0 dB sits ~78% along
+    // and near-unity moves are expanded — not a straight line.
     private func headerFaderFraction(_ db: Float) -> CGFloat {
-        let f = (db - Self.headerVolMinDb) / (Self.headerVolMaxDb - Self.headerVolMinDb)
-        return CGFloat(min(1, max(0, f)))
+        CGFloat(FaderScale.position(forDb: db))
     }
     private func headerFaderDb(atX pointX: CGFloat, index: Int) -> Float {
         let rect = headerFaderRect(index)
-        let raw = Float((pointX - rect.minX) / max(1, rect.width))
-        let fraction = min(1, max(0, raw))
-        return Self.headerVolMinDb + fraction * (Self.headerVolMaxDb - Self.headerVolMinDb)
+        let fraction = Double(min(1, max(0, (pointX - rect.minX) / max(1, rect.width))))
+        return FaderScale.db(forPosition: fraction)
     }
 
 
@@ -1990,7 +2015,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             guard right > lanesRect.minX, left < lanesRect.maxX else { continue }
 
             let top = laneTop(clip.laneIndex) + 6
-            let rect = NSRect(x: left, y: top, width: max(2, right - left), height: Self.laneHeight - 12)
+            let rect = NSRect(x: left, y: top, width: max(2, right - left), height: laneHeight - 12)
 
             let body = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
             NSColor(hex: clip.selected ? 0x2a4356 : 0x1e3140).setFill()
@@ -2194,6 +2219,8 @@ struct TimelineView: NSViewRepresentable {
     let onCycleAutomationParameter: (Int) -> Void
     var onAutomationParamOptions: ((Int) -> [(id: String, name: String, on: Bool)])? = nil
     var onSetAutomationParam: ((Int, String) -> Void)? = nil
+    var onSetLaneHeight: ((CGFloat) -> Void)? = nil
+    var onCommitLaneHeight: (() -> Void)? = nil
     let onAddAutomationPoint: (Int, Double, Float) -> Void
     let onMoveAutomationPoint: (Int, Int, Double, Float) -> Void
     let onDeleteAutomationPoint: (Int, Int) -> Void
@@ -2279,6 +2306,8 @@ struct TimelineView: NSViewRepresentable {
         view.onCycleAutomationParameter = onCycleAutomationParameter
         view.onAutomationParamOptions = onAutomationParamOptions
         view.onSetAutomationParam = onSetAutomationParam
+        view.onSetLaneHeight = onSetLaneHeight
+        view.onCommitLaneHeight = onCommitLaneHeight
         view.onAddAutomationPoint = onAddAutomationPoint
         view.onMoveAutomationPoint = onMoveAutomationPoint
         view.onDeleteAutomationPoint = onDeleteAutomationPoint

@@ -309,6 +309,8 @@ private struct EditView: View {
                             .map { (id: $0.id, name: $0.displayName, on: $0.id == current) }
                     },
                     onSetAutomationParam: { engine.setAutomationParameter(laneIndex: $0, id: $1) },
+                    onSetLaneHeight: { engine.setLaneHeight($0) },
+                    onCommitLaneHeight: { engine.commitLaneHeight() },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
                     onMoveAutomationPoint: { engine.moveAutomationPoint(laneIndex: $0, pointIndex: $1, timeSeconds: $2, value: $3) },
                     onDeleteAutomationPoint: { engine.deleteAutomationPoint(laneIndex: $0, pointIndex: $1) },
