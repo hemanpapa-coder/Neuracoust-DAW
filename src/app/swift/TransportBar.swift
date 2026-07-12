@@ -4,32 +4,36 @@ struct TitleBar: View {
     @EnvironmentObject private var engine: EngineController
 
     var body: some View {
-        // File name pushed to the left (past the traffic lights) rather than centred, and
-        // a slimmer bar, so the wide empty band at the top is reclaimed.
-        HStack(spacing: Theme.Space.md) {
-            Text("Neuracoust DAW")
-                .font(Theme.Font.ui(10.5, .semibold))
-                .foregroundStyle(Theme.Palette.textMuted)
-            Text("· \(documentLabel)")
-                .font(Theme.Font.ui(10.5))
-                .foregroundStyle(Theme.Palette.text)
-            Circle()
-                .fill(engine.projectDirty ? Theme.Palette.amber : Theme.Palette.textFainter)
-                .frame(width: 6, height: 6)
+        // The file name is centred on the top (traffic-light) line — the macOS title
+        // position — with the engine status on the right; a slim bar reclaims the band.
+        ZStack {
+            HStack(spacing: Theme.Space.md) {
+                Text("Neuracoust DAW")
+                    .font(Theme.Font.ui(10.5, .semibold))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                Text("· \(documentLabel)")
+                    .font(Theme.Font.ui(10.5))
+                    .foregroundStyle(Theme.Palette.text)
+                Circle()
+                    .fill(engine.projectDirty ? Theme.Palette.amber : Theme.Palette.textFainter)
+                    .frame(width: 6, height: 6)
+            }
 
-            Spacer()
-
-            Circle()
-                .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
-                .frame(width: 6, height: 6)
-            Text(engine.running
-                 ? "\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize)"
-                 : "엔진 정지")
-                .font(Theme.Font.mono(9))
-                .foregroundStyle(Theme.Palette.textFaint)
+            HStack {
+                Spacer()
+                HStack(spacing: Theme.Space.md) {
+                    Circle()
+                        .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
+                        .frame(width: 6, height: 6)
+                    Text(engine.running
+                         ? "\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize)"
+                         : "엔진 정지")
+                        .font(Theme.Font.mono(9))
+                        .foregroundStyle(Theme.Palette.textFaint)
+                }
+                .padding(.trailing, Theme.Space.xxl)
+            }
         }
-        .padding(.leading, 78)   // clear the window's traffic lights
-        .padding(.trailing, Theme.Space.xxl)
         .frame(height: 26)
         .frame(maxWidth: .infinity)
         .background(Theme.Gradient.titlebar)

@@ -476,14 +476,14 @@ private struct EditView: View {
     }
 
     private var toolSelector: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Theme.Space.sm) {
             ForEach(EngineController.EditTool.allCases) { tool in
                 let active = engine.editTool == tool
                 Button { engine.editTool = tool } label: {
                     Image(systemName: tool.symbol)
-                        .font(.system(size: 10))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(active ? Theme.Palette.deepBorder : Theme.Palette.textDim)
-                        .frame(width: 24, height: 20)
+                        .frame(width: 26, height: 22)
                         .background(
                             RoundedRectangle(cornerRadius: Theme.Radius.button)
                                 .fill(active ? Theme.Palette.accent : Theme.Palette.button)
