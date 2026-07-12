@@ -5077,7 +5077,9 @@ int main() {
     neuracoust::daw::renderProjectAudioBlock(renderPlan, 0, 4, renderBlock);
     assert(renderBlock.size() == 8);
     assert(std::abs(renderBlock[0]) < 0.0001f);
-    assert(renderBlock[2] > 0.45f && renderBlock[2] < 0.55f);
+    // Windowed-sinc SRC: interpolating this impulse-like source at the half-sample point
+    // gives its bandlimited value ~sinc(0.5)=0.637, not the old linear 0.5.
+    assert(renderBlock[2] > 0.60f && renderBlock[2] < 0.67f);
     assert(renderBlock[4] > 0.99f);
     assert(renderBlock[1] == 0.0f);
     assert(renderBlock[3] == 0.0f);
@@ -5103,8 +5105,11 @@ int main() {
     assert(neuracoust::daw::makeProjectAudioRenderPlan(stretchProject, renderPlan, error));
     neuracoust::daw::renderProjectAudioBlock(renderPlan, 0, 2, renderBlock);
     assert(renderBlock.size() == 4);
-    assert(std::abs(renderBlock[0]) < 0.0001f);
-    assert(renderBlock[2] > 0.49f && renderBlock[2] < 0.51f);
+    // 2x time compression downsamples, so the windowed-sinc SRC lowpasses (anti-aliases):
+    // the first sample carries a small anti-alias skirt instead of exact 0, and the mid
+    // sample reads its bandlimited value rather than the old linear 0.5.
+    assert(std::abs(renderBlock[0]) < 0.05f);
+    assert(renderBlock[2] > 0.60f && renderBlock[2] < 0.70f);
     assert(renderBlock[1] == 0.0f);
     assert(renderBlock[3] == 0.0f);
     renderProject.tracks[0].muted = true;

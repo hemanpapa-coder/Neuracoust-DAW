@@ -214,13 +214,16 @@ int main() {
         const auto m = analyzeTone(up, 1000.0);
         printf("  upsample 44.1->48k, 1 kHz: THD+N %.1f dB, peak %.1f dBFS\n", m.thdnDb, m.peakDbfs);
         check(m.peakDbfs > -12.0, "upsample not silent");
+        check(m.thdnDb < -80.0, "upsample THD+N < -80 dB (windowed-sinc SRC)");
     }
 
-    // 3) HF response: a 15 kHz tone upsampled 44.1->48k should keep most of its level.
+    // 3) HF response: a 15 kHz tone upsampled 44.1->48k should keep essentially all its
+    //    level — the old linear interp rolled ~3 dB off here.
     WavAudioData hf;
     if (renderTone(dir, "hf", 44100, 15000.0, 48000.0, hf)) {
         const auto m = analyzeTone(hf, 15000.0);
-        printf("  HF 15 kHz 44.1->48k: level %.1f dBFS (rolloff shows here)\n", m.fundDbfs);
+        printf("  HF 15 kHz 44.1->48k: level %.1f dBFS\n", m.fundDbfs);
+        check(m.fundDbfs > -9.0, "15 kHz rolloff small (< ~2 dB below unity)");
     }
 
     // 4) Downsample alias: a 30 kHz tone @96k is above 24 kHz Nyquist at 48k. An ideal SRC
@@ -233,6 +236,7 @@ int main() {
         double peak = 0; for (float s : x) peak = std::max(peak, (double)std::abs(s));
         printf("  downsample 96->48k, 30 kHz tone: 18 kHz alias image %.1f dBFS, out peak %.1f dBFS\n",
                aliasDbfs, dbfs(peak));
+        check(aliasDbfs < -70.0, "downsample alias image < -70 dBFS (anti-aliased SRC)");
     }
 
     printf("== %s ==\n", g_failures == 0 ? "ALL SANITY CHECKS PASS" : "FAILURES");

@@ -415,26 +415,56 @@ float clipFadeGain(const ClipState& clip, double localSeconds) {
     return gain;
 }
 
-float sourceSampleAt(const WavAudioData& source, double sourceFrame, int channel) {
+inline double normalizedSinc(double x) {
+    if (std::abs(x) < 1e-9) return 1.0;
+    const double px = kPi * x;
+    return std::sin(px) / px;
+}
+
+// Blackman-windowed-sinc resampler. `step` is how many source frames advance per output
+// frame (sourceRate/projectRate ÷ timeScale): >1 means downsampling, so the sinc is
+// lowpassed to the output Nyquist to stop aliasing; <=1 reconstructs at the source Nyquist.
+// Replaces the old 2-point linear interpolation, which had no anti-aliasing and rolled off
+// the highs. A step≈1, integer-aligned read takes a direct fast path (the common case).
+constexpr int kSrcZeroCrossings = 16;   // taps each side at unity; widened on downsample
+
+float sourceSampleAt(const WavAudioData& source, double sourceFrame, int channel, double step = 1.0) {
     if (source.channels <= 0 || source.interleavedSamples.empty() || sourceFrame < 0.0) {
         return 0.0f;
     }
     const int64_t frameCount = source.frameCount();
-    const auto frame = static_cast<int64_t>(std::floor(sourceFrame));
-    if (frame < 0 || frame >= frameCount) {
-        return 0.0f;
+    const int ch = source.channels > 1 ? std::min(channel, source.channels - 1) : 0;
+    const auto sampleAt = [&](int64_t f) -> double {
+        if (f < 0 || f >= frameCount) return 0.0;
+        const size_t idx = static_cast<size_t>(f * source.channels + ch);
+        return idx < source.interleavedSamples.size() ? static_cast<double>(source.interleavedSamples[idx]) : 0.0;
+    };
+
+    const int64_t base = static_cast<int64_t>(std::floor(sourceFrame));
+    const double frac = sourceFrame - static_cast<double>(base);
+    if (base < 0 || base >= frameCount) return 0.0f;
+
+    // Fast path: unity read on an integer boundary (no resampling / time-stretch).
+    if (step <= 1.0000001 && frac < 1e-7) {
+        return static_cast<float>(sampleAt(base));
     }
-    const int resolvedChannel = source.channels > 1 ? std::min(channel, source.channels - 1) : 0;
-    const auto index = static_cast<size_t>(frame * source.channels + resolvedChannel);
-    const float current = index < source.interleavedSamples.size() ? source.interleavedSamples[index] : 0.0f;
-    const int64_t nextFrame = frame + 1;
-    if (nextFrame >= frameCount) {
-        return current;
+
+    const double cutoff = std::min(1.0, 1.0 / std::max(1.0, step));   // fraction of source Nyquist
+    // Kernel widens as it downsamples, but cap it — beyond ~4x the extra taps cost more than
+    // they buy, and an unbounded kernel would be unsafe in the realtime path.
+    const int reach = std::min(64, static_cast<int>(std::ceil(static_cast<double>(kSrcZeroCrossings) / cutoff)));
+    double acc = 0.0, norm = 0.0;
+    for (int k = -reach + 1; k <= reach; ++k) {
+        const double d = frac - static_cast<double>(k);              // distance to sample base+k
+        const double arg = cutoff * d;
+        if (std::abs(arg) > static_cast<double>(kSrcZeroCrossings)) continue;
+        const double t = (arg / static_cast<double>(kSrcZeroCrossings) + 1.0) * 0.5;   // 0..1
+        const double win = 0.42 - 0.5 * std::cos(2.0 * kPi * t) + 0.08 * std::cos(4.0 * kPi * t);
+        const double h = cutoff * normalizedSinc(arg) * win;
+        acc += sampleAt(base + k) * h;
+        norm += h;
     }
-    const auto nextIndex = static_cast<size_t>(nextFrame * source.channels + resolvedChannel);
-    const float next = nextIndex < source.interleavedSamples.size() ? source.interleavedSamples[nextIndex] : current;
-    const float fraction = static_cast<float>(sourceFrame - static_cast<double>(frame));
-    return current + (next - current) * fraction;
+    return static_cast<float>(norm != 0.0 ? acc / norm : acc);
 }
 
 std::pair<float, float> dryClipSampleAtTimelineFrame(const ProjectRenderClip& renderClip,
@@ -456,8 +486,9 @@ std::pair<float, float> dryClipSampleAtTimelineFrame(const ProjectRenderClip& re
     const float polarity = clip.polarityInverted ? -1.0f : 1.0f;
     const double sourceFrame = clip.sourceOffsetSeconds * renderClip.source.sampleRate
         + (static_cast<double>(timelineFrame - clipStartFrame) * sourceRateRatio / timeScale);
-    const float dryLeft = sourceSampleAt(renderClip.source, sourceFrame, 0) * clipGain * fadeGain * polarity;
-    const float dryRight = sourceSampleAt(renderClip.source, sourceFrame, 1) * clipGain * fadeGain * polarity;
+    const double resampleStep = sourceRateRatio / timeScale;         // source frames per output frame
+    const float dryLeft = sourceSampleAt(renderClip.source, sourceFrame, 0, resampleStep) * clipGain * fadeGain * polarity;
+    const float dryRight = sourceSampleAt(renderClip.source, sourceFrame, 1, resampleStep) * clipGain * fadeGain * polarity;
     return {dryLeft, dryRight};
 }
 
@@ -2186,8 +2217,8 @@ bool renderExternalSidechainBusStereoBlock(const ProjectAudioRenderPlan& plan,
         }
         const double sourceFrame = sourceOffsetFrames + static_cast<double>(timelineFrame - busStartFrame) * sourceRateRatio;
         const auto destination = static_cast<size_t>(frameOffset) * 2;
-        interleavedStereo[destination] = sourceSampleAt(busIt->source, sourceFrame, 0);
-        interleavedStereo[destination + 1] = sourceSampleAt(busIt->source, sourceFrame, 1);
+        interleavedStereo[destination] = sourceSampleAt(busIt->source, sourceFrame, 0, sourceRateRatio);
+        interleavedStereo[destination + 1] = sourceSampleAt(busIt->source, sourceFrame, 1, sourceRateRatio);
         wroteAudio = wroteAudio ||
             std::abs(interleavedStereo[destination]) > 0.0000001f ||
             std::abs(interleavedStereo[destination + 1]) > 0.0000001f;
