@@ -738,6 +738,14 @@ final class EngineController: ObservableObject {
     var speakerSimulationActive: Bool {
         monitorModules.contains { $0.enabled && $0.name.localizedCaseInsensitiveContains("Speaker Simulation") }
     }
+    /// Headphone-specific correction modules — shown in the headphone panel so the user
+    /// can see whether the virtual-speaker A/B/C is paired with crossfeed / correction.
+    var headphoneSimulationActive: Bool {
+        monitorModules.contains { $0.enabled && $0.name.localizedCaseInsensitiveContains("Headphone Simulation") }
+    }
+    var crossfeedActive: Bool {
+        monitorModules.contains { $0.enabled && $0.name.localizedCaseInsensitiveContains("Crossfeed") }
+    }
     @Published private(set) var speakerSets: [SpeakerSet] = []
     @Published private(set) var activeSpeakerSlot = 0
     @Published private(set) var monitorVolumeDb: Float = -6

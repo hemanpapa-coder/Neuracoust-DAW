@@ -158,9 +158,13 @@ struct MonitorDock: View {
                     .lineLimit(1)
             }
 
-            if engine.outputMode == .speaker {
-                speakerSets
-            } else {
+            // A/B/C virtual-speaker monitoring is shared across both outputs: the same
+            // modelled speaker (A/니어필드, B/미드필드, C/라지필드) is auditioned either
+            // over the physical speakers or over headphones. The Monitor DSP chain applies
+            // Speaker Simulation on the monitor bus regardless of the output, so the A/B/C
+            // choice is heard on headphones too — with crossfeed/headphone correction on top.
+            speakerSets
+            if engine.outputMode == .headphone {
                 headphonePanel
             }
         }
@@ -342,11 +346,16 @@ struct MonitorDock: View {
     }
 
     private var headphonePanel: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.md) {
-            StatRow(label: "모델", value: "Sonarworks · HD 650")
-            Text("헤드폰 모니터 → 크로스피드 + 가상 스피커/헤드폰 보정")
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            Text("헤드폰 모니터 → 위 A/B/C 가상 스피커 + 크로스피드 / 헤드폰 보정")
                 .font(Theme.Font.ui(8.5))
                 .foregroundStyle(Theme.Palette.textFaint)
+            let sim = engine.speakerSimulationActive
+            let cross = engine.headphoneSimulationActive || engine.crossfeedActive
+            StatRow(label: "가상 스피커", value: sim ? "켜짐" : "꺼짐",
+                    valueColor: sim ? Theme.Palette.purpleLight : Theme.Palette.textFaint)
+            StatRow(label: "크로스피드/보정", value: cross ? "켜짐" : "꺼짐",
+                    valueColor: cross ? Theme.Palette.purpleLight : Theme.Palette.textFaint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(9)
