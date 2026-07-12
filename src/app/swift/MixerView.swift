@@ -271,6 +271,9 @@ struct ChannelStrip: View {
     let showInserts: Bool
     let showSends: Bool
     let showDynamics: Bool
+    /// The Edit-view Channel column pins a uniform width, so the strip stays the same size
+    /// whatever track is selected (and whatever per-track width the mixer uses). nil = mixer.
+    var fixedWidth: CGFloat? = nil
 
     private var accent: Color { track.kind.accent }
 
@@ -281,13 +284,19 @@ struct ChannelStrip: View {
             VStack(spacing: Theme.Space.md) {
                 if showIO { inputSection }
                 if showInserts && track.kind.showsInserts { insertSection }
-                if showSends && track.kind.showsSends { sendSection }
+                // Master has no sends; its auto fade-out takes that upper slot so the fader
+                // drops down and lines up with the channel faders instead of floating high
+                // over an empty gap.
+                if track.kind == .master {
+                    autoFadeSection
+                } else if showSends && track.kind.showsSends {
+                    sendSection
+                }
                 panSection
                 buttonRow
                 if track.kind.hasSolo { automationModeMenu }
                 faderSection
                 volumeReadout
-                if track.kind == .master { autoFadeSection }
                 if showDynamics { dynamicsSelector }
             }
             .padding(.horizontal, Theme.Space.md)
@@ -319,8 +328,8 @@ struct ChannelStrip: View {
                 .strokeBorder(strokeColor, lineWidth: dropTargeted || isSelected ? 2 : 1)
         )
         // Width grip lives at the bottom-right corner (by the footer), not the ambiguous
-        // mid-right edge.
-        .overlay(alignment: .bottomTrailing) { widthResizeHandle }
+        // mid-right edge. Hidden in the fixed-width Channel column.
+        .overlay(alignment: .bottomTrailing) { if fixedWidth == nil { widthResizeHandle } }
         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
         // Drop another channel here to reorder it before/after this one (drop side decides).
         // The dedicated Transferable type never collides with the insert-slot plain-text drop.
@@ -385,6 +394,7 @@ struct ChannelStrip: View {
 
     /// Width honours a live multi-selection drag preview before it commits.
     private var stripWidth: CGFloat {
+        if let fixedWidth { return fixedWidth }
         if let drag = engine.channelWidthDrag, drag.targets.contains(track.id) {
             return min(220, max(92, drag.width))
         }
@@ -601,10 +611,8 @@ struct ChannelStrip: View {
     /// Input pill — pinned to the top of the strip. A MIDI source for instrument/MIDI
     /// tracks, a hardware pair otherwise.
     private var inputSection: some View {
+        // No "IN" caption — the value alone reads as the input, and it saves a row.
         VStack(alignment: .leading, spacing: 2) {
-            Text("IN")
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(Theme.Palette.textFaint)
             Menu {
                 if track.kind == .instrument || track.kind == .midi {
                     let sources = engine.midiInputs()
@@ -632,10 +640,8 @@ struct ChannelStrip: View {
 
     /// Output pill — pinned to the bottom of the strip. Master or any aux/bus track.
     private var outputSection: some View {
+        // No "OUT" caption — "Master" alone reads as the output destination.
         VStack(alignment: .leading, spacing: 2) {
-            Text("OUT")
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(Theme.Palette.textFaint)
             Menu {
                 ForEach(engine.outputBusOptions(track.id), id: \.self) { opt in
                     Button(opt) { engine.setTrackOutputBus(track.id, opt) }
@@ -823,16 +829,19 @@ struct ChannelStrip: View {
                          },
                          onBegin: { engine.beginAutomationTouch(track.id, "track.volume") })
                 .frame(width: 32, height: 132)
-                .padding(.trailing, 5)
+                .padding(.trailing, 3)
+
+            // Meter scale moved to the LEFT of the meter so its numbers stay visible
+            // (only the fader cap may clip them occasionally).
+            MeterScale()
+                .frame(height: 132)
+                .padding(.trailing, 1)
 
             HStack(spacing: 3) {
-                VerticalMeter(peak: meterPeakLeft, width: 6)
-                VerticalMeter(peak: meterPeakRight, width: 6)
+                VerticalMeter(peak: meterPeakLeft, width: 4)
+                VerticalMeter(peak: meterPeakRight, width: 4)
             }
             .frame(height: 132)
-            .padding(.trailing, 1)
-
-            MeterScale().frame(height: 132)
         }
     }
 

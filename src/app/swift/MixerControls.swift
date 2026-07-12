@@ -164,7 +164,7 @@ struct FaderScaleMarks: View {
             ForEach(FaderScale.marks, id: \.1) { label, db in
                 let y = capHeight / 2 + travel * (1 - CGFloat(FaderScale.position(forDb: db)))
                 let unity = db == 0
-                HStack(spacing: 2.5) {
+                HStack(spacing: 2) {                       // tick ↔ number gap (matches the meter)
                     Text(label)
                         .font(Theme.Font.mono(7, unity ? .semibold : .regular))
                         .foregroundStyle(Color(hex: unity ? 0xb6bbc2 : 0x8b9096))
@@ -173,10 +173,13 @@ struct FaderScaleMarks: View {
                         .fill(Color(hex: 0x4a4f56))
                         .frame(width: unity ? 6 : 4, height: 1)
                 }
-                .position(x: 14, y: y)
+                // Pin the tick to the trailing (fader) edge, so its distance to the fader
+                // is set by the section's padding rather than by centring math.
+                .frame(width: geo.size.width, alignment: .trailing)
+                .position(x: geo.size.width / 2, y: y)
             }
         }
-        .frame(width: 28)
+        .frame(width: 25)
     }
 }
 
@@ -392,16 +395,20 @@ struct MeterScale: View {
         GeometryReader { geo in
             ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
                 let frac = (topDb - m.1) / (topDb - botDb)          // 0 dBFS at top
-                HStack(spacing: 2) {
-                    Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 4, height: 1)
+                HStack(spacing: 2) {                       // number ↔ tick gap (matches the fader)
                     Text(m.0)
                         .font(Theme.Font.mono(7, m.1 == 0 ? .bold : .regular))
                         .foregroundStyle(Color(hex: 0x3fb950))
+                        .frame(width: 15, alignment: .trailing)
+                    Rectangle().fill(Color(hex: 0x4a4f56)).frame(width: 4, height: 1)
                 }
-                .position(x: 12, y: CGFloat(frac) * geo.size.height)
+                // The scale sits to the LEFT of the meter, so the tick pins to the trailing
+                // (meter) edge and the number stays clear on the fader side.
+                .frame(width: geo.size.width, alignment: .trailing)
+                .position(x: geo.size.width / 2, y: CGFloat(frac) * geo.size.height)
             }
         }
-        .frame(width: 22)
+        .frame(width: 21)
     }
 }
 

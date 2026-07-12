@@ -46,10 +46,10 @@ private struct PanelColumnHeader: View {
 struct ChannelColumn: View {
     @EnvironmentObject private var engine: EngineController
 
-    private var columnWidth: CGFloat {
-        guard let t = engine.inspectedTrack else { return 150 }
-        return max(150, engine.channelWidthFor(t.id) + 26)
-    }
+    // Uniform, fixed — the column stays the same size whatever track is selected and
+    // whatever per-track width that channel uses in the mixer.
+    private let stripWidth = EngineController.channelWidthDefault
+    private var columnWidth: CGFloat { stripWidth + 28 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,7 +62,8 @@ struct ChannelColumn: View {
                                  showIO: true,
                                  showInserts: true,
                                  showSends: true,
-                                 showDynamics: false)
+                                 showDynamics: false,
+                                 fixedWidth: stripWidth)
                         .padding(.vertical, Theme.Space.md)
                         .frame(maxWidth: .infinity)
                 }
