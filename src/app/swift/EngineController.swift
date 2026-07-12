@@ -154,6 +154,7 @@ final class EngineController: ObservableObject {
         let kind: TrackKind
         let colorHex: String
         let folder: String
+        var notes: String = ""
         var inputBus: String
         var outputBus: String
         var volumeDb: Float
@@ -1154,6 +1155,7 @@ final class EngineController: ObservableObject {
                 kind: TrackKind(engineType: readEngineString { nc_track_type(handle, i, $0, $1) }),
                 colorHex: readEngineString { nc_track_color(handle, i, $0, $1) },
                 folder: readEngineString { nc_track_folder(handle, i, $0, $1) },
+                notes: readEngineString { nc_track_notes(handle, i, $0, $1) },
                 inputBus: readEngineString { nc_track_input_bus(handle, i, $0, $1) },
                 outputBus: readEngineString { nc_track_output_bus(handle, i, $0, $1) },
                 volumeDb: nc_track_volume_db(handle, i),
@@ -2934,6 +2936,15 @@ final class EngineController: ObservableObject {
     func setTrackOutputBus(_ id: Int, _ bus: String) {
         guard let handle else { return }
         _ = bus.withCString { nc_track_set_output_bus(handle, Int32(id), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// The channel memo. Records one undo step per commit (call on end-editing, not per
+    /// keystroke); the memo has no audio effect, so no reconcile.
+    func setTrackNotes(_ id: Int, _ notes: String) {
+        guard let handle else { return }
+        _ = notes.withCString { nc_track_set_notes(handle, Int32(id), $0) }
         reloadTracks()
         refreshHistory()
     }

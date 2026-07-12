@@ -99,6 +99,7 @@ struct TrackState {
     std::string elasticAudioMode = "none";
     std::string mixGroupName;
     std::string controlMasterTrackName;
+    std::string notes;   // free-text channel memo, shown in the mixer; no audio effect
 };
 
 struct ClipState {

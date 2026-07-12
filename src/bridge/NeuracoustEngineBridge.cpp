@@ -560,6 +560,11 @@ void nc_track_folder(NCEngine* engine, int index, char* out, size_t outLen) {
     copyText(out, outLen, track != nullptr ? track->folderName : std::string{});
 }
 
+void nc_track_notes(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->notes : std::string{});
+}
+
 void nc_track_input_bus(NCEngine* engine, int index, char* out, size_t outLen) {
     const auto* track = trackAt(engine, index);
     copyText(out, outLen, track != nullptr ? track->inputBus : std::string{});
@@ -584,6 +589,15 @@ void nc_track_set_output_bus(NCEngine* engine, int index, const char* bus) {
     track->outputBus = bus;
     engine->recordStep("Set track output");
     engine->reconcileProject();
+}
+
+// A channel memo — free text, no audio effect, so it records an undo step (and
+// autosaves) but does not touch the render graph.
+void nc_track_set_notes(NCEngine* engine, int index, const char* notes) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || notes == nullptr || track->notes == notes) return;
+    track->notes = notes;
+    engine->recordStep("Edit channel memo");
 }
 
 namespace {

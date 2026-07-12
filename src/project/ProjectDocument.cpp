@@ -2011,6 +2011,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"elasticAudioMode\":\"" << escapeJsonString(normalizedElasticAudioMode(track.elasticAudioMode)) << "\""
             << ",\"mixGroupName\":\"" << escapeJsonString(track.mixGroupName) << "\""
             << ",\"controlMasterTrackName\":\"" << escapeJsonString(track.controlMasterTrackName) << "\""
+            << ",\"notes\":\"" << escapeJsonString(track.notes) << "\""
             << ",\"channelFormat\":\"" << escapeJsonString(track.channelFormat == "mono" ? "mono" : "stereo") << "\""
             << ",\"pan\":" << track.pan << ",\"muted\":" << (track.muted ? "true" : "false")
             << ",\"solo\":" << (track.solo ? "true" : "false")
@@ -2587,6 +2588,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.elasticAudioMode = normalizedElasticAudioMode(stringAfterKey(body, "elasticAudioMode"));
         track.mixGroupName = trim(stringAfterKey(body, "mixGroupName"));
         track.controlMasterTrackName = trim(stringAfterKey(body, "controlMasterTrackName"));
+        track.notes = stringAfterKey(body, "notes");
         track.channelFormat = trim(stringAfterKey(body, "channelFormat"));
         if (track.channelFormat != "mono" && track.channelFormat != "stereo") {
             track.channelFormat = "stereo";

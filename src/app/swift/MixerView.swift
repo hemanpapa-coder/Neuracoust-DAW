@@ -32,7 +32,7 @@ struct MixerView: View {
     @State private var showIO = true
     @State private var showInserts = true
     @State private var showSends = true
-    @State private var showDynamics = false
+    @State private var showMemo = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,7 +79,7 @@ struct MixerView: View {
                 chip("cable.connector", "입출력 라우팅 (I/O) 표시", $showIO)
                 chip("square.stack.3d.up.fill", "인서트 슬롯 표시", $showInserts)
                 chip("arrow.up.forward", "센드 표시", $showSends)
-                chip("waveform.path", "다이나믹스 표시", $showDynamics)
+                chip("note.text", "채널 메모 표시", $showMemo)
             }
 
             panLawMenu
@@ -230,7 +230,7 @@ struct MixerView: View {
             showIO: showIO,
             showInserts: showInserts,
             showSends: showSends,
-            showDynamics: showDynamics
+            showMemo: showMemo
         )
         // Every mixer strip shares the tallest one's height (Master included), so adding
         // inserts/sends to one channel grows them all together.
@@ -245,7 +245,9 @@ struct ChannelStrip: View {
     @State private var renaming = false
     @State private var draftName = ""
     @State private var reorderDX: CGFloat = 0
+    @State private var memoDraft = ""
     @FocusState private var nameFieldFocused: Bool
+    @FocusState private var memoFocused: Bool
 
     private var reorderable: Bool { track.kind != .master }
 
@@ -273,7 +275,7 @@ struct ChannelStrip: View {
     let showIO: Bool
     let showInserts: Bool
     let showSends: Bool
-    let showDynamics: Bool
+    let showMemo: Bool
     /// The Edit-view Channel column pins a uniform width, so the strip stays the same size
     /// whatever track is selected (and whatever per-track width the mixer uses). nil = mixer.
     var fixedWidth: CGFloat? = nil
@@ -308,7 +310,7 @@ struct ChannelStrip: View {
                 HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
                 faderSection
                 volumeReadout
-                if showDynamics { dynamicsSelector }
+                if showMemo { memoField }
             }
             .padding(.horizontal, Theme.Space.md)
             .padding(.vertical, Theme.Space.lg)
@@ -906,21 +908,25 @@ struct ChannelStrip: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var dynamicsSelector: some View {
-        HStack(spacing: 2) {
-            Text("dyn")
-                .font(Theme.Font.ui(8))
-                .foregroundStyle(Theme.Palette.textDim)
-            Text("▾")
-                .font(Theme.Font.ui(6))
-                .foregroundStyle(Theme.Palette.textFaint)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 3)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.pill)
-                .fill(Theme.Palette.button)
-        )
+    /// A per-channel memo (커맨드/메모). Free text, saved to the track; commits one undo
+    /// step when editing ends, so typing does not spam history. Grows a few lines then
+    /// scrolls. Master/Monitor keep it too — a place for mix notes.
+    @ViewBuilder private var memoField: some View {
+        TextField("메모…", text: $memoDraft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(Theme.Font.ui(8.5))
+            .foregroundStyle(Theme.Palette.text)
+            .lineLimit(1...4)
+            .padding(5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.recess))
+            .focused($memoFocused)
+            .onAppear { memoDraft = track.notes }
+            // Pull in external changes (undo, project load, reorder) only while not typing.
+            .onChange(of: track.notes) { _, new in if !memoFocused { memoDraft = new } }
+            .onChange(of: memoFocused) { _, focused in
+                if !focused, memoDraft != track.notes { engine.setTrackNotes(track.id, memoDraft) }
+            }
     }
 
     /// Double-click to rename. A rejected name (Master, Monitor, a duplicate) simply

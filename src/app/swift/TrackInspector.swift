@@ -64,7 +64,7 @@ struct ChannelColumn: View {
                                  showIO: true,
                                  showInserts: true,
                                  showSends: true,
-                                 showDynamics: false,
+                                 showMemo: false,
                                  fixedWidth: stripWidth)
                         .padding(.vertical, Theme.Space.md)
                         .frame(maxWidth: .infinity)

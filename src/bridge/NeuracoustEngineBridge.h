@@ -143,6 +143,9 @@ void nc_track_type(NCEngine* engine, int index, char* out, size_t outLen);
 /// "#RRGGBB", possibly empty.
 void nc_track_color(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_folder(NCEngine* engine, int index, char* out, size_t outLen);
+// A free-text channel memo (no audio effect). The setter records an undo step.
+void nc_track_notes(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_notes(NCEngine* engine, int index, const char* notes);
 void nc_track_input_bus(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen);
 // Route a track's input/output; both reconcile the mixer graph. Output options are
