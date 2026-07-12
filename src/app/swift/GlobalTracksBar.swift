@@ -119,8 +119,6 @@ struct GlobalTracksBar: View {
 
     private func nameColumn(_ ruler: Ruler) -> some View {
         HStack(spacing: 6) {
-            // Colour accent bar + icon, so rulers read apart at a glance.
-            RoundedRectangle(cornerRadius: 1.5).fill(ruler.color).frame(width: 3, height: 12)
             Image(systemName: ruler.icon)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(ruler.color.opacity(0.9))
@@ -142,9 +140,14 @@ struct GlobalTracksBar: View {
             .buttonStyle(.plain)
             .help("\(ruler.rawValue) 추가 (재생 위치)")
         }
-        .padding(.leading, 8).padding(.trailing, 6)
+        .padding(.leading, 11).padding(.trailing, 6)
         .frame(width: Self.headerWidth, alignment: .leading)
         .background(Color(hex: 0x2c2820))
+        // Full-height accent flush to the left edge: the per-ruler colours stack into one
+        // continuous, vertically-aligned strip rather than ragged short bars.
+        .overlay(alignment: .leading) {
+            Rectangle().fill(ruler.color).frame(width: 3)
+        }
         .overlay(alignment: .trailing) {
             Rectangle().fill(Color.black.opacity(0.45)).frame(width: 1)
         }

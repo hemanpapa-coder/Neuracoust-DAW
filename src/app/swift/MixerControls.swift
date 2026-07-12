@@ -37,8 +37,10 @@ enum FaderScale {
         return minDb + head * (maxDb - minDb)
     }
 
+    // Console-style legend: dense near unity, spreading below, ∞ at the true floor.
     static let marks: [(String, Float)] = [
-        ("12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("-∞", silenceDb),
+        ("10", 10), ("5", 5), ("0", 0), ("5", -5), ("10", -10),
+        ("20", -20), ("30", -30), ("40", -40), ("∞", silenceDb),
     ]
 }
 
@@ -50,18 +52,22 @@ struct FaderScaleMarks: View {
     var body: some View {
         GeometryReader { geo in
             let travel = geo.size.height - capHeight
-            ForEach(FaderScale.marks, id: \.0) { label, db in
-                Text(label)
-                    .font(Theme.Font.mono(6))
-                    .foregroundStyle(Color(hex: 0x7a6f5f))
-                    .frame(width: 18, alignment: .trailing)
-                    .position(
-                        x: 9,
-                        y: capHeight / 2 + travel * (1 - CGFloat(FaderScale.position(forDb: db)))
-                    )
+            ForEach(FaderScale.marks, id: \.1) { label, db in
+                let y = capHeight / 2 + travel * (1 - CGFloat(FaderScale.position(forDb: db)))
+                let unity = db == 0
+                HStack(spacing: 2.5) {
+                    Text(label)
+                        .font(Theme.Font.mono(6.5, unity ? .bold : .regular))
+                        .foregroundStyle(Color(hex: unity ? 0xc0b49c : 0x7a6f5f))
+                        .frame(width: 13, alignment: .trailing)
+                    Rectangle()
+                        .fill(Color(hex: unity ? 0x8a7d68 : 0x574d40))
+                        .frame(width: unity ? 7 : 4, height: unity ? 1.5 : 1)
+                }
+                .position(x: 12, y: y)
             }
         }
-        .frame(width: 18)
+        .frame(width: 24)
     }
 }
 
@@ -127,29 +133,41 @@ struct ChannelFader: View {
 
     private let capHeight: CGFloat = 26
 
-    /// The design's cap is a physical knob: two radial gradients plus an inset rim.
+    /// A modern take on the classic brushed-metal console cap: a metallic body with grip
+    /// ribs, a brighter central grip band, and the accent line as the value indicator.
     private var faderCap: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(
-                    RadialGradient(
-                        colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
-                        center: UnitPoint(x: 0.5, y: 0.65),
-                        startRadius: 1, endRadius: 26
-                    )
-                )
+            RoundedRectangle(cornerRadius: 5)
+                .fill(LinearGradient(
+                    colors: [Color(hex: 0x646c74), Color(hex: 0x363c44), Color(hex: 0x14181d)],
+                    startPoint: .top, endPoint: .bottom))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(LinearGradient(colors: [.white.opacity(0.35), .black.opacity(0.45)],
+                                               startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                .shadow(color: .black.opacity(0.55), radius: 3, y: 2)
 
-            Rectangle()
-                .fill(accent)
-                .frame(height: 2)
-                .shadow(color: accent.opacity(0.8), radius: 2)
+            // Grip ribs across the whole cap.
+            VStack(spacing: 3) {
+                ForEach(0..<5, id: \.self) { _ in
+                    Rectangle().fill(Color.black.opacity(0.30)).frame(height: 0.75)
+                        .overlay(Rectangle().fill(Color.white.opacity(0.10)).frame(height: 0.75).offset(y: -0.75))
+                }
+            }
+            .padding(.horizontal, 6)
+
+            // Central grip band + accent indicator line.
+            ZStack {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(LinearGradient(colors: [Color(hex: 0xd0d4d9), Color(hex: 0x9299a1), Color(hex: 0xb7bcc2)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .frame(height: 9)
+                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black.opacity(0.25), lineWidth: 0.5))
+                Rectangle().fill(accent).frame(height: 2).shadow(color: accent.opacity(0.9), radius: 2)
+            }
+            .padding(.horizontal, 2)
         }
-        .frame(width: 30, height: capHeight)
+        .frame(width: 34, height: capHeight)
     }
 }
 
