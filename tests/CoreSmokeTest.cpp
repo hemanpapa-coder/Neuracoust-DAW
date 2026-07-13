@@ -1653,6 +1653,7 @@ int main() {
     edlProject.tempoMap.clear();
     edlProject.tempoMap.push_back({0.0, 120.0});
     edlProject.tempoMap.push_back({12.0, 126.5});
+    edlProject.markers.clear();   // defaultProject() seeds a start marker; this fixture controls its own
     edlProject.markers.push_back({"midi-marker-a", "Verse 1", 1.25});
     edlProject.chordEvents.push_back({"chord-export-a", "Verse / Cmaj7", 1.5});
     edlProject.lyricEvents.push_back({"lyric-export-a", "Hello Neuracoust", 1.75});
@@ -3457,6 +3458,7 @@ int main() {
     assert(recordedClipMessage.find("invalid duration") != std::string::npos);
     assert(!neuracoust::daw::appendAudioClipAt(trackEditProject, "Lead Vocal", "/tmp/bad.wav", -0.1, 0.25).size());
     assert(!neuracoust::daw::appendAudioClip(trackEditProject, "Master", "/tmp/master.wav", 0.25).size());
+    trackEditProject.markers.clear();   // defaultProject() seeds a start marker; count from zero here
     const auto markerB = neuracoust::daw::addMarkerAt(trackEditProject, 1.2);
     const auto markerA = neuracoust::daw::addMarkerAt(trackEditProject, 0.4);
     assert(markerB == "marker-1");
@@ -4147,6 +4149,7 @@ int main() {
     assert(sanitizedProject.markers.front().timeSeconds == 0.0);
     assert(sanitizedProject.markers.back().timeSeconds == 24.0 * 60.0 * 60.0);
     auto snapProject = neuracoust::daw::defaultProject();
+    snapProject.editMode = "Slip";   // defaultProject() ships Grid; exercise the plain 0.1 s quantum first
     assert(std::abs(neuracoust::daw::projectTimelineQuantumSeconds(snapProject) - 0.1) < 0.000001);
     assert(std::abs(neuracoust::daw::snapProjectTime(snapProject, 1.24) - 1.2) < 0.000001);
     assert(std::abs(neuracoust::daw::snapProjectTime(snapProject, 1.25) - 1.3) < 0.000001);
@@ -5467,6 +5470,7 @@ int main() {
     assert(std::abs(boundaryProject.editSelectionStartSeconds - 1.5) < 0.0001);
     assert(std::abs(boundaryProject.editSelectionEndSeconds - 2.0) < 0.0001);
     assert(!neuracoust::daw::setEditSelectionToSurroundingClipBoundaries(boundaryProject, 0.5, rangeStartSeconds, rangeEndSeconds, "Audio 1"));
+    boundaryProject.markers.clear();   // drop the seeded start marker so 0.1 s has no surrounding pair
     boundaryProject.markers.push_back({"mk-a", "Verse", 0.5});
     boundaryProject.markers.push_back({"mk-b", "Chorus", 2.25});
     boundaryProject.markers.push_back({"mk-c", "Bridge", 4.0});

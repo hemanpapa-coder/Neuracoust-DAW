@@ -813,7 +813,10 @@ int main() {
         // --- markers: navigation only, but they have to survive a save ------------
         {
             nc_project_new(engine);
-            check(nc_marker_count(engine) == 0, "a new project has no markers");
+            // A new project now seeds a start marker at t=0 ("1"); this block controls
+            // its own fixture, so clear it before counting.
+            check(nc_marker_delete(engine, 0.0, 0.2), "clear the seeded start marker");
+            check(nc_marker_count(engine) == 0, "and then it has no markers");
 
             char firstId[128] = {0};
             check(nc_marker_add(engine, 4.0, firstId, sizeof(firstId)), "add a marker at 4 s");
@@ -1208,10 +1211,12 @@ int main() {
             check(strlen(broken.message) > 0, "and says why");
         }
 
-        // snapProjectTime always snaps — it does not consult a "snap enabled" flag.
-        // The default project's grid unit is 1 s, so 1.234 lands on 1.0. Whether to
-        // snap at all is the caller's decision.
-        // The default project's timeline quantum is 0.1 s, so 1.234 lands on 1.2.
+        // snapProjectTime always snaps — it does not consult a "snap enabled" flag;
+        // whether to snap at all is the caller's decision. Pin the grid to the 0.1 s
+        // quantum (the default project now ships Grid + 1 beat, which would snap to the
+        // beat) so 1.234 lands on 1.2 and the quantum path stays under test.
+        nc_project_set_edit_mode(engine, "Grid");
+        nc_project_set_grid_unit(engine, "0.1s");
         const double snapped = nc_project_snap_time(engine, 1.234);
         printf("snap(1.234) = %.3f\n", snapped);
         check(std::abs(snapped - 1.2) < 0.0001, "snapping lands on the default 0.1 s quantum");

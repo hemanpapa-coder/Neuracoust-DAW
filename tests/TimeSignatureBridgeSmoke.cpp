@@ -1,5 +1,6 @@
-// Positional time-signature edits over the bridge: add sorts, replace-at-time, and the
-// anchor at t=0 cannot be moved or deleted.
+// Positional time-signature edits over the bridge: add sorts, replace-at-time, the
+// t=0 start event moves like any other (the value before the first entry falls back to
+// the earliest one, so no gap opens), but the initial meter at t=0 cannot be deleted.
 #include "bridge/NeuracoustEngineBridge.h"
 #include <cstdio>
 #include <cmath>
@@ -29,13 +30,15 @@ int main() {
     check(nc_time_sig_add(e, 8.0, 5, 4) && nc_time_sig_count(e) == 3, "replace at 8s, no dup");
     check(nc_time_sig_numerator(e, 1) == 5, "replaced to 5/4");
 
-    // Move a change; anchor is immovable.
+    // Move a change; the t=0 start event drags too (conductor events are all movable).
     check(nc_time_sig_move(e, 16.0, 0.25, 20.0), "move 6/8 to 20s");
-    check(!nc_time_sig_move(e, 0.0, 0.25, 4.0), "anchor refuses move");
+    check(nc_time_sig_move(e, 0.0, 0.25, 4.0), "the start event moves too");
+    check(std::abs(nc_time_sig_time(e, 0) - 4.0) < 1e-6, "it landed at 4s");
+    check(nc_time_sig_move(e, 4.0, 0.25, 0.0), "and drags back to 0");
 
-    // Delete a change; anchor is undeletable.
+    // Delete a change; the initial meter at t=0 is required, so it is undeletable.
     check(nc_time_sig_delete(e, 8.0, 0.25), "delete 5/4");
-    check(!nc_time_sig_delete(e, 0.0, 0.25), "anchor refuses delete");
+    check(!nc_time_sig_delete(e, 0.0, 0.25), "the start meter cannot be deleted");
     check(nc_time_sig_count(e) == 2, "count == 2 after delete");
 
     nc_engine_destroy(e);
