@@ -887,8 +887,20 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Localized UI string for `key` in the OS language, English fallback, then the key.
+    func tr(_ key: String) -> String {
+        var buffer = [CChar](repeating: 0, count: 512)
+        key.withCString { nc_tr($0, &buffer, buffer.count) }
+        return String(cString: buffer)
+    }
+
     func start() {
         guard let handle else { return }
+
+        // Localize to the user's preferred language (Korean / English / Japanese / Chinese),
+        // English for anything a table doesn't cover. preferredLanguages reflects the OS
+        // setting even though the app ships no .lproj (Locale.current would report en).
+        nc_set_ui_language(Locale.preferredLanguages.first ?? Locale.current.identifier)
 
         var errorBuffer = [CChar](repeating: 0, count: 256)
         let ok = nc_engine_start(handle, &errorBuffer, errorBuffer.count)

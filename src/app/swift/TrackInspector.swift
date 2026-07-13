@@ -215,7 +215,7 @@ struct TrackInspector: View {
                 )
         }
         .buttonStyle(.plain)
-        .help(engine.helpMode ? "자동화 모드 순환 (Read → Touch → Latch → Write → Off)" : "")
+        .help(engine.helpMode ? engine.tr("help.automation_mode") : "")
     }
 
     private func automationColor(_ mode: String) -> Color {

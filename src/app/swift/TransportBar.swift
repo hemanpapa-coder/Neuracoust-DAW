@@ -456,7 +456,7 @@ struct TransportBar: View {
         .buttonStyle(.plain)
         .padding(3)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.surface))
-        .help(engine.helpMode ? "도움말 모드 끄기" : "도움말 모드: 켜면 버튼에 마우스를 올렸을 때 설명이 나옵니다")
+        .help(engine.helpMode ? engine.tr("help.mode_off") : engine.tr("help.mode_on"))
     }
 
     private var viewTabs: some View {

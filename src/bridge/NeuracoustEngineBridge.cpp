@@ -1,5 +1,6 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
+#include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
 #include "audio/MidiInputRecorder.h"
@@ -49,6 +50,18 @@ void copyText(char* dst, size_t dstLen, const std::string& src) {
 }
 
 } // namespace
+
+// Localization is global (no engine handle). tr() resolves the key in the current UI
+// language, falls back to English, then to the key itself.
+void nc_set_ui_language(const char* localeTag) {
+    if (localeTag != nullptr) {
+        neuracoust::daw::setUiLanguageFromLocaleTag(localeTag);
+    }
+}
+
+void nc_tr(const char* key, char* out, size_t outLen) {
+    copyText(out, outLen, neuracoust::daw::tr(key != nullptr ? key : ""));
+}
 
 struct NCEngine {
     RealtimeAudioEngine engine;

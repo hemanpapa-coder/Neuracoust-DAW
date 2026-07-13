@@ -388,9 +388,9 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            zoomIconButton("minus.magnifyingglass", help: "축소") { engine.zoomTimeline(by: 1.5) }
-            zoomIconButton("arrow.up.left.and.down.right.magnifyingglass", help: "화면 맞춤") { engine.fitTimeline() }
-            zoomIconButton("plus.magnifyingglass", help: "확대") { engine.zoomTimeline(by: 1 / 1.5) }
+            zoomIconButton("minus.magnifyingglass", help: engine.tr("help.zoom_out")) { engine.zoomTimeline(by: 1.5) }
+            zoomIconButton("arrow.up.left.and.down.right.magnifyingglass", help: engine.tr("help.zoom_fit")) { engine.fitTimeline() }
+            zoomIconButton("plus.magnifyingglass", help: engine.tr("help.zoom_in")) { engine.zoomTimeline(by: 1 / 1.5) }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
@@ -400,31 +400,31 @@ private struct EditView: View {
 
             let hasSelection = !engine.selectedClipIds.isEmpty
 
-            iconButton("square.split.2x1", help: "분할 (B)", enabled: hasSelection) {
+            iconButton("square.split.2x1", help: engine.tr("help.split"), enabled: hasSelection) {
                 engine.splitSelectedClipsAtPlayhead()
             }
-            iconButton("arrow.triangle.merge", help: "붙이기 (H)", enabled: hasSelection || engine.hasEditRange) {
+            iconButton("arrow.triangle.merge", help: engine.tr("help.heal"), enabled: hasSelection || engine.hasEditRange) {
                 engine.healSelectedClips()
             }
-            iconButton("trash", help: "삭제", enabled: hasSelection) {
+            iconButton("trash", help: engine.tr("help.delete"), enabled: hasSelection) {
                 engine.deleteSelectedClips()
             }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            iconButton("doc.on.doc", help: "복사", enabled: hasSelection) { engine.copySelectedClips() }
-            iconButton("scissors", help: "잘라내기", enabled: hasSelection) { engine.cutSelectedClips() }
-            iconButton("doc.on.clipboard", help: "붙여넣기", enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
-            iconButton("plus.square.on.square", help: "복제", enabled: hasSelection) { engine.duplicateSelectedClips() }
+            iconButton("doc.on.doc", help: engine.tr("help.copy"), enabled: hasSelection) { engine.copySelectedClips() }
+            iconButton("scissors", help: engine.tr("help.cut"), enabled: hasSelection) { engine.cutSelectedClips() }
+            iconButton("doc.on.clipboard", help: engine.tr("help.paste"), enabled: engine.clipboardClipName != nil) { engine.pasteClipsAtPlayhead() }
+            iconButton("plus.square.on.square", help: engine.tr("help.duplicate"), enabled: hasSelection) { engine.duplicateSelectedClips() }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            iconButton("mappin", help: "마커 (⌘M)") { engine.addMarkerAtPlayhead() }
+            iconButton("mappin", help: engine.tr("help.marker")) { engine.addMarkerAtPlayhead() }
 
             // The four range edits live under one menu — the icons alone couldn't tell
             // them apart from the clip ops.
             let hasRange = engine.hasEditRange
-            iconMenu("rectangle.dashed", help: "구간 편집", enabled: hasRange) {
+            iconMenu("rectangle.dashed", help: engine.tr("help.range"), enabled: hasRange) {
                 Button("구간 복사") { engine.copyRange() }
                 Button("구간 잘라내기") { engine.cutRange() }
                 Button("구간 지우기") { engine.clearRange() }
@@ -433,9 +433,9 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            iconButton("waveform.badge.plus", help: "오디오 트랙 추가") { engine.addAudioTrack() }
-            iconButton("pianokeys", help: "악기 트랙 추가") { engine.addInstrumentTrack() }
-            iconButton("rectangle.badge.minus", help: "트랙 삭제", enabled: engine.canDeleteSelectedTrack) {
+            iconButton("waveform.badge.plus", help: engine.tr("help.add_audio")) { engine.addAudioTrack() }
+            iconButton("pianokeys", help: engine.tr("help.add_instrument")) { engine.addInstrumentTrack() }
+            iconButton("rectangle.badge.minus", help: engine.tr("help.delete_track"), enabled: engine.canDeleteSelectedTrack) {
                 engine.deleteSelectedTrack()
             }
 
@@ -473,7 +473,7 @@ private struct EditView: View {
             .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Palette.button))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("그리드 해상도 (스냅 단위)")
+        .help(engine.helpMode ? engine.tr("help.grid") : "")
     }
 
     private var toolSelector: some View {

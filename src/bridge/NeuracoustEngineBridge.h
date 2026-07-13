@@ -14,6 +14,13 @@ extern "C" {
 
 #define NC_MAX_TRACK_METERS 64
 #define NC_TEXT_LEN 128
+
+// UI localization (global, no engine handle). Set the language from an OS locale tag
+// once at launch; tr() then resolves a key in that language, falling back to English,
+// then to the key itself. Languages: Korean, English, Japanese, Chinese (Simplified).
+void nc_set_ui_language(const char* localeTag);
+void nc_tr(const char* key, char* out, size_t outLen);
+
 #define NC_NAME_LEN 64
 #define NC_MAX_INSERT_SLOTS 10
 #define NC_MAX_SEND_SLOTS 5

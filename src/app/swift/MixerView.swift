@@ -76,10 +76,10 @@ struct MixerView: View {
                 .foregroundStyle(Theme.Palette.textLabel)
 
             HStack(spacing: Theme.Space.sm) {
-                chip("cable.connector", "입출력 라우팅 (I/O) 표시", $showIO)
-                chip("square.stack.3d.up.fill", "인서트 슬롯 표시", $showInserts)
-                chip("arrow.up.forward", "센드 표시", $showSends)
-                chip("note.text", "채널 메모 표시", $showMemo)
+                chip("cable.connector", engine.tr("help.mixer_io"), $showIO)
+                chip("square.stack.3d.up.fill", engine.tr("help.mixer_inserts"), $showInserts)
+                chip("arrow.up.forward", engine.tr("help.mixer_sends"), $showSends)
+                chip("note.text", engine.tr("help.mixer_memo"), $showMemo)
             }
 
             panLawMenu
@@ -112,7 +112,7 @@ struct MixerView: View {
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("모노 트랙 팬 법칙 (프로젝트 설정)")
+        .help(engine.helpMode ? engine.tr("help.pan_law") : "")
     }
 
     private func chip(_ systemImage: String, _ help: String, _ binding: Binding<Bool>) -> some View {
@@ -376,7 +376,7 @@ struct ChannelStrip: View {
         .buttonStyle(.plain)
         .padding(.trailing, 3)
         .padding(.bottom, 7)
-        .help(isNarrow ? "채널 넓게" : "채널 좁게")
+        .help(engine.helpMode ? engine.tr(isNarrow ? "help.channel_wide" : "help.channel_narrow") : "")
     }
 
     /// Selected (a `⌘/⇧`-extendable set); the last-clicked strip also drives the timeline.
