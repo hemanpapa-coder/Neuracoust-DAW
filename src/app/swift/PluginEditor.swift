@@ -203,7 +203,14 @@ final class PluginEditorHost: ObservableObject {
                                     normalizedValue: value)
             return
         }
-        // HOST_STAGE, INSPECT, PARAMINFO, TRANSPORT_TOGGLE: nothing to do yet.
+        if line == "TRANSPORT_TOGGLE" {
+            // The plug-in editor window had keyboard focus, so its host process caught the
+            // spacebar and forwarded it here over the pipe. Without acting on it the
+            // transport would not respond while a plug-in GUI is focused.
+            engine.togglePlay()
+            return
+        }
+        // HOST_STAGE, INSPECT, PARAMINFO: nothing to do yet.
     }
 
     /// Restores what the project saved, so reopening an editor shows the mix, not the defaults.
