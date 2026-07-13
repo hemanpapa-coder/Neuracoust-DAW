@@ -973,6 +973,9 @@ bool nc_midi_live_start(NCEngine* engine, const char* sourceId);
 void nc_midi_live_stop(NCEngine* engine);
 bool nc_midi_live_active(NCEngine* engine);
 void nc_midi_pump_live_input(NCEngine* engine);
+/// Route the keyboard to the selected instrument track even when it is not record-armed
+/// (Logic/Live convention). Pass the track index, or -1 to clear. Transient, no undo.
+void nc_set_live_midi_target(NCEngine* engine, int trackIndex);
 // Peak MIDI-input activity (0..1) since the last call; reading it resets it, so the UI
 // applies its own decay. Bump it by calling nc_midi_pump_live_input first each tick.
 float nc_midi_input_activity(NCEngine* engine);

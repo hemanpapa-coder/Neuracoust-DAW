@@ -91,6 +91,10 @@ struct NCEngine {
     /// Peak activity (0..1) of the MIDI seen since the last meter read; consumed by
     /// nc_midi_input_activity so the UI can decay it.
     float midiInputActivity = 0.0f;
+    /// The selected instrument track hears the keyboard even when not record-armed — the
+    /// Logic/Live convention. Transient (not project state, no undo), set from the UI on
+    /// selection; the live-MIDI pump queues to this track in addition to armed ones.
+    std::string liveMidiTargetTrack;
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
@@ -4723,13 +4727,24 @@ void nc_midi_pump_live_input(NCEngine* engine) {
         if (recordedMidiEventToVst3Event(event, v)) liveEvents.push_back(v);
     }
     if (liveEvents.empty()) return;
-    // Every armed / input-monitoring instrument track hears the keyboard. A track with
-    // no instrument plug-in simply renders nothing, so no extra guard is needed.
+    // Every armed / input-monitoring instrument track hears the keyboard, plus the currently
+    // selected instrument track (the live-MIDI target) so playing just works after loading an
+    // instrument. A track with no instrument plug-in simply renders nothing.
     for (const auto& track : engine->project.tracks) {
         if (track.trackType != "instrument") continue;
-        if (!(track.recordArmed || track.inputMonitoring)) continue;
+        const bool isTarget = !engine->liveMidiTargetTrack.empty() && track.name == engine->liveMidiTargetTrack;
+        if (!(track.recordArmed || track.inputMonitoring || isTarget)) continue;
         engine->engine.queueLiveMidiEvents(track.name, liveEvents);
     }
+}
+
+// The selected instrument track hears the keyboard without being record-armed (Logic/Live
+// style). Pass -1 to clear. Transient routing only — touches no project state.
+void nc_set_live_midi_target(NCEngine* engine, int trackIndex) {
+    if (engine == nullptr) return;
+    const auto* track = trackAt(engine, trackIndex);
+    engine->liveMidiTargetTrack = (track != nullptr && track->trackType == "instrument")
+        ? track->name : std::string{};
 }
 
 // ---------------------------------------------------------------------------

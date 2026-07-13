@@ -1853,7 +1853,14 @@ final class EngineController: ObservableObject {
 
     /// Timeline selection. Purely a view concept; the engine has no notion of it.
     @Published var selectedClipIds: Set<String> = []
-    @Published var selectedTrackId: Int?
+    @Published var selectedTrackId: Int? {
+        didSet {
+            // The selected instrument track hears the keyboard (Logic/Live style) so playing
+            // just works after loading an instrument — no need to arm the track first.
+            guard let handle else { return }
+            nc_set_live_midi_target(handle, Int32(selectedTrackId ?? -1))
+        }
+    }
 
     /// Mixer strip selection — a set, distinct from the timeline's single `selectedTrackId`
     /// (which it keeps in sync with the last-clicked strip so the lane highlights too).
