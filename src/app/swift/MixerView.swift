@@ -795,15 +795,17 @@ struct ChannelStrip: View {
                     Text(title).font(Theme.Font.ui(9, .semibold))
                 }
             }
-            .foregroundStyle(on || blink ? Theme.Palette.deepBorder : Theme.Palette.textMuted)
+            // Off is the same colour, unlit — a dim tint fill with a dimmed tint glyph,
+            // like an LED that is off but clearly still red / yellow / orange / blue.
+            .foregroundStyle(on || blink ? Theme.Palette.deepBorder : tint.opacity(0.8))
             .frame(maxWidth: .infinity)
             .frame(height: 20)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                    .fill(on ? tint : (blink ? tint.opacity(0.6) : Theme.Palette.button))
+                    .fill(on ? tint : (blink ? tint.opacity(0.6) : tint.opacity(0.16)))
                     .overlay(
                         RoundedRectangle(cornerRadius: Theme.Radius.clip)
-                            .stroke(Theme.Palette.border, lineWidth: 1)
+                            .stroke(on ? Theme.Palette.border : tint.opacity(0.32), lineWidth: 1)
                     )
             )
         }

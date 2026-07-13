@@ -161,7 +161,7 @@ struct TrackInspector: View {
         // The automation mode chip that used to sit in its own row below is now the fifth
         // button; the space beneath is left free for controls added later.
         HStack(spacing: Theme.Space.sm) {
-            stateButton("M", on: track.muted, onColor: Theme.Palette.amber) { engine.toggleTrackMute(track.id) }
+            stateButton("M", on: track.muted, onColor: Theme.Palette.orange) { engine.toggleTrackMute(track.id) }
             if track.kind.hasSolo {
                 stateButton("S", on: track.solo, onColor: Theme.Palette.yellow) { engine.toggleTrackSolo(track.id) }
                 stateButton("●", on: track.recordArmed, onColor: Theme.Palette.red) { engine.toggleTrackArm(track.id) }
@@ -182,14 +182,15 @@ struct TrackInspector: View {
                     Text(label).font(Theme.Font.ui(9.5, .semibold))
                 }
             }
-                .foregroundStyle(on ? Color.black.opacity(0.85) : Theme.Palette.textMuted)
+                // Off = the same colour, unlit (dim fill + dimmed glyph), not neutral grey.
+                .foregroundStyle(on ? Color.black.opacity(0.85) : onColor.opacity(0.8))
                 .frame(maxWidth: .infinity)
                 .frame(height: 19)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(on ? onColor : Theme.Palette.button)
+                        .fill(on ? onColor : onColor.opacity(0.16))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
-                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                            .stroke(on ? Theme.Palette.divider : onColor.opacity(0.32), lineWidth: 1))
                 )
         }
         .buttonStyle(.plain)

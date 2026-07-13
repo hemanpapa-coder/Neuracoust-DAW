@@ -1575,14 +1575,21 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// a peak meter, so common moves need no mixer trip.
     private func drawLaneHeaderStrip(_ lane: TimelineModel.Lane, index: Int) {
         func button(_ frame: NSRect, _ title: String, on: Bool, onColor: UInt32, blink: Bool = false) {
-            // `blink` is the solo-silenced pulse: a half-lit fill even when not on.
+            // `blink` is the solo-silenced pulse: a half-lit fill even when not on. Off is
+            // the same colour, unlit — a dim tint fill + a dimmed tint glyph, not neutral.
             let fill = on ? NSColor(hex: onColor)
-                     : (blink ? NSColor(hex: onColor).withAlphaComponent(0.55) : NSColor(hex: 0x2a241e))
+                     : (blink ? NSColor(hex: onColor).withAlphaComponent(0.55)
+                              : NSColor(hex: onColor).withAlphaComponent(0.16))
             fill.setFill()
             NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3).fill()
+            NSColor(hex: onColor).withAlphaComponent(on ? 1 : 0.32).setStroke()
+            let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            outline.lineWidth = 1
+            outline.stroke()
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .bold),
-                .foregroundColor: (on || blink) ? NSColor(hex: 0x14100a) : NSColor(hex: 0x9a8f7e),
+                .foregroundColor: (on || blink) ? NSColor(hex: 0x14100a)
+                                                 : NSColor(hex: onColor).withAlphaComponent(0.85),
             ]
             let size = (title as NSString).size(withAttributes: attrs)
             (title as NSString).draw(
@@ -1594,10 +1601,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
         // Mute / solo / arm / monitor, then the inline horizontal fader, pan bar and
         // stereo meter under them.
-        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xe6a23c, blink: lane.soloSilencedBlink)
-        button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xf4d35e)
-        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xe5484d)
-        button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5fb85f)
+        // Canonical tints, shared with the mixer / inspector: mute orange, solo yellow,
+        // record red, input-monitor blue (was green here — now unified).
+        button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xff9f43, blink: lane.soloSilencedBlink)
+        button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xe6d24a)
+        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xff5252)
+        button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5f9fd6)
 
         // Fader / pan / meter tier: hidden on the first shrink step (buttons-only).
         guard laneShowsFaderRow(index) else { return }
