@@ -3879,7 +3879,30 @@ final class EngineController: ObservableObject {
         static let recentProjects = "nc.recentProjects"
         static let stopBehavior = "nc.stopBehavior"
         static let bufferSize = "nc.bufferSize"
+        static let monitorTemplate = "nc.monitorTemplate"
         static let saved = "nc.settingsSaved"
+    }
+
+    /// The full project serialized to a string, sized exactly. Used to snapshot the monitor
+    /// station as the global template.
+    private func serializeProjectString() -> String {
+        guard let handle else { return "" }
+        let size = Int(nc_project_serialize(handle, nil, 0))
+        guard size > 0 else { return "" }
+        var buffer = [CChar](repeating: 0, count: size + 1)
+        _ = nc_project_serialize(handle, &buffer, buffer.count)
+        return String(cString: buffer)
+    }
+
+    /// Apply the saved monitor-station template onto the current project (a new/blank session),
+    /// then refresh the dock. No-op if nothing was saved.
+    private func applyMonitorTemplate() {
+        guard let handle else { return }
+        let blob = UserDefaults.standard.string(forKey: SettingsKey.monitorTemplate) ?? ""
+        guard !blob.isEmpty else { return }
+        if blob.withCString({ nc_apply_monitor_template(handle, $0) }) {
+            reloadMonitorState()
+        }
     }
 
     /// Saves every app-level setting as the default for future launches.
@@ -3910,6 +3933,10 @@ final class EngineController: ObservableObject {
         d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
         d.set(stopBehavior.rawValue, forKey: SettingsKey.stopBehavior)
         d.set(requestedBufferSize, forKey: SettingsKey.bufferSize)
+        // Snapshot the whole monitor station (listen mode, A/B/C speaker sets, DSP modules,
+        // dim/talkback, trims) via the project serializer, so a new session inherits it
+        // instead of resetting to the bare defaults.
+        d.set(serializeProjectString(), forKey: SettingsKey.monitorTemplate)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -3980,6 +4007,8 @@ final class EngineController: ObservableObject {
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
+        // The saved monitor station last, so it wins over the field-by-field bits above.
+        applyMonitorTemplate()
     }
 
     /// `nc_project_new` resets the project model, so the app-level monitor / DSP / edit
@@ -4025,6 +4054,8 @@ final class EngineController: ObservableObject {
             let saved = d.integer(forKey: SettingsKey.bufferSize)
             if saved > 0 && saved != requestedBufferSize { setBufferSize(saved) }
         }
+        // The saved monitor station comes last so it wins over the field-by-field bits above.
+        applyMonitorTemplate()
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the

@@ -3168,6 +3168,35 @@ int nc_project_serialize(NCEngine* engine, char* out, size_t outLen) {
     return static_cast<int>(text.size());
 }
 
+// Apply just the monitor-station configuration from a serialized project (used as the global
+// "전체 설정 저장" template) onto the current project, so a new/blank session inherits the
+// saved monitor setup — listen mode, mono/swap/phase, dim/talkback, input trim, volume, and
+// the whole DSP-module chain incl. the A/B/C speaker slots. Everything else is left alone.
+bool nc_apply_monitor_template(NCEngine* engine, const char* serialized) {
+    if (engine == nullptr || serialized == nullptr || *serialized == '\0') return false;
+    neuracoust::daw::ProjectDocument tmpl;
+    std::string err;
+    if (!neuracoust::daw::deserializeProject(serialized, tmpl, err)) return false;
+    auto& p = engine->project;
+    p.monitorStationMono = tmpl.monitorStationMono;
+    p.monitorStationListenMode = tmpl.monitorStationListenMode;
+    p.monitorStationSwapLeftRight = tmpl.monitorStationSwapLeftRight;
+    p.monitorStationInvertLeft = tmpl.monitorStationInvertLeft;
+    p.monitorStationInvertRight = tmpl.monitorStationInvertRight;
+    p.monitorStationMute = tmpl.monitorStationMute;
+    p.monitorStationDim = tmpl.monitorStationDim;
+    p.monitorStationTalkback = tmpl.monitorStationTalkback;
+    p.monitorStationDimDb = tmpl.monitorStationDimDb;
+    p.monitorStationTalkbackRoute = tmpl.monitorStationTalkbackRoute;
+    p.monitorInputTrimDb = tmpl.monitorInputTrimDb;
+    p.monitorVolumeDb = tmpl.monitorVolumeDb;
+    if (!tmpl.monitorModules.empty()) {
+        p.monitorModules = tmpl.monitorModules;
+    }
+    engine->reconcileProject();
+    return true;
+}
+
 bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out) {
     if (out != nullptr) {
         std::memset(out, 0, sizeof(*out));

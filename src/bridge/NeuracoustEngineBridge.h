@@ -730,6 +730,9 @@ bool nc_bounce_to_wav(NCEngine* engine, const char* path, NCBounceResult* out);
 /// self-contained: `nc_bounce_snapshot_to_wav` renders it without touching the
 /// engine, which is what makes an off-thread bounce safe.
 int nc_project_serialize(NCEngine* engine, char* out, size_t outLen);
+/// Apply only the monitor-station configuration from a serialized project onto the current
+/// one — the "전체 설정 저장" template a new session inherits. Returns false if it won't parse.
+bool nc_apply_monitor_template(NCEngine* engine, const char* serialized);
 
 /// Renders a serialized document. Touches no shared state — safe to call from a
 /// background thread while the user keeps editing.
