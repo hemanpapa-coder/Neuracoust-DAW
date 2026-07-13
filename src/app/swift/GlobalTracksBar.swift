@@ -121,7 +121,7 @@ struct GlobalTracksBar: View {
                 .foregroundStyle(ruler.color.opacity(0.9))
                 .frame(width: 12)
             Text(ruler.rawValue)
-                .font(Theme.Font.mono(9.5, .medium))
+                .font(Theme.Font.mono(8, .medium))
                 .foregroundStyle(Theme.Palette.textDim)
             Spacer(minLength: 0)
             Button {
