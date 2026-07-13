@@ -298,7 +298,7 @@ struct ChannelStrip: View {
                     autoFadeSection
                     // The master has no sends; pad to the sends' height so its pan / buttons
                     // / fader drop to the same rows as the channels'.
-                    Color.clear.frame(height: 50)
+                    Color.clear.frame(height: 51)
                 } else if showSends && track.kind.showsSends {
                     sendSection
                 }
@@ -356,11 +356,10 @@ struct ChannelStrip: View {
     /// between the default (large) and the narrow (small) width. Two states, no free
     /// widening past the default.
     private var widthResizeHandle: some View {
-        let isNarrow = engine.channelWidthFor(track.id) <= EngineController.channelWidthMin + 1
+        let isNarrow = engine.channelWidth <= EngineController.channelWidthMin + 1
         return Button {
-            let sel = engine.selectedMixerTrackIds
-            let targets: [Int] = (sel.contains(track.id) && sel.count > 1) ? Array(sel) : [track.id]
-            engine.setChannelWidth(trackIds: targets,
+            // One global width — widen/narrow the whole mixer at once.
+            engine.setChannelWidth(trackIds: [],
                                    width: isNarrow ? EngineController.channelWidthDefault : EngineController.channelWidthMin)
             engine.commitChannelWidth()
         } label: {
@@ -387,7 +386,7 @@ struct ChannelStrip: View {
     /// Width honours a live multi-selection drag preview before it commits.
     private var stripWidth: CGFloat {
         if let fixedWidth { return fixedWidth }
-        if let drag = engine.channelWidthDrag, drag.targets.contains(track.id) {
+        if let drag = engine.channelWidthDrag {   // one global width — every strip previews it
             return min(EngineController.channelWidthMax, max(EngineController.channelWidthMin, drag.width))
         }
         return max(EngineController.channelWidthMin, engine.channelWidthFor(track.id))

@@ -1586,15 +1586,26 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
             outline.lineWidth = 1
             outline.stroke()
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .bold),
-                .foregroundColor: (on || blink) ? NSColor(hex: 0x14100a)
-                                                 : NSColor(hex: onColor).withAlphaComponent(0.85),
-            ]
-            let size = (title as NSString).size(withAttributes: attrs)
-            (title as NSString).draw(
-                at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
-                withAttributes: attrs)
+            let glyphColor = (on || blink) ? NSColor(hex: 0x14100a)
+                                           : NSColor(hex: onColor).withAlphaComponent(0.85)
+            if title == "●" {
+                // Record shows a hollow circle, like the transport key / inspector — not "R".
+                let d: CGFloat = 7
+                let circle = NSBezierPath(ovalIn: NSRect(x: frame.midX - d / 2, y: frame.midY - d / 2,
+                                                         width: d, height: d))
+                circle.lineWidth = 1.3
+                glyphColor.setStroke()
+                circle.stroke()
+            } else {
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .bold),
+                    .foregroundColor: glyphColor,
+                ]
+                let size = (title as NSString).size(withAttributes: attrs)
+                (title as NSString).draw(
+                    at: NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2),
+                    withAttributes: attrs)
+            }
         }
         // Name-only tier: nothing below the name.
         guard laneShowsButtons(index) else { return }
@@ -1605,7 +1616,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         // record red, input-monitor blue (was green here — now unified).
         button(headerMuteRect(index), "M", on: lane.muted, onColor: 0xff9f43, blink: lane.soloSilencedBlink)
         button(headerSoloRect(index), "S", on: lane.soloed, onColor: 0xe6d24a)
-        button(headerArmRect(index), "R", on: lane.armed, onColor: 0xff5252)
+        button(headerArmRect(index), "●", on: lane.armed, onColor: 0xff5252)
         button(headerInputMonitorRect(index), "I", on: lane.inputMonitor, onColor: 0x5f9fd6)
 
         // Fader / pan / meter tier: hidden on the first shrink step (buttons-only).
@@ -1908,11 +1919,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func drawHeaderFader(index: Int, lane: TimelineModel.Lane) {
         let fader = headerFaderRect(index)
+        // A thin slot — just the moving bar's thickness, not a tall pill background.
+        let slotH: CGFloat = 3
+        let slot = NSRect(x: fader.minX, y: fader.midY - slotH / 2, width: fader.width, height: slotH)
         NSColor(hex: 0x151009).setFill()
-        NSBezierPath(roundedRect: fader, xRadius: fader.height / 2, yRadius: fader.height / 2).fill()
-        NSColor.white.withAlphaComponent(0.06).setStroke()
-        let rim = NSBezierPath(roundedRect: fader.insetBy(dx: 0.5, dy: 0.5), xRadius: fader.height / 2, yRadius: fader.height / 2)
-        rim.lineWidth = 0.75; rim.stroke()
+        NSBezierPath(roundedRect: slot, xRadius: slotH / 2, yRadius: slotH / 2).fill()
         let knobX = fader.minX + headerFaderFraction(lane.volumeDb) * fader.width
         lane.accent.withAlphaComponent(0.7).setFill()
         NSBezierPath(roundedRect: NSRect(x: fader.minX, y: fader.midY - 1.5,
@@ -1938,13 +1949,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func drawHeaderPan(index: Int, lane: TimelineModel.Lane) {
         let bar = headerPanRect(index)
+        // A thin slot, matching the fader — not a tall pill background.
+        let slotH: CGFloat = 3
+        let slot = NSRect(x: bar.minX, y: bar.midY - slotH / 2, width: bar.width, height: slotH)
         NSColor(hex: 0x151009).setFill()
-        NSBezierPath(roundedRect: bar, xRadius: bar.height / 2, yRadius: bar.height / 2).fill()
-        NSColor.white.withAlphaComponent(0.06).setStroke()
-        let rim = NSBezierPath(roundedRect: bar.insetBy(dx: 0.5, dy: 0.5), xRadius: bar.height / 2, yRadius: bar.height / 2)
-        rim.lineWidth = 0.75; rim.stroke()
-        NSColor.white.withAlphaComponent(0.14).setFill()
-        NSRect(x: bar.midX - 0.5, y: bar.minY + 1, width: 1, height: bar.height - 2).fill()
+        NSBezierPath(roundedRect: slot, xRadius: slotH / 2, yRadius: slotH / 2).fill()
+        NSColor.white.withAlphaComponent(0.18).setFill()
+        NSRect(x: bar.midX - 0.5, y: bar.midY - 2.5, width: 1, height: 5).fill()   // centre detent tick
         let knobX = bar.minX + CGFloat((lane.pan + 1) / 2) * bar.width
         lane.accent.withAlphaComponent(0.7).setFill()
         NSBezierPath(roundedRect: NSRect(x: min(bar.midX, knobX), y: bar.midY - 1.5,
