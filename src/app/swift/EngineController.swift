@@ -3715,6 +3715,8 @@ final class EngineController: ObservableObject {
         remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
+        physicalPowerAmpModel = readString { nc_monitor_physical_power_amp_model(handle, $0, $1) }
+        physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
         autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
         autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
@@ -3874,6 +3876,8 @@ final class EngineController: ObservableObject {
         static let monitorExclusive = "nc.monitorOutputExclusive"
         static let physSpeaker = "nc.physicalSpeakerModel"
         static let physHeadphone = "nc.physicalHeadphoneModel"
+        static let physAmp = "nc.physicalPowerAmpModel"
+        static let physCable = "nc.physicalSpeakerCableModel"
         static let monitorVol = "nc.monitorVolumeDb"
         static let delayComp = "nc.delayCompensation"
         static let recentProjects = "nc.recentProjects"
@@ -3929,6 +3933,8 @@ final class EngineController: ObservableObject {
         d.set(monitorOutputExclusive, forKey: SettingsKey.monitorExclusive)
         d.set(physicalSpeakerModel, forKey: SettingsKey.physSpeaker)
         d.set(physicalHeadphoneModel, forKey: SettingsKey.physHeadphone)
+        d.set(physicalPowerAmpModel, forKey: SettingsKey.physAmp)
+        d.set(physicalSpeakerCableModel, forKey: SettingsKey.physCable)
         d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
         d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
         d.set(stopBehavior.rawValue, forKey: SettingsKey.stopBehavior)
@@ -4005,6 +4011,8 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
         if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
+        if let amp = d.string(forKey: SettingsKey.physAmp), !amp.isEmpty { setPhysicalPowerAmpModel(amp) }
+        if let cab = d.string(forKey: SettingsKey.physCable), !cab.isEmpty { setPhysicalSpeakerCableModel(cab) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
         // The saved monitor station last, so it wins over the field-by-field bits above.
@@ -4039,6 +4047,8 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
         if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
+        if let amp = d.string(forKey: SettingsKey.physAmp), !amp.isEmpty { setPhysicalPowerAmpModel(amp) }
+        if let cab = d.string(forKey: SettingsKey.physCable), !cab.isEmpty { setPhysicalSpeakerCableModel(cab) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
         // These restart the audio engine, so only re-apply when the saved value differs.
@@ -4149,17 +4159,47 @@ final class EngineController: ObservableObject {
             readString { nc_headphone_model_name(Int32(i), $0, $1) }
         }
     }
+    var powerAmpModelCatalog: [String] {
+        (0..<Int(nc_power_amp_model_count())).map { i in
+            readString { nc_power_amp_model_name(Int32(i), $0, $1) }
+        }
+    }
+    var speakerCableModelCatalog: [String] {
+        (0..<Int(nc_speaker_cable_model_count())).map { i in
+            readString { nc_speaker_cable_model_name(Int32(i), $0, $1) }
+        }
+    }
 
     // The real speaker/headphone the user monitors on (definition, not a simulation),
     // and whether speaker and headphone are mutually exclusive.
     @Published var physicalSpeakerModel = ""
     @Published var physicalHeadphoneModel = ""
+    // Power amp + speaker cable — only meaningful when the physical speaker is passive.
+    @Published var physicalPowerAmpModel = ""
+    @Published var physicalSpeakerCableModel = ""
     @Published var monitorOutputExclusive = true
+
+    /// A passive physical speaker needs an external amp + cable; an active monitor doesn't.
+    var physicalSpeakerIsPassive: Bool {
+        !physicalSpeakerModel.isEmpty && physicalSpeakerModel.withCString { nc_speaker_model_is_passive($0) }
+    }
 
     func setPhysicalSpeakerModel(_ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_physical_speaker_model(handle, $0) }
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setPhysicalPowerAmpModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_power_amp_model(handle, $0) }
+        physicalPowerAmpModel = readString { nc_monitor_physical_power_amp_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setPhysicalSpeakerCableModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_speaker_cable_model(handle, $0) }
+        physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
         refreshHistory()
     }
     func setPhysicalHeadphoneModel(_ model: String) {

@@ -968,6 +968,17 @@ void nc_monitor_physical_speaker_model(NCEngine* engine, char* out, size_t outLe
 void nc_monitor_set_physical_speaker_model(NCEngine* engine, const char* model);
 void nc_monitor_physical_headphone_model(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model);
+// A passive speaker runs off an external power amp + speaker cable; an active monitor has
+// the amp built in. is_passive drives whether the amp/cable pickers are enabled.
+bool nc_speaker_model_is_passive(const char* name);
+int  nc_power_amp_model_count(void);
+void nc_power_amp_model_name(int index, char* out, size_t outLen);
+int  nc_speaker_cable_model_count(void);
+void nc_speaker_cable_model_name(int index, char* out, size_t outLen);
+void nc_monitor_physical_power_amp_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_power_amp_model(NCEngine* engine, const char* model);
+void nc_monitor_physical_speaker_cable_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* model);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 

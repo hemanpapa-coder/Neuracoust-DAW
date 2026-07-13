@@ -4574,7 +4574,7 @@ const std::vector<std::string>& speakerModelCatalog() {
         "Barefoot Footprint01 (MF)", "Barefoot Footprint02 (MF)", "Barefoot Footprint03 (NF)", "Barefoot MicroMain26 (MF)", "Barefoot MicroMain27 (MF)", "Barefoot MicroMain45 (MF)", "Barefoot MiniMain12 (LF)", "Barefoot MasterStack12 (LF)",
         "Quested S7R (NF)", "Quested V2108 (MF)", "Quested VH3208 (LF)", "Ocean Way HR5 (MF)", "Ocean Way HR4 (MF)", "Ocean Way HR3 (LF)", "Ocean Way HR2 (LF)", "Augspurger Duo 8 (MF)", "Augspurger Duo 12 (LF)", "Augspurger Duo 15 (LF)", "Meyer Sound Amie (MF)", "Meyer Sound Bluehorn (LF)",
         "Kii THREE (MF)", "Dutch & Dutch 8c (MF)", "GGNTKT M1 (MF)", "PSI Audio A17-M (NF)", "PSI Audio A21-M (MF)", "PSI Audio A25-M (MF)", "Manger P1 (MF)", "Unity Audio The Rock MkII (NF)", "Unity Audio Boulder MkIII (MF)",
-        "Klein + Hummel O 300 (MF)", "Tannoy Gold 5 (NF)", "Tannoy Gold 8 (NF)", "Tannoy Reveal 502 (NF)", "Tannoy Reveal 802 (NF)", "Tannoy System 600 (NF)", "Tannoy System 800 (MF)", "Westlake BBSM-10 (MF)", "Westlake BBSM-15 (LF)",
+        "Klein + Hummel O 300 (MF)", "Tannoy Gold 5 (NF)", "Tannoy Gold 8 (NF)", "Tannoy Reveal 502 (NF)", "Tannoy Reveal 802 (NF)", "Tannoy System 600 (NF)", "Tannoy System 800 (MF)", "Tannoy Mercury 638 Black Ash Plus (MF)", "Westlake BBSM-10 (MF)", "Westlake BBSM-15 (LF)",
         "Laptop", "Phone Speaker", "Small Bluetooth Speaker", "TV Speaker", "Car Stereo", "Club PA",
         "YouTube AAC Preview", "Spotify Ogg Preview", "Apple Music AAC Preview", "Tidal HiFi Preview", "Broadcast Loudness Preview",
     };
@@ -4638,6 +4638,80 @@ void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model
     if (engine->project.physicalHeadphoneModel == model) return;
     engine->project.physicalHeadphoneModel = model;
     engine->recordStep("Set physical headphone");
+}
+
+namespace {
+// Power amplifiers driving a passive speaker. "None" is the default (unset).
+const std::vector<std::string>& powerAmpModelCatalog() {
+    static const std::vector<std::string> models = {
+        "None",
+        "Crown D-75A", "Crown D-45", "Crown XLS 1002", "Crown XLS 1502", "Crown XLS 2502", "Crown DC-300A", "Crown Macro-Tech MA-5000i",
+        "Bryston 4B³", "Bryston 2.5B³", "Benchmark AHB2", "Hafler P3000", "Hafler P7000",
+        "Yamaha P2500S", "Yamaha P3500S", "Yamaha PC2001N", "QSC GX5", "QSC RMX 850a",
+        "ATI AT6002", "Rotel RB-1590", "NAD C 268", "Adcom GFA-555", "Hypex NC252MP", "Purifi 1ET400A",
+        "Parasound A21+", "McIntosh MC152", "Marantz PM8006", "generic power amp",
+    };
+    return models;
+}
+// Speaker cable between a power amp and a passive speaker.
+const std::vector<std::string>& speakerCableModelCatalog() {
+    static const std::vector<std::string> models = {
+        "None",
+        "Canare 2S9F", "Canare 4S8", "Canare 4S11", "Canare 4S12F",
+        "Mogami 3082", "Mogami 3103", "Belden 5000UE", "Belden 5T00UP", "Belden 9497",
+        "Gotham SPK 2x2.5", "Sommer Cable Meridian SP240", "Van Damme Blue Series 2x2.5",
+        "Monster Cable XP", "Kimber Kable 8TC", "AudioQuest Rocket 33", "generic 2.5mm² speaker cable",
+    };
+    return models;
+}
+// Passive speakers need an external amp + cable; active/powered monitors have the amp built in.
+bool speakerModelIsPassive(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (char c : name) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.find("passive") != std::string::npos) return true;
+    if (lower.find("active") != std::string::npos) return false;   // explicitly powered
+    // Curated classic passives that famously run off a separate amplifier.
+    static const std::vector<std::string> passive = {
+        "yamaha ns-10", "auratone 5c", "jbl 4312", "mercury 638", "638 black ash",
+        "westlake bbsm", "tannoy system",
+    };
+    for (const auto& p : passive) if (lower.find(p) != std::string::npos) return true;
+    return false;   // default: an active studio monitor
+}
+} // namespace
+
+int nc_power_amp_model_count() { return static_cast<int>(powerAmpModelCatalog().size()); }
+void nc_power_amp_model_name(int index, char* out, size_t outLen) {
+    const auto& c = powerAmpModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+int nc_speaker_cable_model_count() { return static_cast<int>(speakerCableModelCatalog().size()); }
+void nc_speaker_cable_model_name(int index, char* out, size_t outLen) {
+    const auto& c = speakerCableModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+bool nc_speaker_model_is_passive(const char* name) {
+    return name != nullptr && speakerModelIsPassive(name);
+}
+
+void nc_monitor_physical_power_amp_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalPowerAmpModel : std::string{});
+}
+void nc_monitor_set_physical_power_amp_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.physicalPowerAmpModel == model) return;
+    engine->project.physicalPowerAmpModel = model;
+    engine->recordStep("Set power amp");
+}
+void nc_monitor_physical_speaker_cable_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalSpeakerCableModel : std::string{});
+}
+void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.physicalSpeakerCableModel == model) return;
+    engine->project.physicalSpeakerCableModel = model;
+    engine->recordStep("Set speaker cable");
 }
 bool nc_monitor_output_exclusive(NCEngine* engine) {
     return engine != nullptr && engine->project.monitorSpeakerHeadphoneExclusive;

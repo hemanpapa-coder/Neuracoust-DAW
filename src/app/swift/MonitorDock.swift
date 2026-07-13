@@ -199,6 +199,16 @@ struct MonitorDock: View {
         Divider()
         modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
                   selected: engine.physicalSpeakerModel) { engine.setPhysicalSpeakerModel($0) }
+        // A passive speaker is driven by an external power amp + cable; an active monitor has
+        // the amp built in, so those pickers only appear for a passive model.
+        if engine.physicalSpeakerIsPassive {
+            modelMenu("파워앰프 모델", catalog: engine.powerAmpModelCatalog,
+                      selected: engine.physicalPowerAmpModel) { engine.setPhysicalPowerAmpModel($0) }
+            modelMenu("스피커 케이블 모델", catalog: engine.speakerCableModelCatalog,
+                      selected: engine.physicalSpeakerCableModel) { engine.setPhysicalSpeakerCableModel($0) }
+        } else if !engine.physicalSpeakerModel.isEmpty {
+            Text("액티브 스피커 — 앰프/케이블 불필요").font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder

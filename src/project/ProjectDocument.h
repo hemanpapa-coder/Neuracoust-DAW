@@ -217,6 +217,9 @@ struct ProjectDocument {
     // other, so only speaker or only headphone monitors at a time.
     std::string physicalSpeakerModel;
     std::string physicalHeadphoneModel;
+    // The power amp and speaker cable driving a PASSIVE speaker; ignored for active monitors.
+    std::string physicalPowerAmpModel;
+    std::string physicalSpeakerCableModel;
     bool monitorSpeakerHeadphoneExclusive = true;
     // Auto fade-out: a fade written into the Master track's volume automation over the
     // last N seconds. 0 = off. Curve is one of linear/equal_power/exponential/logarithmic.
