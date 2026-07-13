@@ -83,12 +83,14 @@ final class AiAssistantController: ObservableObject {
     }
 
     private static func preferredModel(from names: [String]) -> String? {
-        // Avoid reasoning models (slow, hidden tokens); prefer a mid-size instruct model.
+        // Prefer a strong instruct/coding model that holds up under JSON-constrained,
+        // multi-command prompts. gemma:12b degenerates on compound commands (empty/garbage
+        // output), so it comes last; reasoning models are avoided (slow, hidden tokens).
         let lowered = names.map { ($0, $0.lowercased()) }
         func firstMatch(_ needles: [String]) -> String? {
             lowered.first { pair in needles.contains { pair.1.contains($0) } && !pair.1.contains("reasoning") }?.0
         }
-        return firstMatch(["gemma", "mistral-small", "qwen3.6", "qwen2.5", "llama"])
+        return firstMatch(["mistral-small", "qwen3-coder", "qwen3.6", "qwen2.5", "qwen", "llama", "gemma"])
             ?? names.first { !$0.lowercased().contains("reasoning") }
     }
 

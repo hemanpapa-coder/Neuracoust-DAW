@@ -5118,6 +5118,9 @@ void nc_ai_build_request(NCEngine* engine, const char* model, const char* userTe
     std::ostringstream body;
     body << "{\"model\":\"" << aiJsonEscape(modelName) << "\","
          << "\"stream\":false,\"format\":\"json\","
+         // Cap generation and keep it near-deterministic: a weak model can otherwise
+         // degenerate under the JSON grammar and run to the token ceiling.
+         << "\"options\":{\"num_predict\":512,\"temperature\":0.2},"
          << "\"messages\":["
          << "{\"role\":\"system\",\"content\":\"" << aiJsonEscape(aiSystemPromptWithSchema()) << "\"},"
          << "{\"role\":\"user\",\"content\":\"Project snapshot: " << aiJsonEscape(snapshotJson)
