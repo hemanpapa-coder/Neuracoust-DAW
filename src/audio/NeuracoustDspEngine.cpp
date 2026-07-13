@@ -241,6 +241,45 @@ bool monitorModulesOnlyActiveTargetSlotChanged(const std::vector<MonitorDspModul
     return slotChanged;
 }
 
+// Full equality of the monitor DSP module chain, including the active slot. Used to skip
+// reconfiguring the monitor processors (which resets their filter state — an audible click)
+// on an edit that did not touch the monitor at all.
+bool monitorModulesEqual(const std::vector<MonitorDspModule>& left,
+                         const std::vector<MonitorDspModule>& right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (size_t index = 0; index < left.size(); ++index) {
+        const auto& a = left[index];
+        const auto& b = right[index];
+        if (a.id != b.id ||
+            a.displayName != b.displayName ||
+            a.stage != b.stage ||
+            a.enabled != b.enabled ||
+            a.activeTargetSlot != b.activeTargetSlot ||
+            a.realModel != b.realModel ||
+            a.targetModelA != b.targetModelA ||
+            a.targetModelB != b.targetModelB ||
+            a.targetModelC != b.targetModelC ||
+            a.speakerOutputA != b.speakerOutputA ||
+            a.speakerOutputB != b.speakerOutputB ||
+            a.speakerOutputC != b.speakerOutputC ||
+            a.streamingPreview != b.streamingPreview ||
+            a.speakerRoomEqA != b.speakerRoomEqA ||
+            a.speakerRoomEqB != b.speakerRoomEqB ||
+            a.speakerRoomEqC != b.speakerRoomEqC ||
+            a.speakerSimulationWeightA != b.speakerSimulationWeightA ||
+            a.speakerSimulationWeightB != b.speakerSimulationWeightB ||
+            a.speakerSimulationWeightC != b.speakerSimulationWeightC ||
+            !trackInsertSlotsEqual(a.speakerInsertsA, b.speakerInsertsA) ||
+            !trackInsertSlotsEqual(a.speakerInsertsB, b.speakerInsertsB) ||
+            !trackInsertSlotsEqual(a.speakerInsertsC, b.speakerInsertsC)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 float stereoPeak(const std::vector<float>& samples) {
     float peak = 0.0f;
     for (const float sample : samples) {
@@ -1039,7 +1078,10 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
     const double projectSampleRate = plan.sampleRate > 0.0 ? plan.sampleRate : settings_.sampleRate;
     plan.transportRecordingActive = settings_.transportRecordingActive;
     projectPlan_ = std::move(plan);
-    projectRenderState_.reset();
+    // Render-state refresh moved below (conditional resetForSeek before the configured_
+    // block): a plain edit preserves the keyed plug-in processors and the monitor DSP
+    // filter state instead of tearing everything down — that teardown clicked the monitor
+    // and gapped plug-ins on every clip move/trim/split/fade mid-playback.
     settings_.delayCompensationEnabled = project.delayCompensationEnabled;
     settings_.lowLatencyRecordMonitoringEnabled = project.directMonitoringEnabled;
     settings_.tempoMap = project.tempoMap;
@@ -1063,12 +1105,19 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
     settings_.monitorStationTalkbackRoute = project.monitorStationTalkbackRoute.empty() ? "listen_room" : project.monitorStationTalkbackRoute;
     settings_.monitorInputTrimDb = std::max(-12.0f, std::min(0.0f, project.monitorInputTrimDb));
     settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb));
-    settings_.monitorModules = project.monitorModules.empty() ? defaultMonitorDspModules() : project.monitorModules;
+    const auto nextMonitorModules = project.monitorModules.empty() ? defaultMonitorDspModules() : project.monitorModules;
+    // A clip edit never touches the monitor chain (that path is setMonitorDspModules, which
+    // crossfades). Reconfiguring the monitor processor resets its filter state — a click on
+    // every edit — so only do it when the modules actually changed.
+    const bool monitorModulesChanged = !monitorModulesEqual(settings_.monitorModules, nextMonitorModules);
+    settings_.monitorModules = nextMonitorModules;
     projectPlan_.monitorModules = settings_.monitorModules;
-    monitorProcessor_.configure(std::max(1.0, projectSampleRate), settings_.monitorModules);
-    previousMonitorProcessor_ = monitorProcessor_;
-    monitorDspModuleTransitionSamplesRemaining_ = 0;
-    monitorDspModuleTransitionSamplesTotal_ = 0;
+    if (monitorModulesChanged) {
+        monitorProcessor_.configure(std::max(1.0, projectSampleRate), settings_.monitorModules);
+        previousMonitorProcessor_ = monitorProcessor_;
+        monitorDspModuleTransitionSamplesRemaining_ = 0;
+        monitorDspModuleTransitionSamplesTotal_ = 0;
+    }
     settings_.listenRoom.enabled = project.listenRoomEnabled;
     settings_.listenRoom.sessionName = project.listenRoomSessionName;
     settings_.listenRoom.source = project.listenRoomSource;
@@ -1086,8 +1135,23 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
     sampleRateForStatus_.store(std::max(1.0, projectSampleRate));
     updateProjectMonitorPolicyLocked();
     syncProjectMonitorDspRenderPathLocked();
+    // Preserve the keyed plug-in processors and the monitor / master-insert DSP across an
+    // edit; resetForSeek clears only the transient decode/phase/live-MIDI state. Force the
+    // flag-gated master-insert chain and monitor DSP to rebuild only when their content
+    // actually changed, so a plain clip edit does not click or gap the sound.
+    const std::string nextInsertGraphSignature = configured_
+        ? realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize_)
+        : std::string();
+    const bool insertGraphChanged = configured_ && nextInsertGraphSignature != realtimeInsertGraphSignature_;
+    projectRenderState_.resetForSeek();
+    if (insertGraphChanged) {
+        projectRenderState_.masterInsertChainPrepared = false;
+        projectRenderState_.masterInsertChain.reset();
+    }
+    if (monitorModulesChanged) {
+        projectRenderState_.monitorDspConfigured = false;
+    }
     if (configured_) {
-        const std::string nextInsertGraphSignature = realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize_);
         if (nextInsertGraphSignature != realtimeInsertGraphSignature_) {
             if (!prepareRealtimeInsertChainLocked(maxBlockSize_, error)) {
                 return false;
