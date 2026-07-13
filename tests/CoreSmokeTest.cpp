@@ -6745,6 +6745,53 @@ int main() {
     assert(recording64.bitsPerSample == 64);
     assert(recording64.floatingPoint);
 
+    {
+        // Instrument rack layering: adding a layer must not drop the first instrument.
+        // Regression for the indexed setTrackInstrumentSlot missing the legacy-materialize
+        // guard — a layer at slot 1 while the instrument lived only in track.instrument
+        // used to compact to an empty front slot and lose the original.
+        using namespace neuracoust::daw;
+        ProjectDocument project;
+        const std::string trackName = addInstrumentTrack(project);
+        assert(!trackName.empty());
+
+        auto makeInstrument = [](const std::string& name) {
+            InstrumentSlotState slot;
+            slot.pluginName = name;
+            slot.pluginPath = "/tmp/" + name + ".vst3";
+            slot.pluginFormat = "VST3";
+            slot.enabled = true;
+            slot.bypassed = false;
+            return slot;
+        };
+
+        auto trackByName = [&project](const std::string& name) -> const TrackState* {
+            for (const auto& track : project.tracks) {
+                if (track.name == name) return &track;
+            }
+            return nullptr;
+        };
+
+        // First instrument via the legacy single-slot path (mirrors nc_track_set_instrument).
+        assert(setTrackInstrumentSlot(project, trackName, makeInstrument("Alpha")));
+        const TrackState* t = trackByName(trackName);
+        assert(t != nullptr);
+        assert(t->instrument.pluginName == "Alpha");
+
+        // Layer a second instrument at slot 1 — both must survive and stay ordered.
+        assert(setTrackInstrumentSlot(project, trackName, 1, makeInstrument("Beta")));
+        t = trackByName(trackName);
+        assert(t->instrumentSlots.size() == 2);
+        assert(t->instrumentSlots[0].pluginName == "Alpha");
+        assert(t->instrumentSlots[1].pluginName == "Beta");
+        assert(t->instrument.pluginName == "Alpha");   // front mirrors slot 0, not the empty gap
+
+        // Removing the layer leaves the primary intact.
+        assert(clearTrackInstrumentSlot(project, trackName, 1));
+        t = trackByName(trackName);
+        assert(t->instrument.pluginName == "Alpha");
+    }
+
     std::cout << "Core smoke test passed\n";
     return 0;
 }

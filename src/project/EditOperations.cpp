@@ -3046,6 +3046,13 @@ bool setTrackInstrumentSlot(ProjectDocument& project, const std::string& trackNa
     if (track == nullptr || track->trackType != "instrument" || isProtectedTrackName(trackName) || slotIndex >= kMaxInstrumentRackSlots) {
         return false;
     }
+    // Materialize a legacy single instrument into slot 0 before writing any higher slot, or
+    // adding a layer would leave slot 0 empty and compaction would drop the original
+    // instrument (front() becomes the empty slot). clearTrackInstrumentSlot and
+    // toggleTrackInstrumentBypass already do this; the setter must too.
+    if (slotIndex > 0 && track->instrumentSlots.empty() && instrumentSlotHasPlugin(track->instrument)) {
+        track->instrumentSlots.push_back(track->instrument);
+    }
     if (track->instrumentSlots.size() <= slotIndex) {
         track->instrumentSlots.resize(slotIndex + 1);
     }
