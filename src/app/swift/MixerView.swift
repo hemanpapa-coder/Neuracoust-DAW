@@ -230,7 +230,8 @@ struct MixerView: View {
             showIO: showIO,
             showInserts: showInserts,
             showSends: showSends,
-            showMemo: showMemo
+            showMemo: showMemo,
+            mixerHasInstrument: engine.tracks.contains { $0.kind == .instrument }
         )
         // Every mixer strip shares the tallest one's height (Master included), so adding
         // inserts/sends to one channel grows them all together.
@@ -279,6 +280,11 @@ struct ChannelStrip: View {
     /// The Edit-view Channel column pins a uniform width, so the strip stays the same size
     /// whatever track is selected (and whatever per-track width the mixer uses). nil = mixer.
     var fixedWidth: CGFloat? = nil
+    /// True when at least one strip in the mixer carries an instrument, so every strip
+    /// reserves the instrument-slot row (blank where it doesn't apply) and the inserts /
+    /// sends / pan / fader stay aligned across strips — instead of the instrument strip alone
+    /// growing taller. Logic-style: the slot exists on every strip.
+    var mixerHasInstrument: Bool = false
 
     private var accent: Color { track.kind.accent }
 
@@ -290,6 +296,11 @@ struct ChannelStrip: View {
                 if showIO { inputSection }
                 // Horizontal input meter (L/R) right under the input, before the inserts.
                 HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
+                // The instrument slot is its own reserved row (Logic-style) so every strip's
+                // inserts/sends/pan/fader line up when a sibling carries an instrument.
+                if showInserts && (track.kind == .instrument || mixerHasInstrument) {
+                    instrumentSlotSection
+                }
                 if showInserts && track.kind.showsInserts { insertSection }
                 // Master has no sends; its auto fade-out takes that upper slot so the fader
                 // drops down and lines up with the channel faders instead of floating high
@@ -447,17 +458,23 @@ struct ChannelStrip: View {
         }
     }
 
-    private var insertSection: some View {
+    /// The instrument slot, its own row so it doesn't push the inserts/sends/pan/fader of an
+    /// instrument strip out of line with the others. Instrument tracks show the slot (loaded
+    /// or empty-to-load); every other strip renders the same height blank so the rows align.
+    private var instrumentSlotSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // An instrument track's sound starts here, not in an insert.
-            if !track.instrumentName.isEmpty {
+            Text("악기")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFaint)
+            if track.kind == .instrument {
                 let slot = PluginEditorHost.Slot(trackId: track.id,
                                                  insertIndex: EngineController.instrumentSlotIndex)
-                Text("악기")
-                    .font(Theme.Font.mono(6.5))
-                    .foregroundStyle(Theme.Palette.textFaint)
                 SlotChip(label: track.instrumentName, accent: accent, lit: editors.isOpen(slot)) {
-                    editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
+                    if track.instrumentName.isEmpty {
+                        engine.openPluginBrowser(forTrack: track.id)
+                    } else {
+                        editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
+                    }
                 }
                 .contextMenu {
                     Button("에디터 열기") {
@@ -467,7 +484,17 @@ struct ChannelStrip: View {
                     Divider()
                     Button("악기 제거", role: .destructive) { engine.clearInstrument(track: track.id) }
                 }
+            } else {
+                SlotChip(label: "", accent: accent) {}
             }
+        }
+        // Non-instrument strips reserve the identical height but show nothing.
+        .opacity(track.kind == .instrument ? 1 : 0)
+        .allowsHitTesting(track.kind == .instrument)
+    }
+
+    private var insertSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
             Text("인서트 A–E")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
