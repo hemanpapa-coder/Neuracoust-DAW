@@ -346,6 +346,12 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:NeuracoustAuEditorHost>"
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust AU Editor Host"
+        # MACOSX_PACKAGE_LOCATION does not reliably stage the icns under the Ninja
+        # generator, so copy it in explicitly — the app icon and the project-folder
+        # icon (NSWorkspace.setIcon) both read it from Resources at runtime.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/NeuracoustDAW.icns"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/NeuracoustDAW.icns"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/main.d")
 

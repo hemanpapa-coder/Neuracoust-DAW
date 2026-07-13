@@ -1440,6 +1440,80 @@ bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t 
     return true;
 }
 
+int nc_project_consolidate_media(NCEngine* engine, char* error, size_t errorLen) {
+    if (engine == nullptr) {
+        copyText(error, errorLen, "no engine");
+        return -1;
+    }
+    if (engine->projectPath.empty()) {
+        copyText(error, errorLen, "save the project before consolidating media");
+        return -1;
+    }
+
+    const std::filesystem::path audioDir =
+        neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::error_code ec;
+    std::filesystem::create_directories(audioDir, ec);
+    if (ec) {
+        copyText(error, errorLen, std::string("could not create the Audio Files folder: ") + ec.message());
+        return -1;
+    }
+    const auto canonicalAudioDir = std::filesystem::weakly_canonical(audioDir, ec);
+
+    // Copy each external source once and remember the remap, so several clips that share
+    // one source all follow it to the same copy. A copy that fails leaves the original
+    // reference untouched rather than orphaning the clip.
+    std::map<std::string, std::string> remap;
+    int copied = 0;
+    auto consolidatePath = [&](std::string& path) {
+        if (path.empty()) {
+            return;
+        }
+        const auto existing = remap.find(path);
+        if (existing != remap.end()) {
+            path = existing->second;
+            return;
+        }
+        std::error_code fileEc;
+        const std::filesystem::path src(path);
+        if (!std::filesystem::is_regular_file(src, fileEc)) {
+            return;
+        }
+        // Already inside this project's Audio Files folder → leave it where it lies.
+        if (std::filesystem::weakly_canonical(src.parent_path(), fileEc) == canonicalAudioDir) {
+            return;
+        }
+        std::filesystem::path dest = audioDir / src.filename();
+        for (int suffix = 1; std::filesystem::exists(dest, fileEc); ++suffix) {
+            dest = audioDir / (src.stem().string() + "-" + std::to_string(suffix) + src.extension().string());
+        }
+        std::filesystem::copy_file(src, dest, std::filesystem::copy_options::none, fileEc);
+        if (fileEc) {
+            return;
+        }
+        remap[path] = dest.string();
+        path = dest.string();
+        ++copied;
+    };
+
+    // mediaSources is the render source of truth for paths; clips carry a denormalised
+    // copy for the edit/display model. Rewrite both so the picture and the sound agree.
+    for (auto& source : engine->project.mediaSources) {
+        consolidatePath(source.path);
+    }
+    for (auto& clip : engine->project.clips) {
+        consolidatePath(clip.sourcePath);
+    }
+
+    if (copied > 0) {
+        engine->reconcileProject();
+        std::string saveError;
+        neuracoust::daw::saveProjectFileWithBackup(engine->project, engine->projectPath, saveError);
+    }
+    copyText(error, errorLen, "");
+    return copied;
+}
+
 bool nc_audio_import_supported(const char* path) {
     if (path == nullptr || *path == '\0') {
         return false;

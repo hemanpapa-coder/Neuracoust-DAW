@@ -1467,16 +1467,50 @@ final class EngineController: ObservableObject {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "ndaw")].compactMap { $0 }
         panel.nameFieldStringValue = projectName.isEmpty ? "Untitled" : projectName
+        panel.message = "프로젝트는 폴더로 저장됩니다 — 오디오 파일이 그 안의 Audio Files 폴더에 모입니다."
         guard panel.runModal() == .OK, let url = panel.url else { return false }
 
+        // A project is a self-contained folder: <chosen>/<name>/<name>.ndaw, with the
+        // Audio Files folder alongside the document inside it. If the user already picked
+        // a folder whose name matches (re-saving in place), don't nest another level.
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let parent = url.deletingLastPathComponent()
+        let folderURL = parent.lastPathComponent == baseName ? parent : url.deletingPathExtension()
+        let ndawURL = folderURL.appendingPathComponent(baseName).appendingPathExtension("ndaw")
+
+        do {
+            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        } catch {
+            lastError = "프로젝트 폴더를 만들 수 없습니다: \(error.localizedDescription)"
+            return false
+        }
+
         var errorBuffer = [CChar](repeating: 0, count: 256)
-        guard nc_project_save_as(handle, url.path, &errorBuffer, errorBuffer.count) else {
+        guard nc_project_save_as(handle, ndawURL.path, &errorBuffer, errorBuffer.count) else {
             lastError = String(cString: errorBuffer)
             return false
         }
+        // Pull any temp / external media into this folder's Audio Files so it travels
+        // with the project. Harmless (returns 0) when everything is already inside. Only
+        // clip source paths change, so refresh the clips (waveforms re-read from the new
+        // paths) rather than reloading the whole document.
+        if nc_project_consolidate_media(handle, &errorBuffer, errorBuffer.count) > 0 {
+            reloadClips()
+        }
+        applyProjectFolderIcon(to: folderURL)
         refreshHistory()
-        rememberRecentProject(url)
+        rememberRecentProject(ndawURL)
         return true
+    }
+
+    /// Brand the project folder with the Neuracoust logo (the bundled app icon), the way
+    /// Logic marks its project folders. Best-effort — a failure just leaves the plain
+    /// Finder folder icon.
+    private func applyProjectFolderIcon(to folderURL: URL) {
+        let icon = Bundle.main.url(forResource: "NeuracoustDAW", withExtension: "icns")
+            .flatMap { NSImage(contentsOf: $0) } ?? NSApp.applicationIconImage
+        guard let icon else { return }
+        NSWorkspace.shared.setIcon(icon, forFile: folderURL.path, options: [])
     }
 
     /// Opens a document or imports audio, chosen by extension. Used by the Finder

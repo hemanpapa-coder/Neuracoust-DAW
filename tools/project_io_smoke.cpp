@@ -233,6 +233,25 @@ int main() {
     check(strstr(convertedSource, ".wav") != NULL, "the m4a became a wav");
     check(nc_project_dirty(engine), "importing after a save makes the document dirty");
 
+    // --- consolidate: a pre-save temp import must move into Audio Files -------
+    // The first clip was imported before the save, so it still points at the temp
+    // "Unsaved Imports" folder; the m4a converted straight into Audio Files. A saved
+    // project has to be self-contained, so consolidation copies the stray one in.
+    check(nc_project_consolidate_media(engine, error, sizeof(error)) == 1,
+          "consolidation pulled in the one external source (the m4a was already inside)");
+    bool anyClipOutsideAudioFiles = false;
+    for (int index = 0; index < nc_clip_count(engine); ++index) {
+        char src[512] = {0};
+        nc_clip_source_path(engine, index, src, sizeof(src));
+        if (strstr(src, "/Audio Files/") == NULL || strstr(src, "Unsaved Imports") != NULL) {
+            anyClipOutsideAudioFiles = true;
+        }
+        check(std::filesystem::exists(src), "the consolidated source exists on disk");
+    }
+    check(!anyClipOutsideAudioFiles, "every clip now lives inside the project's Audio Files");
+    check(nc_project_consolidate_media(engine, error, sizeof(error)) == 0,
+          "a second consolidate copies nothing — the folder is already self-contained");
+
     // --- reopen from disk ----------------------------------------------------
     check(nc_project_save(engine, error, sizeof(error)), "save to the known path");
 

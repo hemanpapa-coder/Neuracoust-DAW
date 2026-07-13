@@ -366,6 +366,12 @@ bool nc_project_open(NCEngine* engine, const char* path, bool preferAutosave,
 bool nc_project_save(NCEngine* engine, char* error, size_t errorLen);
 bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t errorLen);
 
+/// Copies every clip source that lives outside the project's `Audio Files` folder into
+/// it (temp imports made before the first save, files dragged in from elsewhere) and
+/// rewrites the clip paths, so a saved project folder is self-contained. Returns the
+/// number of files copied, or -1 on error. Requires the project to have a path.
+int nc_project_consolidate_media(NCEngine* engine, char* error, size_t errorLen);
+
 /// wav, wave, mp3, aif, aiff, m4a, caf.
 bool nc_audio_import_supported(const char* path);
 
