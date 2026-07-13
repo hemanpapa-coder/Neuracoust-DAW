@@ -1412,6 +1412,13 @@ final class EngineController: ObservableObject {
     /// Panels are user-initiated; nothing here writes without an explicit choice.
     func newProject() {
         guard let handle, confirmDiscardingChanges() else { return }
+
+        // Pro Tools-style: a project is a folder made up front. Prompt for name/location and
+        // create it now so imports and recordings land inside it from the first drop — there
+        // is no "Untitled" temp limbo. Cancelling the prompt leaves the current project intact
+        // (nothing has been torn down yet).
+        guard let (folderURL, ndawURL) = promptForProjectFolder(defaultName: "Untitled") else { return }
+
         nc_project_new(handle)
         keyEventStore = []          // conductor key state is per-project; reset it
         musicalKey = "C"
@@ -1419,6 +1426,16 @@ final class EngineController: ObservableObject {
         // A fresh project inherits the saved app-level monitor / DSP / edit settings, so a
         // new session starts from "전체 설정 저장" instead of the bare engine defaults.
         reapplyPersistedSettingsToNewProject()
+
+        // Give the fresh project its folder home immediately (document + Audio Files + icon).
+        var errorBuffer = [CChar](repeating: 0, count: 256)
+        if nc_project_save_as(handle, ndawURL.path, &errorBuffer, errorBuffer.count) {
+            applyProjectFolderIcon(to: folderURL)
+            rememberRecentProject(ndawURL)
+            refreshHistory()
+        } else {
+            lastError = String(cString: errorBuffer)
+        }
     }
 
     func openProject() {
@@ -1483,28 +1500,35 @@ final class EngineController: ObservableObject {
         return true
     }
 
-    @discardableResult
-    func saveProjectAs() -> Bool {
-        guard let handle else { return false }
-
+    /// Ask for a name/location and create the project folder: <chosen>/<name>/<name>.ndaw,
+    /// with the Audio Files folder alongside the document inside it. Shared by Save As and
+    /// New Project. If the user already picked a folder whose name matches (re-saving in
+    /// place), don't nest another level. Returns nil if cancelled or the folder can't be made.
+    private func promptForProjectFolder(defaultName: String) -> (folder: URL, ndaw: URL)? {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "ndaw")].compactMap { $0 }
-        panel.nameFieldStringValue = projectName.isEmpty ? "Untitled" : projectName
-        panel.message = "프로젝트는 폴더로 저장됩니다 — 오디오 파일이 그 안의 Audio Files 폴더에 모입니다."
-        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        panel.nameFieldStringValue = defaultName
+        panel.message = "프로젝트는 폴더로 만들어집니다 — 오디오 파일이 그 안의 Audio Files 폴더에 모입니다."
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
-        // A project is a self-contained folder: <chosen>/<name>/<name>.ndaw, with the
-        // Audio Files folder alongside the document inside it. If the user already picked
-        // a folder whose name matches (re-saving in place), don't nest another level.
         let baseName = url.deletingPathExtension().lastPathComponent
         let parent = url.deletingLastPathComponent()
         let folderURL = parent.lastPathComponent == baseName ? parent : url.deletingPathExtension()
         let ndawURL = folderURL.appendingPathComponent(baseName).appendingPathExtension("ndaw")
-
         do {
             try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         } catch {
             lastError = "프로젝트 폴더를 만들 수 없습니다: \(error.localizedDescription)"
+            return nil
+        }
+        return (folderURL, ndawURL)
+    }
+
+    @discardableResult
+    func saveProjectAs() -> Bool {
+        guard let handle else { return false }
+
+        guard let (folderURL, ndawURL) = promptForProjectFolder(defaultName: projectName.isEmpty ? "Untitled" : projectName) else {
             return false
         }
 
