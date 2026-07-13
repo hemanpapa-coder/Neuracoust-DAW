@@ -154,23 +154,22 @@ struct GlobalTracksBar: View {
     @ViewBuilder
     private func lanePanel(_ ruler: Ruler, laneWidth: CGFloat) -> some View {
         ZStack(alignment: .leading) {
-            ruler.color.opacity(0.04)   // faint per-ruler tint to separate lanes
+            // The faint per-ruler tint doubles as the double-click-to-add surface. It is the
+            // BOTTOM layer, so an event chip (added on top by lane(...)) wins the hit-test for
+            // its own select/move/delete gestures; only clicks that land on empty lane space
+            // fall through to here. A top overlay here used to swallow every event gesture.
+            ruler.color.opacity(0.04)
+                .contentShape(Rectangle())
+                .gesture(TapGesture(count: 2).sequenced(before: DragGesture(minimumDistance: 0))
+                    .onEnded { v in
+                        if case .second(_, let d?) = v {
+                            addTarget = AddTarget(ruler: ruler,
+                                seconds: max(0, engine.snap(seconds(atX: d.startLocation.x + Self.headerWidth, laneWidth))))
+                        }
+                    })
             lane(ruler, laneWidth: laneWidth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .overlay {
-            GeometryReader { _ in
-                Color.clear.contentShape(Rectangle())
-                    .gesture(TapGesture(count: 2).sequenced(before: DragGesture(minimumDistance: 0))
-                        .onEnded { v in
-                            if case .second(_, let d?) = v {
-                                addTarget = AddTarget(ruler: ruler,
-                                    seconds: max(0, engine.snap(seconds(atX: d.startLocation.x + Self.headerWidth, laneWidth))))
-                            }
-                        })
-            }
-        }
     }
 
     /// The draggable separator below a ruler, which resizes that ruler's height.
