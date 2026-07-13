@@ -30,12 +30,12 @@ final class AiAssistantController: ObservableObject {
 
         var summary: String {
             switch type {
-            case "SetTrackGain": return "\(track): 게인 \(String(format: "%+.1f", gainDb)) dB"
-            case "SetTrackPan": return "\(track): 팬 \(String(format: "%+.2f", pan))"
-            case "SetTrackMute": return "\(track): \(enabled ? "뮤트" : "뮤트 해제")"
-            case "SetTrackSolo": return "\(track): \(enabled ? "솔로" : "솔로 해제")"
-            case "ArmTrackForRecording": return "\(track): \(enabled ? "녹음 준비" : "녹음 준비 해제")"
-            case "AddMarker": return "마커 '\(label)' @ \(String(format: "%.2f", timeSeconds))s"
+            case "set_track_gain": return "\(track): 게인 \(String(format: "%+.1f", gainDb)) dB"
+            case "set_track_pan": return "\(track): 팬 \(String(format: "%+.2f", pan))"
+            case "set_track_mute": return "\(track): \(enabled ? "뮤트" : "뮤트 해제")"
+            case "set_track_solo": return "\(track): \(enabled ? "솔로" : "솔로 해제")"
+            case "arm_track_for_recording": return "\(track): \(enabled ? "녹음 준비" : "녹음 준비 해제")"
+            case "add_marker": return "마커 '\(label)' @ \(String(format: "%.2f", timeSeconds))s"
             default: return type
             }
         }
@@ -148,7 +148,7 @@ final class AiAssistantController: ObservableObject {
         let parsed: [Proposal] = commands.compactMap { c in
             guard let type = c["type"] as? String else { return nil }
             return Proposal(
-                type: type,
+                type: Self.normalizeCommandType(type),
                 track: (c["track"] as? String) ?? "",
                 gainDb: floatValue(c["gainDb"]),
                 pan: floatValue(c["pan"]),
@@ -196,6 +196,18 @@ final class AiAssistantController: ObservableObject {
 
     private func appendSystem(_ text: String) {
         messages.append(ChatMessage(role: .system, text: text))
+    }
+
+    /// The engine's command types are snake_case; a model sometimes answers in CamelCase
+    /// ("SetTrackSolo"). Normalize so either form applies.
+    static func normalizeCommandType(_ t: String) -> String {
+        if t.contains("_") { return t.lowercased() }
+        var out = ""
+        for (i, ch) in t.enumerated() {
+            if ch.isUppercase && i > 0 { out.append("_") }
+            out.append(Character(ch.lowercased()))
+        }
+        return out
     }
 
     private func floatValue(_ v: Any?) -> Float {
