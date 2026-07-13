@@ -1094,13 +1094,29 @@ final class EngineController: ObservableObject {
 
     // MARK: - Transport
 
+    /// What the Stop button does with the playhead. Pro Tools calls the second one
+    /// "Timeline Insertion Follows Playback" off — return to where you started.
+    enum StopBehavior: String, CaseIterable, Identifiable {
+        case inPlace, returnToStart
+        var id: String { rawValue }
+        var label: String { self == .inPlace ? "그 자리에 멈춤" : "출발한 곳으로" }
+    }
+    @Published var stopBehavior: StopBehavior = .inPlace
+    /// Where playback last started from, for `returnToStart`.
+    private var playStartSeconds: Double = 0
+
     func togglePlay() {
         setTransport(running: !transportRunning)
     }
 
     func stop() {
+        let wasRunning = transportRunning
         setTransport(running: false)
-        seek(0)
+        // Stop no longer jumps to the very start. Stay put, or return to where playback
+        // began (never bar 1 unless that is where you pressed play), per the chosen mode.
+        if stopBehavior == .returnToStart, wasRunning {
+            seek(playStartSeconds)
+        }
     }
 
     func rewind() {
@@ -1157,6 +1173,7 @@ final class EngineController: ObservableObject {
 
     private func setTransport(running: Bool) {
         guard let handle else { return }
+        if running, !transportRunning { playStartSeconds = playheadSeconds }   // remember for stop
         nc_engine_set_transport_running(handle, running)
         transportRunning = running
         transportWallClockBase = playheadSeconds
@@ -3586,6 +3603,7 @@ final class EngineController: ObservableObject {
         static let monitorVol = "nc.monitorVolumeDb"
         static let delayComp = "nc.delayCompensation"
         static let recentProjects = "nc.recentProjects"
+        static let stopBehavior = "nc.stopBehavior"
         static let saved = "nc.settingsSaved"
     }
 
@@ -3615,6 +3633,7 @@ final class EngineController: ObservableObject {
         d.set(physicalHeadphoneModel, forKey: SettingsKey.physHeadphone)
         d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
         d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
+        d.set(stopBehavior.rawValue, forKey: SettingsKey.stopBehavior)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -3648,6 +3667,7 @@ final class EngineController: ObservableObject {
         }
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
+        if let sb = d.string(forKey: SettingsKey.stopBehavior), let mode = StopBehavior(rawValue: sb) { stopBehavior = mode }
         // Key and its positional changes are per-project, not global — restoring them from
         // settings leaked a stray key event (e.g. a "D") into every new/other project. Start
         // clean: the key row shows the default C at the top until the user adds one.

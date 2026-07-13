@@ -218,6 +218,13 @@ private:
     std::atomic<double> insertTailOnStopSeconds_ {-1.0};
     int64_t insertTailSamplesRemaining_ = 0;
     bool wasTransportRunning_ = false;
+    // Live-monitor gating for instruments. A held key must keep the instrument rendering so
+    // it sustains and its release tail rings; but an armed instrument with no key down must
+    // go silent, or it "무조건 재생" — sounds forever with the transport stopped. Count the
+    // notes the pump has queued; keep the monitor alive while any is held and for a short
+    // release tail after the last one lifts, then stop rendering it.
+    std::atomic<int> liveNotesHeld_ {0};
+    int64_t liveMonitorTailSamplesRemaining_ = 0;
     std::atomic<bool> physicalInputMonitoringActiveForStatus_ {false};
     std::atomic<int> inputMonitorChannelsForStatus_ {0};
     std::atomic<float> inputPeakForStatus_ {0.0f};

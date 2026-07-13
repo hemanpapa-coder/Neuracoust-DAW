@@ -1512,6 +1512,20 @@ void NeuracoustDspEngine::queueLiveMidiEvents(const std::string& trackName, cons
     if (queue.size() > kMaxQueuedLiveMidiEvents) {
         queue.erase(queue.begin(), queue.end() - static_cast<std::ptrdiff_t>(kMaxQueuedLiveMidiEvents));
     }
+    // Track how many keys are currently down so the render can keep the instrument alive
+    // while notes sustain but let it fall silent when the keyboard is idle.
+    int held = liveNotesHeld_.load(std::memory_order_relaxed);
+    for (const auto& event : events) {
+        if (event.kind != Vst3MidiEventKind::Note) {
+            continue;
+        }
+        if (event.noteOn && event.velocity > 0) {
+            ++held;
+        } else if (held > 0) {
+            --held;
+        }
+    }
+    liveNotesHeld_.store(std::max(0, held), std::memory_order_relaxed);
 }
 
 void NeuracoustDspEngine::setTransportRecordingActive(bool active) {
@@ -1631,13 +1645,19 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     // renders the instrument whenever liveMidiEvents is non-empty. The renderer consumes
     // and erases each event, so nothing accumulates.
     const bool hasLiveMidi = !projectRenderState_.liveMidiEvents.empty();
-    // An instrument voice — a held note, a release tail — lives inside the plug-in, so the
-    // engine has to keep calling process on it every block. Gating on (transportRunning ||
-    // hasLiveMidi) alone dropped a held key the instant its NoteOn was consumed: the queue
-    // emptied, the track stopped rendering, and the note only sounded in the one block after
-    // each ~30 Hz live-MIDI pump — a gated, "subtly wrong" tone while monitoring stopped.
-    // Render a playable instrument track whenever it is live-monitoring / record-armed too,
-    // so a sustained key stays smooth between pumps.
+    // Keep a live-monitored instrument rendering while a key is held (so it sustains between
+    // the ~30 Hz pumps instead of gating) and for a short release tail after the last key
+    // lifts — but no longer. Rendering it forever while armed made an idle instrument sound
+    // non-stop with the transport stopped ("무조건 재생"). While notes are down the tail is
+    // held full; once the keyboard is idle it counts down to silence.
+    if (liveNotesHeld_.load(std::memory_order_relaxed) > 0) {
+        liveMonitorTailSamplesRemaining_ = static_cast<int64_t>(std::max(1.0, settings_.sampleRate) * 4.0);
+    } else if (liveMonitorTailSamplesRemaining_ > 0) {
+        liveMonitorTailSamplesRemaining_ = std::max<int64_t>(0, liveMonitorTailSamplesRemaining_ - frameCount);
+    }
+    const bool liveMonitorActive = liveMonitorTailSamplesRemaining_ > 0;
+    // An instrument voice — a held note, its release tail — lives inside the plug-in, so the
+    // engine has to keep calling process on it every block while that voice is alive.
     const bool hasInstrumentTrack =
         std::any_of(renderPlan.tracks.begin(), renderPlan.tracks.end(), [&](const TrackState& track) {
             if (track.trackType != "instrument") {
@@ -1651,7 +1671,10 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             if (!hasPlayableSlot) {
                 return false;
             }
-            return transportRunning || hasLiveMidi || track.recordArmed || track.inputMonitoring;
+            // Monitor only an armed / input-monitoring track, and only while a live voice is
+            // actually sounding — not indefinitely just because the track is armed.
+            return transportRunning || hasLiveMidi ||
+                   ((track.recordArmed || track.inputMonitoring) && liveMonitorActive);
         });
     const bool hasActiveInserts =
         renderPlan.hasActiveVst3Inserts ||

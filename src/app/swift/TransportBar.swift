@@ -104,6 +104,14 @@ struct TransportBar: View {
             }
             transportKey("stop.fill") { engine.stop() }
                 .contextMenu {
+                    Text("정지 위치")
+                    Picker("정지 위치", selection: Binding(
+                        get: { engine.stopBehavior },
+                        set: { engine.stopBehavior = $0 }
+                    )) {
+                        ForEach(EngineController.StopBehavior.allCases) { Text($0.label).tag($0) }
+                    }
+                    Divider()
                     Text("정지 후 인서트 DSP (Pro Tools HD 방식)")
                     Picker("인서트 DSP", selection: Binding(
                         get: { engine.insertTailOnStopSeconds },
