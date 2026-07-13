@@ -3588,8 +3588,12 @@ final class EngineController: ObservableObject {
         for index in tracks.indices {
             let (left, right) = peaks[tracks[index].name] ?? (0, 0)
             // Ballistic, so a track meter falls to silence on stop instead of freezing.
-            tracks[index].peakLeft = max(left, tracks[index].peakLeft * Self.meterDecay)
-            tracks[index].peakRight = max(right, tracks[index].peakRight * Self.meterDecay)
+            // Assign only on change: an idle strip must not republish tracks every tick, or
+            // every menu observing the controller flickers.
+            let nl = max(left, tracks[index].peakLeft * Self.meterDecay)
+            let nr = max(right, tracks[index].peakRight * Self.meterDecay)
+            if nl != tracks[index].peakLeft { tracks[index].peakLeft = nl }
+            if nr != tracks[index].peakRight { tracks[index].peakRight = nr }
         }
     }
 
@@ -3621,13 +3625,18 @@ final class EngineController: ObservableObject {
             spectrumBins = Array(spectrumScratch[0..<count])
             return
         }
+        // Compute into scratch and publish the whole array once, only if something moved
+        // audibly — an idle spectrum asymptotically decaying toward zero must not republish
+        // every tick (which flickers open menus). Fast attack, slow release.
+        var changed = false
         for i in 0..<count {
             let incoming = spectrumScratch[i]
-            // Fast attack, slow release.
-            spectrumBins[i] = incoming > spectrumBins[i]
-                ? incoming
-                : spectrumBins[i] * 0.72 + incoming * 0.28
+            let cur = spectrumBins[i]
+            let next = incoming > cur ? incoming : cur * 0.72 + incoming * 0.28
+            spectrumScratch[i] = next
+            if abs(next - cur) > 1e-4 { changed = true }
         }
+        if changed { spectrumBins = Array(spectrumScratch[0..<count]) }
     }
 
     private var goniometerScratch = [Float](repeating: 0, count: 1024)
@@ -3641,7 +3650,15 @@ final class EngineController: ObservableObject {
         _ = goniometerScratch.withUnsafeMutableBufferPointer {
             nc_goniometer_samples(handle, $0.baseAddress, Int32(count))
         }
-        goniometerSamples = Array(goniometerScratch[0..<count])
+        // Publish only on real change: a silent goniometer (all near zero) must not
+        // republish every tick and flicker open menus.
+        var changed = goniometerSamples.count != count
+        if !changed {
+            for i in 0..<count where abs(goniometerScratch[i] - goniometerSamples[i]) > 1e-4 {
+                changed = true; break
+            }
+        }
+        if changed { goniometerSamples = Array(goniometerScratch[0..<count]) }
     }
 
     // MARK: - Monitor station
@@ -4288,50 +4305,57 @@ final class EngineController: ObservableObject {
 
     // MARK: - Poll loop
 
+    /// Assign a @Published property only when the value actually changes. Every unconditional
+    /// assignment in the 30 Hz poll fires objectWillChange, which re-renders every view
+    /// observing the controller — including open menus, whose checkmarks then visibly flicker.
+    /// Writing only real changes means an idle engine publishes nothing and menus stay put.
+    private func setIfChanged<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<EngineController, T>, _ value: T) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+    }
+
     private func tick() {
         guard let handle else { return }
 
         var status = NCEngineStatus()
         nc_engine_status(handle, &status)
 
-        phaseCorrelation = status.phaseCorrelation
-        let dcSamples = Int(nc_delay_compensation_samples(handle))
-        if dcSamples != delayCompensationSamples { delayCompensationSamples = dcSamples }
-        spectrumLow = status.spectrumLow
-        spectrumMid = status.spectrumMid
-        spectrumHigh = status.spectrumHigh
-        wakeJitterUs = status.realtimeAverageWakeJitterUs
-        remoteDspActive = status.remoteDspMonitorActive
-        remoteDspRoundTripMs = status.remoteDspRoundTripMs
-        activeInsertCount = Int(status.activeRealtimeVst3TrackInserts)
+        setIfChanged(\.phaseCorrelation, status.phaseCorrelation)
+        setIfChanged(\.delayCompensationSamples, Int(nc_delay_compensation_samples(handle)))
+        setIfChanged(\.spectrumLow, status.spectrumLow)
+        setIfChanged(\.spectrumMid, status.spectrumMid)
+        setIfChanged(\.spectrumHigh, status.spectrumHigh)
+        setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs)
+        setIfChanged(\.remoteDspActive, status.remoteDspMonitorActive)
+        setIfChanged(\.remoteDspRoundTripMs, status.remoteDspRoundTripMs)
+        setIfChanged(\.activeInsertCount, Int(status.activeRealtimeVst3TrackInserts)
             + Int(status.activeRealtimeVst3MasterInserts)
-            + Int(status.activeRemoteDspTrackInserts)
+            + Int(status.activeRemoteDspTrackInserts))
 
-        running = status.running
+        setIfChanged(\.running, status.running)
         let wasTransportRunning = transportRunning
-        transportRunning = status.transportRunning
+        setIfChanged(\.transportRunning, status.transportRunning)
         if wasTransportRunning && !transportRunning { finishAutomationPass() }
         // Ballistic meters: snap up to a new peak, decay down. Without the decay a held
         // engine peak stays lit after stop; with it the meter always falls to silence.
-        outputPeakLeft = max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay)
-        outputPeakRight = max(status.outputPeakRight, outputPeakRight * Self.meterDecay)
+        setIfChanged(\.outputPeakLeft, max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay))
+        setIfChanged(\.outputPeakRight, max(status.outputPeakRight, outputPeakRight * Self.meterDecay))
         updateSpectrumBins(handle)
         updateGoniometer(handle)
-        momentaryLufs = status.momentaryLufs
-        shortTermLufs = status.shortTermLufs
-        integratedLufs = status.integratedLufs
-        loudnessRange = status.loudnessRange
-        truePeakDb = status.truePeakDb
+        setIfChanged(\.momentaryLufs, status.momentaryLufs)
+        setIfChanged(\.shortTermLufs, status.shortTermLufs)
+        setIfChanged(\.integratedLufs, status.integratedLufs)
+        setIfChanged(\.loudnessRange, status.loudnessRange)
+        setIfChanged(\.truePeakDb, status.truePeakDb)
         // Input meter follows the peak immediately on the way up and decays on the way
         // down, so a transient stays readable for a moment.
-        inputPeak = max(status.inputPeak, inputPeak * 0.82)
-        sampleRate = status.sampleRate
-        bufferSize = Int(status.requestedBufferSize)
-        delayCompensationMs = status.delayCompensationMs
-        maxRenderDurationUs = status.realtimeMaxRenderDurationUs
-        deviceName = withUnsafePointer(to: status.deviceName) {
+        setIfChanged(\.inputPeak, max(status.inputPeak, inputPeak * 0.82))
+        setIfChanged(\.sampleRate, status.sampleRate)
+        setIfChanged(\.bufferSize, Int(status.requestedBufferSize))
+        setIfChanged(\.delayCompensationMs, status.delayCompensationMs)
+        setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs)
+        setIfChanged(\.deviceName, withUnsafePointer(to: status.deviceName) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(NC_TEXT_LEN)) { String(cString: $0) }
-        }
+        })
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
         // Drive any plugin-parameter automation lanes to the playhead, so a drawn plug-in
@@ -4356,14 +4380,16 @@ final class EngineController: ObservableObject {
         // Live MIDI: keep a keyboard open and drain its notes into armed instruments.
         pumpLiveMidi(handle)
         // The pump bumps the activity; read (which resets it) and decay for the meter.
-        midiActivity = max(nc_midi_input_activity(handle), midiActivity - 0.07)
+        setIfChanged(\.midiActivity, max(nc_midi_input_activity(handle), midiActivity - 0.07))
 
         listenRoom?.refresh()
     }
 
     private func updatePlayhead(engineSeconds: Double) {
         guard transportRunning else {
-            playheadSeconds = engineSeconds
+            // Guarded so a stopped transport doesn't republish the playhead every tick
+            // (which flickers open menus). While playing it genuinely moves each tick.
+            setIfChanged(\.playheadSeconds, engineSeconds)
             transportWallClockBase = engineSeconds
             transportWallClockStart = CACurrentMediaTime()
             return
