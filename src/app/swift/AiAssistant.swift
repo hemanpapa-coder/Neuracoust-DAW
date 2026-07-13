@@ -87,15 +87,22 @@ final class AiAssistantController: ObservableObject {
     }
 
     private static func preferredModel(from names: [String]) -> String? {
-        // Prefer a strong instruct/coding model that holds up under JSON-constrained,
-        // multi-command prompts. gemma:12b degenerates on compound commands (empty/garbage
-        // output), so it comes last; reasoning models are avoided (slow, hidden tokens).
+        // Prefer a model that holds up under JSON-constrained, multi-command prompts while
+        // staying light on this 26 GB machine. qwen2.5-coder:14b (verified on compound
+        // commands, ~9 GB) leads; mistral-small:24b is a heavier fallback. gemma:12b
+        // degenerates on compound commands, so it comes last. Skip tiny / reasoning / embed
+        // models (too weak or too slow for structured control).
         let lowered = names.map { ($0, $0.lowercased()) }
-        func firstMatch(_ needles: [String]) -> String? {
-            lowered.first { pair in needles.contains { pair.1.contains($0) } && !pair.1.contains("reasoning") }?.0
+        func weak(_ n: String) -> Bool {
+            n.contains("reasoning") || n.contains(":1.5b") || n.contains("e4b")
+                || n.contains("mini") || n.contains("embed")
         }
-        return firstMatch(["mistral-small", "qwen3-coder", "qwen3.6", "qwen2.5", "qwen", "llama", "gemma"])
-            ?? names.first { !$0.lowercased().contains("reasoning") }
+        func firstMatch(_ needles: [String]) -> String? {
+            lowered.first { pair in needles.contains { pair.1.contains($0) } && !weak(pair.1) }?.0
+        }
+        return firstMatch(["qwen2.5-coder", "qwen3-coder", "mistral-small", "qwen3.6",
+                           "qwen2.5", "qwen3", "llama3", "gemma3", "gemma"])
+            ?? names.first { !weak($0.lowercased()) }
     }
 
     func send() {
