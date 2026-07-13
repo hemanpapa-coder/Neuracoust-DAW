@@ -2067,6 +2067,14 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// A pure MIDI track — MIDI regions with no instrument slot (a part is silent until
+    /// routed to an instrument track). The engine already had nc_track_add_midi.
+    func addMidiTrack() {
+        guard let handle, nc_track_add_midi(handle) >= 0 else { return }
+        reloadTracks()
+        refreshHistory()
+    }
+
     /// Deleting takes the clips with it, so ask first when the track has any.
     func deleteSelectedTrack() {
         guard let handle, let trackId = selectedTrackId,

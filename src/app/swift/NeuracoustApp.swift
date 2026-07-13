@@ -105,6 +105,7 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("t", modifiers: .command)
                 Button("악기 트랙 추가") { engine.addInstrumentTrack() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("MIDI 트랙 추가") { engine.addMidiTrack() }
                 Button("Aux(버스) 트랙 추가") { engine.addAuxTrack() }
                 Divider()
                 Button("선택 트랙 복제…") {
@@ -487,6 +488,7 @@ private struct EditView: View {
 
             iconButton("waveform.badge.plus", help: engine.tr("help.add_audio")) { engine.addAudioTrack() }
             iconButton("pianokeys", help: engine.tr("help.add_instrument")) { engine.addInstrumentTrack() }
+            iconButton("music.note.list", help: engine.tr("help.add_midi")) { engine.addMidiTrack() }
             iconButton("rectangle.badge.minus", help: engine.tr("help.delete_track"), enabled: engine.canDeleteSelectedTrack) {
                 engine.deleteSelectedTrack()
             }
