@@ -157,6 +157,9 @@ struct TrackInspector: View {
 
     @ViewBuilder
     private func buttonGrid(_ track: EngineController.Track) -> some View {
+        // One compact row like the timeline track header: M · S · R(arm) · I · automation.
+        // The automation mode chip that used to sit in its own row below is now the fifth
+        // button; the space beneath is left free for controls added later.
         HStack(spacing: Theme.Space.sm) {
             stateButton("M", on: track.muted, onColor: Theme.Palette.amber) { engine.toggleTrackMute(track.id) }
             if track.kind.hasSolo {
@@ -165,24 +168,23 @@ struct TrackInspector: View {
                 stateButton("I", on: track.inputMonitoring, onColor: Theme.Palette.accent) {
                     engine.toggleTrackInputMonitoring(track.id)
                 }
+                automationChip(track)
             }
         }
-        if track.kind.hasSolo { automationModeRow(track) }
     }
 
     private func stateButton(_ label: String, on: Bool, onColor: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
                 if label == "●" {
-                    // Match the transport / mixer record circle exactly (size 10, regular).
-                    Image(systemName: "circle").font(.system(size: 10))
+                    Image(systemName: "circle").font(.system(size: 9))
                 } else {
-                    Text(label).font(Theme.Font.ui(10, .semibold))
+                    Text(label).font(Theme.Font.ui(9.5, .semibold))
                 }
             }
                 .foregroundStyle(on ? Color.black.opacity(0.85) : Theme.Palette.textMuted)
                 .frame(maxWidth: .infinity)
-                .frame(height: 22)
+                .frame(height: 19)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.button)
                         .fill(on ? onColor : Theme.Palette.button)
@@ -193,27 +195,26 @@ struct TrackInspector: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private func automationModeRow(_ track: EngineController.Track) -> some View {
+    /// The automation-mode chip as the fifth button — its letter (R/T/L/W/O) and colour
+    /// track the mode, clicking cycles it. Mirrors the timeline track header.
+    private func automationChip(_ track: EngineController.Track) -> some View {
         let mode = EngineController.automationModes.first { $0.id == track.automationMode }
-        Button { engine.cycleAutomationMode(track.id) } label: {
-            HStack(spacing: Theme.Space.sm) {
-                Text("자동화")
-                    .font(Theme.Font.ui(9))
-                    .foregroundStyle(Theme.Palette.textFaint)
-                Spacer(minLength: 0)
-                Text((mode?.label ?? "Read").uppercased())
-                    .font(Theme.Font.mono(8.5, .semibold))
-                    .foregroundStyle(automationColor(track.automationMode))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 3).fill(automationColor(track.automationMode).opacity(0.16)))
-            }
-            .padding(.horizontal, Theme.Space.sm)
-            .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+        let letter = String((mode?.label ?? "Read").prefix(1)).uppercased()
+        return Button { engine.cycleAutomationMode(track.id) } label: {
+            Text(letter)
+                .font(Theme.Font.ui(9.5, .bold))
+                .foregroundStyle(Color.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .frame(height: 19)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(automationColor(track.automationMode))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1))
+                )
         }
         .buttonStyle(.plain)
-        .help("자동화 모드 순환 (Read → Touch → Latch → Write → Off)")
+        .help(engine.helpMode ? "자동화 모드 순환 (Read → Touch → Latch → Write → Off)" : "")
     }
 
     private func automationColor(_ mode: String) -> Color {
@@ -235,10 +236,13 @@ struct TrackInspector: View {
                     .font(Theme.Font.mono(9.5))
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
+            // The channel fader laid on its side (right = louder): the same physical knob
+            // as the mixer, same FaderScale taper. A native horizontal drag rather than a
+            // rotationEffect, whose hit-testing lands on the wrong controls.
             InspectorHFader(volumeDb: track.volumeDb, accent: track.kind.accent,
                             onChange: { engine.setTrackVolume(track.id, $0) },
                             onCommit: { engine.recordGesture("볼륨") })
-                .frame(height: 14)
+                .frame(height: 20)
             inspectorFaderScale
         }
     }
@@ -364,19 +368,19 @@ struct InspectorHFader: View {
                 Capsule().fill(LinearGradient(colors: [accent.opacity(0.5), accent],
                                               startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(6, geo.size.width * pos))
-                // The same physical cap as the channel fader, laid on its side (a
-                // vertical accent line, since this fader travels left-right).
+                // The channel fader's physical cap, exactly — 16×26 knob rotated onto its
+                // side (26×16, a vertical accent line), same gradient and rim.
                 ZStack {
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 4)
                         .fill(RadialGradient(colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
-                                             center: UnitPoint(x: 0.5, y: 0.35), startRadius: 1, endRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                                             center: UnitPoint(x: 0.65, y: 0.5), startRadius: 1, endRadius: 26))
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
                     Rectangle().fill(accent).frame(width: 2)
                         .shadow(color: accent.opacity(0.8), radius: 2)
                 }
-                .frame(width: 12, height: 18)
-                .offset(x: max(0, min(geo.size.width - 12, geo.size.width * pos - 6)))
+                .frame(width: 26, height: 16)
+                .offset(x: max(0, min(geo.size.width - 26, geo.size.width * pos - 13)))
             }
             .contentShape(Rectangle())
             .gesture(

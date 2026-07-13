@@ -565,7 +565,10 @@ struct ChannelStrip: View {
                     } label: {
                         emptySendSlot
                     }
-                    .menuStyle(.borderlessButton)
+                    // .borderlessButton silently drops a shape-only (textless) label, so the
+                    // dashed box never drew — the same trap as the inspector routing menus.
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
                     .menuIndicator(.hidden)
                     .frame(maxWidth: .infinity)   // fill the row so the dashed box is visible
                 }
