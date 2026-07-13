@@ -1674,10 +1674,14 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             if (!hasPlayableSlot) {
                 return false;
             }
-            // Monitor only an armed / input-monitoring track, and only while a live voice is
-            // actually sounding — not indefinitely just because the track is armed.
-            return transportRunning || hasLiveMidi ||
-                   ((track.recordArmed || track.inputMonitoring) && liveMonitorActive);
+            // Render while a live voice is actually sounding (a key is held, or its release
+            // tail) — regardless of whether the track is armed. The selected instrument track
+            // (the live-MIDI target) is monitored on selection, not by arming, so gating this
+            // on recordArmed/inputMonitoring dropped its sustain and release: only the ~30 Hz
+            // note-on blocks rendered, so held notes came out choppy ("소리가 잘 안나요"). The
+            // tail is bounded (full while keys are down, then counts down to silence), so an
+            // idle instrument still falls silent — no "무조건 재생".
+            return transportRunning || hasLiveMidi || liveMonitorActive;
         });
     const bool hasActiveInserts =
         renderPlan.hasActiveVst3Inserts ||
