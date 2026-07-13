@@ -1038,9 +1038,18 @@ final class EngineController: ObservableObject {
                     deleteMidiRegion(regionId)
                     return nil
                 }
-                guard !selectedClipIds.isEmpty else { return event }
-                deleteSelectedClips()
-                return nil
+                if !selectedClipIds.isEmpty {
+                    deleteSelectedClips()
+                    return nil
+                }
+                // Nothing time-based selected: a lone track/channel selection is the target.
+                // deleteSelectedTrack asks first when the track carries clips, and the delete
+                // is undoable, so this is safe.
+                if selectedTrackId != nil, canDeleteSelectedTrack {
+                    deleteSelectedTrack()
+                    return nil
+                }
+                return event
             default:
                 return event
             }
@@ -1801,6 +1810,16 @@ final class EngineController: ObservableObject {
             selectedMixerTrackIds = [trackId]
         }
         selectedTrackId = trackId
+        focusTrackForDeletion()   // last click wins: the track is now the Delete target
+    }
+
+    /// Selecting a track/channel makes it the Delete-key target, so drop the clip / region /
+    /// conductor selections (the reverse — selecting a clip keeps the track for the Inspector
+    /// but takes the Delete key, because clips are checked before the track).
+    private func focusTrackForDeletion() {
+        selectedClipIds = []
+        selectedRegionId = nil
+        selectedConductor = nil
     }
 
     /// The track shown in the Channel column and the Inspector — the last-clicked
@@ -2082,6 +2101,7 @@ final class EngineController: ObservableObject {
             selectedMixerTrackIds = [id]
         }
         selectedTrackId = id
+        focusTrackForDeletion()   // last click wins: the track is now the Delete target
     }
 
     /// The engine track id for a timeline lane, or nil past the last lane.
@@ -2272,11 +2292,23 @@ final class EngineController: ObservableObject {
         guard let handle, let trackId = selectedTrackId,
               let track = tracks.first(where: { $0.id == trackId }) else { return }
 
+        // Ask first when the track carries anything — clips, MIDI, an instrument, inserts or
+        // sends — so a Delete-key press never silently discards work. An empty track deletes
+        // straight away.
         let clipsOnTrack = clips.filter { $0.trackName == track.name }
-        if !clipsOnTrack.isEmpty {
+        let regionsOnTrack = midiRegions.filter { $0.trackName == track.name }
+        let hasInstrument = !track.instrumentName.isEmpty && track.instrumentName != "No Instrument"
+        let realInserts = track.inserts.filter { !$0.isEmpty }
+        var parts: [String] = []
+        if !clipsOnTrack.isEmpty { parts.append("클립 \(clipsOnTrack.count)개") }
+        if !regionsOnTrack.isEmpty { parts.append("MIDI 리전 \(regionsOnTrack.count)개") }
+        if hasInstrument { parts.append("악기 \(track.instrumentName)") }
+        if !realInserts.isEmpty { parts.append("인서트 \(realInserts.count)개") }
+        if !track.sends.isEmpty { parts.append("센드 \(track.sends.count)개") }
+        if !parts.isEmpty {
             let alert = NSAlert()
             alert.messageText = "\(track.name) 트랙을 삭제할까요?"
-            alert.informativeText = "이 트랙의 클립 \(clipsOnTrack.count)개도 함께 삭제됩니다."
+            alert.informativeText = "이 트랙의 " + parts.joined(separator: ", ") + "도 함께 삭제됩니다."
             alert.addButton(withTitle: "삭제")
             alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
