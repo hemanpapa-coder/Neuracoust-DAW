@@ -3540,6 +3540,9 @@ bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex) 
     if (!neuracoust::daw::setTrackInstrumentSlot(engine->project, trackName, instrument)) {
         return false;
     }
+    // Instruments render as stereo, so an instrument track is defined stereo automatically
+    // (a mono track picking up an instrument follows the instrument). The user can override.
+    track->channelFormat = "stereo";
     engine->reconcileProject();
     engine->recordStep("Load " + instrument.pluginName);
     return true;

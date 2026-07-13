@@ -443,6 +443,19 @@ struct ChannelStrip: View {
                     .foregroundStyle(Theme.Palette.textDim)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                // Stereo/mono, in the (uniform-height) header so it never breaks strip
+                // alignment. Auto-defined on import / instrument load; this overrides by hand.
+                Menu {
+                    Button("스테레오") { engine.setTrackStereo(track.id, true) }
+                    Button("모노") { engine.setTrackStereo(track.id, false) }
+                } label: {
+                    Text(track.isStereo ? "St" : "Mo")
+                        .font(Theme.Font.mono(6.5, .semibold))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 4).frame(height: 12)
+                        .background(RoundedRectangle(cornerRadius: 2).fill(accent.opacity(0.22)))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
             .padding(.horizontal, Theme.Space.md)
             .frame(height: 18)

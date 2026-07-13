@@ -182,6 +182,22 @@ bool importAudioFile(ProjectDocument& project,
     const double durationSeconds =
         static_cast<double>(audio.frameCount()) / static_cast<double>(audio.sampleRate);
 
+    // Auto-define the track's channel format from the source — a mono file makes the track
+    // mono, a stereo file stereo — but only for the track's first clip, so a later mono drop
+    // can't flip an established stereo track. (Mainly for recording channels: the track
+    // follows what it captures; the user can still override it by hand.)
+    {
+        const bool trackHadClips = std::any_of(project.clips.begin(), project.clips.end(),
+            [&](const ClipState& clip) { return clip.trackName == trackName; });
+        if (!trackHadClips) {
+            auto trackIt = std::find_if(project.tracks.begin(), project.tracks.end(),
+                [&](const TrackState& track) { return track.name == trackName; });
+            if (trackIt != project.tracks.end()) {
+                trackIt->channelFormat = audio.channels >= 2 ? "stereo" : "mono";
+            }
+        }
+    }
+
     const std::string clipId =
         appendAudioClipAt(project, trackName, clipSourcePath, std::max(0.0, startSeconds), durationSeconds);
     if (clipId.empty()) {
