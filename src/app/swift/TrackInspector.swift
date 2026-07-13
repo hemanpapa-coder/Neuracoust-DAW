@@ -237,13 +237,17 @@ struct TrackInspector: View {
                     .font(Theme.Font.mono(9.5))
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
-            // The channel fader laid on its side (right = louder): the same physical knob
-            // as the mixer, same FaderScale taper. A native horizontal drag rather than a
-            // rotationEffect, whose hit-testing lands on the wrong controls.
-            InspectorHFader(volumeDb: track.volumeDb, accent: track.kind.accent,
-                            onChange: { engine.setTrackVolume(track.id, $0) },
-                            onCommit: { engine.recordGesture("볼륨") })
-                .frame(height: 20)
+            // The actual mixer ChannelFader, rotated 90° clockwise so it lies on its side
+            // (right = louder) — the exact same control, not a look-alike.
+            GeometryReader { geo in
+                ChannelFader(volumeDb: track.volumeDb, accent: track.kind.accent,
+                             onChange: { engine.setTrackVolume(track.id, $0) },
+                             onCommit: { engine.recordGesture("볼륨") })
+                    .frame(width: 24, height: geo.size.width)
+                    .rotationEffect(.degrees(90))
+                    .frame(width: geo.size.width, height: 24)
+            }
+            .frame(height: 24)
             inspectorFaderScale
         }
     }
@@ -251,7 +255,7 @@ struct TrackInspector: View {
     /// The channel fader's dB legend, laid out horizontally under the Inspector fader —
     /// the same FaderScale taper (+12 at the right … -∞ at the left).
     private var inspectorFaderScale: some View {
-        let marks: [(String, Float)] = [("+12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("-∞", -120)]
+        let marks: [(String, Float)] = [("+12", 12), ("0", 0), ("-12", -12), ("-24", -24), ("∞", -120)]
         return GeometryReader { geo in
             ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
                 let x = geo.size.width * CGFloat(FaderScale.position(forDb: m.1))
@@ -350,48 +354,5 @@ struct TrackInspector: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-    }
-}
-
-// MARK: - Horizontal tapered volume fader (mirrors the mixer's FaderScale taper)
-
-struct InspectorHFader: View {
-    let volumeDb: Float
-    let accent: Color
-    let onChange: (Float) -> Void
-    var onCommit: () -> Void = {}
-
-    var body: some View {
-        GeometryReader { geo in
-            let pos = FaderScale.position(forDb: volumeDb)
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.Palette.recess)
-                Capsule().fill(LinearGradient(colors: [accent.opacity(0.5), accent],
-                                              startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(6, geo.size.width * pos))
-                // The channel fader's physical cap, exactly — the 16×26 knob laid on its
-                // side (26×16, a vertical accent line), same gradient and rim.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(RadialGradient(colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
-                                             center: UnitPoint(x: 0.65, y: 0.5), startRadius: 1, endRadius: 26))
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
-                    Rectangle().fill(accent).frame(width: 2)
-                        .shadow(color: accent.opacity(0.8), radius: 2)
-                }
-                .frame(width: 26, height: 16)
-                .offset(x: max(0, min(geo.size.width - 26, geo.size.width * pos - 13)))
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let p = min(1, max(0, value.location.x / geo.size.width))
-                        onChange(FaderScale.db(forPosition: p))
-                    }
-                    .onEnded { _ in onCommit() }
-            )
-        }
     }
 }
