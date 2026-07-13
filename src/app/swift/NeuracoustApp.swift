@@ -129,6 +129,11 @@ struct NeuracoustApp: App {
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)
             }
+            // FabFilter-style Help menu: a checkmarked toggle for the hover hints, the
+            // same helpMode the toolbar "?" flips. A Toggle renders with the ✓ in a menu.
+            CommandGroup(replacing: .help) {
+                Toggle("대화형 도움말 표시", isOn: $engine.helpMode)
+            }
         }
     }
 }
