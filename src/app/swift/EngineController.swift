@@ -1030,6 +1030,10 @@ final class EngineController: ObservableObject {
                 healSelectedClips()
                 return nil
             case KeyCode.delete, KeyCode.forwardDelete:
+                if selectedConductor != nil {
+                    deleteSelectedConductor()
+                    return nil
+                }
                 if let regionId = selectedRegionId {
                     deleteMidiRegion(regionId)
                     return nil
@@ -1820,6 +1824,7 @@ final class EngineController: ObservableObject {
     func selectClip(_ clipId: String?) {
         selectedClipIds = clipId.map { [$0] } ?? []
         selectedRegionId = nil
+        if clipId != nil { selectedConductor = nil }
     }
 
     /// Shift-click: add a clip to the selection, or take it back out.
@@ -2491,7 +2496,7 @@ final class EngineController: ObservableObject {
 
     func selectRegion(_ regionId: String?) {
         selectedRegionId = regionId
-        if regionId != nil { selectedClipIds = [] }
+        if regionId != nil { selectedClipIds = []; selectedConductor = nil }
     }
 
     var editingRegion: MidiRegion? {
@@ -2678,6 +2683,39 @@ final class EngineController: ObservableObject {
         let timeSeconds: Double
         let label: String
     }
+
+    /// A single selected conductor event, keyed by its time (every delete is time+tolerance).
+    /// Mutually exclusive with the clip and MIDI-region selections so one Delete key has one
+    /// target.
+    enum ConductorSelection: Equatable {
+        case songform(Double), marker(Double), tempo(Double)
+        case meter(Double), key(Double), chord(Double), lyric(Double)
+    }
+    @Published var selectedConductor: ConductorSelection?
+
+    func selectConductor(_ selection: ConductorSelection?) {
+        selectedConductor = selection
+        if selection != nil {
+            selectedClipIds = []
+            selectedRegionId = nil
+        }
+    }
+
+    /// Delete the selected conductor event via its type's existing time-keyed delete.
+    func deleteSelectedConductor() {
+        guard let selection = selectedConductor else { return }
+        switch selection {
+        case .songform(let t): deleteSongSection(at: t)
+        case .marker(let t):   deleteMarker(at: t)
+        case .tempo(let t):    deleteTempoMarker(at: t)
+        case .meter(let t):    deleteMeter(at: t)
+        case .key(let t):      deleteKey(at: t)
+        case .chord(let t):    deleteChord(at: t)
+        case .lyric(let t):    deleteLyric(at: t)
+        }
+        selectedConductor = nil
+    }
+
     @Published private(set) var chords: [ConductorEvent] = []
     @Published private(set) var lyrics: [ConductorEvent] = []
     @Published private(set) var tempoMarkers: [ConductorEvent] = []

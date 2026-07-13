@@ -244,8 +244,10 @@ struct GlobalTracksBar: View {
             ForEach(engine.meterEvents) { e in
                 eventChip(e, ruler: .meter, glyph: .square, laneWidth: laneWidth,
                           anchored: e.timeSeconds < 0.01,
+                          selected: engine.selectedConductor == .meter(e.timeSeconds),
                           onMove: { engine.moveMeter(from: e.timeSeconds, to: $0) },
-                          onDelete: { engine.deleteMeter(at: e.timeSeconds) })
+                          onDelete: { engine.deleteMeter(at: e.timeSeconds) },
+                          onSelect: { engine.selectConductor(.meter(e.timeSeconds)) })
             }
         case .key:
             if engine.keyEvents.isEmpty {
@@ -256,21 +258,27 @@ struct GlobalTracksBar: View {
                 ForEach(engine.keyEvents) { e in
                     eventChip(e, ruler: .key, glyph: .circle, laneWidth: laneWidth,
                               anchored: e.timeSeconds < 0.01,
+                              selected: engine.selectedConductor == .key(e.timeSeconds),
                               onMove: { engine.moveKey(from: e.timeSeconds, to: $0) },
-                              onDelete: { engine.deleteKey(at: e.timeSeconds) })
+                              onDelete: { engine.deleteKey(at: e.timeSeconds) },
+                              onSelect: { engine.selectConductor(.key(e.timeSeconds)) })
                 }
             }
         case .chord:
             ForEach(engine.chords) { e in
                 eventChip(e, ruler: .chord, glyph: .diamond, laneWidth: laneWidth, anchored: false,
+                          selected: engine.selectedConductor == .chord(e.timeSeconds),
                           onMove: { engine.moveChord(from: e.timeSeconds, to: $0) },
-                          onDelete: { engine.deleteChord(at: e.timeSeconds) })
+                          onDelete: { engine.deleteChord(at: e.timeSeconds) },
+                          onSelect: { engine.selectConductor(.chord(e.timeSeconds)) })
             }
         case .lyric:
             ForEach(engine.lyrics) { e in
                 eventChip(e, ruler: .lyric, glyph: .none, laneWidth: laneWidth, anchored: false,
+                          selected: engine.selectedConductor == .lyric(e.timeSeconds),
                           onMove: { engine.moveLyric(from: e.timeSeconds, to: $0) },
-                          onDelete: { engine.deleteLyric(at: e.timeSeconds) })
+                          onDelete: { engine.deleteLyric(at: e.timeSeconds) },
+                          onSelect: { engine.selectConductor(.lyric(e.timeSeconds)) })
             }
         }
     }
@@ -282,6 +290,7 @@ struct GlobalTracksBar: View {
         let key = "m\(time)"
         let px = x(dragSeconds[key] ?? time, laneWidth)
         let trashing = markerTrashing.contains(key)
+        let selected = engine.selectedConductor == .marker(time)
         let pinW: CGFloat = 9
         return Group {
             if px >= Self.headerWidth - 40 && px <= Self.headerWidth + laneWidth {
@@ -290,10 +299,13 @@ struct GlobalTracksBar: View {
                         Image(systemName: "trash.fill").font(.system(size: 10))
                             .foregroundStyle(Theme.Palette.red)
                     } else {
-                        MarkerPin().fill(Ruler.marker.color).frame(width: pinW, height: 12)
+                        MarkerPin().fill(Ruler.marker.color)
+                            .frame(width: pinW, height: 12)
+                            .overlay(selected ? MarkerPin().stroke(Color.white, lineWidth: 1.2).frame(width: pinW, height: 12) : nil)
                     }
                     if !label.isEmpty && !trashing {
-                        Text(label).font(Theme.Font.mono(9, .medium)).foregroundStyle(Ruler.marker.color).lineLimit(1)
+                        Text(label).font(Theme.Font.mono(9, .medium))
+                            .foregroundStyle(selected ? .white : Ruler.marker.color).lineLimit(1)
                     }
                 }
                 // Anchor the pin's tip (its horizontal centre) on the marker time, not the
@@ -330,7 +342,8 @@ struct GlobalTracksBar: View {
                 if trash {
                     onDelete()
                 } else if abs(v.translation.width) < 3 && abs(v.translation.height) < 3 {
-                    engine.seek(start)            // a click seeks the playhead to the marker
+                    engine.selectConductor(.marker(start))   // select it (Delete removes it)
+                    engine.seek(start)                       // and move the playhead to it
                 } else {
                     onMove(t)
                 }
@@ -347,6 +360,7 @@ struct GlobalTracksBar: View {
         let clippedEnd = min(Self.headerWidth + laneWidth, endX)
         let width = max(0, clippedEnd - clippedStart)
         let color = EngineController.songSectionColor(e.label)
+        let selected = engine.selectedConductor == .songform(e.timeSeconds)
         return Group {
             if width > 1 && clippedEnd > Self.headerWidth {
                 HStack(spacing: 0) {
@@ -358,12 +372,13 @@ struct GlobalTracksBar: View {
                 }
                 .frame(width: width, alignment: .leading)
                 .frame(maxHeight: .infinity)
-                .background(color.opacity(0.30))
-                .overlay(RoundedRectangle(cornerRadius: 2).stroke(color.opacity(0.7), lineWidth: 0.5))
+                .background(color.opacity(selected ? 0.5 : 0.30))
+                .overlay(RoundedRectangle(cornerRadius: 2).stroke(selected ? Color.white : color.opacity(0.7), lineWidth: selected ? 1.5 : 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 2))
                 .offset(x: clippedStart - Self.headerWidth)
                 .gesture(dragGesture(key: "sf\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth,
                                      onMove: { engine.moveSongSection(from: e.timeSeconds, to: $0) }))
+                .onTapGesture { engine.selectConductor(.songform(e.timeSeconds)) }
                 .contextMenu { Button("삭제", role: .destructive) { engine.deleteSongSection(at: e.timeSeconds) } }
             }
         }
@@ -371,6 +386,7 @@ struct GlobalTracksBar: View {
 
     private func tempoPoint(_ e: EngineController.ConductorEvent, laneWidth: CGFloat) -> some View {
         let px = x(dragSeconds["tp\(e.timeSeconds)"] ?? e.timeSeconds, laneWidth)
+        let selected = engine.selectedConductor == .tempo(e.timeSeconds)
         return Group {
             if px >= Self.headerWidth - 20 && px <= Self.headerWidth + laneWidth {
                 HStack(spacing: 3) {
@@ -378,10 +394,13 @@ struct GlobalTracksBar: View {
                     Text(e.label).font(Theme.Font.mono(9, .medium)).foregroundStyle(Ruler.tempo.color)
                 }
                 .padding(.horizontal, 3).frame(height: 15)
+                .background(RoundedRectangle(cornerRadius: 3).fill(selected ? Ruler.tempo.color.opacity(0.28) : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Ruler.tempo.color : .clear, lineWidth: 1.3))
                 .contentShape(Rectangle())
                 .offset(x: px - Self.headerWidth - 3)
                 .gesture(dragGesture(key: "tp\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth,
                                      onMove: { engine.moveTempoMarker(from: e.timeSeconds, to: $0) }))
+                .onTapGesture { engine.selectConductor(.tempo(e.timeSeconds)) }
                 .contextMenu { Button("삭제", role: .destructive) { engine.deleteTempoMarker(at: e.timeSeconds) } }
             }
         }
@@ -390,8 +409,9 @@ struct GlobalTracksBar: View {
     private enum Glyph { case diamond, square, circle, none }
 
     private func eventChip(_ e: EngineController.ConductorEvent, ruler: Ruler, glyph: Glyph, laneWidth: CGFloat,
-                           anchored: Bool, movable: Bool = true,
-                           onMove: @escaping (Double) -> Void, onDelete: @escaping () -> Void) -> some View {
+                           anchored: Bool, movable: Bool = true, selected: Bool = false,
+                           onMove: @escaping (Double) -> Void, onDelete: @escaping () -> Void,
+                           onSelect: (() -> Void)? = nil) -> some View {
         let px = x(dragSeconds["\(ruler.rawValue)\(e.timeSeconds)"] ?? e.timeSeconds, laneWidth)
         return Group {
             if px >= Self.headerWidth - 30 && px <= Self.headerWidth + laneWidth {
@@ -406,11 +426,12 @@ struct GlobalTracksBar: View {
                         .font(Theme.Font.mono(9, .semibold)).foregroundStyle(ruler.color).lineLimit(1)
                 }
                 .padding(.horizontal, 5).frame(height: 15)
-                .background(RoundedRectangle(cornerRadius: 3).fill(ruler.color.opacity(0.16)))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(ruler.color.opacity(anchored ? 0.15 : 0.35), lineWidth: 0.5))
+                .background(RoundedRectangle(cornerRadius: 3).fill(ruler.color.opacity(selected ? 0.34 : 0.16)))
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? ruler.color : ruler.color.opacity(anchored ? 0.15 : 0.35), lineWidth: selected ? 1.3 : 0.5))
                 .offset(x: px - Self.headerWidth + 2)
                 // Every real event is draggable, including the ones seeded at the start.
                 .gesture(movable ? dragGesture(key: "\(ruler.rawValue)\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth, onMove: onMove) : nil)
+                .onTapGesture { onSelect?() }
                 .contextMenu { if !anchored { Button("삭제", role: .destructive) { onDelete() } } }
             }
         }
