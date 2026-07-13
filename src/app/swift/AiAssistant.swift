@@ -72,13 +72,17 @@ final class AiAssistantController: ObservableObject {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoded = try JSONDecoder().decode(TagsResponse.self, from: data)
-            let names = decoded.models.map(\.name)
+            let names = decoded.models.map(\.name).sorted()
+            guard !names.isEmpty else { return }   // keep the last good list, never blank it
             models = names
             if model.isEmpty || !names.contains(model) {
                 model = Self.preferredModel(from: names) ?? names.first ?? ""
             }
         } catch {
-            appendSystem("Ollama에 연결할 수 없어요 (\(host)). ollama serve 가 켜져 있는지 확인하세요.")
+            // Keep whatever list we had; only surface the error if we have nothing.
+            if models.isEmpty {
+                appendSystem("Ollama에 연결할 수 없어요 (\(host)). ollama serve 가 켜져 있는지 확인하세요.")
+            }
         }
     }
 
@@ -256,6 +260,9 @@ struct AiAssistantPanel: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.Palette.divider, lineWidth: 1))
         .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
         .padding(24)
+        // Populate the model list before the user opens the picker, so opening it never
+        // races an async update (which would dismiss the menu — the flicker).
+        .task { await ai.refreshModels() }
     }
 
     private var header: some View {
@@ -276,19 +283,25 @@ struct AiAssistantPanel: View {
             .buttonStyle(.plain)
             .help(ai.autoApply ? "자동 적용 켜짐 — AI가 바로 실행 (되돌리기 가능)" : "자동 적용 꺼짐 — 제안만")
             Menu {
-                if ai.models.isEmpty {
-                    Button("모델 새로고침") { Task { await ai.refreshModels() } }
-                } else {
-                    Picker("모델", selection: $ai.model) {
-                        ForEach(ai.models, id: \.self) { Text($0).tag($0) }
+                // Flat buttons (not a Picker) so an async model-list update while the menu is
+                // open doesn't rebuild and dismiss it — the flicker the Picker caused.
+                ForEach(ai.models, id: \.self) { name in
+                    Button {
+                        ai.model = name
+                    } label: {
+                        if name == ai.model { Label(name, systemImage: "checkmark") }
+                        else { Text(name) }
                     }
-                    Divider()
-                    Button("모델 새로고침") { Task { await ai.refreshModels() } }
                 }
+                if ai.models.isEmpty {
+                    Text("모델 목록 없음").font(Theme.Font.mono(9))
+                }
+                Divider()
+                Button("모델 새로고침") { Task { await ai.refreshModels() } }
             } label: {
-                Text(ai.model.isEmpty ? "모델" : ai.model)
+                Text(ai.model.isEmpty ? "모델 선택" : ai.model)
                     .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
-                    .lineLimit(1).frame(maxWidth: 130)
+                    .lineLimit(1).frame(width: 130, alignment: .trailing)
             }
             .menuStyle(.button).buttonStyle(.plain)
             Button { ai.open = false } label: {
