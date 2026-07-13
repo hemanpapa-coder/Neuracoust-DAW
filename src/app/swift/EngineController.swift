@@ -399,14 +399,19 @@ final class EngineController: ObservableObject {
         guard let track = tracks.first(where: { $0.id == trackId }) else { return }
 
         let plugin = plugins.first { $0.id == pluginIndex }
-        let loadsAsInstrument = track.kind == .instrument && plugin?.category == "Instrument"
-
+        // The plugin category is a name heuristic — a synth whose name carries no
+        // "synth/piano/drum" keyword (Serum, Kontakt, Vital) is not tagged "Instrument".
+        // So an EXPLICIT instrument-slot target (empty chip, 악기 교체, 레이어 추가) must win
+        // over the heuristic: the user asked for the instrument slot, not an insert.
         let layerSlot = pluginTargetInstrumentSlot
         pluginTargetInstrumentSlot = nil
         let changed: Bool
-        if loadsAsInstrument, let slot = layerSlot {
-            changed = nc_track_set_instrument_slot(handle, Int32(trackId), Int32(slot), Int32(pluginIndex))
-        } else if loadsAsInstrument {
+        if track.kind == .instrument, let slot = layerSlot {
+            changed = slot == 0
+                ? nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
+                : nc_track_set_instrument_slot(handle, Int32(trackId), Int32(slot), Int32(pluginIndex))
+        } else if track.kind == .instrument && plugin?.category == "Instrument" {
+            // No explicit target, but the plugin looks like an instrument → primary slot.
             changed = nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
         } else {
             changed = nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
@@ -417,10 +422,18 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Load (or replace) the track's primary instrument. Opens the browser targeting the
+    /// instrument slot explicitly, so any picked plugin fills the slot rather than an insert.
+    func loadInstrument(track trackId: Int) {
+        pluginTargetInstrumentSlot = 0
+        openPluginBrowser(forTrack: trackId)
+    }
+
     /// Add another instrument to the track's rack (a layer), all fed the same MIDI and summed.
     /// Opens the plugin browser targeting the next free rack slot.
     func addInstrumentLayer(track trackId: Int) {
         guard let track = tracks.first(where: { $0.id == trackId }) else { return }
+        // Empty rack → slot 0 (the primary instrument); otherwise the next free layer slot.
         let nextSlot = track.instrumentLayers.count
         guard nextSlot < 8 else { lastError = "악기 레이어는 최대 8개입니다."; return }
         pluginTargetInstrumentSlot = nextSlot

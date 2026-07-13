@@ -291,8 +291,10 @@ struct TrackInspector: View {
                     .disabled(track.instrumentLayers.count >= 8)
                 }
                 if track.instrumentLayers.isEmpty {
-                    Text("악기 없음 — 플러그인 브라우저에서 로드")
-                        .font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.textFaint)
+                    Button { engine.loadInstrument(track: track.id) } label: {
+                        Text("악기 로드…").font(Theme.Font.mono(9)).foregroundStyle(track.kind.accent)
+                    }
+                    .buttonStyle(.plain)
                 } else {
                     ForEach(Array(track.instrumentLayers.enumerated()), id: \.offset) { idx, name in
                         HStack(spacing: 4) {

@@ -488,7 +488,7 @@ struct ChannelStrip: View {
                 let label = track.instrumentName + (extraLayers > 0 ? "  +\(extraLayers)" : "")
                 SlotChip(label: label, accent: accent, lit: editors.isOpen(slot)) {
                     if track.instrumentName.isEmpty {
-                        engine.openPluginBrowser(forTrack: track.id)
+                        engine.loadInstrument(track: track.id)
                     } else {
                         editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
                     }
@@ -497,7 +497,7 @@ struct ChannelStrip: View {
                     Button("에디터 열기") {
                         editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
                     }
-                    Button("악기 교체…") { engine.openPluginBrowser(forTrack: track.id) }
+                    Button("악기 교체…") { engine.loadInstrument(track: track.id) }
                     Button("레이어 추가…") { engine.addInstrumentLayer(track: track.id) }
                     Divider()
                     Button("악기 제거", role: .destructive) { engine.clearInstrument(track: track.id) }
