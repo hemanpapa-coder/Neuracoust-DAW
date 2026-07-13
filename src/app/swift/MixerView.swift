@@ -298,7 +298,7 @@ struct ChannelStrip: View {
                     autoFadeSection
                     // The master has no sends; pad to the sends' height so its pan / buttons
                     // / fader drop to the same rows as the channels'.
-                    Color.clear.frame(height: 47)
+                    Color.clear.frame(height: 50)
                 } else if showSends && track.kind.showsSends {
                     sendSection
                 }
@@ -925,7 +925,13 @@ struct ChannelStrip: View {
             .lineLimit(1...4)
             .padding(5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.recess))
+            // A warm panel tone that sits in the strip rather than a flat black hole.
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .fill(Theme.Palette.panel)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .stroke(Theme.Palette.divider, lineWidth: 1))
+            )
             .focused($memoFocused)
             .onAppear { memoDraft = track.notes }
             // Pull in external changes (undo, project load, reorder) only while not typing.
