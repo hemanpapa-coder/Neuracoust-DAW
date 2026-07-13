@@ -1615,10 +1615,13 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
         inputMonitorBuffer_[destination + 1] = right;
         peak = std::max(peak, std::max(std::abs(left), std::abs(right)));
     }
-    const double maxBufferedSeconds = talkbackActive ? 0.08 : 0.5;
-    const double sampleRate = std::max(1.0, sampleRateForStatus_.load(std::memory_order_relaxed));
-    const size_t maxFrames = static_cast<size_t>(std::max(1.0, sampleRate * maxBufferedSeconds));
-    const size_t maxSamples = maxFrames * 2;
+    // Keep the input-monitor FIFO to a few render buffers, not the old 0.5 s, so monitoring
+    // latency can't accumulate — the SoundGrid driver delivers callbacks in bursts, which
+    // would otherwise pile up in this queue. Anything older than the cap is dropped (the
+    // monitor skips ahead), bounding worst-case latency to ~a few buffers. Talkback tighter.
+    const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
+    const int64_t capFrames = blockFrames * (talkbackActive ? 2 : 4);
+    const size_t maxSamples = static_cast<size_t>(capFrames) * 2;
     if (inputMonitorBuffer_.size() > maxSamples) {
         inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(), inputMonitorBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
     }

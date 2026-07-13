@@ -732,6 +732,7 @@ private:
             status_.message += " Physical input monitor unavailable: Core Audio input queue could not be created.";
             return false;
         }
+        inputThreadPolicyApplied_.store(false);   // fresh queue → fresh callback thread to pin
         CFStringRef inputUid = deviceUidFromId(settings_.inputDeviceId);
         if (inputUid != nullptr) {
             AudioQueueSetProperty(inputQueue_, kAudioQueueProperty_CurrentDevice, &inputUid, sizeof(inputUid));
@@ -800,6 +801,7 @@ private:
         const int frames = packetCount > 0
             ? static_cast<int>(packetCount)
             : static_cast<int>(buffer->mAudioDataByteSize / inputFormat_.mBytesPerFrame);
+        applyInputThreadPolicyIfNeeded(static_cast<UInt32>(std::max(16, settings_.bufferSize)));
         if (frames > 0) {
             dspEngine_.pushInputMonitorInterleaved(static_cast<const Float32*>(buffer->mAudioData), frames, static_cast<int>(inputFormat_.mChannelsPerFrame));
         }
@@ -911,19 +913,12 @@ private:
         realtimeTelemetrySuppressCallbacks_.store(12, std::memory_order_relaxed);
     }
 
-    void applyAudioThreadPolicyIfNeeded(UInt32 frameCount) {
-        bool expected = false;
-        if (!audioThreadPolicyApplied_.compare_exchange_strong(expected, true)) {
-            return;
-        }
-        // Hard real-time (time-constraint) scheduling for the audio render thread.
-        // Without this the render thread runs at ordinary priority and any busy
-        // out-of-process plug-in worker/observer (or the plug-in editor GUI) can
-        // keep the OS from waking it on time — the callback then arrives a full
-        // buffer period late, which the Monitor shows as ~one-period wake jitter
-        // even though the in-callback DSP load is tiny. Time-constraint guarantees
-        // this thread is scheduled ahead of every QoS class, so its wake timing
-        // stays locked to the buffer period regardless of how busy the workers are.
+    // Hard real-time (time-constraint) scheduling for the calling thread. Without it the
+    // thread runs at ordinary priority and any busy out-of-process plug-in worker/observer
+    // (or the plug-in editor GUI) can keep the OS from waking it on time — the callback then
+    // arrives a full buffer period late. Time-constraint guarantees the thread is scheduled
+    // ahead of every QoS class, so its wake timing stays locked to the buffer period.
+    void applyTimeConstraintToCurrentThread(UInt32 frameCount) {
         const double periodUs = (static_cast<double>(std::max<UInt32>(1, frameCount)) /
                                  std::max(1.0, settings_.sampleRate)) * 1000000.0;
         mach_timebase_info_data_t timebase;
@@ -945,6 +940,26 @@ private:
         }
     }
 
+    void applyAudioThreadPolicyIfNeeded(UInt32 frameCount) {
+        bool expected = false;
+        if (!audioThreadPolicyApplied_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        applyTimeConstraintToCurrentThread(frameCount);
+    }
+
+    // The input AudioQueue runs its callback on a CoreAudio-managed thread that, unlike the
+    // render thread, gets no real-time policy by default — a scheduling asymmetry that lets
+    // the capture thread wake late and forces the monitor FIFO to buffer more. Pin it to the
+    // same time-constraint policy on its first callback so input can track at low latency.
+    void applyInputThreadPolicyIfNeeded(UInt32 frameCount) {
+        bool expected = false;
+        if (!inputThreadPolicyApplied_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        applyTimeConstraintToCurrentThread(frameCount);
+    }
+
     AudioEngineSettings settings_;
     AudioEngineStatus status_;
     AudioUnit unit_ = nullptr;
@@ -957,6 +972,7 @@ private:
     std::vector<float> renderBlock_;
     std::vector<float> renderProbeBlock_;
     std::atomic<bool> audioThreadPolicyApplied_ {false};
+    std::atomic<bool> inputThreadPolicyApplied_ {false};
     std::atomic<uint64_t> realtimeCallbackCount_ {0};
     std::atomic<double> realtimeAverageWakeJitterUs_ {0.0};
     std::atomic<double> realtimeMaxWakeJitterUs_ {0.0};
