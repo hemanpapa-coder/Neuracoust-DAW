@@ -878,16 +878,20 @@ final class EngineController: ObservableObject {
     @Published private(set) var currentOutputDeviceId = ""   // empty = system default
     @Published private(set) var activeOutputDeviceName = ""
 
-    /// Rescans CoreAudio and refreshes the device list — called when a menu opens.
+    /// Rescans CoreAudio and refreshes the device list. Called on the dock's appearance and
+    /// periodically from the poll, so a hot-plugged interface (e.g. a UNiTE-2 connected mid
+    /// session) shows up without a restart. Republishes only on change, so the periodic scan
+    /// doesn't flicker open menus.
     func refreshOutputDevices() {
         guard let handle else { return }
         let count = Int(nc_output_device_count(handle))
-        outputDevices = (0..<count).map { i in
+        let devices = (0..<count).map { i in
             OutputDevice(id: readEngineString { nc_output_device_id(handle, Int32(i), $0, $1) },
                          name: readEngineString(capacity: 256) { nc_output_device_name(handle, Int32(i), $0, $1) })
         }
-        currentOutputDeviceId = readEngineString { nc_current_output_device_id(handle, $0, $1) }
-        activeOutputDeviceName = readEngineString(capacity: 256) { nc_active_output_device_name(handle, $0, $1) }
+        if devices != outputDevices { outputDevices = devices }
+        setIfChanged(\.currentOutputDeviceId, readEngineString { nc_current_output_device_id(handle, $0, $1) })
+        setIfChanged(\.activeOutputDeviceName, readEngineString(capacity: 256) { nc_active_output_device_name(handle, $0, $1) })
     }
 
     /// An empty id selects the system default. Changing the device restarts the engine.
@@ -905,11 +909,12 @@ final class EngineController: ObservableObject {
     func refreshInputDevices() {
         guard let handle else { return }
         let count = Int(nc_input_device_count(handle))
-        inputDevices = (0..<count).map { i in
+        let devices = (0..<count).map { i in
             OutputDevice(id: readEngineString { nc_input_device_id(handle, Int32(i), $0, $1) },
                          name: readEngineString(capacity: 256) { nc_input_device_name(handle, Int32(i), $0, $1) })
         }
-        currentInputDeviceId = readEngineString { nc_current_input_device_id(handle, $0, $1) }
+        if devices != inputDevices { inputDevices = devices }
+        setIfChanged(\.currentInputDeviceId, readEngineString { nc_current_input_device_id(handle, $0, $1) })
     }
 
     /// An empty id selects the system default. Changing the device restarts the engine.
@@ -4382,8 +4387,19 @@ final class EngineController: ObservableObject {
         // The pump bumps the activity; read (which resets it) and decay for the meter.
         setIfChanged(\.midiActivity, max(nc_midi_input_activity(handle), midiActivity - 0.07))
 
+        // Pick up hot-plugged interfaces (a UNiTE-2 connected mid-session) without a restart:
+        // rescan the device lists a couple of times a second. refreshOutputDevices republishes
+        // only when the list actually changed, so this stays flicker-free.
+        deviceRescanTicks += 1
+        if deviceRescanTicks >= 45 {   // ~1.5 s at the 30 Hz poll
+            deviceRescanTicks = 0
+            refreshOutputDevices()
+            refreshInputDevices()
+        }
+
         listenRoom?.refresh()
     }
+    private var deviceRescanTicks = 0
 
     private func updatePlayhead(engineSeconds: Double) {
         guard transportRunning else {
