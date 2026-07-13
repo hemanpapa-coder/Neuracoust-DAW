@@ -83,7 +83,7 @@ final class EngineController: ObservableObject {
     /// Default mixer channel-strip width, and per-track overrides — the same idea as
     /// lane height: drag a strip's side edge to widen/narrow it (a multi-selection moves
     /// together), snapped to a step, persisted.
-    static let channelWidthDefault: CGFloat = 122
+    static let channelWidthDefault: CGFloat = 110
     static let channelWidthStep: CGFloat = 12
     // Width narrows left-right only (height is unchanged); the strip keeps every element,
     // the scales just tuck behind the fader cap as it tightens.
