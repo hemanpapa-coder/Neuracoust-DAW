@@ -49,7 +49,7 @@ enum FaderScale {
     // Signed legend: +12 at the top, unity in the middle, -∞ at the very bottom.
     static let marks: [(String, Float)] = [
         ("+12", 12), ("+6", 6), ("0", 0), ("-6", -6), ("-12", -12),
-        ("-24", -24), ("-36", -36), ("-48", -48), ("-∞", -120),
+        ("-24", -24), ("-36", -36), ("-48", -48), ("∞", -120),
     ]
 }
 
@@ -164,9 +164,12 @@ struct FaderScaleMarks: View {
             ForEach(FaderScale.marks, id: \.1) { label, db in
                 let y = capHeight / 2 + travel * (1 - CGFloat(FaderScale.position(forDb: db)))
                 let unity = db == 0
+                let isInf = label == "∞"
                 HStack(spacing: 2) {                       // tick ↔ number gap (matches the meter)
                     Text(label)
-                        .font(Theme.Font.mono(7, unity ? .semibold : .regular))
+                        // ∞ carries no minus and is set larger, right-aligned in the same
+                        // column as the numbers above it so the legend stays balanced.
+                        .font(Theme.Font.mono(isInf ? 11 : 7, (unity || isInf) ? .semibold : .regular))
                         .foregroundStyle(Color(hex: unity ? 0xb6bbc2 : 0x8b9096))
                         .frame(width: 17, alignment: .trailing)
                     Rectangle()

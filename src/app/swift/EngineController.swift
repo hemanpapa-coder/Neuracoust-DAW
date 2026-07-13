@@ -90,18 +90,20 @@ final class EngineController: ObservableObject {
     static let channelWidthMin: CGFloat = 58
     // No free widening past the default — the width toggle is small ↔ large only.
     static let channelWidthMax: CGFloat = channelWidthDefault
-    // One width for the whole mixer, not per track: audio, aux, VCA and Master all stay the
-    // same size, so making an aux never leaves it (or the master) narrower than the channels.
-    @Published var channelWidth: CGFloat = 58
+    // Per-track width so narrowing a channel touches only that channel (or the current
+    // multi-selection), never the whole mixer. Strips default to the full width, so a new
+    // aux — or the master — is never narrower than the channels.
+    @Published var channelWidths: [Int: CGFloat] = [:]
 
-    // Strips start narrow (small) by default; the corner toggle widens them all to large.
-    func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidth }
+    func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthDefault }
 
     func setChannelWidth(trackIds: [Int], width: CGFloat) {
-        channelWidth = min(Self.channelWidthMax, max(Self.channelWidthMin, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))
+        let w = min(Self.channelWidthMax, max(Self.channelWidthMin, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))
+        for id in trackIds { channelWidths[id] = w }
     }
     func commitChannelWidth() {
-        UserDefaults.standard.set(Int(channelWidth), forKey: SettingsKey.channelWidth)
+        let encoded = channelWidths.map { "\($0.key):\(Int($0.value))" }.joined(separator: "|")
+        UserDefaults.standard.set(encoded, forKey: SettingsKey.channelWidth)
     }
 
     /// Live width-drag preview. While a strip's right edge is dragged, every targeted
@@ -3445,9 +3447,11 @@ final class EngineController: ObservableObject {
                 if kv.count == 2, let id = Int(kv[0]), let h = Double(kv[1]) { laneHeights[id] = CGFloat(h) }
             }
         }
-        // New single-value format; the old per-track "id:w|…" string is ignored (defaults).
-        if let n = d.object(forKey: SettingsKey.channelWidth) as? Int {
-            channelWidth = min(Self.channelWidthMax, max(Self.channelWidthMin, CGFloat(n)))
+        if let enc = d.string(forKey: SettingsKey.channelWidth), !enc.isEmpty {
+            for pair in enc.split(separator: "|") {
+                let kv = pair.split(separator: ":")
+                if kv.count == 2, let id = Int(kv[0]), let w = Double(kv[1]) { channelWidths[id] = CGFloat(w) }
+            }
         }
         if let et = d.string(forKey: SettingsKey.editTool), let tool = EditTool(rawValue: et) { editTool = tool }
         if let sm = d.string(forKey: SettingsKey.soloMonitor), let mode = SoloMonitorMode(rawValue: sm) { soloMonitorMode = mode }
