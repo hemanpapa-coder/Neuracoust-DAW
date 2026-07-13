@@ -1730,11 +1730,15 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                                                                         instrument.pluginClassName);
             const std::string processorKey = track.name + "#I" + std::to_string(slotIndex + 1);
             if (state != nullptr) {
-                const int maxBlockSize = static_cast<int>(std::max<int64_t>(1, frameCount));
+                // Prepare once at a stable, generous maximum block, NOT the current block. On
+                // this machine SoundGrid delivers callbacks in bursts, so frameCount varies
+                // block to block; keying the cache on it re-prepared the plug-in every block,
+                // resetting the synth's voices each time — an audible "직직" crackle. A VST3
+                // processor may be driven with any block <= its prepared maximum.
+                constexpr int kInstrumentMaxBlock = 8192;
                 const std::string cacheKey = instrument.pluginName + "\n" +
                     instrument.pluginPath + "\n" +
-                    std::to_string(static_cast<int>(std::round(plan.sampleRate))) + "\n" +
-                    std::to_string(maxBlockSize);
+                    std::to_string(static_cast<int>(std::round(plan.sampleRate)));
                 auto keyIt = state->instrumentProcessorKeys.find(processorKey);
                 if (keyIt == state->instrumentProcessorKeys.end() || keyIt->second != cacheKey) {
                     state->instrumentProcessors.erase(processorKey);
@@ -1745,7 +1749,7 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                     auto [inserted, _] = state->instrumentProcessors.emplace(processorKey, Vst3RealtimeProcessor());
                     processorIt = inserted;
                     std::string prepareMessage;
-                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, maxBlockSize, prepareMessage)) {
+                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, kInstrumentMaxBlock, prepareMessage)) {
                         state->instrumentLastErrors[processorKey] = prepareMessage;
                         state->instrumentProcessors.erase(processorKey);
                         continue;
