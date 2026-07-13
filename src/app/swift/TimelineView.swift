@@ -727,10 +727,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             return
         }
 
-        // Markers moved to the Global Tracks bar; the ruler just scrubs now.
+        // Markers moved to the Global Tracks bar; the ruler just scrubs now. In Grid
+        // mode the playhead lands on the grid — a click steps to the nearest line.
         if point.y < rulerHeight {
             drag = .seeking
-            onSeek?(max(0, seconds(atX: point.x)))
+            onSeek?(snapped(seconds(atX: point.x)))
             return
         }
 
@@ -865,7 +866,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case .none:
             break
         case .seeking:
-            onSeek?(time)
+            onSeek?(snapped(time))
         case .movingRegion(let id, let grabOffset):
             guard let region = model.midiRegions.first(where: { $0.id == id }) else { break }
             let lane = laneIndex(at: point) ?? region.laneIndex
@@ -1012,8 +1013,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitEdit?("Move clips")
         case .marquee(let origin, let current):
             if origin == current {
-                // A click, not a sweep: the playhead follows, as it always has.
-                onSeek?(max(0, seconds(atX: point.x)))
+                // A click, not a sweep: the playhead follows, snapped to the grid.
+                onSeek?(snapped(seconds(atX: point.x)))
             } else {
                 onSelectMany?(clipsIntersecting(NSRect(x: min(origin.x, current.x),
                                                        y: min(origin.y, current.y),

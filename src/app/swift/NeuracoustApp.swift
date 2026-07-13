@@ -63,6 +63,19 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("n", modifiers: .command)
                 Button("열기…") { engine.openProject() }
                     .keyboardShortcut("o", modifiers: .command)
+                Menu("최근 항목") {
+                    if engine.recentProjects.isEmpty {
+                        Button("최근 항목 없음") {}.disabled(true)
+                    } else {
+                        ForEach(engine.recentProjects, id: \.self) { url in
+                            Button(url.deletingPathExtension().lastPathComponent) {
+                                engine.openRecentProject(url)
+                            }
+                        }
+                        Divider()
+                        Button("최근 항목 지우기") { engine.clearRecentProjects() }
+                    }
+                }
             }
             CommandGroup(replacing: .saveItem) {
                 Button("저장") { engine.saveProject() }
@@ -510,12 +523,11 @@ private struct EditView: View {
     /// The edit-tool picker: each tool forces a mouse behaviour in the timeline.
     private var gridMenu: some View {
         Menu {
-            ForEach(EngineController.GridUnit.allCases) { unit in
-                Button {
-                    engine.setGridUnit(unit)
-                } label: {
-                    if engine.gridUnit == unit { Label(unit.label, systemImage: "checkmark") } else { Text(unit.label) }
-                }
+            Section("박자 단위 (템포 따라감)") {
+                ForEach(EngineController.GridUnit.musicalCases) { gridUnitButton($0) }
+            }
+            Section("시간 단위 (고정)") {
+                ForEach(EngineController.GridUnit.timeCases) { gridUnitButton($0) }
             }
         } label: {
             HStack(spacing: 4) {
@@ -528,6 +540,14 @@ private struct EditView: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .helpTip(engine.tr("help.grid"))
+    }
+
+    private func gridUnitButton(_ unit: EngineController.GridUnit) -> some View {
+        Button {
+            engine.setGridUnit(unit)
+        } label: {
+            if engine.gridUnit == unit { Label(unit.label, systemImage: "checkmark") } else { Text(unit.label) }
+        }
     }
 
     private var toolSelector: some View {

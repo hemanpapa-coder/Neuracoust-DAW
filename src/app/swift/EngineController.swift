@@ -672,6 +672,9 @@ final class EngineController: ObservableObject {
         case bar = "1 bar", beat = "1 beat", quarter = "1/4 beat"
         case eighth = "1/8 beat", sixteenth = "1/16 beat", tenth = "0.1s", frame = "1 frame"
         var id: String { rawValue }
+        /// Bar/beat units follow the tempo map; time units are fixed wall-clock.
+        static var musicalCases: [GridUnit] { [.bar, .beat, .quarter, .eighth, .sixteenth] }
+        static var timeCases: [GridUnit] { [.tenth, .frame] }
         var label: String {
             switch self {
             case .bar: return "1 마디"; case .beat: return "1 비트"; case .quarter: return "1/4"
@@ -1406,6 +1409,42 @@ final class EngineController: ObservableObject {
         openProject(at: url)
     }
 
+    /// Recently opened/saved documents, newest first, capped. Persisted across launches
+    /// so the File ▸ 최근 항목 submenu can reopen the last sessions.
+    @Published private(set) var recentProjects: [URL] = []
+    private static let maxRecentProjects = 12
+
+    private func loadRecentProjects() {
+        let paths = UserDefaults.standard.stringArray(forKey: SettingsKey.recentProjects) ?? []
+        recentProjects = paths.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func rememberRecentProject(_ url: URL) {
+        let standardized = url.standardizedFileURL
+        var list = recentProjects.filter { $0.standardizedFileURL != standardized }
+        list.insert(standardized, at: 0)
+        if list.count > Self.maxRecentProjects { list = Array(list.prefix(Self.maxRecentProjects)) }
+        recentProjects = list
+        UserDefaults.standard.set(list.map { $0.path }, forKey: SettingsKey.recentProjects)
+    }
+
+    /// Reopen a document from the recent list. A path that has since moved or been
+    /// deleted drops out of the list rather than erroring.
+    func openRecentProject(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            recentProjects.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
+            UserDefaults.standard.set(recentProjects.map { $0.path }, forKey: SettingsKey.recentProjects)
+            lastError = "파일을 찾을 수 없습니다: \(url.lastPathComponent)"
+            return
+        }
+        openProject(at: url)
+    }
+
+    func clearRecentProjects() {
+        recentProjects = []
+        UserDefaults.standard.removeObject(forKey: SettingsKey.recentProjects)
+    }
+
     @discardableResult
     func saveProject() -> Bool {
         guard let handle else { return false }
@@ -1436,6 +1475,7 @@ final class EngineController: ObservableObject {
             return false
         }
         refreshHistory()
+        rememberRecentProject(url)
         return true
     }
 
@@ -1469,6 +1509,7 @@ final class EngineController: ObservableObject {
         var errorBuffer = [CChar](repeating: 0, count: 256)
         if nc_project_open(handle, url.path, preferAutosave, &errorBuffer, errorBuffer.count) {
             afterProjectReplaced()
+            rememberRecentProject(url)
         } else {
             lastError = String(cString: errorBuffer)
         }
@@ -3413,6 +3454,7 @@ final class EngineController: ObservableObject {
         static let physHeadphone = "nc.physicalHeadphoneModel"
         static let monitorVol = "nc.monitorVolumeDb"
         static let delayComp = "nc.delayCompensation"
+        static let recentProjects = "nc.recentProjects"
         static let saved = "nc.settingsSaved"
     }
 
@@ -3449,6 +3491,7 @@ final class EngineController: ObservableObject {
     /// Restores saved app-level settings. Called once at start.
     func restorePersistedSettings() {
         let d = UserDefaults.standard
+        loadRecentProjects()   // independent of the saved-settings gate below
         guard d.bool(forKey: SettingsKey.saved) else { return }
         if let out = d.string(forKey: SettingsKey.outputDevice), !out.isEmpty { setOutputDevice(out) }
         if let inp = d.string(forKey: SettingsKey.inputDevice), !inp.isEmpty { setInputDevice(inp) }
