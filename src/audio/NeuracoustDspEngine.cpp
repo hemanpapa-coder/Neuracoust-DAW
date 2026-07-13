@@ -1567,20 +1567,27 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     // renders the instrument whenever liveMidiEvents is non-empty. The renderer consumes
     // and erases each event, so nothing accumulates.
     const bool hasLiveMidi = !projectRenderState_.liveMidiEvents.empty();
-    const bool hasInstrumentTrack = (transportRunning || hasLiveMidi) &&
-        std::any_of(renderPlan.tracks.begin(), renderPlan.tracks.end(), [](const TrackState& track) {
+    // An instrument voice — a held note, a release tail — lives inside the plug-in, so the
+    // engine has to keep calling process on it every block. Gating on (transportRunning ||
+    // hasLiveMidi) alone dropped a held key the instant its NoteOn was consumed: the queue
+    // emptied, the track stopped rendering, and the note only sounded in the one block after
+    // each ~30 Hz live-MIDI pump — a gated, "subtly wrong" tone while monitoring stopped.
+    // Render a playable instrument track whenever it is live-monitoring / record-armed too,
+    // so a sustained key stays smooth between pumps.
+    const bool hasInstrumentTrack =
+        std::any_of(renderPlan.tracks.begin(), renderPlan.tracks.end(), [&](const TrackState& track) {
             if (track.trackType != "instrument") {
                 return false;
             }
-            if (std::any_of(track.instrumentSlots.begin(), track.instrumentSlots.end(), [](const InstrumentSlotState& slot) {
+            const bool hasPlayableSlot =
+                std::any_of(track.instrumentSlots.begin(), track.instrumentSlots.end(), [](const InstrumentSlotState& slot) {
                     return slot.enabled && !slot.bypassed && !slot.pluginPath.empty();
-                })) {
-                return true;
+                }) ||
+                (track.instrument.enabled && !track.instrument.bypassed && !track.instrument.pluginPath.empty());
+            if (!hasPlayableSlot) {
+                return false;
             }
-            return
-                track.instrument.enabled &&
-                !track.instrument.bypassed &&
-                !track.instrument.pluginPath.empty();
+            return transportRunning || hasLiveMidi || track.recordArmed || track.inputMonitoring;
         });
     const bool hasActiveInserts =
         renderPlan.hasActiveVst3Inserts ||
