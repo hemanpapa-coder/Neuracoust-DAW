@@ -473,8 +473,6 @@ private struct EditView: View {
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)
 
-            iconButton("mappin", help: engine.tr("help.marker")) { engine.addMarkerAtPlayhead() }
-
             // The four range edits live under one menu — the icons alone couldn't tell
             // them apart from the clip ops.
             let hasRange = engine.hasEditRange
