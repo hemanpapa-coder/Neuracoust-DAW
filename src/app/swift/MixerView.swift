@@ -729,14 +729,14 @@ struct ChannelStrip: View {
     }
 
     private var buttonRow: some View {
+        // M · S · R(arm) · I — the same order as the track header and inspector.
         HStack(spacing: 2) {
-            if track.kind.hasArm {
-                stateButton("●", on: track.recordArmed, tint: Theme.Palette.red) {
-                    engine.toggleTrackArm(track.id)
-                }
-                stateButton("I", on: track.inputMonitoring, tint: Theme.Palette.accent) {
-                    engine.toggleTrackInputMonitoring(track.id)
-                }
+            // While another track is soloed, this one is silenced — blink its Mute the
+            // way Pro Tools does, so it reads as held down by the solo rather than off.
+            let soloSilenced = engine.anyTrackSoloed && !track.solo && track.kind.hasSolo
+            stateButton("M", on: track.muted, tint: Theme.Palette.orange,
+                        blink: soloSilenced && engine.soloBlinkOn) {
+                engine.toggleTrackMute(track.id)
             }
             if track.kind.hasSolo {
                 stateButton("S", on: track.solo, tint: Theme.Palette.yellow) {
@@ -744,12 +744,13 @@ struct ChannelStrip: View {
                 }
                 .contextMenu { soloModeMenu }
             }
-            // While another track is soloed, this one is silenced — blink its Mute the
-            // way Pro Tools does, so it reads as held down by the solo rather than off.
-            let soloSilenced = engine.anyTrackSoloed && !track.solo && track.kind.hasSolo
-            stateButton("M", on: track.muted, tint: Theme.Palette.orange,
-                        blink: soloSilenced && engine.soloBlinkOn) {
-                engine.toggleTrackMute(track.id)
+            if track.kind.hasArm {
+                stateButton("●", on: track.recordArmed, tint: Theme.Palette.red) {
+                    engine.toggleTrackArm(track.id)
+                }
+                stateButton("I", on: track.inputMonitoring, tint: Theme.Palette.accent) {
+                    engine.toggleTrackInputMonitoring(track.id)
+                }
             }
         }
     }

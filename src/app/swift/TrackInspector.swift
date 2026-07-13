@@ -242,7 +242,7 @@ struct TrackInspector: View {
             InspectorHFader(volumeDb: track.volumeDb, accent: track.kind.accent,
                             onChange: { engine.setTrackVolume(track.id, $0) },
                             onCommit: { engine.recordGesture("볼륨") })
-                .frame(height: 20)
+                .frame(height: 14)
             inspectorFaderScale
         }
     }
@@ -368,19 +368,19 @@ struct InspectorHFader: View {
                 Capsule().fill(LinearGradient(colors: [accent.opacity(0.5), accent],
                                               startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(6, geo.size.width * pos))
-                // The channel fader's physical cap, exactly — 16×26 knob rotated onto its
-                // side (26×16, a vertical accent line), same gradient and rim.
+                // The same physical cap as the channel fader, laid on its side (a
+                // vertical accent line, since this fader travels left-right).
                 ZStack {
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(RadialGradient(colors: [Color(hex: 0x3c444e), Color(hex: 0x171c22)],
-                                             center: UnitPoint(x: 0.65, y: 0.5), startRadius: 1, endRadius: 26))
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
+                                             center: UnitPoint(x: 0.5, y: 0.35), startRadius: 1, endRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
                     Rectangle().fill(accent).frame(width: 2)
                         .shadow(color: accent.opacity(0.8), radius: 2)
                 }
-                .frame(width: 26, height: 16)
-                .offset(x: max(0, min(geo.size.width - 26, geo.size.width * pos - 13)))
+                .frame(width: 12, height: 18)
+                .offset(x: max(0, min(geo.size.width - 12, geo.size.width * pos - 6)))
             }
             .contentShape(Rectangle())
             .gesture(
