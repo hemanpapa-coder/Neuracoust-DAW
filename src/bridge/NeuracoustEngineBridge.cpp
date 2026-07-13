@@ -990,6 +990,25 @@ const neuracoust::daw::InstrumentSlotState* loadedInstrument(NCEngine* engine, i
     return &track->instrument;
 }
 
+// The renderer plays track.instrumentSlots, not the legacy track.instrument mirror, so
+// parameter and editor access must target the actual rack slot — otherwise an editor knob or
+// preset writes to a copy the sound never reads. Resolves slot `slotIndex`, materializing the
+// legacy single instrument into slot 0 so access is uniform. Returns nullptr if empty.
+neuracoust::daw::InstrumentSlotState* instrumentSlotMutable(NCEngine* engine, int trackIndex, size_t slotIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return nullptr;
+    if (track->instrumentSlots.empty() && !track->instrument.pluginPath.empty() &&
+        track->instrument.pluginName != "No Instrument") {
+        track->instrumentSlots.push_back(track->instrument);
+    }
+    if (slotIndex >= track->instrumentSlots.size()) return nullptr;
+    auto& slot = track->instrumentSlots[slotIndex];
+    if (slot.pluginPath.empty() || slot.pluginName.empty() || slot.pluginName == "No Instrument") {
+        return nullptr;
+    }
+    return &slot;
+}
+
 } // namespace
 
 void nc_track_instrument_plugin_path(NCEngine* engine, int index, char* out, size_t outLen) {
@@ -1012,59 +1031,97 @@ void nc_track_instrument_class_name(NCEngine* engine, int index, char* out, size
     copyText(out, outLen, instrument != nullptr ? instrument->pluginClassName : std::string{});
 }
 
-int nc_track_instrument_param_count(NCEngine* engine, int index) {
-    const auto* instrument = loadedInstrument(engine, index);
-    return instrument != nullptr ? static_cast<int>(instrument->parameters.size()) : 0;
+// Per-slot plug-in descriptor, so a layer's editor can be opened and addressed individually.
+void nc_track_instrument_slot_plugin_path(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    copyText(out, outLen, slot != nullptr ? slot->pluginPath : std::string{});
+}
+void nc_track_instrument_slot_plugin_format(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    copyText(out, outLen, slot != nullptr ? slot->pluginFormat : std::string{});
+}
+void nc_track_instrument_slot_class_id(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    copyText(out, outLen, slot != nullptr ? slot->pluginClassId : std::string{});
+}
+void nc_track_instrument_slot_class_name(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    copyText(out, outLen, slot != nullptr ? slot->pluginClassName : std::string{});
 }
 
-uint32_t nc_track_instrument_param_id(NCEngine* engine, int index, int paramIndex) {
-    const auto* instrument = loadedInstrument(engine, index);
-    if (instrument == nullptr || paramIndex < 0 ||
-        static_cast<size_t>(paramIndex) >= instrument->parameters.size()) {
+// Read/write instrument parameters on a specific rack slot (slot 0 = the primary instrument).
+// These are what the editor host talks to; they target instrumentSlots so a knob turn is heard.
+int nc_track_instrument_slot_param_count(NCEngine* engine, int index, int slotIndex) {
+    if (slotIndex < 0) return 0;
+    const auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    return slot != nullptr ? static_cast<int>(slot->parameters.size()) : 0;
+}
+
+uint32_t nc_track_instrument_slot_param_id(NCEngine* engine, int index, int slotIndex, int paramIndex) {
+    if (slotIndex < 0) return 0;
+    const auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    if (slot == nullptr || paramIndex < 0 || static_cast<size_t>(paramIndex) >= slot->parameters.size()) {
         return 0;
     }
-    return instrument->parameters[static_cast<size_t>(paramIndex)].parameterId;
+    return slot->parameters[static_cast<size_t>(paramIndex)].parameterId;
 }
 
-double nc_track_instrument_param_value(NCEngine* engine, int index, int paramIndex) {
-    const auto* instrument = loadedInstrument(engine, index);
-    if (instrument == nullptr || paramIndex < 0 ||
-        static_cast<size_t>(paramIndex) >= instrument->parameters.size()) {
+double nc_track_instrument_slot_param_value(NCEngine* engine, int index, int slotIndex, int paramIndex) {
+    if (slotIndex < 0) return 0.0;
+    const auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    if (slot == nullptr || paramIndex < 0 || static_cast<size_t>(paramIndex) >= slot->parameters.size()) {
         return 0.0;
     }
-    return instrument->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
+    return slot->parameters[static_cast<size_t>(paramIndex)].normalizedValue;
 }
 
-bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
-                                            const char* displayName, double normalizedValue) {
-    auto* track = trackAt(engine, index);
-    if (track == nullptr || loadedInstrument(engine, index) == nullptr) {
-        return false;
-    }
+bool nc_track_set_instrument_slot_vst3_parameter(NCEngine* engine, int index, int slotIndex,
+                                                 uint32_t parameterId, const char* displayName,
+                                                 double normalizedValue) {
+    if (slotIndex < 0) return false;
+    auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    if (slot == nullptr) return false;
 
     const double clamped = std::max(0.0, std::min(1.0, normalizedValue));
     const std::string name = displayName != nullptr ? displayName : "";
-
-    auto& parameters = track->instrument.parameters;
+    auto& parameters = slot->parameters;
     auto found = std::find_if(parameters.begin(), parameters.end(),
                               [&](const neuracoust::daw::Vst3ParameterValueState& parameter) {
                                   return parameter.parameterId == parameterId;
                               });
     if (found != parameters.end()) {
         found->normalizedValue = clamped;
-        if (!name.empty()) {
-            found->displayName = name;
-        }
+        if (!name.empty()) found->displayName = name;
     } else {
         parameters.push_back({parameterId,
                               name.empty() ? "Param " + std::to_string(parameterId) : name,
                               clamped});
     }
-
-    // The instrument's parameters live in the render plan, not in a live insert
-    // chain, so the graph has to be reconciled for a knob turn to be heard.
+    // Keep the legacy mirror in step so display/name reads stay correct for slot 0.
+    if (auto* track = trackAt(engine, index);
+        track != nullptr && slotIndex == 0 && !track->instrumentSlots.empty()) {
+        track->instrument = track->instrumentSlots.front();
+    }
+    // Instrument parameters live in the render plan, so reconcile for the change to be heard.
     engine->reconcileProject();
     return true;
+}
+
+// Slot 0 (primary instrument) accessors — the existing API, now routed through the rack slot
+// the renderer actually plays rather than the stale track.instrument mirror.
+int nc_track_instrument_param_count(NCEngine* engine, int index) {
+    return nc_track_instrument_slot_param_count(engine, index, 0);
+}
+uint32_t nc_track_instrument_param_id(NCEngine* engine, int index, int paramIndex) {
+    return nc_track_instrument_slot_param_id(engine, index, 0, paramIndex);
+}
+double nc_track_instrument_param_value(NCEngine* engine, int index, int paramIndex) {
+    return nc_track_instrument_slot_param_value(engine, index, 0, paramIndex);
+}
+bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
+                                            const char* displayName, double normalizedValue) {
+    return nc_track_set_instrument_slot_vst3_parameter(engine, index, 0, parameterId,
+                                                       displayName, normalizedValue);
 }
 
 int nc_track_send_count(NCEngine* engine, int index) {

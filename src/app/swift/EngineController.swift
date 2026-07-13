@@ -543,19 +543,22 @@ final class EngineController: ObservableObject {
 
         guard let track = tracks.first(where: { $0.id == trackId }) else { return nil }
 
-        if insertIndex == Self.instrumentSlotIndex {
-            let i = Int32(trackId)
-            let path = readEngineString { nc_track_instrument_plugin_path(handle, i, $0, $1) }
+        // insertIndex <= -1 addresses an instrument rack slot: -1 = slot 0 (primary),
+        // -2 = layer 1, … so a layer's editor opens and is addressed on its own.
+        if insertIndex <= Self.instrumentSlotIndex {
+            let i = Int32(trackId), sl = Int32(Self.instrumentSlotIndex - insertIndex)
+            let path = readEngineString { nc_track_instrument_slot_plugin_path(handle, i, sl, $0, $1) }
             guard !path.isEmpty else { return nil }
+            let name = readEngineString { nc_track_instrument_slot_name(handle, i, sl, $0, $1) }
             // An instrument runs in the render plan, never in the sandbox bridge, so it
             // has no shared-memory observer to point its editor at.
             return InsertDescriptor(
                 trackName: track.name,
-                name: track.instrumentName,
+                name: name == "No Instrument" ? "" : name,
                 pluginPath: path,
-                format: readEngineString { nc_track_instrument_plugin_format(handle, i, $0, $1) },
-                classId: readEngineString { nc_track_instrument_class_id(handle, i, $0, $1) },
-                className: readEngineString { nc_track_instrument_class_name(handle, i, $0, $1) },
+                format: readEngineString { nc_track_instrument_slot_plugin_format(handle, i, sl, $0, $1) },
+                classId: readEngineString { nc_track_instrument_slot_class_id(handle, i, sl, $0, $1) },
+                className: readEngineString { nc_track_instrument_slot_class_name(handle, i, sl, $0, $1) },
                 observerShmName: "", observerMaxBlock: 0, observerSampleRate: 0)
         }
 
@@ -596,11 +599,12 @@ final class EngineController: ObservableObject {
             }
         }
         let i = Int32(trackId), s = Int32(insertIndex)
-        if insertIndex == Self.instrumentSlotIndex {
-            let count = Int(nc_track_instrument_param_count(handle, i))
+        if insertIndex <= Self.instrumentSlotIndex {
+            let sl = Int32(Self.instrumentSlotIndex - insertIndex)
+            let count = Int(nc_track_instrument_slot_param_count(handle, i, sl))
             return (0..<count).map { p in
-                (id: nc_track_instrument_param_id(handle, i, Int32(p)),
-                 value: nc_track_instrument_param_value(handle, i, Int32(p)))
+                (id: nc_track_instrument_slot_param_id(handle, i, sl, Int32(p)),
+                 value: nc_track_instrument_slot_param_value(handle, i, sl, Int32(p)))
             }
         }
         let count = Int(nc_track_insert_param_count(handle, i, s))
@@ -616,8 +620,10 @@ final class EngineController: ObservableObject {
         let changed: Bool
         if trackId == Self.masterInsertTargetId {
             changed = nc_master_set_vst3_parameter(handle, Int32(insertIndex), parameterId, nil, normalizedValue)
-        } else if insertIndex == Self.instrumentSlotIndex {
-            changed = nc_track_set_instrument_vst3_parameter(handle, Int32(trackId), parameterId, nil, normalizedValue)
+        } else if insertIndex <= Self.instrumentSlotIndex {
+            changed = nc_track_set_instrument_slot_vst3_parameter(
+                handle, Int32(trackId), Int32(Self.instrumentSlotIndex - insertIndex),
+                parameterId, nil, normalizedValue)
         } else {
             changed = nc_track_set_vst3_parameter(handle, Int32(trackId), Int32(insertIndex),
                                                   parameterId, nil, normalizedValue)

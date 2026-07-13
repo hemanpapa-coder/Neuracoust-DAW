@@ -274,6 +274,19 @@ double nc_track_instrument_param_value(NCEngine* engine, int index, int paramInd
 bool nc_track_set_instrument_vst3_parameter(NCEngine* engine, int index, uint32_t parameterId,
                                             const char* displayName, double normalizedValue);
 
+// Per-rack-slot instrument access (slot 0 = primary). Lets a layer's editor open and be
+// addressed on its own. The slot-0 forms above route through slot 0 of these.
+void nc_track_instrument_slot_plugin_path(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen);
+void nc_track_instrument_slot_plugin_format(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen);
+void nc_track_instrument_slot_class_id(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen);
+void nc_track_instrument_slot_class_name(NCEngine* engine, int index, int slotIndex, char* out, size_t outLen);
+int nc_track_instrument_slot_param_count(NCEngine* engine, int index, int slotIndex);
+uint32_t nc_track_instrument_slot_param_id(NCEngine* engine, int index, int slotIndex, int paramIndex);
+double nc_track_instrument_slot_param_value(NCEngine* engine, int index, int slotIndex, int paramIndex);
+bool nc_track_set_instrument_slot_vst3_parameter(NCEngine* engine, int index, int slotIndex,
+                                                 uint32_t parameterId, const char* displayName,
+                                                 double normalizedValue);
+
 // ---------------------------------------------------------------------------
 // Master inserts
 //

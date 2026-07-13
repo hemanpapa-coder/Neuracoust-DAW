@@ -82,6 +82,7 @@ struct ChannelColumn: View {
 
 struct TrackInspector: View {
     @EnvironmentObject private var engine: EngineController
+    @EnvironmentObject private var editors: PluginEditorHost
 
     @State private var renaming = false
     @State private var draftName = ""
@@ -303,6 +304,14 @@ struct TrackInspector: View {
                             Text(name).font(Theme.Font.mono(9))
                                 .foregroundStyle(Theme.Palette.textSecondary).lineLimit(1)
                             Spacer(minLength: 0)
+                            // Open this layer's editor. Slot s addresses as insert index -1-s.
+                            Button {
+                                editors.toggle(trackId: track.id,
+                                               insertIndex: EngineController.instrumentSlotIndex - idx)
+                            } label: {
+                                Image(systemName: "slider.horizontal.3").font(.system(size: 8, weight: .bold))
+                            }
+                            .buttonStyle(.plain).foregroundStyle(track.kind.accent)
                             Button { engine.removeInstrumentLayer(track: track.id, slot: idx) } label: {
                                 Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
                             }
