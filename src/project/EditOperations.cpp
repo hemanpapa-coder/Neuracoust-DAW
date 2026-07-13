@@ -708,6 +708,7 @@ InstrumentSlotState normalizedInstrumentSlot(InstrumentSlotState instrument) {
         instrument.pluginPath.clear();
         instrument.enabled = false;
         instrument.bypassed = false;
+        instrument.soloed = false;
         instrument.midiInput = "MIDI Input";
         instrument.midiChannel = 0;
         instrument.reportedLatencySamples = 0;
@@ -3079,6 +3080,22 @@ bool toggleTrackInstrumentBypass(ProjectDocument& project, const std::string& tr
         return false;
     }
     track->instrumentSlots[slotIndex].bypassed = !track->instrumentSlots[slotIndex].bypassed;
+    compactAndSyncInstrumentRack(*track);
+    return true;
+}
+
+bool toggleTrackInstrumentSlotSolo(ProjectDocument& project, const std::string& trackName, size_t slotIndex) {
+    TrackState* track = findTrack(project, trackName);
+    if (track == nullptr || track->trackType != "instrument" || slotIndex >= kMaxInstrumentRackSlots) {
+        return false;
+    }
+    if (track->instrumentSlots.empty() && instrumentSlotHasPlugin(track->instrument)) {
+        track->instrumentSlots.push_back(track->instrument);
+    }
+    if (slotIndex >= track->instrumentSlots.size() || !instrumentSlotHasPlugin(track->instrumentSlots[slotIndex])) {
+        return false;
+    }
+    track->instrumentSlots[slotIndex].soloed = !track->instrumentSlots[slotIndex].soloed;
     compactAndSyncInstrumentRack(*track);
     return true;
 }

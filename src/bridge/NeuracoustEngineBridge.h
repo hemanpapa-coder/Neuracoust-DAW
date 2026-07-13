@@ -200,6 +200,11 @@ int  nc_track_instrument_slot_count(NCEngine* engine, int trackIndex);
 void nc_track_instrument_slot_name(NCEngine* engine, int trackIndex, int slotIndex, char* out, size_t outLen);
 bool nc_track_set_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex, int pluginIndex);
 bool nc_track_remove_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex);
+/// Per-layer mute (bypass) and solo within the instrument rack.
+bool nc_track_instrument_slot_bypassed(NCEngine* engine, int trackIndex, int slotIndex);
+bool nc_track_instrument_slot_soloed(NCEngine* engine, int trackIndex, int slotIndex);
+bool nc_track_toggle_instrument_slot_bypass(NCEngine* engine, int trackIndex, int slotIndex);
+bool nc_track_toggle_instrument_slot_solo(NCEngine* engine, int trackIndex, int slotIndex);
 
 /// Duplicates a track with all its settings (inserts, sends, routing, clips), optionally
 /// excluding clips/inserts/sends. Returns the new track's index, or -1 on failure.

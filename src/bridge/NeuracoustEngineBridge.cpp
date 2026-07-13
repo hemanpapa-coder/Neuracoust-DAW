@@ -3701,6 +3701,36 @@ bool nc_track_set_instrument_slot(NCEngine* engine, int trackIndex, int slotInde
     return true;
 }
 
+// Per-layer mute (bypass) and solo in the instrument rack.
+bool nc_track_instrument_slot_bypassed(NCEngine* engine, int trackIndex, int slotIndex) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, trackIndex, static_cast<size_t>(slotIndex));
+    return slot != nullptr && slot->bypassed;
+}
+bool nc_track_instrument_slot_soloed(NCEngine* engine, int trackIndex, int slotIndex) {
+    const auto* slot = slotIndex < 0 ? nullptr : instrumentSlotMutable(engine, trackIndex, static_cast<size_t>(slotIndex));
+    return slot != nullptr && slot->soloed;
+}
+bool nc_track_toggle_instrument_slot_bypass(NCEngine* engine, int trackIndex, int slotIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slotIndex < 0) return false;
+    if (!neuracoust::daw::toggleTrackInstrumentBypass(engine->project, track->name, static_cast<size_t>(slotIndex))) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Instrument layer mute");
+    return true;
+}
+bool nc_track_toggle_instrument_slot_solo(NCEngine* engine, int trackIndex, int slotIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slotIndex < 0) return false;
+    if (!neuracoust::daw::toggleTrackInstrumentSlotSolo(engine->project, track->name, static_cast<size_t>(slotIndex))) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Instrument layer solo");
+    return true;
+}
+
 bool nc_track_remove_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex) {
     auto* track = trackAt(engine, trackIndex);
     if (track == nullptr || slotIndex < 0) return false;

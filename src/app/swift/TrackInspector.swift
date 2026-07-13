@@ -297,13 +297,21 @@ struct TrackInspector: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    ForEach(Array(track.instrumentLayers.enumerated()), id: \.offset) { idx, name in
+                    ForEach(Array(track.instrumentLayers.enumerated()), id: \.offset) { idx, layer in
                         HStack(spacing: 4) {
                             Text("\(idx + 1)").font(Theme.Font.mono(8))
                                 .foregroundStyle(Theme.Palette.textFaint).frame(width: 9)
-                            Text(name).font(Theme.Font.mono(9))
-                                .foregroundStyle(Theme.Palette.textSecondary).lineLimit(1)
+                            Text(layer.name).font(Theme.Font.mono(9))
+                                .foregroundStyle(layer.muted ? Theme.Palette.textFaint : Theme.Palette.textSecondary)
+                                .lineLimit(1)
                             Spacer(minLength: 0)
+                            // Per-layer mute (M) and solo (S).
+                            layerButton("M", on: layer.muted, onColor: Theme.Palette.amber) {
+                                engine.toggleInstrumentLayerMute(track: track.id, slot: idx)
+                            }
+                            layerButton("S", on: layer.soloed, onColor: Theme.Palette.yellow) {
+                                engine.toggleInstrumentLayerSolo(track: track.id, slot: idx)
+                            }
                             // Open this layer's editor. Slot s addresses as insert index -1-s.
                             Button {
                                 editors.toggle(trackId: track.id,
@@ -323,6 +331,18 @@ struct TrackInspector: View {
                 }
             }
         }
+    }
+
+    /// A tiny M / S toggle for a rack layer.
+    private func layerButton(_ label: String, on: Bool, onColor: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Theme.Font.mono(8, .bold))
+                .foregroundStyle(on ? Color.black : Theme.Palette.textFaint)
+                .frame(width: 14, height: 12)
+                .background(RoundedRectangle(cornerRadius: 3).fill(on ? onColor : Theme.Palette.recess))
+        }
+        .buttonStyle(.plain)
     }
 
     /// Mono/stereo channel format. A mono track sums to one channel panned into the field.

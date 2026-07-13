@@ -38,7 +38,8 @@ struct InstrumentSlotState {
     std::string pluginName = "No Instrument";
     std::string pluginFormat = "None";
     std::string pluginPath;
-    bool bypassed = false;
+    bool bypassed = false;   // per-layer mute
+    bool soloed = false;     // per-layer solo (transient; when any layer soloes, only soloed layers sound)
     bool enabled = false;
     std::string midiInput = "MIDI Input";
     int midiChannel = 0;

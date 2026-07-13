@@ -1704,11 +1704,15 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
         }
         std::vector<float> summedOutput(static_cast<size_t>(frameCount) * 2, 0.0f);
         bool renderedAnySlot = false;
+        // Per-layer solo: when any layer in this rack is soloed, only soloed layers sound.
+        const bool anyLayerSoloed = std::any_of(instrumentSlots.begin(), instrumentSlots.end(),
+                                                [](const InstrumentSlotState& slot) { return slot.soloed; });
         for (size_t slotIndex = 0; slotIndex < instrumentSlots.size(); ++slotIndex) {
             const auto& instrument = instrumentSlots[slotIndex];
             if (instrument.pluginPath.empty() ||
                 !instrument.enabled ||
                 instrument.bypassed ||
+                (anyLayerSoloed && !instrument.soloed) ||
                 instrument.pluginName.empty() ||
                 instrument.pluginName == "No Instrument") {
                 continue;

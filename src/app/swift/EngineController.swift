@@ -157,6 +157,13 @@ final class EngineController: ObservableObject {
         var preFader: Bool = false
     }
 
+    /// One instrument in the rack, with its per-layer mute (bypass) and solo state.
+    struct InstrumentLayer: Hashable {
+        let name: String
+        var muted: Bool = false
+        var soloed: Bool = false
+    }
+
     struct Track: Identifiable {
         let id: Int
         let name: String
@@ -181,7 +188,7 @@ final class EngineController: ObservableObject {
         var instrumentName: String
         /// The instrument rack: every loaded instrument on the track (slot 0 = primary, the
         /// rest are layers), all fed the same MIDI and summed. Empty when there's no instrument.
-        var instrumentLayers: [String] = []
+        var instrumentLayers: [InstrumentLayer] = []
         var sends: [TrackSend]
 
         var peakLeft: Float = 0
@@ -443,6 +450,24 @@ final class EngineController: ObservableObject {
     func removeInstrumentLayer(track trackId: Int, slot: Int) {
         guard let handle else { return }
         if nc_track_remove_instrument_slot(handle, Int32(trackId), Int32(slot)) {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
+    /// Per-layer mute (bypass): the layer stops sounding, the rest keep playing.
+    func toggleInstrumentLayerMute(track trackId: Int, slot: Int) {
+        guard let handle else { return }
+        if nc_track_toggle_instrument_slot_bypass(handle, Int32(trackId), Int32(slot)) {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
+    /// Per-layer solo: while any layer is soloed, only soloed layers sound.
+    func toggleInstrumentLayerSolo(track trackId: Int, slot: Int) {
+        guard let handle else { return }
+        if nc_track_toggle_instrument_slot_solo(handle, Int32(trackId), Int32(slot)) {
             reloadTracks()
             refreshHistory()
         }
@@ -1343,9 +1368,13 @@ final class EngineController: ObservableObject {
                 }(),
                 instrumentLayers: {
                     let count = Int(nc_track_instrument_slot_count(handle, i))
-                    return (0..<count).map { s in
-                        readEngineString { nc_track_instrument_slot_name(handle, i, Int32(s), $0, $1) }
-                    }.filter { !$0.isEmpty && $0 != "No Instrument" }
+                    return (0..<count).compactMap { s -> InstrumentLayer? in
+                        let name = readEngineString { nc_track_instrument_slot_name(handle, i, Int32(s), $0, $1) }
+                        guard !name.isEmpty, name != "No Instrument" else { return nil }
+                        return InstrumentLayer(name: name,
+                                               muted: nc_track_instrument_slot_bypassed(handle, i, Int32(s)),
+                                               soloed: nc_track_instrument_slot_soloed(handle, i, Int32(s)))
+                    }
                 }(),
                 sends: (0..<sendCount).map { slot in
                     TrackSend(bus: readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) },

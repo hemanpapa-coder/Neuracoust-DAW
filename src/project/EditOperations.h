@@ -228,6 +228,8 @@ bool setTrackInstrumentSlot(ProjectDocument& project, const std::string& trackNa
 bool setTrackInstrumentSlot(ProjectDocument& project, const std::string& trackName, size_t slotIndex, const InstrumentSlotState& instrument);
 bool toggleTrackInstrumentBypass(ProjectDocument& project, const std::string& trackName);
 bool toggleTrackInstrumentBypass(ProjectDocument& project, const std::string& trackName, size_t slotIndex);
+/// Per-layer solo: when any layer in the rack is soloed, only soloed layers sound.
+bool toggleTrackInstrumentSlotSolo(ProjectDocument& project, const std::string& trackName, size_t slotIndex);
 bool setTrackInstrumentMidiChannel(ProjectDocument& project, const std::string& trackName, int midiChannel);
 bool setTrackInstrumentMidiChannel(ProjectDocument& project, const std::string& trackName, size_t slotIndex, int midiChannel);
 bool clearTrackInstrumentSlot(ProjectDocument& project, const std::string& trackName);
