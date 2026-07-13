@@ -190,6 +190,13 @@ bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex);
 // Remove the instrument from a track's instrument slot.
 bool nc_track_clear_instrument(NCEngine* engine, int trackIndex);
 
+// Instrument rack (layering): up to 8 instruments on one track, all fed the same MIDI and
+// summed. Slot 0 is the primary instrument; higher slots are layers.
+int  nc_track_instrument_slot_count(NCEngine* engine, int trackIndex);
+void nc_track_instrument_slot_name(NCEngine* engine, int trackIndex, int slotIndex, char* out, size_t outLen);
+bool nc_track_set_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex, int pluginIndex);
+bool nc_track_remove_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex);
+
 /// Duplicates a track with all its settings (inserts, sends, routing, clips), optionally
 /// excluding clips/inserts/sends. Returns the new track's index, or -1 on failure.
 int nc_track_duplicate(NCEngine* engine, int trackIndex,

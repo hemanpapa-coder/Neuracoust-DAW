@@ -482,7 +482,11 @@ struct ChannelStrip: View {
             if track.kind == .instrument {
                 let slot = PluginEditorHost.Slot(trackId: track.id,
                                                  insertIndex: EngineController.instrumentSlotIndex)
-                SlotChip(label: track.instrumentName, accent: accent, lit: editors.isOpen(slot)) {
+                // "+N" badge when instruments are layered (all fed the same MIDI, summed). The
+                // strip stays one fixed-height slot; the full rack is managed in the Inspector.
+                let extraLayers = max(0, track.instrumentLayers.count - 1)
+                let label = track.instrumentName + (extraLayers > 0 ? "  +\(extraLayers)" : "")
+                SlotChip(label: label, accent: accent, lit: editors.isOpen(slot)) {
                     if track.instrumentName.isEmpty {
                         engine.openPluginBrowser(forTrack: track.id)
                     } else {
@@ -494,6 +498,7 @@ struct ChannelStrip: View {
                         editors.toggle(trackId: track.id, insertIndex: EngineController.instrumentSlotIndex)
                     }
                     Button("악기 교체…") { engine.openPluginBrowser(forTrack: track.id) }
+                    Button("레이어 추가…") { engine.addInstrumentLayer(track: track.id) }
                     Divider()
                     Button("악기 제거", role: .destructive) { engine.clearInstrument(track: track.id) }
                 }

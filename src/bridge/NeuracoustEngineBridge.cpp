@@ -3548,6 +3548,70 @@ bool nc_track_set_instrument(NCEngine* engine, int trackIndex, int pluginIndex) 
     return true;
 }
 
+// --- Instrument rack (layering): several instruments on one track, all fed the same MIDI
+// and summed. The engine already supports up to 8 slots; these expose them. ---
+
+static bool instrumentSlotFilled(const neuracoust::daw::InstrumentSlotState& slot) {
+    return !slot.pluginPath.empty() && slot.pluginName != "No Instrument" && !slot.pluginName.empty();
+}
+
+int nc_track_instrument_slot_count(NCEngine* engine, int trackIndex) {
+    const auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return 0;
+    int count = 0;
+    for (const auto& slot : track->instrumentSlots) {
+        if (instrumentSlotFilled(slot)) ++count;
+    }
+    if (count == 0 && instrumentSlotFilled(track->instrument)) count = 1;   // legacy single slot
+    return count;
+}
+
+void nc_track_instrument_slot_name(NCEngine* engine, int trackIndex, int slotIndex, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slotIndex < 0) { copyText(out, outLen, ""); return; }
+    if (static_cast<size_t>(slotIndex) < track->instrumentSlots.size()) {
+        copyText(out, outLen, track->instrumentSlots[static_cast<size_t>(slotIndex)].pluginName);
+    } else if (slotIndex == 0) {
+        copyText(out, outLen, track->instrument.pluginName);
+    } else {
+        copyText(out, outLen, "");
+    }
+}
+
+bool nc_track_set_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex, int pluginIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    const auto* plugin = pluginAt(engine, pluginIndex);
+    if (track == nullptr || plugin == nullptr || slotIndex < 0) return false;
+    neuracoust::daw::InstrumentSlotState instrument;
+    instrument.pluginName = plugin->name;
+    instrument.pluginFormat = plugin->format.empty() ? "VST3" : plugin->format;
+    instrument.pluginPath = plugin->path;
+    instrument.pluginClassId = plugin->pluginClassId;
+    instrument.pluginClassName = plugin->pluginClassName;
+    instrument.enabled = plugin->exists;
+    instrument.bypassed = false;
+    const std::string trackName = track->name;
+    if (!neuracoust::daw::setTrackInstrumentSlot(engine->project, trackName, static_cast<size_t>(slotIndex), instrument)) {
+        return false;
+    }
+    track->channelFormat = "stereo";
+    engine->reconcileProject();
+    engine->recordStep(slotIndex == 0 ? ("Load " + instrument.pluginName) : "Add instrument layer");
+    return true;
+}
+
+bool nc_track_remove_instrument_slot(NCEngine* engine, int trackIndex, int slotIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slotIndex < 0) return false;
+    const std::string trackName = track->name;
+    if (!neuracoust::daw::clearTrackInstrumentSlot(engine->project, trackName, static_cast<size_t>(slotIndex))) {
+        return false;
+    }
+    engine->reconcileProject();
+    engine->recordStep("Remove instrument layer");
+    return true;
+}
+
 void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen) {
     const auto* track = trackAt(engine, trackIndex);
     copyText(out, outLen, track != nullptr ? track->instrument.pluginName : std::string{});

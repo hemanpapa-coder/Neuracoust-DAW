@@ -99,6 +99,7 @@ struct TrackInspector: View {
                     VStack(alignment: .leading, spacing: Theme.Space.lg) {
                         identityRow(track)
                         channelFormatRow(track)
+                        instrumentRackRow(track)
                         buttonGrid(track)
                         volumeRow(track)
                         meterRow(track)
@@ -270,6 +271,47 @@ struct TrackInspector: View {
             }
         }
         .frame(height: 11)
+    }
+
+    /// The instrument rack — several instruments layered on one track, all fed the same MIDI
+    /// and summed (like an Ableton Instrument Rack). Add / remove layers here; the mixer strip
+    /// shows the primary + a "+N" badge so it stays aligned.
+    @ViewBuilder
+    private func instrumentRackRow(_ track: EngineController.Track) -> some View {
+        if track.kind == .instrument {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("악기 랙").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
+                    Spacer()
+                    Button { engine.addInstrumentLayer(track: track.id) } label: {
+                        Image(systemName: "plus").font(.system(size: 9, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(track.kind.accent)
+                    .disabled(track.instrumentLayers.count >= 8)
+                }
+                if track.instrumentLayers.isEmpty {
+                    Text("악기 없음 — 플러그인 브라우저에서 로드")
+                        .font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.textFaint)
+                } else {
+                    ForEach(Array(track.instrumentLayers.enumerated()), id: \.offset) { idx, name in
+                        HStack(spacing: 4) {
+                            Text("\(idx + 1)").font(Theme.Font.mono(8))
+                                .foregroundStyle(Theme.Palette.textFaint).frame(width: 9)
+                            Text(name).font(Theme.Font.mono(9))
+                                .foregroundStyle(Theme.Palette.textSecondary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Button { engine.removeInstrumentLayer(track: track.id, slot: idx) } label: {
+                                Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                            }
+                            .buttonStyle(.plain).foregroundStyle(Theme.Palette.textFaint)
+                        }
+                        .padding(.horizontal, 6).frame(height: 18)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.button))
+                    }
+                }
+            }
+        }
     }
 
     /// Mono/stereo channel format. A mono track sums to one channel panned into the field.

@@ -179,6 +179,9 @@ final class EngineController: ObservableObject {
         var inserts: [InsertSlot]
         /// What turns this track's MIDI notes into sound. Empty on every other kind.
         var instrumentName: String
+        /// The instrument rack: every loaded instrument on the track (slot 0 = primary, the
+        /// rest are layers), all fed the same MIDI and summed. Empty when there's no instrument.
+        var instrumentLayers: [String] = []
         var sends: [TrackSend]
 
         var peakLeft: Float = 0
@@ -267,6 +270,9 @@ final class EngineController: ObservableObject {
 
     /// Which track the browser will insert into. nil while it is closed.
     @Published private(set) var pluginTargetTrack: Int?
+    /// When set, the plugin browser loads the picked instrument into this rack slot (a layer)
+    /// instead of the primary slot 0. Cleared after the pick.
+    private var pluginTargetInstrumentSlot: Int?
     @Published private(set) var plugins: [PluginCandidate] = []
     @Published private(set) var brands: [Facet] = []
     @Published private(set) var categories: [Facet] = []
@@ -294,6 +300,7 @@ final class EngineController: ObservableObject {
 
     func closePluginBrowser() {
         pluginTargetTrack = nil
+        pluginTargetInstrumentSlot = nil
     }
 
     private func reloadFacets() {
@@ -394,10 +401,35 @@ final class EngineController: ObservableObject {
         let plugin = plugins.first { $0.id == pluginIndex }
         let loadsAsInstrument = track.kind == .instrument && plugin?.category == "Instrument"
 
-        let changed = loadsAsInstrument
-            ? nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
-            : nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
+        let layerSlot = pluginTargetInstrumentSlot
+        pluginTargetInstrumentSlot = nil
+        let changed: Bool
+        if loadsAsInstrument, let slot = layerSlot {
+            changed = nc_track_set_instrument_slot(handle, Int32(trackId), Int32(slot), Int32(pluginIndex))
+        } else if loadsAsInstrument {
+            changed = nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
+        } else {
+            changed = nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
+        }
         if changed {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
+    /// Add another instrument to the track's rack (a layer), all fed the same MIDI and summed.
+    /// Opens the plugin browser targeting the next free rack slot.
+    func addInstrumentLayer(track trackId: Int) {
+        guard let track = tracks.first(where: { $0.id == trackId }) else { return }
+        let nextSlot = track.instrumentLayers.count
+        guard nextSlot < 8 else { lastError = "악기 레이어는 최대 8개입니다."; return }
+        pluginTargetInstrumentSlot = nextSlot
+        openPluginBrowser(forTrack: trackId)
+    }
+
+    func removeInstrumentLayer(track trackId: Int, slot: Int) {
+        guard let handle else { return }
+        if nc_track_remove_instrument_slot(handle, Int32(trackId), Int32(slot)) {
             reloadTracks()
             refreshHistory()
         }
@@ -1263,6 +1295,12 @@ final class EngineController: ObservableObject {
                 instrumentName: {
                     let loaded = readEngineString { nc_track_instrument_name(handle, i, $0, $1) }
                     return loaded == "No Instrument" ? "" : loaded
+                }(),
+                instrumentLayers: {
+                    let count = Int(nc_track_instrument_slot_count(handle, i))
+                    return (0..<count).map { s in
+                        readEngineString { nc_track_instrument_slot_name(handle, i, Int32(s), $0, $1) }
+                    }.filter { !$0.isEmpty && $0 != "No Instrument" }
                 }(),
                 sends: (0..<sendCount).map { slot in
                     TrackSend(bus: readEngineString { nc_track_send_bus(handle, i, Int32(slot), $0, $1) },
