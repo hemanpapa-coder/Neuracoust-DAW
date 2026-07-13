@@ -2574,6 +2574,44 @@ bool nc_tempo_marker_add(NCEngine* engine, double timeSeconds, double bpm) {
     engine->recordStep("Add tempo");
     return true;
 }
+// Set the project's base tempo (the transport TEMPO field), keeping the t=0 anchor in the
+// tempo map in sync so the conductor lane and the transport always agree. Creates the anchor
+// if the map has none.
+bool nc_project_set_tempo_bpm(NCEngine* engine, int bpm) {
+    if (engine == nullptr || bpm < 1 || bpm > 999) return false;
+    engine->project.tempoBpm = bpm;
+    auto& map = engine->project.tempoMap;
+    bool anchored = false;
+    for (auto& m : map) {
+        if (m.timeSeconds <= 1e-6) { m.bpm = static_cast<double>(bpm); anchored = true; break; }
+    }
+    if (!anchored) {
+        map.insert(map.begin(), neuracoust::daw::TempoMarkerState{0.0, static_cast<double>(bpm)});
+    }
+    engine->reconcileProject();
+    engine->recordStep("Set tempo");
+    return true;
+}
+// Set the project's base time signature (the transport SIG field), keeping the t=0 meter
+// anchor in sync the same way.
+bool nc_project_set_time_signature(NCEngine* engine, int numerator, int denominator) {
+    if (engine == nullptr || numerator < 1 || numerator > 32 || denominator < 1 || denominator > 32) {
+        return false;
+    }
+    engine->project.timeSignatureNumerator = numerator;
+    engine->project.timeSignatureDenominator = denominator;
+    auto& map = engine->project.timeSignatureMap;
+    bool anchored = false;
+    for (auto& m : map) {
+        if (m.timeSeconds <= 1e-6) { m.numerator = numerator; m.denominator = denominator; anchored = true; break; }
+    }
+    if (!anchored) {
+        map.insert(map.begin(), neuracoust::daw::TimeSignatureMarkerState{0.0, numerator, denominator});
+    }
+    engine->reconcileProject();
+    engine->recordStep("Set time signature");
+    return true;
+}
 bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol) {
     if (engine == nullptr) return false;
     if (!neuracoust::daw::deleteNearestTempoMarker(engine->project, timeSeconds, tol)) return false;

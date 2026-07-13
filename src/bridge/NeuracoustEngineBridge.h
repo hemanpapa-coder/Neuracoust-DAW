@@ -125,6 +125,10 @@ void nc_project_timecode(NCEngine* engine, double seconds, char* out, size_t out
 int nc_project_tempo_bpm(NCEngine* engine);
 int nc_project_time_signature_numerator(NCEngine* engine);
 int nc_project_time_signature_denominator(NCEngine* engine);
+/// Set the base tempo / time signature (the transport TEMPO and SIG fields). Each keeps the
+/// t=0 conductor anchor in sync so the transport and the conductor lanes always agree.
+bool nc_project_set_tempo_bpm(NCEngine* engine, int bpm);
+bool nc_project_set_time_signature(NCEngine* engine, int numerator, int denominator);
 
 // Bars|beats|ticks at `seconds`, 1-based bar and beat, 960 ticks per beat.
 void nc_project_bars_beats(NCEngine* engine, double seconds, int* bar, int* beat, int* tick);

@@ -6025,6 +6025,9 @@ bool deleteNearestTempoMarker(ProjectDocument& project, double timeSeconds, doub
     auto nearest = project.tempoMap.end();
     double nearestDistance = toleranceSeconds;
     for (auto it = project.tempoMap.begin(); it != project.tempoMap.end(); ++it) {
+        if (it->timeSeconds <= 1e-6) {
+            continue;   // the initial tempo anchor at t=0 defines the base and is required
+        }
         const double distance = std::abs(it->timeSeconds - timeSeconds);
         if (distance <= nearestDistance) {
             nearest = it;

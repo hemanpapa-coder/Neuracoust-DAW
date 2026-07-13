@@ -2894,6 +2894,29 @@ final class EngineController: ObservableObject {
         if nc_lyric_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
     }
 
+    /// Set the base tempo from the transport TEMPO field. Syncs the t=0 conductor anchor.
+    func setBaseTempo(_ bpm: Int) {
+        guard let handle else { return }
+        if nc_project_set_tempo_bpm(handle, Int32(max(1, min(999, bpm)))) {
+            tempoBpm = Int(nc_project_tempo_bpm(handle))
+            reloadConductor(); refreshHistory()
+        }
+    }
+
+    /// Set the base time signature from the transport SIG field. `text` is "num/den" (a bare
+    /// number is taken as the numerator over the current denominator). Syncs the t=0 anchor.
+    func setBaseTimeSignature(_ text: String) {
+        guard let handle else { return }
+        let parts = text.split(separator: "/")
+        let num = Int(parts.first.map(String.init) ?? "") ?? timeSignature.numerator
+        let den = parts.count > 1 ? (Int(parts[1]) ?? timeSignature.denominator) : timeSignature.denominator
+        if nc_project_set_time_signature(handle, Int32(max(1, num)), Int32(max(1, den))) {
+            timeSignature = (Int(nc_project_time_signature_numerator(handle)),
+                             Int(nc_project_time_signature_denominator(handle)))
+            reloadConductor(); refreshHistory()
+        }
+    }
+
     /// Add / change a time-signature. `text` is "num/den" (e.g. "3/4"); a bare number is
     /// taken as the numerator over 4.
     func addMeter(at seconds: Double, text: String) {

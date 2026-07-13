@@ -82,6 +82,8 @@ struct TitleBar: View {
 
 struct TransportBar: View {
     @EnvironmentObject private var engine: EngineController
+    @State private var editingPod: String?
+    @State private var podDraft = ""
 
     var body: some View {
         HStack(spacing: Theme.Space.lg) {
@@ -354,10 +356,35 @@ struct TransportBar: View {
 
     private var tempoPods: some View {
         HStack(spacing: Theme.Space.xs) {
-            pod(String(format: "%.1f", Double(engine.tempoBpm)), "TEMPO")
-            pod("\(engine.timeSignature.numerator)/\(engine.timeSignature.denominator)", "SIG")
+            editablePod(String(format: "%.1f", Double(engine.tempoBpm)), "TEMPO") {
+                if let bpm = Double($0) { engine.setBaseTempo(Int(bpm.rounded())) }
+            }
+            editablePod("\(engine.timeSignature.numerator)/\(engine.timeSignature.denominator)", "SIG") {
+                engine.setBaseTimeSignature($0)
+            }
         }
         .padding(.leading, Theme.Space.lg)
+    }
+
+    /// TEMPO and SIG are editable: click to type a new value. Committing sets the base and its
+    /// t=0 conductor anchor, so the transport and the 템포 / 박자 lanes stay in sync.
+    private func editablePod(_ value: String, _ label: String, commit: @escaping (String) -> Void) -> some View {
+        pod(value, label)
+            .contentShape(Rectangle())
+            .onTapGesture { podDraft = value; editingPod = label }
+            .popover(isPresented: Binding(get: { editingPod == label },
+                                          set: { if !$0 { editingPod = nil } })) {
+                VStack(spacing: 8) {
+                    Text(label).font(Theme.Font.mono(8)).tracking(0.6).foregroundStyle(Theme.Palette.textFaint)
+                    TextField(label, text: $podDraft)
+                        .textFieldStyle(.roundedBorder).frame(width: 90)
+                        .font(Theme.Font.mono(13, .semibold))
+                        .onSubmit { commit(podDraft); editingPod = nil }
+                    Text(label == "TEMPO" ? "BPM (예: 128)" : "박자 (예: 3/4)")
+                        .font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textFaint)
+                }
+                .padding(14)
+            }
     }
 
     private func pod(_ value: String, _ label: String) -> some View {
