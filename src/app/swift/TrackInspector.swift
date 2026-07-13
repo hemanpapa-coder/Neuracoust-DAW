@@ -100,6 +100,7 @@ struct TrackInspector: View {
                         identityRow(track)
                         buttonGrid(track)
                         volumeRow(track)
+                        meterRow(track)
                         panRow(track)
                         routingSection(track)
                     }
@@ -268,6 +269,15 @@ struct TrackInspector: View {
             }
         }
         .frame(height: 11)
+    }
+
+    @ViewBuilder
+    private func meterRow(_ track: EngineController.Track) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("레벨").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
+            // The mixer's own meter view — same dB mapping, gradient and ballistics.
+            HorizontalMeter(peakLeft: track.peakLeft, peakRight: track.peakRight)
+        }
     }
 
     @ViewBuilder

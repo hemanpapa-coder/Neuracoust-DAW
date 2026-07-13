@@ -1626,17 +1626,23 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         drawHeaderFader(index: index, lane: lane)
         drawHeaderPan(index: index, lane: lane)
 
-        // Stereo peak meter: L bar on top, R below.
+        // Stereo peak meter: L bar on top, R below. Same dB mapping + green→yellow→red
+        // gradient as the mixer's HorizontalMeter, so the track meter reads identically.
         let meter = headerMeterRect(index)
         NSColor(hex: 0x140f0a).setFill()
         NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
         let barHeight = (meter.height - 1) / 2
+        let meterGradient = NSGradient(colors: [NSColor(hex: 0x46d17f), NSColor(hex: 0xe6d24a), NSColor(hex: 0xff5252)],
+                                       atLocations: [0.0, 0.6, 1.0], colorSpace: .deviceRGB)
         func meterBar(_ level: Float, atY y: CGFloat) {
-            guard level > 0.0001 else { return }
-            let l = min(1, max(0, CGFloat(level)))
-            let color = l > 0.9 ? NSColor(hex: 0xe5484d) : l > 0.7 ? NSColor(hex: 0xe6a23c) : NSColor(hex: 0x5fb85f)
-            color.setFill()
-            NSRect(x: meter.minX, y: y, width: meter.width * l, height: barHeight).fill()
+            let frac = CGFloat(meterFraction(level))
+            guard frac > 0.001 else { return }
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: NSRect(x: meter.minX, y: y, width: meter.width * frac, height: barHeight)).addClip()
+            // Draw the gradient across the full width so a colour maps to a level, not to the
+            // bar's own length; the clip reveals only up to the current level.
+            meterGradient?.draw(in: NSRect(x: meter.minX, y: y, width: meter.width, height: barHeight), angle: 0)
+            NSGraphicsContext.restoreGraphicsState()
         }
         meterBar(lane.peakLeft, atY: meter.minY)
         meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
@@ -1962,9 +1968,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         NSBezierPath(roundedRect: NSRect(x: min(bar.midX, knobX), y: bar.midY - 1.5,
                                          width: abs(knobX - bar.midX), height: 3),
                      xRadius: 1.5, yRadius: 1.5).fill()
-        let knobW: CGFloat = 9, knobH: CGFloat = 11
-        let knob = NSRect(x: knobX - knobW / 2, y: bar.midY - knobH / 2, width: knobW, height: knobH)
-        let cap = NSBezierPath(roundedRect: knob, xRadius: 2.5, yRadius: 2.5)
+        // A round thumb, matching the mixer's PanSlider circular thumb.
+        let knobD: CGFloat = 9
+        let knob = NSRect(x: knobX - knobD / 2, y: bar.midY - knobD / 2, width: knobD, height: knobD)
+        let cap = NSBezierPath(ovalIn: knob)
         if let g = NSGradient(colors: [NSColor(hex: 0x6a727a), NSColor(hex: 0x363c44), NSColor(hex: 0x181c22)]) {
             g.draw(in: cap, angle: -90)
         }
