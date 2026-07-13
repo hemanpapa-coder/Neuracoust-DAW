@@ -356,7 +356,8 @@ struct ChannelStrip: View {
     /// between the default (large) and the narrow (small) width. Two states, no free
     /// widening past the default.
     private var widthResizeHandle: some View {
-        let isNarrow = engine.channelWidthFor(track.id) <= EngineController.channelWidthMin + 1
+        // Midpoint test so it flips reliably whichever exact widths are in play.
+        let isNarrow = engine.channelWidthFor(track.id) < (EngineController.channelWidthMin + EngineController.channelWidthDefault) / 2
         return Button {
             // Only this channel — or, if it is part of a multi-selection, the whole
             // selection. Never every strip.

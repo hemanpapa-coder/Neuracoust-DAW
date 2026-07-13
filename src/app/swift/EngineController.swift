@@ -98,7 +98,10 @@ final class EngineController: ObservableObject {
     func channelWidthFor(_ trackId: Int) -> CGFloat { channelWidths[trackId] ?? Self.channelWidthDefault }
 
     func setChannelWidth(trackIds: [Int], width: CGFloat) {
-        let w = min(Self.channelWidthMax, max(Self.channelWidthMin, (width / Self.channelWidthStep).rounded() * Self.channelWidthStep))
+        // No step-snapping: the toggle sets exactly min or default, and snapping to a
+        // 12 pt grid rounded the narrow width (58) up to 60, which then read as "wide"
+        // and left the strip stuck narrow.
+        let w = min(Self.channelWidthMax, max(Self.channelWidthMin, width))
         for id in trackIds { channelWidths[id] = w }
     }
     func commitChannelWidth() {
