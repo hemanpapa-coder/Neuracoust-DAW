@@ -92,9 +92,9 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("s", modifiers: [.command, .option])
                 Divider()
                 Button("오디오 가져오기…") { engine.importAudio(intoTrack: 0) }
-                    .keyboardShortcut("i", modifiers: .command)
+                    .keyboardShortcut("i", modifiers: [.command, .shift])   // Pro Tools
                 Button("바운스…") { engine.bounceProject() }
-                    .keyboardShortcut("e", modifiers: .command)
+                    .keyboardShortcut("b", modifiers: [.command, .option])  // Pro Tools
                     .disabled(engine.bouncing)
             }
             CommandGroup(replacing: .undoRedo) {
@@ -118,9 +118,9 @@ struct NeuracoustApp: App {
             }
             CommandMenu("트랙") {
                 Button("오디오 트랙 추가") { engine.addAudioTrack() }
-                    .keyboardShortcut("t", modifiers: .command)
+                    .keyboardShortcut("n", modifiers: [.command, .shift])            // Pro Tools: New Track
                 Button("악기 트랙 추가") { engine.addInstrumentTrack() }
-                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .keyboardShortcut("n", modifiers: [.command, .shift, .option])
                 Button("MIDI 트랙 추가") { engine.addMidiTrack() }
                 Button("Aux(버스) 트랙 추가") { engine.addAuxTrack() }
                 Divider()
@@ -133,8 +133,9 @@ struct NeuracoustApp: App {
                     .disabled(engine.selectedTrackId == nil)
             }
             CommandMenu("AI") {
+                // ⌥⌘A — ⇧⌘I now belongs to Import Audio (Pro Tools).
                 Button(ai.open ? "AI 어시스턴트 닫기" : "AI 어시스턴트 열기") { ai.toggle() }
-                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                    .keyboardShortcut("a", modifiers: [.command, .option])
             }
             // FabFilter-style Help menu: a checkmarked toggle for the hover hints, the
             // same helpMode the toolbar "?" flips. A Toggle renders with the ✓ in a menu.

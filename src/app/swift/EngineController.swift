@@ -1107,6 +1107,10 @@ final class EngineController: ObservableObject {
         static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
+        static let leftBracket: UInt16 = 33    // [  — Pro Tools zoom out
+        static let rightBracket: UInt16 = 30   // ]  — Pro Tools zoom in
+        static let enter: UInt16 = 36          // Return — Pro Tools memory location (marker)
+        static let f: UInt16 = 3               // Pro Tools zoom-to-fit
     }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -1122,6 +1126,10 @@ final class EngineController: ObservableObject {
                 // to be consumed here (return nil) or it also clicks whatever button
                 // holds focus.
                 togglePlay()
+                return nil
+            case KeyCode.enter:
+                // Pro Tools: Return drops a memory location (marker) at the playhead.
+                addMarkerAtPlayhead()
                 return nil
             case KeyCode.b where selectedRegionId != nil:
                 splitRegionAtPlayhead(selectedRegionId!)
@@ -1159,20 +1167,35 @@ final class EngineController: ObservableObject {
         }
 
         let shift = event.modifierFlags.contains(.shift)
+        let option = event.modifierFlags.contains(.option)
 
         switch event.keyCode {
+        // Pro Tools horizontal zoom: ⌘] in, ⌘[ out. ⌘⌥] / ⌘⌥[ frames the session (fit).
+        case KeyCode.rightBracket:
+            option ? fitTimeline() : zoomTimeline(by: 0.5)
+        case KeyCode.leftBracket:
+            option ? fitTimeline() : zoomTimeline(by: 2.0)
         case KeyCode.z:
             shift ? redo() : undo()
         case KeyCode.s:
             shift ? saveProjectAs() : saveProject()
         case KeyCode.o:
             openProject()
+        case KeyCode.n where shift:
+            // Pro Tools: ⌘⇧N = New Track (audio). ⌘⇧⌥N adds an instrument track.
+            option ? addInstrumentTrack() : addAudioTrack()
         case KeyCode.n:
-            newProject()
-        case KeyCode.i:
-            importAudio(intoTrack: 0)
+            newProject()                        // ⌘N = New Session
+        case KeyCode.i where shift:
+            importAudio(intoTrack: 0)           // Pro Tools: ⌘⇧I = Import Audio
+        case KeyCode.b where option:
+            bounceProject()                     // Pro Tools: ⌘⌥B = Bounce to Disk
         case KeyCode.e:
-            bounceProject()
+            // Pro Tools: ⌘E = Separate Clip (split at the playhead / selection).
+            if let regionId = selectedRegionId { splitRegionAtPlayhead(regionId) }
+            else { splitSelectedClipsAtPlayhead() }
+        case KeyCode.h:
+            healSelectedClips()                 // Pro Tools: ⌘H = Heal Separation
         case KeyCode.c where !selectedClipIds.isEmpty:
             copySelectedClips()
         case KeyCode.x where !selectedClipIds.isEmpty:
@@ -1184,10 +1207,7 @@ final class EngineController: ObservableObject {
         case KeyCode.d where !selectedClipIds.isEmpty:
             duplicateSelectedClips()
         case KeyCode.m:
-            addMarkerAtPlayhead()
-        case KeyCode.t:
-            // ⌘T adds an audio track, ⌘⇧T an instrument track — the way most DAWs do it.
-            shift ? addInstrumentTrack() : addAudioTrack()
+            addMarkerAtPlayhead()               // kept alongside Pro Tools' Return
         default:
             return event
         }
