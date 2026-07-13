@@ -859,6 +859,11 @@ final class EngineController: ObservableObject {
     /// Marked nonisolated so `deinit` can free it; nothing else ever holds it.
     private nonisolated(unsafe) var handle: OpaquePointer?
     private var timer: Timer?
+    /// A held key must not wait a 33 ms UI tick to sound. This second timer only drains the
+    /// live-MIDI queue into the instruments, ~240 Hz, so monitoring latency drops toward one
+    /// audio buffer instead of one UI frame — the "레이턴시" the user felt against Logic.
+    private var midiPumpTimer: Timer?
+    private let midiPumpInterval = 1.0 / 240.0
     private var keyMonitor: Any?
 
     /// Listen Room drives its own relay process but reads engine state, so it
@@ -937,6 +942,19 @@ final class EngineController: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        // Drain live MIDI far more often than the 30 Hz tick so a played note reaches the
+        // instrument within ~one audio buffer. The tick still owns source auto-open and the
+        // activity meter; this only pumps the queue (a no-op when nothing is pending).
+        let midiTimer = Timer(timeInterval: midiPumpInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let handle = self.handle else { return }
+                nc_midi_pump_live_input(handle)
+            }
+        }
+        midiTimer.tolerance = 0
+        RunLoop.main.add(midiTimer, forMode: .common)
+        self.midiPumpTimer = midiTimer
 
         restorePersistedSettings()
     }
@@ -1067,6 +1085,8 @@ final class EngineController: ObservableObject {
         keyMonitor = nil
         timer?.invalidate()
         timer = nil
+        midiPumpTimer?.invalidate()
+        midiPumpTimer = nil
         if let handle {
             nc_engine_stop(handle)
         }
@@ -2000,6 +2020,8 @@ final class EngineController: ObservableObject {
         guard nc_clip_move_to_track(handle, clipId, Int32(trackId), startSeconds,
                                     &buffer, buffer.count) else { return }
         selectClip(String(cString: buffer))
+        // Overlapping the destination lane's clips crossfades them, same as a same-lane move.
+        applyCrossfadesForSelection()
         reloadClips()
         refreshHistory()
     }
@@ -2200,8 +2222,10 @@ final class EngineController: ObservableObject {
             }
         }
         // Overlapping a clip onto a same-track neighbour becomes a crossfade, folded into
-        // this one move step (Pro Tools' auto-crossfade on overlap).
-        if stepName == "Move clip" { applyCrossfadesForSelection() }
+        // this one move step (Pro Tools' auto-crossfade on overlap). Applies to a multi-clip
+        // drag ("Move clips") too, not just a single clip, so dragging two selected clips to
+        // overlap crossfades them.
+        if stepName == "Move clip" || stepName == "Move clips" { applyCrossfadesForSelection() }
         recordGesture(stepName)
     }
 

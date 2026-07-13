@@ -316,8 +316,11 @@ struct GlobalTracksBar: View {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
                 dragSeconds[key] = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
-                if abs(v.translation.height) > 34 { markerTrashing.insert(key) }
-                else { markerTrashing.remove(key) }
+                // Drag the pin clearly off the lane to trash it. Require the drag to be
+                // vertical-dominant (and past the ~22 pt lane) so a horizontal move — which
+                // is how a marker is repositioned in time — never trashes by accident.
+                let offLane = abs(v.translation.height) > 22 && abs(v.translation.height) > abs(v.translation.width)
+                if offLane { markerTrashing.insert(key) } else { markerTrashing.remove(key) }
             }
             .onEnded { v in
                 let t = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
