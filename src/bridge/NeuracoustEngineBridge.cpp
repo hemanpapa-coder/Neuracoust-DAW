@@ -1090,6 +1090,10 @@ int nc_track_add_aux(NCEngine* engine) {
     aux.name = name;
     aux.trackType = "aux";
     aux.outputBus = "Master";
+    // A bus receives from sends addressed to its own name, not a hardware input. Leaving
+    // inputBus at the "Input 1" default made the renderer receive on "Input 1" instead of
+    // "Aux N", so send signal never reached the aux. Clear it, like the Master bus.
+    aux.inputBus.clear();
     aux.colorHex = "#7C8BA0";
     auto master = std::find_if(tracks.begin(), tracks.end(), [](const neuracoust::daw::TrackState& t) {
         return t.name == "Master" || t.trackType == "master";

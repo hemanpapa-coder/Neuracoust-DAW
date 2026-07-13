@@ -287,10 +287,6 @@ private struct EditView: View {
                 Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
             }
 
-            Rectangle()
-                .fill(Theme.Palette.rail)
-                .frame(width: Theme.toolRailWidth)
-
             VStack(spacing: 0) {
                 toolbar
 
