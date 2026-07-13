@@ -63,7 +63,10 @@ struct MonitorDock: View {
 
     private var routingDescription: String {
         guard let set = engine.activeSpeakerSet else { return "Master → Monitor" }
-        return "Master → Monitor → \(set.letter): \(set.output)"
+        // "None" is the modelled/virtual path (out the main L/R), not a dead output —
+        // show the speaker model so the header does not read like silence.
+        let dest = set.output == "None" ? "\(set.displayModel) · Main 1-2" : set.output
+        return "Master → Monitor → \(set.letter): \(dest)"
     }
 
     // MARK: Level + modes

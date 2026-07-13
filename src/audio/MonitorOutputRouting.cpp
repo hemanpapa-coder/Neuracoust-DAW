@@ -132,10 +132,18 @@ MonitorOutputRoute resolveMonitorOutputRoute(const std::vector<MonitorDspModule>
     result.description = slotName(result.activeSlot) + " -> " + route;
 
     if (routeIsNone(route)) {
-        result.assigned = false;
-        result.available = false;
+        // "None" is the modelled/virtual path, not a mute: the speaker-simulation DSP is
+        // applied and its output still leaves on the main L/R pair. Only an explicit
+        // physical route (Main 1-2, Output N-N) moves it onto other channels. Treating
+        // None as silent black-holed every modelled speaker — selecting a speaker model
+        // sets the slot's route to "None", so the monitor went completely dead the moment
+        // a model was chosen.
+        result.assigned = true;
+        result.available = availableChannels >= 2;
         result.leftChannel = 0;
         result.rightChannel = 1;
+        result.displayRoute = "Main 1-2";
+        result.description = slotName(result.activeSlot) + " -> modelled (Main 1-2)";
         return result;
     }
 

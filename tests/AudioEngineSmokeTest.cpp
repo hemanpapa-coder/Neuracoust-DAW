@@ -90,9 +90,12 @@ int main() {
 
         modules[0].activeTargetSlot = 2;
         route = neuracoust::daw::resolveMonitorOutputRoute(modules, 8);
-        if (route.assigned || route.available || route.requestedRoute != "None" ||
-            route.description.find("Speaker C") == std::string::npos) {
-            std::cerr << "Monitor speaker C unassigned route should remain independent from Speaker A\n";
+        // A "None" route is the modelled/virtual path, not a mute: it must still leave on
+        // the main L/R pair so a selected speaker model is audible. (Selecting a model sets
+        // the slot's route to "None" — treating that as silent black-holed the monitor.)
+        if (!route.assigned || !route.available || route.leftChannel != 0 || route.rightChannel != 1 ||
+            route.requestedRoute != "None" || route.description.find("Speaker C") == std::string::npos) {
+            std::cerr << "Monitor speaker C modelled (None) route should still resolve to Main 1-2\n";
             return 46;
         }
     }
