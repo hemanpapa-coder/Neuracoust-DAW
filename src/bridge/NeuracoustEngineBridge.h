@@ -578,6 +578,7 @@ double nc_tempo_marker_time(NCEngine* engine, int index);
 double nc_tempo_marker_bpm(NCEngine* engine, int index);
 bool nc_tempo_marker_add(NCEngine* engine, double timeSeconds, double bpm);
 bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol);
+bool nc_tempo_marker_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
 
 int nc_time_sig_count(NCEngine* engine);
 double nc_time_sig_time(NCEngine* engine, int index);

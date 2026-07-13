@@ -250,7 +250,7 @@ struct GlobalTracksBar: View {
         case .key:
             if engine.keyEvents.isEmpty {
                 eventChip(EngineController.ConductorEvent(id: -1, timeSeconds: 0, label: engine.musicalKey),
-                          ruler: .key, glyph: .circle, laneWidth: laneWidth, anchored: true,
+                          ruler: .key, glyph: .circle, laneWidth: laneWidth, anchored: true, movable: false,
                           onMove: { _ in }, onDelete: {})
             } else {
                 ForEach(engine.keyEvents) { e in
@@ -367,14 +367,18 @@ struct GlobalTracksBar: View {
     }
 
     private func tempoPoint(_ e: EngineController.ConductorEvent, laneWidth: CGFloat) -> some View {
-        let px = x(e.timeSeconds, laneWidth)
+        let px = x(dragSeconds["tp\(e.timeSeconds)"] ?? e.timeSeconds, laneWidth)
         return Group {
             if px >= Self.headerWidth - 20 && px <= Self.headerWidth + laneWidth {
                 HStack(spacing: 3) {
                     RoundedRectangle(cornerRadius: 2).fill(Ruler.tempo.color).frame(width: 6, height: 6)
                     Text(e.label).font(Theme.Font.mono(9, .medium)).foregroundStyle(Ruler.tempo.color)
                 }
+                .padding(.horizontal, 3).frame(height: 15)
+                .contentShape(Rectangle())
                 .offset(x: px - Self.headerWidth - 3)
+                .gesture(dragGesture(key: "tp\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth,
+                                     onMove: { engine.moveTempoMarker(from: e.timeSeconds, to: $0) }))
                 .contextMenu { Button("삭제", role: .destructive) { engine.deleteTempoMarker(at: e.timeSeconds) } }
             }
         }
@@ -383,7 +387,7 @@ struct GlobalTracksBar: View {
     private enum Glyph { case diamond, square, circle, none }
 
     private func eventChip(_ e: EngineController.ConductorEvent, ruler: Ruler, glyph: Glyph, laneWidth: CGFloat,
-                           anchored: Bool,
+                           anchored: Bool, movable: Bool = true,
                            onMove: @escaping (Double) -> Void, onDelete: @escaping () -> Void) -> some View {
         let px = x(dragSeconds["\(ruler.rawValue)\(e.timeSeconds)"] ?? e.timeSeconds, laneWidth)
         return Group {
@@ -402,7 +406,8 @@ struct GlobalTracksBar: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(ruler.color.opacity(0.16)))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(ruler.color.opacity(anchored ? 0.15 : 0.35), lineWidth: 0.5))
                 .offset(x: px - Self.headerWidth + 2)
-                .gesture(anchored ? nil : dragGesture(key: "\(ruler.rawValue)\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth, onMove: onMove))
+                // Every real event is draggable, including the ones seeded at the start.
+                .gesture(movable ? dragGesture(key: "\(ruler.rawValue)\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth, onMove: onMove) : nil)
                 .contextMenu { if !anchored { Button("삭제", role: .destructive) { onDelete() } } }
             }
         }

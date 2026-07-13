@@ -2482,6 +2482,18 @@ bool nc_tempo_marker_delete(NCEngine* engine, double timeSeconds, double tol) {
     engine->recordStep("Delete tempo");
     return true;
 }
+bool nc_tempo_marker_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds) {
+    if (engine == nullptr) return false;
+    auto& map = engine->project.tempoMap;
+    for (auto& m : map) {
+        if (std::abs(m.timeSeconds - fromSeconds) <= tol) {
+            m.timeSeconds = std::max(0.0, toSeconds);
+            std::sort(map.begin(), map.end(), [](const auto& a, const auto& b) { return a.timeSeconds < b.timeSeconds; });
+            engine->reconcileProject(); engine->recordStep("Move tempo"); return true;
+        }
+    }
+    return false;
+}
 
 // --- Time-signature (meter) changes: positional edits over project.timeSignatureMap. ---
 int nc_time_sig_count(NCEngine* engine) {
@@ -2518,7 +2530,7 @@ bool nc_time_sig_move(NCEngine* engine, double fromSeconds, double tol, double t
     if (engine == nullptr) return false;
     auto& map = engine->project.timeSignatureMap;
     for (auto& m : map) {
-        if (m.timeSeconds > 1e-6 && std::abs(m.timeSeconds - fromSeconds) <= tol) {   // never move the anchor at 0
+        if (std::abs(m.timeSeconds - fromSeconds) <= tol) {   // the start event may move too
             m.timeSeconds = std::max(0.0, toSeconds);
             std::sort(map.begin(), map.end(), [](const auto& a, const auto& b) { return a.timeSeconds < b.timeSeconds; });
             engine->reconcileProject(); engine->recordStep("Move time signature"); return true;

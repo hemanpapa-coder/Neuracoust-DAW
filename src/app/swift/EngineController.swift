@@ -53,6 +53,10 @@ final class EngineController: ObservableObject {
     /// Help mode: while on, controls carry hover tooltips describing what they do. Off by
     /// default so the tooltips don't nag during normal work.
     @Published var helpMode = false
+    /// The control currently hovered in help mode, plus its window-space frame, so a single
+    /// top-level overlay can draw the tooltip beside it (native .help was unreliable).
+    struct HelpHover: Equatable { let text: String; let frame: CGRect }
+    @Published var helpHover: HelpHover?
     @Published var loopEnabled = false
     /// The loop range doubles as the edit range, the way the old UI used it.
     @Published private(set) var loopStartSeconds: Double = 0
@@ -2581,6 +2585,11 @@ final class EngineController: ObservableObject {
     func moveMeter(from: Double, to: Double) {
         guard let handle else { return }
         if nc_time_sig_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
+    }
+
+    func moveTempoMarker(from: Double, to: Double) {
+        guard let handle else { return }
+        if nc_tempo_marker_move(handle, from, markerTolerance, snap(to)) { reloadConductor() }
     }
 
     // Positional key changes (app-side, persisted with settings).

@@ -215,7 +215,7 @@ struct TrackInspector: View {
                 )
         }
         .buttonStyle(.plain)
-        .help(engine.helpMode ? engine.tr("help.automation_mode") : "")
+        .helpTip(engine.tr("help.automation_mode"))
     }
 
     private func automationColor(_ mode: String) -> Color {

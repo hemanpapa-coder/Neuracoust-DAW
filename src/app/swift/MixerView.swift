@@ -112,7 +112,7 @@ struct MixerView: View {
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help(engine.helpMode ? engine.tr("help.pan_law") : "")
+        .helpTip(engine.tr("help.pan_law"))
     }
 
     private func chip(_ systemImage: String, _ help: String, _ binding: Binding<Bool>) -> some View {
@@ -131,7 +131,7 @@ struct MixerView: View {
                 )
         }
         .buttonStyle(.plain)
-        .help(engine.helpMode ? help : "")
+        .helpTip(help)
     }
 
     // MARK: Routing banner
@@ -376,7 +376,7 @@ struct ChannelStrip: View {
         .buttonStyle(.plain)
         .padding(.trailing, 3)
         .padding(.bottom, 7)
-        .help(engine.helpMode ? engine.tr(isNarrow ? "help.channel_wide" : "help.channel_narrow") : "")
+        .helpTip(engine.tr(isNarrow ? "help.channel_wide" : "help.channel_narrow"))
     }
 
     /// Selected (a `⌘/⇧`-extendable set); the last-clicked strip also drives the timeline.

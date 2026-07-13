@@ -146,6 +146,24 @@ struct RootView: View {
         }
         .background(Theme.Palette.background)
         .preferredColorScheme(.dark)
+        .coordinateSpace(name: "helpRoot")
+        // A single top-level help tooltip, drawn beside whatever control is hovered while
+        // help mode is on. Rendered here so it is never clipped by a toolbar's bounds.
+        .overlay {
+            if let hover = engine.helpHover, engine.helpMode {
+                Text(hover.text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.92)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                    .fixedSize()
+                    .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                    .position(x: hover.frame.midX, y: hover.frame.maxY + 16)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.animation(.easeOut(duration: 0.08)))
+            }
+        }
         .overlay {
             if engine.pluginBrowserOpen {
                 PluginBrowser()
@@ -264,6 +282,46 @@ private struct SpotDialog: View {
         }
         engine.spotPlaceClip(id, at: value)
     }
+}
+
+/// Reports its window-space frame + help text to the engine while hovered in help mode, so
+/// the single top-level overlay in RootView can draw the tooltip beside it.
+private struct HelpTipModifier: ViewModifier {
+    @EnvironmentObject private var engine: EngineController
+    let text: String
+    @State private var frame: CGRect = .zero
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { frame = geo.frame(in: .named("helpRoot")) }
+                        .onChange(of: geo.frame(in: .named("helpRoot"))) { _, f in
+                            frame = f
+                            if engine.helpHover?.frame != .zero, engine.helpHover?.text == text {
+                                engine.helpHover = .init(text: text, frame: f)
+                            }
+                        }
+                }
+            )
+            .onHover { hovering in
+                guard engine.helpMode, !text.isEmpty else {
+                    if engine.helpHover?.frame == frame { engine.helpHover = nil }
+                    return
+                }
+                if hovering {
+                    engine.helpHover = .init(text: text, frame: frame)
+                } else if engine.helpHover?.frame == frame {
+                    engine.helpHover = nil
+                }
+            }
+    }
+}
+
+extension View {
+    /// Custom help tooltip (shown only in help mode), replacing the unreliable native .help.
+    func helpTip(_ text: String) -> some View { modifier(HelpTipModifier(text: text)) }
 }
 
 // The three regions below are structural stubs. They hold the layout the design
@@ -469,7 +527,7 @@ private struct EditView: View {
             .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Palette.button))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help(engine.helpMode ? engine.tr("help.grid") : "")
+        .helpTip(engine.tr("help.grid"))
     }
 
     private var toolSelector: some View {
@@ -531,7 +589,7 @@ private struct EditView: View {
                             .stroke(Theme.Palette.divider, lineWidth: 1))
                 )
         }
-        .buttonStyle(.plain).disabled(!enabled).help(engine.helpMode ? help : "")
+        .buttonStyle(.plain).disabled(!enabled).helpTip(help)
     }
 
     /// Same look as iconButton, but opens a menu (used to group the range edits).
@@ -551,7 +609,7 @@ private struct EditView: View {
                             .stroke(Theme.Palette.divider, lineWidth: 1))
                 )
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(!enabled).help(engine.helpMode ? help : "")
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(!enabled).helpTip(help)
     }
 
     private func zoomButton(_ title: String,
