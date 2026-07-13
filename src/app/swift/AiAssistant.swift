@@ -48,6 +48,10 @@ final class AiAssistantController: ObservableObject {
     @Published var model = ""
     @Published var busy = false
     @Published var input = ""
+    /// Every supported command is reversible (one undo step), so the assistant acts on its
+    /// own by default — the user asked it to do things, not just suggest them. Turn this off
+    /// to review each proposed command with an Apply button before it runs.
+    @Published var autoApply = true
 
     private unowned let engine: EngineController
     private let host = "http://127.0.0.1:11434"
@@ -141,7 +145,7 @@ final class AiAssistantController: ObservableObject {
         let reply = (obj["reply"] as? String) ?? content
         messages.append(ChatMessage(role: .assistant, text: reply))
         let commands = (obj["commands"] as? [[String: Any]]) ?? []
-        proposals = commands.compactMap { c in
+        let parsed: [Proposal] = commands.compactMap { c in
             guard let type = c["type"] as? String else { return nil }
             return Proposal(
                 type: type,
@@ -153,6 +157,14 @@ final class AiAssistantController: ObservableObject {
                 label: (c["label"] as? String) ?? "",
                 reason: (c["reason"] as? String) ?? ""
             )
+        }
+        // The assistant acts by default: reversible commands run immediately (each one undo
+        // step). With auto-apply off, they wait as proposals the user applies by hand.
+        if autoApply {
+            proposals = []
+            for proposal in parsed { apply(proposal) }
+        } else {
+            proposals = parsed
         }
     }
 
@@ -238,6 +250,17 @@ struct AiAssistantPanel: View {
             Text("AI 어시스턴트").font(Theme.Font.ui(13, .semibold)).foregroundStyle(Theme.Palette.textBright)
             Spacer()
             if ai.busy { ProgressView().controlSize(.small).padding(.trailing, 4) }
+            // Auto-apply: the assistant acts immediately (reversible, one undo step each).
+            Button { ai.autoApply.toggle() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: ai.autoApply ? "bolt.fill" : "bolt.slash")
+                        .font(.system(size: 9))
+                    Text("자동").font(Theme.Font.mono(8))
+                }
+                .foregroundStyle(ai.autoApply ? Theme.Palette.green : Theme.Palette.textFaint)
+            }
+            .buttonStyle(.plain)
+            .help(ai.autoApply ? "자동 적용 켜짐 — AI가 바로 실행 (되돌리기 가능)" : "자동 적용 꺼짐 — 제안만")
             Menu {
                 if ai.models.isEmpty {
                     Button("모델 새로고침") { Task { await ai.refreshModels() } }
