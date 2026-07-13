@@ -3589,6 +3589,33 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// I/O buffer choices, smallest (lowest latency) first. The device clamps to what it
+    /// supports; `bufferSize` reflects what was actually granted after the restart.
+    static let bufferSizeChoices = [32, 64, 128, 256, 512, 1024]
+
+    /// The requested buffer size (the project value), which may differ from the granted
+    /// `bufferSize` if the device clamped it.
+    var requestedBufferSize: Int {
+        guard let handle else { return bufferSize }
+        return Int(nc_buffer_size(handle))
+    }
+
+    /// Change the audio I/O buffer size. Restarts the engine (a brief dropout) to apply, then
+    /// reads back what the device actually granted. Smaller = lower latency, more CPU load.
+    func setBufferSize(_ frames: Int) {
+        guard let handle else { return }
+        nc_set_buffer_size(handle, Int32(frames))
+        // The restart rebuilds status; the granted size lands in `bufferSize` on the next tick.
+        UserDefaults.standard.set(Int(nc_buffer_size(handle)), forKey: SettingsKey.bufferSize)
+    }
+
+    /// Round-trip-ish latency label for a buffer size at the current sample rate: one buffer
+    /// period. (True round-trip is roughly twice this plus device/driver offsets.)
+    func bufferLatencyMs(_ frames: Int) -> Double {
+        let rate = sampleRate > 0 ? sampleRate : 48000
+        return Double(frames) / rate * 1000.0
+    }
+
     /// The external DSP Manager reserve applies live through the monitor path — no restart.
     func setExternalDspCoreCount(_ count: Int) {
         guard let handle else { return }
@@ -3674,6 +3701,7 @@ final class EngineController: ObservableObject {
         static let delayComp = "nc.delayCompensation"
         static let recentProjects = "nc.recentProjects"
         static let stopBehavior = "nc.stopBehavior"
+        static let bufferSize = "nc.bufferSize"
         static let saved = "nc.settingsSaved"
     }
 
@@ -3704,6 +3732,7 @@ final class EngineController: ObservableObject {
         d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
         d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
         d.set(stopBehavior.rawValue, forKey: SettingsKey.stopBehavior)
+        d.set(requestedBufferSize, forKey: SettingsKey.bufferSize)
         d.set(true, forKey: SettingsKey.saved)
         lastError = "전체 설정을 저장했습니다."
     }
@@ -3738,6 +3767,10 @@ final class EngineController: ObservableObject {
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
         if let sb = d.string(forKey: SettingsKey.stopBehavior), let mode = StopBehavior(rawValue: sb) { stopBehavior = mode }
+        if d.object(forKey: SettingsKey.bufferSize) != nil {
+            let bs = d.integer(forKey: SettingsKey.bufferSize)
+            if bs > 0, bs != requestedBufferSize { setBufferSize(bs) }
+        }
         // Key and its positional changes are per-project, not global — restoring them from
         // settings leaked a stray key event (e.g. a "D") into every new/other project. Start
         // clean: the key row shows the default C at the top until the user adds one.
@@ -3810,6 +3843,10 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.dspCores) != nil {
             let saved = d.integer(forKey: SettingsKey.dspCores)
             if saved > 0 && saved != dspCoreCount { setDspCoreCount(saved) }
+        }
+        if d.object(forKey: SettingsKey.bufferSize) != nil {
+            let saved = d.integer(forKey: SettingsKey.bufferSize)
+            if saved > 0 && saved != requestedBufferSize { setBufferSize(saved) }
         }
     }
 

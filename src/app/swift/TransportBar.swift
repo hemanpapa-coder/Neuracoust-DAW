@@ -25,11 +25,13 @@ struct TitleBar: View {
                     Circle()
                         .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
                         .frame(width: 6, height: 6)
-                    Text(engine.running
-                         ? "\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize)"
-                         : "엔진 정지")
-                        .font(Theme.Font.mono(9))
-                        .foregroundStyle(Theme.Palette.textFaint)
+                    if engine.running {
+                        deviceMenu
+                    } else {
+                        Text("엔진 정지")
+                            .font(Theme.Font.mono(9))
+                            .foregroundStyle(Theme.Palette.textFaint)
+                    }
                 }
                 .padding(.trailing, Theme.Space.xxl)
             }
@@ -48,6 +50,33 @@ struct TitleBar: View {
 
     private func formatSampleRate(_ rate: Double) -> String {
         rate <= 0 ? "—" : String(format: "%.1fk", rate / 1000.0)
+    }
+
+    /// The device readout doubles as the buffer-size (latency) picker: smaller buffer =
+    /// lower latency, more CPU / dropout risk. The label shows the granted buffer and its
+    /// one-buffer latency in ms.
+    private var deviceMenu: some View {
+        Menu {
+            Section("버퍼 크기 — 작을수록 저지연 (CPU·드롭 위험↑)") {
+                ForEach(EngineController.bufferSizeChoices, id: \.self) { size in
+                    Button {
+                        engine.setBufferSize(size)
+                    } label: {
+                        let text = "\(size) samples · \(String(format: "%.1f", engine.bufferLatencyMs(size))) ms"
+                        if size == engine.requestedBufferSize {
+                            Label(text, systemImage: "checkmark")
+                        } else {
+                            Text(text)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text("\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize) (\(String(format: "%.1f", engine.bufferLatencyMs(engine.bufferSize)))ms)")
+                .font(Theme.Font.mono(9))
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
     }
 }
 

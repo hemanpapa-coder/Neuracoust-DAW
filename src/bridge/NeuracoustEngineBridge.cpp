@@ -3819,6 +3819,22 @@ void nc_dsp_set_core_count(NCEngine* engine, int count) {
     restartEngineForSettings(engine);
 }
 
+int nc_buffer_size(NCEngine* engine) {
+    return engine != nullptr ? engine->project.defaultBufferSize : 0;
+}
+
+void nc_set_buffer_size(NCEngine* engine, int frames) {
+    if (engine == nullptr) return;
+    // 16..2048 frames covers the useful range; the audio device clamps to its own supported
+    // set at start(), and nc_engine_status().requestedBufferSize reports what was granted.
+    // Only takes effect at start(), so restart the engine (a brief dropout, like a device
+    // or core-count change).
+    const int clamped = std::max(16, std::min(2048, frames));
+    if (clamped == engine->project.defaultBufferSize) return;
+    engine->project.defaultBufferSize = clamped;
+    restartEngineForSettings(engine);
+}
+
 namespace {
 
 // Output-capable devices, cached so a right-click menu does not re-scan CoreAudio on

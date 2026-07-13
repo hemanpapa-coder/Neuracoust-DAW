@@ -817,6 +817,12 @@ void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
 int nc_dsp_core_count(NCEngine* engine);
 void nc_dsp_set_core_count(NCEngine* engine, int count);
 
+/// Audio I/O buffer size in frames (the project's requested size). Setting it restarts the
+/// audio engine to apply — a brief dropout. The device may clamp it; the granted size is in
+/// nc_engine_status().requestedBufferSize. Smaller = lower latency, more CPU / dropout risk.
+int nc_buffer_size(NCEngine* engine);
+void nc_set_buffer_size(NCEngine* engine, int frames);
+
 // Cores DW asks the external DSP Manager to reserve (1..16). This applies live through
 // the monitor DSP path — no audio restart. A connected node's own reported core count
 // still takes precedence; this is the request/fallback hint.
