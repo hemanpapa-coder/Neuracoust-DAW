@@ -298,18 +298,18 @@ struct TrackInspector: View {
 
             if routingExpanded {
                 if track.kind == .audio {
-                    routingMenu(icon: "arrow.down.right", tint: Theme.Palette.green, label: "입력",
+                    routingMenu(tint: Theme.Palette.green, label: "입력",
                                 current: track.inputBus.isEmpty ? "없음" : track.inputBus,
                                 options: engine.audioInputOptions()) { engine.setTrackInputBus(track.id, $0) }
                 }
-                routingMenu(icon: "arrow.up.right", tint: Theme.Palette.amber, label: "출력",
+                routingMenu(tint: Theme.Palette.amber, label: "출력",
                             current: track.outputBus.isEmpty ? "Master" : track.outputBus,
                             options: engine.outputBusOptions(track.id)) { engine.setTrackOutputBus(track.id, $0) }
             }
         }
     }
 
-    private func routingMenu(icon: String, tint: Color, label: String, current: String,
+    private func routingMenu(tint: Color, label: String, current: String,
                              options: [String], pick: @escaping (String) -> Void) -> some View {
         Menu {
             ForEach(options, id: \.self) { option in
@@ -321,20 +321,20 @@ struct TrackInspector: View {
             }
         } label: {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: icon).font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)
+                Circle().fill(tint).frame(width: 6, height: 6)
                 Text(label)
                     .font(Theme.Font.ui(9.5))
                     .foregroundStyle(Theme.Palette.textFaint)
+                Spacer(minLength: 6)
                 Text(current)
                     .font(Theme.Font.ui(10, .medium))
                     .foregroundStyle(Theme.Palette.textBright)
                     .lineLimit(1)
-                Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textMuted)
             }
             .padding(.horizontal, 9)
-            .frame(height: 24)
+            .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.button)
                     .fill(Theme.Palette.button)
@@ -342,7 +342,9 @@ struct TrackInspector: View {
                         .stroke(Theme.Palette.coolDivider, lineWidth: 1))
             )
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
     }
 }
 
