@@ -98,6 +98,7 @@ struct TrackInspector: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: Theme.Space.lg) {
                         identityRow(track)
+                        channelFormatRow(track)
                         buttonGrid(track)
                         volumeRow(track)
                         meterRow(track)
@@ -269,6 +270,30 @@ struct TrackInspector: View {
             }
         }
         .frame(height: 11)
+    }
+
+    /// Mono/stereo channel format. A mono track sums to one channel panned into the field.
+    @ViewBuilder
+    private func channelFormatRow(_ track: EngineController.Track) -> some View {
+        if track.kind.hasSolo {
+            HStack(spacing: 4) {
+                Text("채널").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
+                Spacer()
+                formatChip("스테레오", selected: track.isStereo, accent: track.kind.accent) { engine.setTrackStereo(track.id, true) }
+                formatChip("모노", selected: !track.isStereo, accent: track.kind.accent) { engine.setTrackStereo(track.id, false) }
+            }
+        }
+    }
+
+    private func formatChip(_ label: String, selected: Bool, accent: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Theme.Font.mono(9, .medium))
+                .foregroundStyle(selected ? Theme.Palette.textBright : Theme.Palette.textSecondary)
+                .padding(.horizontal, 8).frame(height: 18)
+                .background(RoundedRectangle(cornerRadius: 4).fill(selected ? accent.opacity(0.5) : Theme.Palette.button))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder

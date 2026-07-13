@@ -172,6 +172,9 @@ final class EngineController: ObservableObject {
         var solo: Bool
         var recordArmed: Bool
         var inputMonitoring: Bool
+        /// Channel format — a mono track sums to one channel panned into the field, a stereo
+        /// track keeps L/R.
+        var isStereo: Bool = true
         var automationMode: String = "read"
         var inserts: [InsertSlot]
         /// What turns this track's MIDI notes into sound. Empty on every other kind.
@@ -1246,6 +1249,7 @@ final class EngineController: ObservableObject {
                 solo: nc_track_solo(handle, i),
                 recordArmed: nc_track_record_armed(handle, i),
                 inputMonitoring: nc_track_input_monitoring(handle, i),
+                isStereo: readEngineString { nc_track_channel_format(handle, i, $0, $1) } != "mono",
                 automationMode: readEngineString { nc_track_automation_mode(handle, i, $0, $1) },
                 inserts: (0..<insertCount).map { slot in
                     let s = Int32(slot)
@@ -3244,6 +3248,15 @@ final class EngineController: ObservableObject {
     func setTrackOutputBus(_ id: Int, _ bus: String) {
         guard let handle else { return }
         _ = bus.withCString { nc_track_set_output_bus(handle, Int32(id), $0) }
+        reloadTracks()
+        refreshHistory()
+    }
+
+    /// Set a track's channel format to stereo or mono. Reconciles the graph (a mono track
+    /// is summed to one channel), so it records one undo step.
+    func setTrackStereo(_ id: Int, _ stereo: Bool) {
+        guard let handle else { return }
+        _ = (stereo ? "stereo" : "mono").withCString { nc_track_set_channel_format(handle, Int32(id), $0) }
         reloadTracks()
         refreshHistory()
     }

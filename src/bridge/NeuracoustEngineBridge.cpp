@@ -604,6 +604,21 @@ void nc_track_set_output_bus(NCEngine* engine, int index, const char* bus) {
     engine->reconcileProject();
 }
 
+void nc_track_channel_format(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->channelFormat : std::string{"stereo"});
+}
+
+void nc_track_set_channel_format(NCEngine* engine, int index, const char* format) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr || format == nullptr) return;
+    const std::string value = std::string(format) == "mono" ? "mono" : "stereo";
+    if (track->channelFormat == value) return;
+    track->channelFormat = value;
+    engine->recordStep("Set track channel format");
+    engine->reconcileProject();   // mono/stereo changes how the renderer sums the track
+}
+
 // A channel memo — free text, no audio effect, so it records an undo step (and
 // autosaves) but does not touch the render graph.
 void nc_track_set_notes(NCEngine* engine, int index, const char* notes) {

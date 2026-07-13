@@ -159,6 +159,10 @@ void nc_track_output_bus(NCEngine* engine, int index, char* out, size_t outLen);
 // Master plus any aux/bus tracks (count then name, cached between the two calls).
 void nc_track_set_input_bus(NCEngine* engine, int index, const char* bus);
 void nc_track_set_output_bus(NCEngine* engine, int index, const char* bus);
+// Track channel format: "mono" or "stereo". The renderer sums a mono track to one channel
+// panned into the field; setting it reconciles the graph.
+void nc_track_channel_format(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_channel_format(NCEngine* engine, int index, const char* format);
 int  nc_track_output_option_count(NCEngine* engine, int index);
 void nc_track_output_option(NCEngine* engine, int index, int i, char* out, size_t outLen);
 
