@@ -87,9 +87,12 @@ struct TransportBar: View {
             transportKey("backward.fill") { engine.seek(engine.playheadSeconds - 2) }
             transportKey("forward.fill") { engine.seek(engine.playheadSeconds + 2) }
             transportKey("forward.end.fill") {}
+            // A green PLAY key, Sony-recorder style: lit bright green while playing, an
+            // unlit dark-green key when stopped (still clearly the green button).
             transportKey(engine.transportRunning ? "pause.fill" : "play.fill",
-                         tint: engine.transportRunning ? Theme.Palette.green : Theme.Palette.text,
-                         badge: engine.loopEnabled ? ("repeat", Theme.Palette.green) : nil) {
+                         tint: engine.transportRunning ? Color.black.opacity(0.85) : Theme.Palette.green,
+                         keyFill: engine.transportRunning ? Theme.Palette.green : Theme.Palette.green.opacity(0.16),
+                         badge: engine.loopEnabled ? ("repeat", engine.transportRunning ? Theme.Palette.green : Theme.Palette.green) : nil) {
                 engine.togglePlay()
             }
             // Right-click for the playback mode, the way Pro Tools does. Loop playback
@@ -116,8 +119,10 @@ struct TransportBar: View {
             // Not a take recorder yet: it arms the input monitor path. Drawn hollow so
             // it does not read as a transport that captures audio. Right-click picks the
             // record mode the capture engine will use once it exists.
+            // A red RECORD key: lit bright red while armed, an unlit dark-red key otherwise.
             transportKey("circle",
-                         tint: engine.recording ? Theme.Palette.red : Theme.Palette.textDim,
+                         tint: engine.recording ? Color.black.opacity(0.85) : Theme.Palette.red,
+                         keyFill: engine.recording ? Theme.Palette.red : Theme.Palette.red.opacity(0.16),
                          badge: recordBadge) {
                 engine.toggleRecording()
             }
@@ -152,6 +157,7 @@ struct TransportBar: View {
 
     private func transportKey(_ symbol: String,
                               tint: Color = Theme.Palette.textSecondary,
+                              keyFill: Color? = nil,
                               badge: (symbol: String, tint: Color)? = nil,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -161,10 +167,10 @@ struct TransportBar: View {
                 .frame(width: 28, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(Theme.Palette.button)
+                        .fill(keyFill ?? Theme.Palette.button)
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .stroke(Theme.Palette.border, lineWidth: 1)
+                                .stroke(keyFill != nil ? Color.clear : Theme.Palette.border, lineWidth: 1)
                         )
                 )
                 // The mode badge rides the bottom-trailing corner, exactly as the

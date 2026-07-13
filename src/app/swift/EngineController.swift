@@ -1386,6 +1386,8 @@ final class EngineController: ObservableObject {
     func newProject() {
         guard let handle, confirmDiscardingChanges() else { return }
         nc_project_new(handle)
+        keyEventStore = []          // conductor key state is per-project; reset it
+        musicalKey = "C"
         afterProjectReplaced()
     }
 
@@ -1528,6 +1530,11 @@ final class EngineController: ObservableObject {
         reloadMidiRegions()
         reloadMonitorState()
         refreshHistory()
+        // A new/opened engine project resets to its own default edit mode, so re-apply the
+        // UI's mode and grid unit — otherwise snapping silently falls back to the 0.1 s
+        // quantum instead of the musical (beat) grid the toolbar is showing.
+        nc_project_set_edit_mode(handle, editMode.rawValue.capitalized)
+        _ = gridUnit.rawValue.withCString { nc_project_set_grid_unit(handle, $0) }
         lastError = nil
     }
 
@@ -3450,8 +3457,10 @@ final class EngineController: ObservableObject {
         }
         if let ss = d.string(forKey: SettingsKey.soloSelect), let mode = SoloSelectMode(rawValue: ss) { soloSelectMode = mode }
         if let da = d.string(forKey: SettingsKey.dockAnalyzer), let kind = AnalyzerKind(rawValue: da) { dockAnalyzerKind = kind }
-        if let key = d.string(forKey: SettingsKey.musicalKey), !key.isEmpty { musicalKey = key }
-        restoreKeyEvents()
+        // Key and its positional changes are per-project, not global — restoring them from
+        // settings leaked a stray key event (e.g. a "D") into every new/other project. Start
+        // clean: the key row shows the default C at the top until the user adds one.
+        musicalKey = "C"
         restoreSongForm()
         if d.object(forKey: SettingsKey.rulerBars) != nil { rulerBars = d.bool(forKey: SettingsKey.rulerBars) }
         if d.object(forKey: SettingsKey.rulerTime) != nil { rulerTime = d.bool(forKey: SettingsKey.rulerTime) }

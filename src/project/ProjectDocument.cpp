@@ -1369,10 +1369,18 @@ ProjectDocument defaultProject() {
     audio2.outputBus = "Master";
     project.tracks = {audio1, audio2, master, monitor};
     project.tempoMasterTrackName = audio1.name;
+    project.editMode = "Grid";   // snap to the musical grid by default, matching the UI
     project.audioImportTempoPolicy = "preserve-project";
     normalizeMasterMonitorRouting(project.tracks);
     project.tempoMap.push_back({0.0, static_cast<double>(project.tempoBpm)});
     project.timeSignatureMap.push_back({0.0, project.timeSignatureNumerator, project.timeSignatureDenominator});
+    // A marker on the first beat, so a new project opens with tempo/meter/marker/key all
+    // seeded at the start.
+    MarkerState startMarker;
+    startMarker.id = "marker-start";
+    startMarker.name = "1";
+    startMarker.timeSeconds = 0.0;
+    project.markers.push_back(startMarker);
     project.masterInserts.clear();
     project.monitorModules = defaultMonitorDspModules();
     return project;
