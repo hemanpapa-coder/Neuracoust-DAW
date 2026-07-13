@@ -1,5 +1,6 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
+#include "ai/AiAssistant.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <fstream>
 #include <set>
+#include <sstream>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -4890,4 +4892,131 @@ void nc_listen_external_share_url(NCEngine* engine, char* out, size_t outLen) {
         query += "&token=" + settings.accessToken;
     }
     copyText(out, outLen, path + "?" + query);
+}
+
+// --- AI assistant (Phase 0) -------------------------------------------------
+// The ported neuracoust::daw AiAssistant library owns the brains — project
+// snapshot, command validation, prompting. These functions expose it to Swift:
+// build a request for the local Ollama server, and apply the safe, reversible
+// commands the assistant proposes (one undo step each). The HTTP call itself
+// lives in Swift (URLSession), so nothing here blocks or touches the network.
+
+namespace {
+
+std::string aiJsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (const char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                out += buf;
+            } else {
+                out += c;
+            }
+        }
+    }
+    return out;
+}
+
+// The vague ported system prompt gets an explicit, parseable command schema so
+// the model's output can drive real edits. Kept to the safe, reversible subset.
+std::string aiSystemPromptWithSchema() {
+    return
+        "You are the Neuracoust DAW assistant. The user writes in Korean or English; "
+        "reply in the user's language. Respond with ONE JSON object and nothing else: "
+        "{\"reply\":\"<short conversational answer>\",\"commands\":[<zero or more commands>]}. "
+        "Each command is exactly one of: "
+        "{\"type\":\"SetTrackGain\",\"track\":\"<name>\",\"gainDb\":<-60..12>,\"reason\":\"<why>\"} , "
+        "{\"type\":\"SetTrackPan\",\"track\":\"<name>\",\"pan\":<-1..1>,\"reason\":\"<why>\"} , "
+        "{\"type\":\"SetTrackMute\",\"track\":\"<name>\",\"enabled\":<true|false>} , "
+        "{\"type\":\"SetTrackSolo\",\"track\":\"<name>\",\"enabled\":<true|false>} , "
+        "{\"type\":\"ArmTrackForRecording\",\"track\":\"<name>\",\"enabled\":<true|false>} , "
+        "{\"type\":\"AddMarker\",\"label\":\"<text>\",\"timeSeconds\":<number>} . "
+        "Only use track names that appear in the snapshot. If no change is needed, return an "
+        "empty commands array. Never claim the audio changed; the host applies each command "
+        "only after the user confirms.";
+}
+
+} // namespace
+
+void nc_ai_project_context(NCEngine* engine, char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const auto snapshot = neuracoust::daw::makeAiProjectSnapshot(engine->project);
+    copyText(out, outLen, neuracoust::daw::serializeAiProjectSnapshot(snapshot));
+}
+
+void nc_ai_build_request(NCEngine* engine, const char* model, const char* userText,
+                         char* out, size_t outLen) {
+    if (engine == nullptr) { copyText(out, outLen, ""); return; }
+    const auto snapshot = neuracoust::daw::makeAiProjectSnapshot(engine->project);
+    const std::string snapshotJson = neuracoust::daw::serializeAiProjectSnapshot(snapshot);
+    const std::string modelName = (model != nullptr && *model != '\0') ? model : "qwen2.5-coder:14b";
+    const std::string user = userText != nullptr ? userText : "";
+    std::ostringstream body;
+    body << "{\"model\":\"" << aiJsonEscape(modelName) << "\","
+         << "\"stream\":false,\"format\":\"json\","
+         << "\"messages\":["
+         << "{\"role\":\"system\",\"content\":\"" << aiJsonEscape(aiSystemPromptWithSchema()) << "\"},"
+         << "{\"role\":\"user\",\"content\":\"Project snapshot: " << aiJsonEscape(snapshotJson)
+         << "\\nUser request: " << aiJsonEscape(user) << "\"}"
+         << "]}";
+    copyText(out, outLen, body.str());
+}
+
+bool nc_ai_apply_command(NCEngine* engine, const char* typeStr, const char* trackName,
+                         float gainDb, float pan, bool enabled, double timeSeconds,
+                         const char* label, char* msg, size_t msgLen) {
+    using namespace neuracoust::daw;
+    if (engine == nullptr) { copyText(msg, msgLen, "no engine"); return false; }
+    AiCommand cmd;
+    cmd.type = aiCommandTypeFromString(typeStr != nullptr ? typeStr : "");
+    cmd.targetTrackName = trackName != nullptr ? trackName : "";
+    cmd.label = label != nullptr ? label : "";
+    cmd.gainDb = gainDb;
+    cmd.pan = pan;
+    cmd.enabled = enabled;
+    cmd.timeSeconds = timeSeconds;
+    const auto validation = validateAiCommand(engine->project, cmd);
+    if (!validation.ok) { copyText(msg, msgLen, validation.message); return false; }
+
+    bool applied = false;
+    switch (cmd.type) {
+    case AiCommandType::SetTrackGain:
+        applied = setTrackVolumeDb(engine->project, cmd.targetTrackName, gainDb);
+        break;
+    case AiCommandType::SetTrackPan:
+        applied = setTrackPan(engine->project, cmd.targetTrackName, pan);
+        break;
+    case AiCommandType::SetTrackMute:
+        applied = setTrackMuted(engine->project, cmd.targetTrackName, enabled);
+        break;
+    case AiCommandType::SetTrackSolo:
+        applied = setTrackSolo(engine->project, cmd.targetTrackName, enabled);
+        break;
+    case AiCommandType::ArmTrackForRecording:
+        applied = setTrackRecordArmed(engine->project, cmd.targetTrackName, enabled);
+        break;
+    case AiCommandType::AddMarker:
+        applied = !addMarkerAt(engine->project, timeSeconds).empty();
+        if (applied && !cmd.label.empty()) {
+            renameNearestMarker(engine->project, timeSeconds, 0.01, cmd.label);
+        }
+        break;
+    default:
+        copyText(msg, msgLen, "unsupported command");
+        return false;
+    }
+    if (!applied) { copyText(msg, msgLen, "apply failed"); return false; }
+    engine->reconcileProject();
+    engine->recordStep(std::string("AI: ") + aiCommandTypeToString(cmd.type));
+    copyText(msg, msgLen, serializeAiCommandPreview(cmd));
+    return true;
 }

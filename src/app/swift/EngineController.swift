@@ -1270,6 +1270,13 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Refresh the UI after an edit made outside the normal view path (e.g. the AI
+    /// assistant applying a command through the bridge). Reloads tracks and undo state.
+    func reloadAfterExternalEdit() {
+        reloadTracks()
+        refreshHistory()
+    }
+
     private func reloadTracks() {
         guard let handle else { return }
         panLaw = readEngineString { nc_project_pan_law(handle, $0, $1) }

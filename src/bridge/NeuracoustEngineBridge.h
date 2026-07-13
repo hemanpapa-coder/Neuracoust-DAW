@@ -1033,6 +1033,21 @@ void nc_listen_public_share_url(NCEngine* engine, char* out, size_t outLen);
 /// what Copy and QR hand out — the LAN address only works on the same network.
 void nc_listen_external_share_url(NCEngine* engine, char* out, size_t outLen);
 
+// --- AI assistant (Phase 0) ---
+/// The project snapshot the assistant reasons over (tracks, tempo, health), serialized.
+void nc_ai_project_context(NCEngine* engine, char* out, size_t outLen);
+/// Build the Ollama /api/chat request body (JSON) for a user message: system prompt +
+/// command schema + current project snapshot + the user's text. Swift POSTs this. Pass a
+/// large buffer (the snapshot can be several KB).
+void nc_ai_build_request(NCEngine* engine, const char* model, const char* userText,
+                         char* out, size_t outLen);
+/// Validate and apply one assistant-proposed command (SetTrackGain/Pan/Mute/Solo,
+/// ArmTrackForRecording, AddMarker), recording a single undo step. Returns false with a
+/// reason in msg if validation or the edit fails.
+bool nc_ai_apply_command(NCEngine* engine, const char* typeStr, const char* trackName,
+                         float gainDb, float pan, bool enabled, double timeSeconds,
+                         const char* label, char* msg, size_t msgLen);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

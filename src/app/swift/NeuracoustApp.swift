@@ -27,6 +27,7 @@ struct NeuracoustApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var engine: EngineController
     @StateObject private var listen: ListenRoomController
+    @StateObject private var ai: AiAssistantController
 
     init() {
         let engine = EngineController()
@@ -34,6 +35,7 @@ struct NeuracoustApp: App {
         engine.listenRoom = listen
         _engine = StateObject(wrappedValue: engine)
         _listen = StateObject(wrappedValue: listen)
+        _ai = StateObject(wrappedValue: AiAssistantController(engine: engine))
     }
 
     var body: some Scene {
@@ -42,6 +44,7 @@ struct NeuracoustApp: App {
                 .environmentObject(engine)
                 .environmentObject(engine.pluginEditors)
                 .environmentObject(listen)
+                .environmentObject(ai)
                 .task {
                     appDelegate.engine = engine
                     engine.start()
@@ -129,6 +132,10 @@ struct NeuracoustApp: App {
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)
             }
+            CommandMenu("AI") {
+                Button(ai.open ? "AI 어시스턴트 닫기" : "AI 어시스턴트 열기") { ai.toggle() }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+            }
             // FabFilter-style Help menu: a checkmarked toggle for the hover hints, the
             // same helpMode the toolbar "?" flips. A Toggle renders with the ✓ in a menu.
             CommandGroup(replacing: .help) {
@@ -140,6 +147,7 @@ struct NeuracoustApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var engine: EngineController
+    @EnvironmentObject private var ai: AiAssistantController
 
     var body: some View {
         VStack(spacing: 0) {
@@ -186,6 +194,11 @@ struct RootView: View {
         .overlay {
             if engine.pluginBrowserOpen {
                 PluginBrowser()
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if ai.open {
+                AiAssistantPanel(ai: ai)
             }
         }
         .overlay(alignment: .bottom) {
