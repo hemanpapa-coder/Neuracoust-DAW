@@ -1521,8 +1521,8 @@ bool nc_audio_import_supported(const char* path) {
     return neuracoust::daw::isSupportedImportAudioExtension(std::filesystem::path(path));
 }
 
-bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
-                     char* error, size_t errorLen) {
+bool nc_audio_import_analyzed(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
+                             bool analyze, bool applyToTimeline, char* error, size_t errorLen) {
     auto* track = trackAt(engine, trackIndex);
     if (track == nullptr || path == nullptr || *path == '\0') {
         copyText(error, errorLen, "no track or no file");
@@ -1537,15 +1537,23 @@ bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double 
                                           std::filesystem::path(path),
                                           startSeconds,
                                           result,
-                                          importError)) {
+                                          importError,
+                                          analyze,
+                                          applyToTimeline)) {
         copyText(error, errorLen, importError.empty() ? "import failed" : importError);
         return false;
     }
 
     engine->reconcileProject();
     engine->recordStep("Import " + std::filesystem::path(path).filename().string());
-    copyText(error, errorLen, "");
+    // Hand the analysis summary back so the UI can report what was detected.
+    copyText(error, errorLen, result.message);
     return true;
+}
+
+bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
+                     char* error, size_t errorLen) {
+    return nc_audio_import_analyzed(engine, trackIndex, path, startSeconds, true, true, error, errorLen);
 }
 
 int nc_clip_count(NCEngine* engine) {

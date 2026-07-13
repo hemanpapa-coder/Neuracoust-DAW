@@ -530,7 +530,8 @@ std::string analyzeImportedAudioIntoProject(ProjectDocument& project,
                                             const WavAudioData& data,
                                             double clipStartSeconds,
                                             double clipDurationSeconds,
-                                            bool hasEmbeddedTempo) {
+                                            bool hasEmbeddedTempo,
+                                            bool applyToTimeline) {
     static constexpr std::array<const char*, 12> kKeyNames {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"};
     double bpm = hasEmbeddedTempo ? data.embeddedTempoBpm : estimateTempoBpmFromAudio(data);
     if (!(std::isfinite(bpm) && bpm >= 55.0 && bpm <= 190.0)) {
@@ -553,95 +554,102 @@ std::string analyzeImportedAudioIntoProject(ProjectDocument& project,
             }
         }
     }
-    project.tempoBpm = static_cast<int>(std::round(bpm));
-    project.timeSignatureNumerator = meterGroove.numerator;
-    project.timeSignatureDenominator = meterGroove.denominator;
-    project.timeSignatureMap.clear();
-    project.timeSignatureMap.push_back({0.0, project.timeSignatureNumerator, project.timeSignatureDenominator});
-    project.grooveFeel = meterGroove.groove;
-    project.grooveSwingAmount = meterGroove.swing;
+    // Detection results are held in locals so the summary reads the same whether or not it is
+    // committed to the timeline. Only the project writes below are gated on applyToTimeline.
+    const int numerator = meterGroove.numerator;
+    const int denominator = meterGroove.denominator;
     const auto songChroma = chromaForWindow(data, 0.0, std::min(clipDurationSeconds, 180.0));
     const KeyEstimate key = estimateKeyFromChroma(songChroma);
     const bool keyKnown = key.confidence >= 0.018 && key.tonalShare >= 0.36 &&
         tonalContinuityForWindow(data, 0.0, std::min(clipDurationSeconds, 180.0)) >= 0.08;
-    if (keyKnown) {
-        project.detectedKey = kKeyNames[static_cast<size_t>(std::max(0, std::min(11, key.root)))];
-        project.detectedKeyMode = key.minor ? "minor" : "major";
-    } else {
-        project.detectedKey = "Unknown";
-        project.detectedKeyMode = "unknown";
-    }
+    const std::string detectedKeyName = keyKnown
+        ? std::string(kKeyNames[static_cast<size_t>(std::max(0, std::min(11, key.root)))]) : "Unknown";
+    const std::string detectedKeyMode = keyKnown ? (key.minor ? "minor" : "major") : "unknown";
     const bool chordKeyMinor = project.chordKeyModePreference == "minor"
         ? true
         : (project.chordKeyModePreference == "major" ? false : key.minor);
     const double beatSeconds = 60.0 / bpm;
     const double barSeconds = beatSeconds *
-        static_cast<double>(std::max(1, project.timeSignatureNumerator)) *
-        (4.0 / static_cast<double>(std::max(1, project.timeSignatureDenominator)));
+        static_cast<double>(std::max(1, numerator)) *
+        (4.0 / static_cast<double>(std::max(1, denominator)));
     const double quarterNoteBeats = clipDurationSeconds / std::max(0.01, beatSeconds);
     const double notatedBeats = quarterNoteBeats *
-        (static_cast<double>(std::max(1, project.timeSignatureDenominator)) / 4.0);
+        (static_cast<double>(std::max(1, denominator)) / 4.0);
     const double barCount = clipDurationSeconds / std::max(0.25, barSeconds);
     const int maxBars = static_cast<int>(std::max(1.0, std::ceil(clipDurationSeconds / std::max(0.25, barSeconds))));
-    if (!hasEmbeddedTempo || project.tempoMap.empty()) {
-        project.tempoMap.clear();
-    }
-    for (int bar = 0; bar <= maxBars; ++bar) {
-        const double markerSeconds = clipStartSeconds + static_cast<double>(bar) * barSeconds;
-        if (markerSeconds > clipStartSeconds + clipDurationSeconds + 0.01) {
-            break;
-        }
-        const bool existing = std::any_of(project.tempoMap.begin(), project.tempoMap.end(), [&](const TempoMarkerState& marker) {
-            return std::abs(marker.timeSeconds - markerSeconds) < 0.02;
-        });
-        if (!existing) {
-            project.tempoMap.push_back({markerSeconds, bpm});
-        }
-    }
-    std::sort(project.tempoMap.begin(), project.tempoMap.end(), [](const TempoMarkerState& left, const TempoMarkerState& right) {
-        return left.timeSeconds < right.timeSeconds;
-    });
-
     const int chordBars = std::min(maxBars, 96);
     size_t chordChangesAdded = 0;
-    std::string lastChordName = lastChordNameBeforeOrAt(project.chordEvents, clipStartSeconds);
-    for (int bar = 0; bar < chordBars; ++bar) {
-        const double eventSeconds = clipStartSeconds + static_cast<double>(bar) * barSeconds;
-        if (eventSeconds > clipStartSeconds + clipDurationSeconds - 0.05 || chordAlreadyNear(project.chordEvents, eventSeconds, 0.2)) {
-            continue;
+
+    if (applyToTimeline) {
+        project.tempoBpm = static_cast<int>(std::round(bpm));
+        project.timeSignatureNumerator = numerator;
+        project.timeSignatureDenominator = denominator;
+        project.timeSignatureMap.clear();
+        project.timeSignatureMap.push_back({0.0, numerator, denominator});
+        project.grooveFeel = meterGroove.groove;
+        project.grooveSwingAmount = meterGroove.swing;
+        project.detectedKey = detectedKeyName;
+        project.detectedKeyMode = detectedKeyMode;
+        if (!hasEmbeddedTempo || project.tempoMap.empty()) {
+            project.tempoMap.clear();
         }
-        const double localStart = static_cast<double>(bar) * barSeconds;
-        std::string chord = estimateChordNameForWindow(data,
-                                                       localStart,
-                                                       std::min(barSeconds, clipDurationSeconds - localStart),
-                                                       key.root,
-                                                       chordKeyMinor,
-                                                       keyKnown);
-        if (chord != "N.C." && !chord.empty() && chord != lastChordName) {
-            addChordEventAt(project, eventSeconds, chord);
-            lastChordName = chord;
-            ++chordChangesAdded;
+        for (int bar = 0; bar <= maxBars; ++bar) {
+            const double markerSeconds = clipStartSeconds + static_cast<double>(bar) * barSeconds;
+            if (markerSeconds > clipStartSeconds + clipDurationSeconds + 0.01) {
+                break;
+            }
+            const bool existing = std::any_of(project.tempoMap.begin(), project.tempoMap.end(), [&](const TempoMarkerState& marker) {
+                return std::abs(marker.timeSeconds - markerSeconds) < 0.02;
+            });
+            if (!existing) {
+                project.tempoMap.push_back({markerSeconds, bpm});
+            }
+        }
+        std::sort(project.tempoMap.begin(), project.tempoMap.end(), [](const TempoMarkerState& left, const TempoMarkerState& right) {
+            return left.timeSeconds < right.timeSeconds;
+        });
+
+        std::string lastChordName = lastChordNameBeforeOrAt(project.chordEvents, clipStartSeconds);
+        for (int bar = 0; bar < chordBars; ++bar) {
+            const double eventSeconds = clipStartSeconds + static_cast<double>(bar) * barSeconds;
+            if (eventSeconds > clipStartSeconds + clipDurationSeconds - 0.05 || chordAlreadyNear(project.chordEvents, eventSeconds, 0.2)) {
+                continue;
+            }
+            const double localStart = static_cast<double>(bar) * barSeconds;
+            std::string chord = estimateChordNameForWindow(data,
+                                                           localStart,
+                                                           std::min(barSeconds, clipDurationSeconds - localStart),
+                                                           key.root,
+                                                           chordKeyMinor,
+                                                           keyKnown);
+            if (chord != "N.C." && !chord.empty() && chord != lastChordName) {
+                addChordEventAt(project, eventSeconds, chord);
+                lastChordName = chord;
+                ++chordChangesAdded;
+            }
+        }
+
+        const std::array<const char*, 6> sectionNames {"Intro", "Verse", "Pre", "Chorus", "Bridge", "Outro"};
+        const int sectionStepBars = 8;
+        for (int section = 0; section * sectionStepBars < maxBars && section < 16; ++section) {
+            const double sectionSeconds = clipStartSeconds + static_cast<double>(section * sectionStepBars) * barSeconds;
+            if (markerAlreadyNear(project.markers, sectionSeconds, 0.5)) {
+                continue;
+            }
+            addMarkerAt(project, sectionSeconds);
+            renameNearestMarker(project, sectionSeconds, 0.1, sectionNames[static_cast<size_t>(std::min<int>(section, static_cast<int>(sectionNames.size() - 1)))]);
         }
     }
 
-    const std::array<const char*, 6> sectionNames {"Intro", "Verse", "Pre", "Chorus", "Bridge", "Outro"};
-    const int sectionStepBars = 8;
-    for (int section = 0; section * sectionStepBars < maxBars && section < 16; ++section) {
-        const double sectionSeconds = clipStartSeconds + static_cast<double>(section * sectionStepBars) * barSeconds;
-        if (markerAlreadyNear(project.markers, sectionSeconds, 0.5)) {
-            continue;
-        }
-        addMarkerAt(project, sectionSeconds);
-        renameNearestMarker(project, sectionSeconds, 0.1, sectionNames[static_cast<size_t>(std::min<int>(section, static_cast<int>(sectionNames.size() - 1)))]);
-    }
-    return std::string(hasEmbeddedTempo ? (normalizedCompoundTempo ? "embedded dotted-pulse tempo normalized" : "embedded tempo") : "estimated tempo") +
+    return std::string(applyToTimeline ? "" : "analysis only (timeline unchanged) · ") +
+        (hasEmbeddedTempo ? (normalizedCompoundTempo ? "embedded dotted-pulse tempo normalized" : "embedded tempo") : "estimated tempo") +
         " " + std::to_string(static_cast<int>(std::round(bpm))) +
-        " BPM · " + std::to_string(project.timeSignatureNumerator) + "/" + std::to_string(project.timeSignatureDenominator) +
+        " BPM · " + std::to_string(numerator) + "/" + std::to_string(denominator) +
         " · " + std::to_string(static_cast<int>(std::round(barCount))) + " bar(s) / " +
         std::to_string(static_cast<int>(std::round(notatedBeats))) + " beat(s)" +
-        " · " + project.detectedKey + (project.detectedKeyMode == "unknown" ? "" : (project.detectedKeyMode == "minor" ? " minor" : " major")) +
+        " · " + detectedKeyName + (detectedKeyMode == "unknown" ? "" : (detectedKeyMode == "minor" ? " minor" : " major")) +
         " · chord key mode " + (project.chordKeyModePreference.empty() ? "auto" : project.chordKeyModePreference) +
-        " · " + project.grooveFeel + (project.grooveSwingAmount > 0.0 ? " " + std::to_string(static_cast<int>(std::round(project.grooveSwingAmount * 100.0))) + "%" : "") +
+        " · " + meterGroove.groove + (meterGroove.swing > 0.0 ? " " + std::to_string(static_cast<int>(std::round(meterGroove.swing * 100.0))) + "%" : "") +
         " · " + std::to_string(chordChangesAdded) + " chord change(s) from " + std::to_string(chordBars) + " bar scan";
 }
 

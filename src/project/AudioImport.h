@@ -49,12 +49,17 @@ bool convertAudioFileToWavInDirectory(const std::filesystem::path& sourcePath,
 /// unsaved project has nowhere of its own to put media.
 ///
 /// The clip's musical metadata is analysed on the way in, the same as the old UI.
+/// `analyze` runs the tempo / key / chord / marker detection; `applyToTimeline` decides
+/// whether that detection is written into the project (tempo map, markers, key, chords) or
+/// only reported. `analyze == false` imports the audio raw and touches none of it.
 bool importAudioFile(ProjectDocument& project,
                      const std::filesystem::path& projectPath,
                      const std::string& trackName,
                      const std::filesystem::path& sourcePath,
                      double startSeconds,
                      AudioImportResult& result,
-                     std::string& error);
+                     std::string& error,
+                     bool analyze = true,
+                     bool applyToTimeline = true);
 
 } // namespace neuracoust::daw

@@ -378,8 +378,15 @@ bool nc_audio_import_supported(const char* path);
 /// Imports `path` onto the track at `trackIndex`, starting at `startSeconds`.
 /// Non-WAV sources are converted; the result lands in the project's Audio Files
 /// folder, or a temporary folder when the project has no path yet.
+/// This convenience always analyses and applies to the timeline (the historical behaviour).
 bool nc_audio_import(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
                      char* error, size_t errorLen);
+
+/// Import with explicit control over the musical analysis: `analyze` runs tempo / key /
+/// chord / marker detection, `applyToTimeline` commits it to the project (vs. detect-only).
+/// On success `error` carries the analysis summary string for the UI to surface.
+bool nc_audio_import_analyzed(NCEngine* engine, int trackIndex, const char* path, double startSeconds,
+                             bool analyze, bool applyToTimeline, char* error, size_t errorLen);
 
 /// Clips currently in the document, and their placement. Enough for a timeline to
 /// draw against; the waveform comes from the source file.

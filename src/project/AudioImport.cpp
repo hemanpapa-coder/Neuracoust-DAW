@@ -136,7 +136,9 @@ bool importAudioFile(ProjectDocument& project,
                      const std::filesystem::path& sourcePath,
                      double startSeconds,
                      AudioImportResult& result,
-                     std::string& error) {
+                     std::string& error,
+                     bool analyze,
+                     bool applyToTimeline) {
     result = {};
     error.clear();
 
@@ -190,11 +192,17 @@ bool importAudioFile(ProjectDocument& project,
     result.clipId = clipId;
     result.clipSourcePath = clipSourcePath;
     result.durationSeconds = durationSeconds;
-    // A WAV can carry its own tempo; the analysis trusts it when present.
-    result.message = analyzeImportedAudioIntoProject(project, audio,
-                                                     std::max(0.0, startSeconds),
-                                                     durationSeconds,
-                                                     audio.embeddedTempoBpm > 0.0);
+    // A WAV can carry its own tempo; the analysis trusts it when present. The user chooses
+    // whether to analyse and whether to commit the result to the timeline.
+    if (analyze) {
+        result.message = analyzeImportedAudioIntoProject(project, audio,
+                                                         std::max(0.0, startSeconds),
+                                                         durationSeconds,
+                                                         audio.embeddedTempoBpm > 0.0,
+                                                         applyToTimeline);
+    } else {
+        result.message = "imported without analysis";
+    }
     return true;
 }
 

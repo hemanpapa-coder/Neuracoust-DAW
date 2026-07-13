@@ -1416,6 +1416,9 @@ final class EngineController: ObservableObject {
         keyEventStore = []          // conductor key state is per-project; reset it
         musicalKey = "C"
         afterProjectReplaced()
+        // A fresh project inherits the saved app-level monitor / DSP / edit settings, so a
+        // new session starts from "전체 설정 저장" instead of the bare engine defaults.
+        reapplyPersistedSettingsToNewProject()
     }
 
     func openProject() {
@@ -1583,27 +1586,73 @@ final class EngineController: ObservableObject {
         importAudio(intoTrack: trackId, at: playheadSeconds, from: urls)
     }
 
+    /// How to treat the engine's musical analysis (tempo / key / chord / section markers)
+    /// for an import.
+    enum ImportAnalysisChoice { case apply, analyzeOnly, skip }
+
+    /// Ask once per import whether to analyse and whether to commit the analysis to the
+    /// timeline. A modal, so it must run on the main thread (imports already do).
+    private func askImportAnalysisChoice() -> ImportAnalysisChoice {
+        let alert = NSAlert()
+        alert.messageText = "음원 분석"
+        alert.informativeText = "임포트한 오디오에서 템포·조성·코드·섹션 마커를 분석할 수 있습니다.\n분석하고 그 결과를 타임라인(템포·마커·조성·코드)에 적용할지 선택하세요."
+        alert.addButton(withTitle: "분석 + 타임라인 적용")
+        alert.addButton(withTitle: "분석만 (적용 안 함)")
+        alert.addButton(withTitle: "원본 그대로 (분석 안 함)")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .apply
+        case .alertSecondButtonReturn: return .analyzeOnly
+        default: return .skip
+        }
+    }
+
     /// Dropping files places the first at `startSeconds`; the rest follow end-to-end.
     /// Track and time come from where the drop landed, not the playhead.
     func importAudio(intoTrack trackId: Int, at startSeconds: Double, from urls: [URL]) {
-        guard let handle else { return }
+        guard let handle, !urls.isEmpty else { return }
+
+        // Ask once, up front, how to treat the analysis for this batch.
+        let choice = askImportAnalysisChoice()
+        let analyze = choice != .skip
+        let applyToTimeline = choice == .apply
 
         var start = max(0, startSeconds)
+        var lastSummary = ""
         for url in urls {
             guard nc_audio_import_supported(url.path) else {
                 lastError = "지원하지 않는 형식: \(url.lastPathComponent)"
                 continue
             }
-            var errorBuffer = [CChar](repeating: 0, count: 256)
-            if nc_audio_import(handle, Int32(trackId), url.path, start, &errorBuffer, errorBuffer.count) {
+            var buffer = [CChar](repeating: 0, count: 512)
+            if nc_audio_import_analyzed(handle, Int32(trackId), url.path, start, analyze, applyToTimeline,
+                                        &buffer, buffer.count) {
+                lastSummary = String(cString: buffer)
                 start += clipDuration(ofLast: trackId)
             } else {
-                lastError = String(cString: errorBuffer)
+                lastError = String(cString: buffer)
             }
         }
         reloadTracks()
         reloadClips()
+        if applyToTimeline {
+            // The analysis rewrote tempo / meter / markers — refresh those so they show now.
+            reloadMarkers()
+            tempoBpm = Int(nc_project_tempo_bpm(handle))
+            timeSignature = (Int(nc_project_time_signature_numerator(handle)),
+                             Int(nc_project_time_signature_denominator(handle)))
+        }
         refreshHistory()
+        // "분석만" leaves the timeline untouched, so its only output is the detected info —
+        // show it, otherwise the mode would look like it did nothing.
+        if choice == .analyzeOnly, !lastSummary.isEmpty {
+            let info = NSAlert()
+            info.messageText = "음원 분석 결과 (타임라인 미적용)"
+            info.informativeText = lastSummary
+            info.addButton(withTitle: "확인")
+            info.runModal()
+        } else if !lastSummary.isEmpty {
+            lastError = lastSummary
+        }
     }
 
     private func clipDuration(ofLast trackId: Int) -> Double {
@@ -3607,6 +3656,47 @@ final class EngineController: ObservableObject {
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
+    }
+
+    /// `nc_project_new` resets the project model, so the app-level monitor / DSP / edit
+    /// settings the user saved with "전체 설정 저장" revert to the fresh project's defaults.
+    /// Re-push the saved ones onto the new project so a new session inherits them (Pro Tools
+    /// starts a new session from your I/O + preferences the same way). The output device is
+    /// engine-level and survives; conductor/layout UI state lives on the controller and is
+    /// left as-is. Restart-causing knobs (core isolation / count) are only re-applied when
+    /// they actually differ, so a plain new project does not trigger a needless audio restart.
+    func reapplyPersistedSettingsToNewProject() {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: SettingsKey.saved), handle != nil else { return }
+        if d.object(forKey: SettingsKey.insertTail) != nil { setInsertTailOnStopSeconds(d.double(forKey: SettingsKey.insertTail)) }
+        if let mode = d.string(forKey: SettingsKey.monitorPathMode), !mode.isEmpty {
+            setMonitorPathMode(mode)
+            dspSources = dspSourcesFromMode(mode)
+        }
+        if d.object(forKey: SettingsKey.listenSource) != nil { setMonitorListenSource(d.bool(forKey: SettingsKey.listenSource)) }
+        if let om = d.string(forKey: SettingsKey.outputMode) { outputMode = (om == "headphone") ? .headphone : .speaker }
+        if let em = d.string(forKey: SettingsKey.editMode), let mode = EditMode(rawValue: em) { editMode = mode }
+        if let gu = d.string(forKey: SettingsKey.gridUnit), let unit = GridUnit(rawValue: gu) { gridUnit = unit }
+        if let handle {
+            nc_project_set_edit_mode(handle, editMode.rawValue.capitalized)
+            _ = gridUnit.rawValue.withCString { nc_project_set_grid_unit(handle, $0) }
+        }
+        if d.object(forKey: SettingsKey.extDspCores) != nil { setExternalDspCoreCount(d.integer(forKey: SettingsKey.extDspCores)) }
+        if let host = d.string(forKey: SettingsKey.remoteHost), !host.isEmpty { setRemoteDspHost(host) }
+        if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
+        if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
+        if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
+        if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
+        if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
+        // These restart the audio engine, so only re-apply when the saved value differs.
+        if d.object(forKey: SettingsKey.coreIsolation) != nil {
+            let saved = d.bool(forKey: SettingsKey.coreIsolation)
+            if saved != coreIsolationEnabled { setCoreIsolation(saved) }
+        }
+        if d.object(forKey: SettingsKey.dspCores) != nil {
+            let saved = d.integer(forKey: SettingsKey.dspCores)
+            if saved > 0 && saved != dspCoreCount { setDspCoreCount(saved) }
+        }
     }
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the

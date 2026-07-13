@@ -16,11 +16,16 @@ struct ProjectMusicReanalysisReport {
     std::string summary;
 };
 
+// Detects tempo / meter / key / chords / section markers from imported audio. When
+// `applyToTimeline` is true it writes them into the project (tempo map, time signature,
+// key, chord events, section markers); when false it only detects and returns the summary,
+// leaving the timeline untouched. The caller decides whether to analyze at all.
 std::string analyzeImportedAudioIntoProject(ProjectDocument& project,
                                             const WavAudioData& data,
                                             double clipStartSeconds,
                                             double clipDurationSeconds,
-                                            bool hasEmbeddedTempo);
+                                            bool hasEmbeddedTempo,
+                                            bool applyToTimeline = true);
 std::string reanalyzeClipMusicalMetadata(ProjectDocument& project,
                                          const std::string& clipId,
                                          const WavAudioData& sourceData,
