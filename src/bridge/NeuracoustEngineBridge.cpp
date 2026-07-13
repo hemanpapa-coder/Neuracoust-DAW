@@ -4444,6 +4444,18 @@ void nc_monitor_toggle_mid_side(NCEngine* engine) {
     applyStationChange(engine);
 }
 
+// Swap left/right in the monitor path — for when the speakers are wired backwards. Meaningless
+// (and forced off) in Mid/Side, but preserved across the normal stereo/mono listen modes.
+bool nc_monitor_swap_left_right(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorStationSwapLeftRight;
+}
+void nc_monitor_toggle_swap_left_right(NCEngine* engine) {
+    if (engine == nullptr) return;
+    auto& p = engine->project;
+    p.monitorStationSwapLeftRight = !p.monitorStationSwapLeftRight;
+    applyStationChange(engine);
+}
+
 void nc_monitor_cycle_phase(NCEngine* engine) {
     if (engine == nullptr) return;
     auto& p = engine->project;

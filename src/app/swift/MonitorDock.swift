@@ -209,6 +209,14 @@ struct MonitorDock: View {
         } else if !engine.physicalSpeakerModel.isEmpty {
             Text("액티브 스피커 — 앰프/케이블 불필요").font(.caption).foregroundStyle(.secondary)
         }
+        Divider()
+        // Speakers wired backwards: swap L/R in the monitor path.
+        Button {
+            engine.toggleMonitorSwapLeftRight()
+        } label: {
+            if engine.monitorSwapLeftRight { Label("좌우(L/R) 스왑", systemImage: "checkmark") }
+            else { Text("좌우(L/R) 스왑") }
+        }
     }
 
     @ViewBuilder

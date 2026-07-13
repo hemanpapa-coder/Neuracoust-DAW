@@ -3717,6 +3717,7 @@ final class EngineController: ObservableObject {
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
         physicalPowerAmpModel = readString { nc_monitor_physical_power_amp_model(handle, $0, $1) }
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
+        monitorSwapLeftRight = nc_monitor_swap_left_right(handle)
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
         autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
         autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
@@ -4178,6 +4179,15 @@ final class EngineController: ObservableObject {
     @Published var physicalPowerAmpModel = ""
     @Published var physicalSpeakerCableModel = ""
     @Published var monitorOutputExclusive = true
+    /// Swap L/R in the monitor path — for speakers wired backwards.
+    @Published var monitorSwapLeftRight = false
+
+    func toggleMonitorSwapLeftRight() {
+        guard let handle else { return }
+        nc_monitor_toggle_swap_left_right(handle)
+        monitorSwapLeftRight = nc_monitor_swap_left_right(handle)
+        refreshHistory()
+    }
 
     /// A passive physical speaker needs an external amp + cable; an active monitor doesn't.
     var physicalSpeakerIsPassive: Bool {

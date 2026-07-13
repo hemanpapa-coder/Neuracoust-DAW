@@ -940,6 +940,9 @@ void nc_monitor_cycle_stereo(NCEngine* engine);
 void nc_monitor_cycle_mono(NCEngine* engine);
 void nc_monitor_toggle_mid_side(NCEngine* engine);
 void nc_monitor_cycle_phase(NCEngine* engine);
+/// Swap left/right in the monitor path (speakers wired backwards). No effect in Mid/Side.
+bool nc_monitor_swap_left_right(NCEngine* engine);
+void nc_monitor_toggle_swap_left_right(NCEngine* engine);
 bool nc_monitor_mid_side(NCEngine* engine);
 bool nc_monitor_invert_left(NCEngine* engine);
 bool nc_monitor_invert_right(NCEngine* engine);
