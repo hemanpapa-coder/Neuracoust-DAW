@@ -95,6 +95,7 @@ struct ProjectAudioRenderState {
     std::string masterInsertLastError;
     std::map<std::string, Vst3RealtimeProcessor> instrumentProcessors;
     std::map<std::string, std::string> instrumentProcessorKeys;
+    std::map<std::string, int> instrumentProcessorMaxBlock;
     std::map<std::string, std::string> instrumentLastErrors;
     std::map<std::string, RealtimeMasterInsertChain> routeInsertChains;
     std::map<std::string, std::string> routeInsertChainKeys;

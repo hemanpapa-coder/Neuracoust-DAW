@@ -1730,17 +1730,23 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                                                                         instrument.pluginClassName);
             const std::string processorKey = track.name + "#I" + std::to_string(slotIndex + 1);
             if (state != nullptr) {
-                // Prepare once at a stable, generous maximum block, NOT the current block. On
+                // Key on plug-in identity + sample rate only, NOT the per-block frameCount. On
                 // this machine SoundGrid delivers callbacks in bursts, so frameCount varies
                 // block to block; keying the cache on it re-prepared the plug-in every block,
-                // resetting the synth's voices each time — an audible "직직" crackle. A VST3
-                // processor may be driven with any block <= its prepared maximum.
-                constexpr int kInstrumentMaxBlock = 8192;
+                // resetting the synth's voices each time — an audible "직직" crackle. Keep one
+                // processor prepared for the largest block seen and just process fewer frames
+                // (a VST3 processor accepts any block <= its prepared maximum), growing the
+                // prepared size only when a bigger block actually arrives — the same approach
+                // the track-insert chain uses.
+                const int requestedBlock = static_cast<int>(std::max<int64_t>(1, frameCount));
                 const std::string cacheKey = instrument.pluginName + "\n" +
                     instrument.pluginPath + "\n" +
                     std::to_string(static_cast<int>(std::round(plan.sampleRate)));
                 auto keyIt = state->instrumentProcessorKeys.find(processorKey);
-                if (keyIt == state->instrumentProcessorKeys.end() || keyIt->second != cacheKey) {
+                auto maxIt = state->instrumentProcessorMaxBlock.find(processorKey);
+                const int preparedMax = maxIt != state->instrumentProcessorMaxBlock.end() ? maxIt->second : 0;
+                const bool identityChanged = keyIt == state->instrumentProcessorKeys.end() || keyIt->second != cacheKey;
+                if (identityChanged || requestedBlock > preparedMax) {
                     state->instrumentProcessors.erase(processorKey);
                     state->instrumentProcessorKeys[processorKey] = cacheKey;
                 }
@@ -1748,12 +1754,14 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                 if (processorIt == state->instrumentProcessors.end()) {
                     auto [inserted, _] = state->instrumentProcessors.emplace(processorKey, Vst3RealtimeProcessor());
                     processorIt = inserted;
+                    const int prepareBlock = std::max(requestedBlock, preparedMax);
                     std::string prepareMessage;
-                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, kInstrumentMaxBlock, prepareMessage)) {
+                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, prepareBlock, prepareMessage)) {
                         state->instrumentLastErrors[processorKey] = prepareMessage;
                         state->instrumentProcessors.erase(processorKey);
                         continue;
                     }
+                    state->instrumentProcessorMaxBlock[processorKey] = prepareBlock;
                 }
                 std::string processMessage;
                 auto result = processorIt->second.processMidiInstrument(outputAudio.interleavedSamples.data(),
