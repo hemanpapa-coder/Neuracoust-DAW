@@ -1,25 +1,30 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Drag a filled insert slot onto another to reorder it (track inserts only).
+/// Drag a filled insert slot onto another to move it (reorder within a track, or across
+/// tracks); hold Option to copy. Payload is "trackId:slot" so the drop knows the source track.
 private struct InsertDragDrop: ViewModifier {
     let isMaster: Bool
+    let trackId: Int
     let slot: Int
     let filled: Bool
-    let onMove: (Int, Int) -> Void
+    /// (sourceTrackId, sourceSlot, destSlot, copy)
+    let onDropInsert: (Int, Int, Int, Bool) -> Void
 
     func body(content: Content) -> some View {
         let dropped = content.onDrop(of: [.plainText], isTargeted: nil) { providers in
             guard !isMaster, let provider = providers.first else { return false }
+            let copy = NSEvent.modifierFlags.contains(.option)
             _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-                if let text = object as? String, let from = Int(text) {
-                    DispatchQueue.main.async { onMove(from, slot) }
-                }
+                guard let text = object as? String else { return }
+                let parts = text.split(separator: ":").compactMap { Int($0) }
+                guard parts.count == 2 else { return }
+                DispatchQueue.main.async { onDropInsert(parts[0], parts[1], slot, copy) }
             }
             return true
         }
         if filled && !isMaster {
-            return AnyView(dropped.onDrag { NSItemProvider(object: "\(slot)" as NSString) })
+            return AnyView(dropped.onDrag { NSItemProvider(object: "\(trackId):\(slot)" as NSString) })
         }
         return AnyView(dropped)
     }
@@ -577,11 +582,20 @@ struct ChannelStrip: View {
                         }
                     }
                 }
-                // Drag a plugin onto another slot to reorder it (track inserts).
-                .modifier(InsertDragDrop(isMaster: isMaster, slot: slot,
+                // Drag a plugin onto another slot to move it (within or across tracks);
+                // hold Option to copy. Master chain stays reorder-free (its own path).
+                .modifier(InsertDragDrop(isMaster: isMaster, trackId: ownerId, slot: slot,
                                          filled: !(insert?.isEmpty ?? true),
-                                         onMove: { from, to in
-                                             if !isMaster { engine.moveInsert(track: ownerId, from: from, to: to) }
+                                         onDropInsert: { srcTrack, srcSlot, dstSlot, copy in
+                                             if copy {
+                                                 engine.copyInsert(srcTrack: srcTrack, srcSlot: srcSlot,
+                                                                   dstTrack: ownerId, dstSlot: dstSlot)
+                                             } else if srcTrack == ownerId {
+                                                 engine.moveInsert(track: ownerId, from: srcSlot, to: dstSlot)
+                                             } else {
+                                                 engine.moveInsertAcross(srcTrack: srcTrack, srcSlot: srcSlot,
+                                                                         dstTrack: ownerId, dstSlot: dstSlot)
+                                             }
                                          }))
             }
         }

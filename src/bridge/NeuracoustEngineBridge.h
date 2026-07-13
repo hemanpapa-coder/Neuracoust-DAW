@@ -807,6 +807,10 @@ bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot);
 int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction);
 int nc_track_move_insert_to_index(NCEngine* engine, int trackIndex, int fromSlot, int toSlot);
 int nc_track_move_insert_to_slot(NCEngine* engine, int trackIndex, int fromSlot, int toSlot);
+/// Copy / move an insert (with its parameters) to a slot on the same or a different track —
+/// mixer drag-and-drop (Option-drag copies, plain drag moves). dstSlot < 0 appends.
+bool nc_track_copy_insert(NCEngine* engine, int srcTrackIndex, int srcSlot, int dstTrackIndex, int dstSlot);
+bool nc_track_move_insert_across(NCEngine* engine, int srcTrackIndex, int srcSlot, int dstTrackIndex, int dstSlot);
 
 /// "NAT", "INT", "RINT" or "EXT" — what the insert will actually run on.
 void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);

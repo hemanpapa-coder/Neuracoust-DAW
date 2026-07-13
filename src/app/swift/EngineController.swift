@@ -483,6 +483,25 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Option-drag in the mixer copies an insert (with its parameters) to another slot,
+    /// same track or across channels.
+    func copyInsert(srcTrack: Int, srcSlot: Int, dstTrack: Int, dstSlot: Int) {
+        guard let handle else { return }
+        if nc_track_copy_insert(handle, Int32(srcTrack), Int32(srcSlot), Int32(dstTrack), Int32(dstSlot)) {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
+    /// Plain drag of an insert onto a different channel moves it there.
+    func moveInsertAcross(srcTrack: Int, srcSlot: Int, dstTrack: Int, dstSlot: Int) {
+        guard let handle else { return }
+        if nc_track_move_insert_across(handle, Int32(srcTrack), Int32(srcSlot), Int32(dstTrack), Int32(dstSlot)) {
+            reloadTracks()
+            refreshHistory()
+        }
+    }
+
     func toggleInsertBypass(track trackId: Int, slot: Int) {
         guard let handle,
               let track = tracks.first(where: { $0.id == trackId }),

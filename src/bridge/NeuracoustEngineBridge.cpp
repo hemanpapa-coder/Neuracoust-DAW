@@ -3775,6 +3775,51 @@ bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot) {
     return true;
 }
 
+// Copy a filled insert (with its parameters) to another slot on the same or a different
+// track — Option-drag in the mixer. dstSlot < 0 appends at the end of the destination.
+bool nc_track_copy_insert(NCEngine* engine, int srcTrackIndex, int srcSlot,
+                          int dstTrackIndex, int dstSlot) {
+    auto* src = trackAt(engine, srcTrackIndex);
+    auto* dst = trackAt(engine, dstTrackIndex);
+    if (src == nullptr || dst == nullptr || srcSlot < 0 ||
+        static_cast<size_t>(srcSlot) >= src->inserts.size()) {
+        return false;
+    }
+    neuracoust::daw::TrackInsertSlot copied = src->inserts[static_cast<size_t>(srcSlot)];  // by value: params included
+    if (copied.pluginName.empty() || copied.pluginName == "No Insert") return false;
+    copied.dspExecutionMode = neuracoust::daw::defaultPluginInsertDspExecutionMode(
+        engine->project, engine->monitorDspEnabled, copied);
+    const std::string dstName = dst->name;
+    const size_t placed = dst->inserts.size();
+    if (!neuracoust::daw::addTrackInsertSlot(engine->project, dstName)) return false;
+    if (!neuracoust::daw::setTrackInsertSlot(engine->project, dstName, placed, copied)) return false;
+    if (dstSlot >= 0 && static_cast<size_t>(dstSlot) < placed) {
+        neuracoust::daw::moveTrackInsertSlotToIndex(engine->project, dstName, placed, static_cast<size_t>(dstSlot));
+    }
+    engine->reconcileProject();
+    engine->recordStep("Copy " + copied.pluginName);
+    return true;
+}
+
+// Move a filled insert to another track (plain drag across channels). Within one track use
+// nc_track_move_insert_to_index. dstSlot < 0 appends.
+bool nc_track_move_insert_across(NCEngine* engine, int srcTrackIndex, int srcSlot,
+                                 int dstTrackIndex, int dstSlot) {
+    auto* src = trackAt(engine, srcTrackIndex);
+    if (src == nullptr || srcSlot < 0 || static_cast<size_t>(srcSlot) >= src->inserts.size()) {
+        return false;
+    }
+    if (srcTrackIndex == dstTrackIndex) {
+        return nc_track_move_insert_to_index(engine, srcTrackIndex, srcSlot, dstSlot) >= 0;
+    }
+    if (!nc_track_copy_insert(engine, srcTrackIndex, srcSlot, dstTrackIndex, dstSlot)) return false;
+    // src is still valid (copy touched dst's insert vector, not project.tracks).
+    neuracoust::daw::removeTrackInsertSlot(engine->project, src->name, static_cast<size_t>(srcSlot));
+    engine->reconcileProject();
+    engine->recordStep("Move insert");
+    return true;
+}
+
 int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction) {
     auto* track = trackAt(engine, trackIndex);
     if (track == nullptr || slot < 0) {
