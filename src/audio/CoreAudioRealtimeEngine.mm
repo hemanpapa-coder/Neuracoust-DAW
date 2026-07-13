@@ -833,6 +833,7 @@ private:
         clearAudioBufferList(outputData, frameCount);
         const auto renderStart = std::chrono::steady_clock::now();
         dspEngine_.renderInterleavedStereo(frameCount, renderBlock_);
+        applyOutputSafety(renderBlock_, static_cast<size_t>(frameCount) * 2u);
         const int availableChannels = std::max(2, audioBufferListChannelCount(outputData));
         const auto route = resolveMonitorOutputRoute(settings_.monitorModules, availableChannels);
         if (route.assigned && route.available) {
@@ -846,6 +847,51 @@ private:
         }
         const auto renderEnd = std::chrono::steady_clock::now();
         recordRealtimeTelemetry(wakeTime, renderStart, renderEnd, frameCount);
+    }
+
+    // Speaker/hearing protection, applied to the interleaved output just before it reaches the
+    // device. Runs on the audio thread — branch-light, allocation-free.
+    //  1. NaN/Inf → 0 (a single non-finite sample is a full-scale click; the classic
+    //     speaker-killer). Any in a block trips a short fault mute so the surrounding
+    //     discontinuity is faded, not blasted.
+    //  2. Hard brickwall clamp to the ceiling — a runaway gain / feedback can never exceed it.
+    //  3. A fault mute that dips to silence and ramps back over ~40 ms, so a burst of garbage
+    //     is smothered instead of hitting the speakers full tilt (the "never output malicious
+    //     noise" behaviour, in software).
+    void applyOutputSafety(std::vector<float>& block, size_t sampleCount) {
+        if (sampleCount > block.size()) sampleCount = block.size();
+        const float ceiling = safetyCeiling_;
+        bool faulted = false;
+        uint64_t clamped = 0;
+        for (size_t i = 0; i < sampleCount; ++i) {
+            float x = block[i];
+            if (!std::isfinite(x)) { x = 0.0f; faulted = true; }
+            if (x > ceiling) { x = ceiling; ++clamped; }
+            else if (x < -ceiling) { x = -ceiling; ++clamped; }
+            block[i] = x;
+        }
+        if (faulted) {
+            // ~40 ms of mute + ramp-back after a non-finite fault.
+            safetyRecoverySamples_ = static_cast<int>(std::max(1.0, settings_.sampleRate) * 0.04) * 2;
+            safetyFaultBlocks_.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (clamped > 0) safetyClampedSamples_.fetch_add(clamped, std::memory_order_relaxed);
+
+        // Apply the fault-mute envelope per stereo frame (both samples share one gain step).
+        if (safetyRecoverySamples_ <= 0 && safetyGain_ >= 0.999f) {
+            safetyGain_ = 1.0f;
+            return;   // fast path: nothing to ride
+        }
+        const double sr = std::max(1.0, settings_.sampleRate);
+        const float rampPerFrame = static_cast<float>(1.0 / (sr * 0.02));   // ~20 ms fade-in
+        for (size_t i = 0; i + 1 < sampleCount; i += 2) {
+            float target = 1.0f;
+            if (safetyRecoverySamples_ > 0) { target = 0.0f; safetyRecoverySamples_ -= 2; }
+            if (safetyGain_ < target) { safetyGain_ = std::min(target, safetyGain_ + rampPerFrame); }
+            else if (safetyGain_ > target) { safetyGain_ = target; }   // mute is instant, recovery ramps
+            block[i] *= safetyGain_;
+            block[i + 1] *= safetyGain_;
+        }
     }
 
     void primeTelemetryIfCoreAudioHasNotRenderedYet() {
@@ -971,6 +1017,14 @@ private:
     NeuracoustDspEngine dspEngine_;
     std::vector<float> renderBlock_;
     std::vector<float> renderProbeBlock_;
+    // Output safety guard: the last line of defence for the speakers. Flushes NaN/Inf to
+    // silence and hard-clamps to the ceiling, then rides a fault mute so a burst of garbage
+    // (a crashed plug-in, a runaway feedback) is faded out instead of blasted at the DAC.
+    float safetyCeiling_ = 1.0f;                 // linear, 1.0 = 0 dBFS
+    float safetyGain_ = 1.0f;                    // current fault-mute gain, ramps 0→1
+    int safetyRecoverySamples_ = 0;              // samples of mute left after a fault
+    std::atomic<uint64_t> safetyFaultBlocks_ {0};
+    std::atomic<uint64_t> safetyClampedSamples_ {0};
     std::atomic<bool> audioThreadPolicyApplied_ {false};
     std::atomic<bool> inputThreadPolicyApplied_ {false};
     std::atomic<uint64_t> realtimeCallbackCount_ {0};
