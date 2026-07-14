@@ -68,6 +68,15 @@ final class PluginEditorHost: ObservableObject {
         }
     }
 
+    /// Removing a track insert shifts the higher slots down, so any editor at or above the
+    /// removed slot is now stale (ghost window / wrong plugin). Close those; lower slots and
+    /// instrument editors (negative index) are untouched.
+    func closeInsertAtOrAbove(trackId: Int, insertIndex: Int) {
+        for slot in Array(sessions.keys) where slot.trackId == trackId && slot.insertIndex >= insertIndex {
+            close(slot)
+        }
+    }
+
     /// Called on quit. Editors are child processes; orphaning them leaves windows behind.
     func closeAll() {
         for slot in sessions.keys {

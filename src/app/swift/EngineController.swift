@@ -495,6 +495,9 @@ final class EngineController: ObservableObject {
 
     func removeInsert(track trackId: Int, slot: Int) {
         guard let handle else { return }
+        // Close the removed slot's editor (and higher, now-shifted ones) so no ghost window
+        // lingers and no editor points at the wrong plugin after the slots renumber.
+        pluginEditors.closeInsertAtOrAbove(trackId: trackId, insertIndex: slot)
         if nc_track_remove_insert(handle, Int32(trackId), Int32(slot)) {
             reloadTracks()
             refreshHistory()
