@@ -1832,7 +1832,21 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             sample *= monitorInputTrimGain;
         }
     }
-    if (settings_.monitorDspEnabled && !projectMonitorDspRenderedInGraph) {
+    // The monitor DSP simulation (speaker model, room EQ, monitor inserts) runs on every block
+    // even when the mix is silent, which is why an idle project still shows a few % DSP load.
+    // Once the output has been pin-drop silent long enough for the filters to have decayed, skip
+    // it — silent in stays silent out, so this can't click, and a stopped project costs ~0 DSP.
+    // A live transition/crossfade or any signal resumes full processing immediately.
+    bool blockSilent = true;
+    for (const float s : interleavedStereo) {
+        if (std::abs(s) > 1.0e-6f) { blockSilent = false; break; }
+    }
+    monitorDspSilentSamples_ = blockSilent ? (monitorDspSilentSamples_ + frameCount) : 0;
+    const bool monitorTransitionActive =
+        monitorDspTransitionSamplesRemaining_ > 0 || monitorDspModuleTransitionSamplesRemaining_ > 0;
+    const bool skipMonitorDsp = blockSilent && !monitorTransitionActive &&
+        monitorDspSilentSamples_ > static_cast<int64_t>(std::max(1.0, settings_.sampleRate) * 0.25);
+    if (settings_.monitorDspEnabled && !projectMonitorDspRenderedInGraph && !skipMonitorDsp) {
         if (monitorDspTransitionSamplesRemaining_ > 0 &&
             !monitorDspTransitionFromMode_.empty() &&
             !monitorDspTransitionToMode_.empty()) {
@@ -1843,7 +1857,9 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             applyMonitorDspPathLocked(settings_.monitorDspPathMode, interleavedStereo);
         }
     }
-    applyMonitorOutputInsertChainLocked(interleavedStereo);
+    if (!skipMonitorDsp) {
+        applyMonitorOutputInsertChainLocked(interleavedStereo);
+    }
     applyMonitorStationControlsLocked(interleavedStereo);
     applyReloadCrossfadeLocked(interleavedStereo);
     applySeekRampLocked(interleavedStereo);

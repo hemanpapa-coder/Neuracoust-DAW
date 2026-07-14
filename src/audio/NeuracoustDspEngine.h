@@ -252,6 +252,9 @@ private:
     int64_t monitorDspTransitionSamplesTotal_ = 0;
     int64_t monitorDspModuleTransitionSamplesRemaining_ = 0;
     int64_t monitorDspModuleTransitionSamplesTotal_ = 0;
+    // Consecutive pin-drop-silent output samples, so the always-on monitor DSP simulation can
+    // be skipped once the mix is silent and its filters have decayed — no DSP burned at idle.
+    int64_t monitorDspSilentSamples_ = 0;
     double remoteDspRoundTripMs_ = 0.0;
     double remoteDspPreviousRoundTripMs_ = 0.0;
     double remoteDspAverageRoundTripJitterUs_ = 0.0;
