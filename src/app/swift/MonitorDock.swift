@@ -576,6 +576,22 @@ struct MonitorDock: View {
                 .buttonStyle(.plain)
             }
 
+            Button { engine.reloadMonitorEq(); engine.monitorEqOpen = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 9))
+                    Text("모니터 EQ").font(Theme.Font.ui(9, .medium))
+                    if !engine.monitorEqBands.isEmpty {
+                        Text("\(engine.monitorEqBands.count)").font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.accent)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 7))
+                }
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.md)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+            }
+            .buttonStyle(.plain)
+
             VStack(spacing: 1) {
                 ForEach(engine.monitorModules) { module in
                     moduleRow(module)

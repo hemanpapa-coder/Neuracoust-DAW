@@ -3749,6 +3749,7 @@ final class EngineController: ObservableObject {
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
         monitorSwapLeftRight = nc_monitor_swap_left_right(handle)
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
+        reloadMonitorEq()
         autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
         autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
         reloadMonitorListen()
@@ -4236,6 +4237,61 @@ final class EngineController: ObservableObject {
         _ = model.withCString { nc_monitor_set_physical_speaker_cable_model(handle, $0) }
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
         refreshHistory()
+    }
+
+    // Monitor parametric EQ (0–64 bands, monitor path only).
+    struct EqBand: Identifiable, Equatable {
+        let id: Int          // band index in the engine
+        var enabled: Bool
+        var type: String     // peaking / low_shelf / high_shelf / high_pass / low_pass / notch
+        var frequencyHz: Double
+        var gainDb: Double
+        var q: Double
+    }
+    @Published private(set) var monitorEqBands: [EqBand] = []
+    @Published var monitorEqOpen = false
+    static let eqBandTypes = ["peaking", "low_shelf", "high_shelf", "high_pass", "low_pass", "notch"]
+    static let eqBandTypeLabels = ["peaking": "피킹", "low_shelf": "로우쉘프", "high_shelf": "하이쉘프",
+                                   "high_pass": "하이패스", "low_pass": "로우패스", "notch": "노치"]
+
+    func reloadMonitorEq() {
+        guard let handle else { return }
+        let count = Int(nc_monitor_eq_band_count(handle))
+        monitorEqBands = (0..<count).map { i in
+            var enabled = false, freq = 0.0, gain = 0.0, q = 0.0
+            var typeBuf = [CChar](repeating: 0, count: 32)
+            _ = nc_monitor_eq_band(handle, Int32(i), &enabled, &typeBuf, typeBuf.count, &freq, &gain, &q)
+            return EqBand(id: i, enabled: enabled, type: String(cString: typeBuf),
+                          frequencyHz: freq, gainDb: gain, q: q)
+        }
+    }
+    func addEqBand(type: String = "peaking", freq: Double = 1000, gain: Double = 0, q: Double = 1) {
+        guard let handle, monitorEqBands.count < 64 else { return }
+        if nc_monitor_eq_add_band(handle, type, freq, gain, q) >= 0 { reloadMonitorEq(); refreshHistory() }
+    }
+    /// Live edit (a knob drag) — no undo step; the view commits the gesture.
+    func updateEqBand(_ band: EqBand) {
+        guard let handle else { return }
+        _ = band.type.withCString {
+            nc_monitor_eq_set_band(handle, Int32(band.id), band.enabled, $0,
+                                   band.frequencyHz, band.gainDb, band.q)
+        }
+        reloadMonitorEq()
+    }
+    func removeEqBand(_ index: Int) {
+        guard let handle else { return }
+        if nc_monitor_eq_remove_band(handle, Int32(index)) { reloadMonitorEq(); refreshHistory() }
+    }
+    func clearMonitorEq() {
+        guard let handle else { return }
+        nc_monitor_eq_clear(handle); reloadMonitorEq(); refreshHistory()
+    }
+    /// Log-spaced magnitude curve (dB) for the EQ display, 20 Hz–20 kHz.
+    func monitorEqResponse(count: Int = 160) -> [Double] {
+        guard let handle else { return Array(repeating: 0, count: count) }
+        var out = [Double](repeating: 0, count: count)
+        nc_monitor_eq_response(handle, &out, Int32(count), 20.0, 20000.0)
+        return out
     }
     func setPhysicalHeadphoneModel(_ model: String) {
         guard let handle else { return }

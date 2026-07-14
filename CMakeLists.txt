@@ -290,6 +290,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/ListenRoom.swift
         src/app/swift/ListenInviteQR.swift
         src/app/swift/AiAssistant.swift
+        src/app/swift/MonitorEqView.swift
         src/app/swift/ChatPanel.swift
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift

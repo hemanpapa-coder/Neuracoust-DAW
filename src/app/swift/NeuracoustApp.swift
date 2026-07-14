@@ -202,6 +202,11 @@ struct RootView: View {
                 AiAssistantPanel(ai: ai)
             }
         }
+        .overlay(alignment: .center) {
+            if engine.monitorEqOpen {
+                MonitorEqView()
+            }
+        }
         .overlay(alignment: .bottom) {
             BounceStatus()
         }
