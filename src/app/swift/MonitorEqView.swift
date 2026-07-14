@@ -14,6 +14,8 @@ struct MonitorEqView: View {
             Divider().overlay(Theme.Palette.divider)
             curve.frame(height: 150).padding(10)
             Divider().overlay(Theme.Palette.divider)
+            measureBar
+            Divider().overlay(Theme.Palette.divider)
             bandList
         }
         .frame(width: 460, height: 560)
@@ -85,6 +87,30 @@ struct MonitorEqView: View {
             ctx.stroke(path, with: .color(Theme.Palette.accent), lineWidth: 1.8)
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.Palette.recess))
+    }
+
+    // Room measurement (②b) + correction (③): sweep a channel, then flatten to Harman.
+    private var measureBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform.badge.mic").font(.system(size: 10)).foregroundStyle(Theme.Palette.purpleLight)
+            Text("룸 측정").font(Theme.Font.ui(10, .semibold)).foregroundStyle(Theme.Palette.textSecondary)
+            if engine.measurementActive {
+                ProgressView(value: engine.measurementProgress).frame(width: 90).controlSize(.small)
+                Text("스윕 재생 중…").font(Theme.Font.ui(8.5)).foregroundStyle(Theme.Palette.textFaint)
+                Button("취소") { engine.cancelMeasurement() }.font(Theme.Font.ui(9)).buttonStyle(.plain).foregroundStyle(Theme.Palette.orange)
+            } else {
+                Button("L 측정") { engine.startMeasurement(channel: 0) }.font(Theme.Font.ui(9, .medium)).buttonStyle(.plain).foregroundStyle(Theme.Palette.accent)
+                Button("R 측정") { engine.startMeasurement(channel: 1) }.font(Theme.Font.ui(9, .medium)).buttonStyle(.plain).foregroundStyle(Theme.Palette.accent)
+                if engine.measureHasCurve(0) {
+                    Button("L 보정") { engine.applyRoomCorrection(channel: 0) }.font(Theme.Font.ui(9, .medium)).buttonStyle(.plain).foregroundStyle(Theme.Palette.purpleLight)
+                }
+                if engine.measureHasCurve(1) {
+                    Button("R 보정") { engine.applyRoomCorrection(channel: 1) }.font(Theme.Font.ui(9, .medium)).buttonStyle(.plain).foregroundStyle(Theme.Palette.purpleLight)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).frame(height: 30)
     }
 
     private var bandList: some View {

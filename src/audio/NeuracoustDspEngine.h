@@ -77,6 +77,17 @@ public:
     void armSeekRamp();
 
     void pushInputMonitorInterleaved(const float* samples, int64_t frameCount, int channels);
+
+    // Acoustic measurement (roadmap ②b): emit `signal` out one output channel (0=L,1=R) while
+    // capturing the mic, so the caller can deconvolve to the system's response. The signal
+    // should already include a trailing tail of silence for the room decay. Requires input
+    // monitoring so the mic reaches pushInputMonitorInterleaved.
+    void startMeasurement(int channel, std::vector<float> signal);
+    void cancelMeasurement();
+    bool measurementActive() const { return measurementActive_.load(std::memory_order_relaxed); }
+    double measurementProgress() const;                // 0..1
+    std::vector<float> takeMeasurementCapture();        // stops and returns the mono capture
+
     void renderInterleavedStereo(int64_t frameCount, std::vector<float>& interleavedStereo);
     AudioEngineStatus statusSnapshot() const;
     std::string lastMessage() const;
@@ -220,6 +231,18 @@ private:
     std::atomic<float> spectrumMid_ {0.0f};
     std::atomic<float> spectrumHigh_ {0.0f};
     std::atomic<bool> inputMonitorCaptureActive_ {false};
+
+    // Acoustic measurement session. sweep/channel are set before active_ turns true and only
+    // read on the audio thread thereafter; the capture buffer is mutex-guarded.
+    std::atomic<bool> measurementActive_ {false};
+    int measurementChannel_ = 0;
+    std::vector<float> measurementSignal_;
+    int64_t measurementEmitPos_ = 0;
+    bool measurementPrevInputMonitor_ = false;
+    mutable std::mutex measurementMutex_;
+    std::vector<float> measurementCapture_;
+    std::atomic<int64_t> measurementProgressFrames_ {0};
+    std::atomic<int64_t> measurementTotalFrames_ {0};
     std::atomic<bool> talkbackCaptureActive_ {false};
     std::atomic<bool> listenSourceActive_ {false};
     // Insert tail on stop: <0 always on (default), 0 cut immediately, >0 ring out N sec.

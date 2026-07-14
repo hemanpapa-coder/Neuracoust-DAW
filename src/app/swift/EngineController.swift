@@ -4299,6 +4299,50 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_eq_clear(handle); reloadMonitorEq(); refreshHistory()
     }
+    // Acoustic measurement (②b): sweep out a channel, capture the mic, deconvolve to a curve.
+    @Published private(set) var measurementActive = false
+    @Published private(set) var measurementProgress: Double = 0
+    private var measuringChannel = 0
+
+    func startMeasurement(channel: Int) {
+        guard let handle, !measurementActive else { return }
+        if nc_measure_start(handle, Int32(channel)) {
+            measuringChannel = channel
+            measurementProgress = 0
+            measurementActive = true
+        }
+    }
+    func cancelMeasurement() {
+        guard let handle else { return }
+        nc_measure_cancel(handle)
+        measurementActive = false
+    }
+    func measureHasCurve(_ channel: Int) -> Bool {
+        guard let handle else { return false }
+        return nc_measure_has_curve(handle, Int32(channel))
+    }
+    func measureCurveResponse(channel: Int, count: Int = 160) -> [Double] {
+        guard let handle else { return Array(repeating: 0, count: count) }
+        var out = [Double](repeating: 0, count: count)
+        nc_measure_curve_response(handle, Int32(channel), &out, Int32(count), 20.0, 20000.0)
+        return out
+    }
+    /// Flatten the measured in-room response toward the Harman target (room correction, ③).
+    func applyRoomCorrection(channel: Int) {
+        guard let handle else { return }
+        if nc_monitor_eq_apply_room_correction(handle, Int32(channel)) { reloadMonitorEq(); refreshHistory() }
+    }
+    // Called each poll tick while measuring; finishes when the sweep has played out.
+    fileprivate func pollMeasurement() {
+        guard measurementActive, let handle else { return }
+        measurementProgress = nc_measure_progress(handle)
+        if !nc_measure_active(handle) {
+            _ = nc_measure_finish(handle, Int32(measuringChannel))
+            measurementProgress = 1
+            measurementActive = false
+        }
+    }
+
     /// Speaker models with a measured curve — the targets the virtual monitor can model.
     lazy var virtualMonitorTargets: [String] = {
         guard let handle else { return [] }
@@ -4608,6 +4652,7 @@ final class EngineController: ObservableObject {
         // menu / the dock appears instead; a proper CoreAudio change-listener is the way to add
         // hot-plug detection without polling.
 
+        pollMeasurement()
         listenRoom?.refresh()
     }
     private var deviceRescanTicks = 0

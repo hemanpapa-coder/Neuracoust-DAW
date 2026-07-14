@@ -999,11 +999,23 @@ bool nc_monitor_eq_remove_band(NCEngine* engine, int index);
 void nc_monitor_eq_clear(NCEngine* engine);
 void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz);
 
+// Acoustic measurement (②b): play a sweep out a channel (0=L,1=R), capture the mic, deconvolve
+// to the in-room response curve. Requires input monitoring / a mic input for samples to arrive.
+bool   nc_measure_start(NCEngine* engine, int channel);
+bool   nc_measure_active(NCEngine* engine);
+double nc_measure_progress(NCEngine* engine);
+void   nc_measure_cancel(NCEngine* engine);
+bool   nc_measure_finish(NCEngine* engine, int channel);
+bool   nc_measure_has_curve(NCEngine* engine, int channel);
+void   nc_measure_curve_response(NCEngine* engine, int channel, double* out, int count, double minHz, double maxHz);
+
 // Virtual monitor: model a target speaker (by catalog name) on the physical monitor by loading
 // its fitted correction curve into the monitor EQ.
 int  nc_virtual_monitor_count(NCEngine* engine);
 void nc_virtual_monitor_name(NCEngine* engine, int index, char* out, size_t outLen);
 bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName);
+// Room correction (③): flatten the measured in-room curve toward the Harman target.
+bool nc_monitor_eq_apply_room_correction(NCEngine* engine, int channel);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 

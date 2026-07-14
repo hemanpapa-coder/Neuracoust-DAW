@@ -626,6 +626,12 @@ public:
         dspEngine_.updateMonitorEq(bands);
     }
 
+    void startMeasurement(int channel, std::vector<float> signal) { dspEngine_.startMeasurement(channel, std::move(signal)); }
+    void cancelMeasurement() { dspEngine_.cancelMeasurement(); }
+    bool measurementActive() const { return dspEngine_.measurementActive(); }
+    double measurementProgress() const { return dspEngine_.measurementProgress(); }
+    std::vector<float> takeMeasurementCapture() { return dspEngine_.takeMeasurementCapture(); }
+
     bool updateClipGain(const std::string& clipId, float gainDb) {
         const bool updated = dspEngine_.updateClipGain(clipId, gainDb);
         if (updated) {
@@ -1104,6 +1110,11 @@ bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& er
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
 void RealtimeAudioEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) { impl_->updateMonitorEq(bands); }
+void RealtimeAudioEngine::startMeasurement(int channel, std::vector<float> signal) { impl_->startMeasurement(channel, std::move(signal)); }
+void RealtimeAudioEngine::cancelMeasurement() { impl_->cancelMeasurement(); }
+bool RealtimeAudioEngine::measurementActive() const { return impl_->measurementActive(); }
+double RealtimeAudioEngine::measurementProgress() const { return impl_->measurementProgress(); }
+std::vector<float> RealtimeAudioEngine::takeMeasurementCapture() { return impl_->takeMeasurementCapture(); }
 bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }

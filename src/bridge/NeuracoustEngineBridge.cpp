@@ -3,6 +3,7 @@
 #include "ai/AiAssistant.h"
 #include "audio/ParametricEq.h"
 #include "audio/MonitorCorrection.h"
+#include "audio/SweepMeasurement.h"
 #include "audio/SpeakerProfiles.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
@@ -102,6 +103,8 @@ struct NCEngine {
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
     std::string pluginScanSignature;                              // .vst3 inventory at last scan
+    neuracoust::daw::ResponseCurve measuredCurveL;                // room measurement, per channel
+    neuracoust::daw::ResponseCurve measuredCurveR;
     neuracoust::daw::PluginCandidateFilterOptions facets;
 
     /// Peaks keyed by source path. Decoding a WAV is not cheap and the timeline
@@ -4843,6 +4846,70 @@ std::vector<std::string>& virtualMonitorNames() {
 }
 }
 
+// --- Acoustic measurement (②b): sweep out a channel, capture the mic, deconvolve to a curve ---
+namespace {
+neuracoust::daw::SweepParams measurementSweepParams(double sampleRate) {
+    neuracoust::daw::SweepParams p;
+    p.sampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
+    p.startHz = 20.0;
+    p.endHz = std::min(20000.0, p.sampleRate * 0.45);
+    p.durationSeconds = 3.0;
+    p.amplitude = 0.5;
+    return p;
+}
+}
+
+bool nc_measure_start(NCEngine* engine, int channel) {
+    if (engine == nullptr) return false;
+    const auto p = measurementSweepParams(engine->engine.status().sampleRate);
+    auto sweep = neuracoust::daw::generateLogSweep(p);
+    sweep.resize(sweep.size() + static_cast<size_t>(p.sampleRate * 0.7), 0.0f);  // room-decay tail
+    engine->engine.startMeasurement(channel == 1 ? 1 : 0, std::move(sweep));
+    return true;
+}
+
+bool nc_measure_active(NCEngine* engine) { return engine != nullptr && engine->engine.measurementActive(); }
+double nc_measure_progress(NCEngine* engine) { return engine != nullptr ? engine->engine.measurementProgress() : 0.0; }
+void nc_measure_cancel(NCEngine* engine) { if (engine != nullptr) engine->engine.cancelMeasurement(); }
+
+// Deconvolve the captured mic into the channel's in-room response curve (midband-normalized).
+// Returns false if too little was captured (e.g. no mic / input monitoring was off).
+bool nc_measure_finish(NCEngine* engine, int channel) {
+    if (engine == nullptr) return false;
+    const auto capture = engine->engine.takeMeasurementCapture();
+    const auto p = measurementSweepParams(engine->engine.status().sampleRate);
+    if (capture.size() < static_cast<size_t>(p.sampleRate * 0.5)) return false;
+    const auto ir = neuracoust::daw::deconvolveSweep(capture, p);
+    const int pts = 200;
+    const auto mags = neuracoust::daw::impulseResponseMagnitudeDb(ir, p.sampleRate, pts, 20.0, 20000.0);
+    neuracoust::daw::ResponseCurve curve;
+    const double lo = 20.0, hi = 20000.0, ratio = std::log(hi / lo);
+    for (int i = 0; i < pts; ++i) {
+        curve.push_back({lo * std::exp(ratio * (pts > 1 ? static_cast<double>(i) / (pts - 1) : 0.0)),
+                         static_cast<double>(mags[static_cast<size_t>(i)])});
+    }
+    curve = neuracoust::daw::normalizeCurveMidband(curve);
+    (channel == 1 ? engine->measuredCurveR : engine->measuredCurveL) = std::move(curve);
+    return true;
+}
+
+bool nc_measure_has_curve(NCEngine* engine, int channel) {
+    if (engine == nullptr) return false;
+    return !(channel == 1 ? engine->measuredCurveR : engine->measuredCurveL).empty();
+}
+
+void nc_measure_curve_response(NCEngine* engine, int channel, double* out, int count, double minHz, double maxHz) {
+    for (int i = 0; i < count; ++i) out[i] = 0.0;
+    if (engine == nullptr || out == nullptr || count <= 0) return;
+    const auto& c = (channel == 1) ? engine->measuredCurveR : engine->measuredCurveL;
+    if (c.empty()) return;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz), ratio = std::log(hi / lo);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
+        out[i] = neuracoust::daw::interpolateCurveDb(c, f);
+    }
+}
+
 int nc_virtual_monitor_count(NCEngine*) {
     return static_cast<int>(virtualMonitorNames().size());
 }
@@ -4853,13 +4920,11 @@ void nc_virtual_monitor_name(NCEngine*, int index, char* out, size_t outLen) {
     copyText(out, outLen, names[static_cast<size_t>(index)]);
 }
 
-bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName) {
-    if (engine == nullptr || catalogName == nullptr) return false;
-    const auto curve = neuracoust::daw::speakerProfileCurve(catalogName);
-    if (curve.empty()) return false;
-    // The dataset curve is already midband-normalized, i.e. the speaker's deviation from flat —
-    // impose it directly to take on its character. 48 bands; boost limited more than cut.
-    const auto bands = neuracoust::daw::fitCurveToEqBands(curve, 48, 20.0, 20000.0, 9.0, 15.0);
+namespace {
+// Load fitted EQ bands into the project's monitor EQ and push them live (no full reconcile,
+// so it never drops the audio). Shared by virtual monitor and room correction.
+void loadEqBandsIntoMonitorEq(NCEngine* engine, const std::vector<neuracoust::daw::EqBandSpec>& bands,
+                              const std::string& stepName) {
     engine->project.monitorEqBands.clear();
     for (const auto& b : bands) {
         neuracoust::daw::MonitorEqBandState state;
@@ -4877,8 +4942,35 @@ bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogNa
         state.q = b.q;
         engine->project.monitorEqBands.push_back(state);
     }
-    engine->reconcileProject();
-    engine->recordStep(std::string("Virtual monitor: ") + catalogName);
+    engine->engine.updateMonitorEq(engine->project.monitorEqBands);
+    engine->recordStep(stepName);
+}
+}
+
+bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName) {
+    if (engine == nullptr || catalogName == nullptr) return false;
+    const auto curve = neuracoust::daw::speakerProfileCurve(catalogName);
+    if (curve.empty()) return false;
+    // The dataset curve is already midband-normalized, i.e. the speaker's deviation from flat —
+    // impose it directly to take on its character. 48 bands; boost limited more than cut.
+    const auto bands = neuracoust::daw::fitCurveToEqBands(curve, 48, 20.0, 20000.0, 9.0, 15.0);
+    loadEqBandsIntoMonitorEq(engine, bands, std::string("Virtual monitor: ") + catalogName);
+    return true;
+}
+
+// Room correction (③): flatten the measured in-room response toward the Harman target.
+// correction = Harman_target − measured; boost limited more than cut (can't fill a null).
+bool nc_monitor_eq_apply_room_correction(NCEngine* engine, int channel) {
+    if (engine == nullptr) return false;
+    const auto& measured = (channel == 1) ? engine->measuredCurveR : engine->measuredCurveL;
+    if (measured.empty()) return false;
+    neuracoust::daw::ResponseCurve correction;
+    correction.reserve(measured.size());
+    for (const auto& [f, db] : measured) {
+        correction.push_back({f, neuracoust::daw::harmanTargetDb(f) - db});
+    }
+    const auto bands = neuracoust::daw::fitCurveToEqBands(correction, 48, 20.0, 20000.0, 9.0, 12.0);
+    loadEqBandsIntoMonitorEq(engine, bands, channel == 1 ? "Room correction (R)" : "Room correction (L)");
     return true;
 }
 

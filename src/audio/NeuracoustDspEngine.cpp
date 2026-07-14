@@ -784,6 +784,43 @@ void NeuracoustDspEngine::resetRuntime() {
     configured_ = false;
 }
 
+void NeuracoustDspEngine::startMeasurement(int channel, std::vector<float> signal) {
+    {
+        std::lock_guard<std::mutex> lock(measurementMutex_);
+        measurementCapture_.clear();
+        measurementCapture_.reserve(signal.size() + static_cast<size_t>(settings_.sampleRate));
+    }
+    measurementChannel_ = (channel == 1) ? 1 : 0;
+    measurementSignal_ = std::move(signal);
+    measurementEmitPos_ = 0;
+    measurementTotalFrames_.store(static_cast<int64_t>(measurementSignal_.size()), std::memory_order_relaxed);
+    measurementProgressFrames_.store(0, std::memory_order_relaxed);
+    // The mic only reaches pushInputMonitorInterleaved while input capture is on; remember the
+    // prior state so we can restore it when the measurement ends.
+    measurementPrevInputMonitor_ = inputMonitorCaptureActive_.load(std::memory_order_relaxed);
+    inputMonitorCaptureActive_.store(true, std::memory_order_relaxed);
+    measurementActive_.store(true, std::memory_order_relaxed);
+}
+
+void NeuracoustDspEngine::cancelMeasurement() {
+    measurementActive_.store(false, std::memory_order_relaxed);
+    inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+}
+
+double NeuracoustDspEngine::measurementProgress() const {
+    const int64_t total = measurementTotalFrames_.load(std::memory_order_relaxed);
+    if (total <= 0) return 0.0;
+    return std::min(1.0, static_cast<double>(measurementProgressFrames_.load(std::memory_order_relaxed)) /
+                             static_cast<double>(total));
+}
+
+std::vector<float> NeuracoustDspEngine::takeMeasurementCapture() {
+    measurementActive_.store(false, std::memory_order_relaxed);
+    inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(measurementMutex_);
+    return std::move(measurementCapture_);
+}
+
 void NeuracoustDspEngine::setTestToneEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(mutex_);
     settings_.testToneEnabled = enabled;
@@ -1595,6 +1632,16 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
     if (samples == nullptr || frameCount <= 0 || channels <= 0) {
         return;
     }
+    // Acoustic measurement: capture the mono mic while a sweep is playing.
+    if (measurementActive_.load(std::memory_order_relaxed)) {
+        std::unique_lock<std::mutex> mlock(measurementMutex_, std::try_to_lock);
+        if (mlock.owns_lock()) {
+            for (int64_t frame = 0; frame < frameCount; ++frame) {
+                measurementCapture_.push_back(samples[static_cast<size_t>(frame * channels)]);
+            }
+        }
+    }
+
     const bool monitorCaptureActive = inputMonitorCaptureActive_.load(std::memory_order_relaxed);
     const bool talkbackActive = talkbackCaptureActive_.load(std::memory_order_relaxed);
     if (!monitorCaptureActive && !talkbackActive) {
@@ -1876,6 +1923,27 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     if (transportRunning) {
         playbackFrame_ = wrappedPlaybackFrameForPlan(projectPlan_, playbackFrame_ + frameCount);
     }
+    // Acoustic measurement: overwrite the output with the sweep on the chosen channel so it
+    // reaches the speaker (the mic is captured in pushInputMonitorInterleaved). Still passes
+    // through the output-safety guard downstream, so the loud sweep can't damage a speaker.
+    if (measurementActive_.load(std::memory_order_relaxed)) {
+        const int64_t total = static_cast<int64_t>(measurementSignal_.size());
+        for (int64_t f = 0; f < frameCount; ++f) {
+            const float s = (measurementEmitPos_ < total) ? measurementSignal_[static_cast<size_t>(measurementEmitPos_)] : 0.0f;
+            const auto idx = static_cast<size_t>(f) * 2u;
+            if (idx + 1 < interleavedStereo.size()) {
+                interleavedStereo[idx] = (measurementChannel_ == 0) ? s : 0.0f;
+                interleavedStereo[idx + 1] = (measurementChannel_ == 1) ? s : 0.0f;
+            }
+            ++measurementEmitPos_;
+        }
+        measurementProgressFrames_.store(measurementEmitPos_, std::memory_order_relaxed);
+        if (measurementEmitPos_ >= total) {
+            measurementActive_.store(false, std::memory_order_relaxed);
+            inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+        }
+    }
+
     playbackFrameForStatus_.store(playbackFrame_);
     storeMetering(interleavedStereo);
 }
