@@ -415,6 +415,9 @@ final class EngineController: ObservableObject {
             if nc_master_add_insert(handle, Int32(pluginIndex)) {
                 reloadMasterInserts()
                 refreshHistory()
+                if !masterInserts.isEmpty {
+                    pluginEditors.toggle(trackId: Self.masterInsertTargetId, insertIndex: masterInserts.count - 1)
+                }
             }
             return
         }
@@ -428,6 +431,7 @@ final class EngineController: ObservableObject {
         let layerSlot = pluginTargetInstrumentSlot
         pluginTargetInstrumentSlot = nil
         let changed: Bool
+        var addedFxInsert = false
         if track.kind == .instrument, let slot = layerSlot {
             changed = slot == 0
                 ? nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
@@ -442,10 +446,19 @@ final class EngineController: ObservableObject {
             instrumentOnInsertRejected = true
         } else {
             changed = nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
+            addedFxInsert = changed
         }
         if changed {
             reloadTracks()
             refreshHistory()
+            // Auto-open the editor for a freshly added FX insert — the plug-in appears with its
+            // window up, no hunting for the chip and clicking it. (Instrument slots open from
+            // their own chip.) The new insert is the last slot in the chain.
+            if addedFxInsert,
+               let updated = tracks.first(where: { $0.id == trackId }),
+               !updated.inserts.isEmpty {
+                pluginEditors.toggle(trackId: trackId, insertIndex: updated.inserts.count - 1)
+            }
         }
     }
 
