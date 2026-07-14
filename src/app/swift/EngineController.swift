@@ -4491,8 +4491,11 @@ final class EngineController: ObservableObject {
         // Pick up hot-plugged interfaces (a UNiTE-2 connected mid-session) without a restart:
         // rescan the device lists a couple of times a second. refreshOutputDevices republishes
         // only when the list actually changed, so this stays flicker-free.
+        // Rescan for hot-plugged interfaces a few seconds apart — enumerateAudioDevices can be
+        // slow for virtual/network devices (SoundGrid, Splashtop), so keep the cadence gentle.
+        // Republishes only on change, so it never flickers menus.
         deviceRescanTicks += 1
-        if deviceRescanTicks >= 45 {   // ~1.5 s at the 30 Hz poll
+        if deviceRescanTicks >= 90 {   // ~3 s at the 30 Hz poll
             deviceRescanTicks = 0
             refreshOutputDevices()
             refreshInputDevices()

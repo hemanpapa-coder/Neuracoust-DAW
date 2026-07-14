@@ -258,6 +258,35 @@ struct PluginBrowser: View {
             }
 
             if engine.pluginBrowserOpen {
+                // An instrument track carries an instrument slot (+ layers) that is NOT an
+                // insert; show it here so a loaded instrument is visible in the browser, not
+                // just in the channel strip.
+                if let track = targetTrack, track.kind == .instrument {
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        Text("악기")
+                            .font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.textFaint)
+                        if track.instrumentLayers.isEmpty {
+                            Text("아직 악기가 없습니다 — 목록에서 악기를 추가하세요")
+                                .font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFainter)
+                                .frame(maxWidth: .infinity).padding(.vertical, Theme.Space.lg)
+                        } else {
+                            ForEach(Array(track.instrumentLayers.enumerated()), id: \.offset) { idx, layer in
+                                HStack(spacing: Theme.Space.md) {
+                                    Text("\(idx + 1)").font(Theme.Font.mono(8))
+                                        .foregroundStyle(Theme.Palette.textFaint)
+                                    Text(layer.name).font(Theme.Font.ui(10))
+                                        .foregroundStyle(Theme.Palette.textSecondary).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, Theme.Space.md).padding(.vertical, 5)
+                                .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(track.kind.accent.opacity(0.14)))
+                            }
+                        }
+                        Text("인서트")
+                            .font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.textFaint)
+                            .padding(.top, Theme.Space.sm)
+                    }
+                }
                 VStack(spacing: Theme.Space.sm) {
                     ForEach(targetChain) { slot in
                         chainRow(slot: slot)
