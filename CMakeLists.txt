@@ -84,6 +84,7 @@ add_library(neuracoust_daw_core
     src/audio/WavFile.cpp
     src/audio/MonitorDspProcessor.cpp
     src/audio/ParametricEq.cpp
+    src/audio/SweepMeasurement.cpp
     src/audio/OfflineBounce.cpp
     src/license/LicenseAgentClient.cpp
     src/nuclust/NuclustDspManager.cpp
@@ -632,6 +633,11 @@ add_executable(neuracoust_parametric_eq_tests tests/ParametricEqTest.cpp)
 neuracoust_link_core(neuracoust_parametric_eq_tests)
 neuracoust_enable_release_asserts(neuracoust_parametric_eq_tests)
 add_test(NAME parametric_eq COMMAND neuracoust_parametric_eq_tests)
+
+add_executable(neuracoust_sweep_measurement_tests tests/SweepMeasurementTest.cpp)
+neuracoust_link_core(neuracoust_sweep_measurement_tests)
+neuracoust_enable_release_asserts(neuracoust_sweep_measurement_tests)
+add_test(NAME sweep_measurement COMMAND neuracoust_sweep_measurement_tests)
 
 add_executable(neuracoust_automation_mode_bridge_smoke tests/AutomationModeBridgeSmoke.cpp)
 target_link_libraries(neuracoust_automation_mode_bridge_smoke PRIVATE neuracoust_daw_core)
