@@ -780,6 +780,8 @@ bool nc_waveform_channel_peaks(NCEngine* engine, const char* path, int channel,
 int nc_plugin_scan(NCEngine* engine);
 /// Force a fresh scan from disk (bypasses the cache) — for when a new plug-in was installed.
 int nc_plugin_rescan(NCEngine* engine);
+/// True if the installed .vst3 set changed since the last scan (browser auto-rescans on open).
+bool nc_plugin_locations_changed(NCEngine* engine);
 
 /// Empty strings mean "no constraint". Returns the number of matches.
 int nc_plugin_apply_filter(NCEngine* engine,

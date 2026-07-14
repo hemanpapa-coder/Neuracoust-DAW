@@ -101,6 +101,11 @@ struct ProjectAudioRenderState {
     std::map<std::string, std::string> routeInsertChainKeys;
     std::map<std::string, int> routeInsertChainMaxBlock;
     std::map<std::string, std::string> routeInsertLastErrors;
+    // Declick: ramp a route's output up when its insert set changes (add/remove/reorder), so
+    // the dry↔wet jump doesn't click.
+    std::map<std::string, std::string> routeInsertSignatures;
+    std::map<std::string, int> routeInsertDeclickRemaining;
+    std::map<std::string, int> routeInsertDeclickTotal;
     std::map<std::string, double> sourceGeneratorPhases;
     std::map<std::string, std::vector<Vst3MidiEvent>> liveMidiEvents;
     std::vector<float> masterInsertDryFallback;

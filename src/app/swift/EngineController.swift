@@ -300,6 +300,11 @@ final class EngineController: ObservableObject {
         if totalPluginCount == 0 {
             totalPluginCount = Int(nc_plugin_scan(handle))
             reloadFacets()
+        } else if nc_plugin_locations_changed(handle) {
+            // A plug-in was installed/updated/removed since the last scan — refresh so it
+            // shows up without the user reaching for the ↻ button.
+            totalPluginCount = Int(nc_plugin_rescan(handle))
+            reloadFacets()
         }
         pluginTargetTrack = trackId
         applyPluginFilter()

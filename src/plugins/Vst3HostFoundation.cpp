@@ -1376,6 +1376,30 @@ void clearVst3PluginScanCache() {
     vst3ScanCache().reset();
 }
 
+std::string vst3BundleInventorySignature() {
+    // Walk the VST3 roots and list .vst3 bundle paths — no probing, so this is fast enough to
+    // run every time the browser opens. Include the bundle's modification time so a plug-in
+    // updated in place is picked up too.
+    std::vector<std::string> entries;
+    for (const auto& root : vst3Roots()) {
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+            if (ec) break;
+            if (entry.path().extension() != ".vst3") continue;
+            std::error_code tec;
+            const auto mtime = std::filesystem::last_write_time(entry.path(), tec);
+            const auto ticks = tec ? 0LL
+                : static_cast<long long>(mtime.time_since_epoch().count());
+            entries.push_back(entry.path().string() + "|" + std::to_string(ticks));
+        }
+    }
+    std::sort(entries.begin(), entries.end());
+    std::string signature;
+    for (const auto& e : entries) { signature += e; signature += '\n'; }
+    return signature;
+}
+
 void sortVst3PluginDescriptorsForDisplay(std::vector<Vst3PluginDescriptor>& descriptors) {
     std::stable_sort(descriptors.begin(), descriptors.end(), vst3DisplayLess);
 }

@@ -1992,6 +1992,36 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 routeInput = dryRouteInput;
                 state.routeInsertLastErrors[route->name] = insertError;
             }
+            // Declick add/reorder: on a change to the insert set, crossfade the route output
+            // from dry to the freshly-processed (wet) signal over ~15 ms so it doesn't click
+            // ("지직"). A failed insert leaves routeInput == dry, so this is dry→dry — no
+            // attenuation, and dry playback stays full level.
+            {
+                std::string signature = std::to_string(routeInserts.size());
+                for (const auto& ins : routeInserts) { signature += '|'; signature += ins.pluginPath; }
+                auto& stored = state.routeInsertSignatures[route->name];
+                if (stored != signature) {
+                    const bool firstTime = stored.empty();
+                    stored = signature;
+                    if (!firstTime) {
+                        const int fade = std::max(1, static_cast<int>(plan.sampleRate * 0.015));
+                        state.routeInsertDeclickTotal[route->name] = fade;
+                        state.routeInsertDeclickRemaining[route->name] = fade;
+                    }
+                }
+                int& remaining = state.routeInsertDeclickRemaining[route->name];
+                if (remaining > 0) {
+                    const int total = std::max(1, state.routeInsertDeclickTotal[route->name]);
+                    for (int64_t f = 0; f < frameCount && remaining > 0; ++f) {
+                        const double prog = std::min(1.0, 1.0 - static_cast<double>(remaining) / total);
+                        const float a = static_cast<float>(0.5 - 0.5 * std::cos(M_PI * prog));  // 0→1
+                        const auto idx = static_cast<size_t>(f) * 2u;
+                        routeInput[idx] = dryRouteInput[idx] * (1.0f - a) + routeInput[idx] * a;
+                        routeInput[idx + 1u] = dryRouteInput[idx + 1u] * (1.0f - a) + routeInput[idx + 1u] * a;
+                        --remaining;
+                    }
+                }
+            }
             if (insertInputPeak <= 0.000001f &&
                 blockPeakAbs(routeInput) <= 0.000001f &&
                 synthesizeSourceGeneratorFallback(state,

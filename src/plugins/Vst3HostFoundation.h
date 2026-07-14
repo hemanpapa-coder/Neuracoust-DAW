@@ -52,6 +52,9 @@ enum class Vst3ScanMode {
 
 std::vector<Vst3PluginDescriptor> scanVst3PluginBundles(Vst3ScanMode mode = Vst3ScanMode::UseCache);
 void clearVst3PluginScanCache();
+// A cheap signature of the installed .vst3 bundles (paths + sizes, no probing) — for
+// detecting when a plug-in was installed/removed so the browser can auto-rescan.
+std::string vst3BundleInventorySignature();
 void sortVst3PluginDescriptorsForDisplay(std::vector<Vst3PluginDescriptor>& descriptors);
 bool vst3PluginDescriptorMatchesFilter(const Vst3PluginDescriptor& descriptor, const std::string& filter);
 bool vst3PluginDescriptorMatchesCriteria(const Vst3PluginDescriptor& descriptor,

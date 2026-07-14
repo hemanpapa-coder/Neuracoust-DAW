@@ -99,6 +99,7 @@ struct NCEngine {
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
+    std::string pluginScanSignature;                              // .vst3 inventory at last scan
     neuracoust::daw::PluginCandidateFilterOptions facets;
 
     /// Peaks keyed by source path. Decoding a WAV is not cheap and the timeline
@@ -3406,6 +3407,7 @@ int nc_plugin_scan(NCEngine* engine) {
     neuracoust::daw::sortPluginCandidatesForDisplay(engine->plugins);
     engine->facets = neuracoust::daw::pluginCandidateFilterOptions(engine->plugins);
     engine->filteredPlugins = engine->plugins;
+    engine->pluginScanSignature = neuracoust::daw::vst3BundleInventorySignature();
     return static_cast<int>(engine->plugins.size());
 }
 
@@ -3417,7 +3419,15 @@ int nc_plugin_rescan(NCEngine* engine) {
     neuracoust::daw::sortPluginCandidatesForDisplay(engine->plugins);
     engine->facets = neuracoust::daw::pluginCandidateFilterOptions(engine->plugins);
     engine->filteredPlugins = engine->plugins;
+    engine->pluginScanSignature = neuracoust::daw::vst3BundleInventorySignature();
     return static_cast<int>(engine->plugins.size());
+}
+
+// True if the installed .vst3 set changed since the last scan — the browser rescans on open
+// so a plug-in installed mid-session appears without the user hunting for the ↻ button.
+bool nc_plugin_locations_changed(NCEngine* engine) {
+    if (engine == nullptr) return false;
+    return neuracoust::daw::vst3BundleInventorySignature() != engine->pluginScanSignature;
 }
 
 int nc_plugin_apply_filter(NCEngine* engine,
