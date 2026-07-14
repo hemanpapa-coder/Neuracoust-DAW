@@ -414,6 +414,18 @@ target_link_libraries(neuracoust_vst3_host_audit PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_vst3_process_worker tools/vst3_process_worker.cpp)
 target_link_libraries(neuracoust_vst3_process_worker PRIVATE neuracoust_daw_core)
 
+# Bundle the out-of-process VST3 worker into the app (defaultVst3ProcessWorkerPath looks for
+# it next to the app executable). Without this, out-of-process insert hosting fails — which
+# both silenced third-party inserts and cut the editor's live-audio observer (so analyzers
+# like Waves F6 / CurvesEQ showed nothing). Mirrors the editor-host bundling above.
+if(NEURACOUST_BUILD_SWIFT_APP AND TARGET NeuracoustDAW)
+    add_dependencies(NeuracoustDAW neuracoust_vst3_process_worker)
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:neuracoust_vst3_process_worker>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust VST3 Process Worker")
+endif()
+
 add_executable(neuracoust_vst3_isolated_process_smoke tools/vst3_isolated_process_smoke.cpp)
 target_link_libraries(neuracoust_vst3_isolated_process_smoke PRIVATE neuracoust_daw_core)
 
