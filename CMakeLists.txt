@@ -83,6 +83,7 @@ add_library(neuracoust_daw_core
     src/audio/AudioInputRecorder.cpp
     src/audio/WavFile.cpp
     src/audio/MonitorDspProcessor.cpp
+    src/audio/ParametricEq.cpp
     src/audio/OfflineBounce.cpp
     src/license/LicenseAgentClient.cpp
     src/nuclust/NuclustDspManager.cpp
@@ -621,6 +622,11 @@ add_test(NAME track_reorder_bridge_smoke COMMAND neuracoust_track_reorder_bridge
 add_executable(neuracoust_pan_law_smoke tests/PanLawSmoke.cpp)
 target_link_libraries(neuracoust_pan_law_smoke PRIVATE neuracoust_daw_core)
 add_test(NAME pan_law_smoke COMMAND neuracoust_pan_law_smoke)
+
+add_executable(neuracoust_parametric_eq_tests tests/ParametricEqTest.cpp)
+neuracoust_link_core(neuracoust_parametric_eq_tests)
+neuracoust_enable_release_asserts(neuracoust_parametric_eq_tests)
+add_test(NAME parametric_eq COMMAND neuracoust_parametric_eq_tests)
 
 add_executable(neuracoust_automation_mode_bridge_smoke tests/AutomationModeBridgeSmoke.cpp)
 target_link_libraries(neuracoust_automation_mode_bridge_smoke PRIVATE neuracoust_daw_core)
