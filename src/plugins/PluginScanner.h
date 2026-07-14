@@ -46,6 +46,8 @@ void sortPluginCandidatesForDisplay(std::vector<PluginCandidate>& candidates);
 PluginCandidateFilterOptions pluginCandidateFilterOptions(const std::vector<PluginCandidate>& candidates);
 PluginCandidate describeInstalledPluginCandidate(const std::string& path,
                                                  const std::string& format);
-std::vector<PluginCandidate> scanKnownPluginLocations();
+// forceRescan re-probes every plug-in bundle from disk instead of the persistent cache, so a
+// newly-installed plug-in shows up without an app restart.
+std::vector<PluginCandidate> scanKnownPluginLocations(bool forceRescan = false);
 
 } // namespace neuracoust::daw

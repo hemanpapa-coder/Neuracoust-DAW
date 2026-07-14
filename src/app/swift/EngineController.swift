@@ -305,6 +305,14 @@ final class EngineController: ObservableObject {
         applyPluginFilter()
     }
 
+    /// Force a fresh scan from disk — picks up a plug-in installed after the app launched.
+    func rescanPlugins() {
+        guard let handle else { return }
+        totalPluginCount = Int(nc_plugin_rescan(handle))
+        reloadFacets()
+        applyPluginFilter()
+    }
+
     func closePluginBrowser() {
         pluginTargetTrack = nil
         pluginTargetInstrumentSlot = nil

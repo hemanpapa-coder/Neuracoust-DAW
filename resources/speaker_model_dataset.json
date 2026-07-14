@@ -827,9 +827,44 @@
     },
     "shared_curve_with": "Yamaha NS-10M Studio (NF)",
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/version/eac/measurements/CEA2034",
       "https://www.youtube.com/watch?v=0pYKuBdhmdc"
     ],
+    "research": {
+      "spinorama_match": "Yamaha NS-10M Studio",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "202404xx",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.youtube.com/watch?v=0pYKuBdhmdc"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "sensitivity": 90,
+        "impedance": 8,
+        "size": {
+          "height": 382,
+          "width": 215,
+          "depth": 199
+        },
+        "weight": 6
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Yamaha NS-10M Studio. Catalog variant shares the NS-10M Studio measurement by explicit family mapping; it is not claimed to be an independently measured sample."
   },
   {
@@ -1660,9 +1695,44 @@
     },
     "shared_curve_with": "Yamaha NS-10M Studio (NF)",
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/version/eac/measurements/CEA2034",
       "https://www.youtube.com/watch?v=0pYKuBdhmdc"
     ],
+    "research": {
+      "spinorama_match": "Yamaha NS-10M Studio",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "202404xx",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.youtube.com/watch?v=0pYKuBdhmdc"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "sensitivity": 90,
+        "impedance": 8,
+        "size": {
+          "height": 382,
+          "width": 215,
+          "depth": 199
+        },
+        "weight": 6
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Yamaha NS-10M Studio. Catalog variant shares the NS-10M Studio measurement by explicit family mapping; it is not claimed to be an independently measured sample."
   },
   {
@@ -2493,9 +2563,44 @@
     },
     "shared_curve_with": "Yamaha NS-10M Studio (NF)",
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/version/eac/measurements/CEA2034",
       "https://www.youtube.com/watch?v=0pYKuBdhmdc"
     ],
+    "research": {
+      "spinorama_match": "Yamaha NS-10M Studio",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "202404xx",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.youtube.com/watch?v=0pYKuBdhmdc"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "sensitivity": 90,
+        "impedance": 8,
+        "size": {
+          "height": 382,
+          "width": 215,
+          "depth": 199
+        },
+        "weight": 6
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Yamaha NS-10M Studio. Catalog variant shares the NS-10M Studio measurement by explicit family mapping; it is not claimed to be an independently measured sample."
   },
   {
@@ -3326,9 +3431,44 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/version/eac/measurements/CEA2034",
       "https://www.youtube.com/watch?v=0pYKuBdhmdc"
     ],
+    "research": {
+      "spinorama_match": "Yamaha NS-10M Studio",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "202404xx",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.youtube.com/watch?v=0pYKuBdhmdc"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "sensitivity": 90,
+        "impedance": 8,
+        "size": {
+          "height": 382,
+          "width": 215,
+          "depth": 199
+        },
+        "weight": 6
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20NS-10M%20Studio/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -3358,6 +3498,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -3387,6 +3540,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -4217,8 +4383,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20HS5/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20HS5/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Yamaha HS5",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200119",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20HS5/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -5049,8 +5239,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Yamaha%20HS7/metadata",
       "https://api.spinorama.org/v1/speaker/Yamaha%20HS7/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Yamaha HS7",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201026",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Yamaha%20HS7/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -5080,6 +5294,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5109,6 +5336,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5138,6 +5378,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5167,6 +5420,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5196,6 +5462,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5225,6 +5504,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5254,6 +5546,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5283,6 +5588,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5312,6 +5630,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5341,6 +5672,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5370,6 +5714,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -5399,6 +5756,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -6229,8 +6599,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208010A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208010A/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8010A",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208010A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -6260,6 +6654,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -7090,8 +7497,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208030C/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208030C/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8030C",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 104
+        },
+        "size": {
+          "height": 299,
+          "width": 189,
+          "depth": 178
+        },
+        "weight": 5
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208030C/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -7121,6 +7562,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -7951,8 +8405,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208050B/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208050B/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8050B",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 104
+        },
+        "size": {
+          "height": 452,
+          "width": 286,
+          "depth": 278
+        },
+        "weight": 14.4
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208050B/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -8783,8 +9271,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208320A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208320A/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8320A",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210530",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 100
+        },
+        "size": {
+          "height": 242,
+          "width": 151,
+          "depth": 142
+        },
+        "weight": 3.2
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208320A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -9615,8 +10137,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208330A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208330A/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8330A",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210812",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 104
+        },
+        "size": {
+          "height": 299,
+          "width": 189,
+          "depth": 178
+        },
+        "weight": 6.7
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208330A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -10447,10 +11003,56 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208331A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208331A/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/genelec_8331a/",
       "https://www.youtube.com/watch?v=Ui1Gh_s_sX0"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8331A",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20220303",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/genelec_8331a/",
+            "https://www.youtube.com/watch?v=Ui1Gh_s_sX0"
+          ]
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Genelec",
+          "method": "gll_hv_txt",
+          "quality": "low",
+          "published": "20220918",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 104
+        },
+        "size": {
+          "height": 305,
+          "width": 189,
+          "depth": 212
+        },
+        "weight": 6.7
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208331A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -11281,9 +11883,80 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208341A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208341A/version/asr-vertical/measurements/CEA2034",
-      "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-sam%E2%84%A2-studio-monitor-review.11652/#post-335087"
+      "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-sam%E2%84%A2-studio-monitor-review.11652/#post-335087",
+      "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-spinorama-and-measurements.23463/#post-785643",
+      "https://thenextweb.com/news/genelec-8341a-studio-monitor-review"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8341A",
+      "selected_measurement": {
+        "version": "asr-vertical",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr-vertical",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200223",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-sam%E2%84%A2-studio-monitor-review.11652/#post-335087"
+          ]
+        },
+        {
+          "version": "asr-horizontal",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": false,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-sam%E2%84%A2-studio-monitor-review.11652/#post-335087"
+          ]
+        },
+        {
+          "version": "misc-napilopez",
+          "origin": "Misc",
+          "method": "rew_text_dump",
+          "quality": "low",
+          "published": "20210518",
+          "selected_for_curve": false,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8341a-spinorama-and-measurements.23463/#post-785643",
+            "https://thenextweb.com/news/genelec-8341a-studio-monitor-review"
+          ]
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Genelec",
+          "method": "gll_hv_txt",
+          "quality": "low",
+          "published": "20220918",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 110.0
+        },
+        "size": {
+          "height": 370.0,
+          "width": 237.0,
+          "depth": 243.0
+        },
+        "weight": 9.8,
+        "spl_peak": 110.0
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208341A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -12114,8 +12787,60 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208351B/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208351B/version/asr-vertical/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8351B",
+      "selected_measurement": {
+        "version": "asr-vertical",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr-vertical",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        },
+        {
+          "version": "asr-horizontal",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Genelec",
+          "method": "gll_hv_txt",
+          "quality": "low",
+          "published": "20220918",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 113
+        },
+        "size": {
+          "height": 454,
+          "width": 287,
+          "depth": 278
+        },
+        "weight": 14.3
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208351B/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -12946,6 +13671,7 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%208361A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%208361A/version/asr-vertical/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8361a-review-powered-monitor.28039/",
       "https://www.soundonsound.com/reviews/genelec-8361a",
@@ -12954,6 +13680,64 @@
       "https://www.delamar.de/test/genelec-8361a-test/",
       "https://www.lowbeats.de/test-genelec-8361a-und-subwoofer-w371a-aktiv-monitor-dreamteam/"
     ],
+    "research": {
+      "spinorama_match": "Genelec 8361A",
+      "selected_measurement": {
+        "version": "asr-vertical",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr-vertical",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20211112",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/genelec-8361a-review-powered-monitor.28039/",
+            "https://www.soundonsound.com/reviews/genelec-8361a",
+            "https://www.lbtechreviews.com/test/speakers/genelec-8361a",
+            "https://www.pro-tools-expert.com/production-expert-1/genelec-8361a-tested",
+            "https://www.delamar.de/test/genelec-8361a-test/",
+            "https://www.lowbeats.de/test-genelec-8361a-und-subwoofer-w371a-aktiv-monitor-dreamteam/"
+          ]
+        },
+        {
+          "version": "asr-horizontal",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20211112",
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Genelec",
+          "method": "gll_hv_txt",
+          "quality": "low",
+          "published": "20220918",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 118
+        },
+        "size": {
+          "height": 593,
+          "width": 357,
+          "depth": 347
+        },
+        "weight": 31.9
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%208361A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -12983,6 +13767,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -13012,6 +13809,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -13842,10 +14652,48 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%201031A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%201031A/version/misc-audiorekr/measurements/CEA2034",
       "https://audiore.kr/genelec-1031a-%eb%a6%ac%eb%b7%b0/",
       "https://www.audiosciencereview.com/forum/index.php?threads/genelec-1031a-measurements-review.49907/"
     ],
+    "research": {
+      "spinorama_match": "Genelec 1031A",
+      "selected_measurement": {
+        "version": "misc-audiorekr",
+        "origin": "Misc",
+        "method": "spl_hv_txt",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-audiorekr",
+          "origin": "Misc",
+          "method": "spl_hv_txt",
+          "quality": "low",
+          "published": "20250125",
+          "selected_for_curve": true,
+          "links": [
+            "https://audiore.kr/genelec-1031a-%eb%a6%ac%eb%b7%b0/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/genelec-1031a-measurements-review.49907/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "max": 110,
+          "peak": 120
+        },
+        "size": {
+          "height": 395,
+          "width": 250,
+          "depth": 290
+        },
+        "weight": 12.7
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%201031A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -14676,8 +15524,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Genelec%201032A/metadata",
       "https://api.spinorama.org/v1/speaker/Genelec%201032A/version/misc-tomvg/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Genelec 1032A",
+      "selected_measurement": {
+        "version": "misc-tomvg",
+        "origin": "Misc",
+        "method": "rew_text_dump",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-tomvg",
+          "origin": "Misc",
+          "method": "rew_text_dump",
+          "quality": "low",
+          "published": "20201112",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Genelec%201032A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -14707,6 +15579,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -14736,6 +15621,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -15566,12 +16464,77 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Neumann%20KH%2080/metadata",
       "https://api.spinorama.org/v1/speaker/Neumann%20KH%2080/version/asr-v3-20200711/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/neumann-kh80-dsp-monitor-measurements-3.14637/",
       "https://thenextweb.com/news/these-3-studio-monitors-are-great-speakers-for-a-small-desk",
       "https://www.audiosciencereview.com/forum/index.php?threads/neumann-kh-80-dsp-speaker-measurements-take-two.11323/page-22#post-425237",
       "https://www.erinsaudiocorner.com/loudspeakers/neumann_kh80/"
     ],
+    "research": {
+      "spinorama_match": "Neumann KH 80",
+      "selected_measurement": {
+        "version": "asr-v3-20200711",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr-v2-20200208",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "asr-v3-20200711",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200711",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/neumann-kh80-dsp-monitor-measurements-3.14637/",
+            "https://thenextweb.com/news/these-3-studio-monitors-are-great-speakers-for-a-small-desk",
+            "https://www.audiosciencereview.com/forum/index.php?threads/neumann-kh-80-dsp-speaker-measurements-take-two.11323/page-22#post-425237",
+            "https://www.erinsaudiocorner.com/loudspeakers/neumann_kh80/"
+          ]
+        },
+        {
+          "version": "misc-napilopez",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Neumann",
+          "method": "webplotdigitizer",
+          "quality": "medium",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20240331",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Neumann%20KH%2080/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Neumann KH 80."
   },
   {
@@ -16402,8 +17365,43 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Neumann%20KH%20120%20II/metadata",
       "https://api.spinorama.org/v1/speaker/Neumann%20KH%20120%20II/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Neumann KH 120 II",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20230714",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 108,
+          "pink_noise": 87
+        },
+        "size": {
+          "height": 287,
+          "width": 182,
+          "depth": 227
+        },
+        "weight": 5.4
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Neumann%20KH%20120%20II/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -17234,8 +18232,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Neumann%20KH%20150/metadata",
       "https://api.spinorama.org/v1/speaker/Neumann%20KH%20150/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Neumann KH 150",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20221210",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 118
+        },
+        "size": {
+          "height": 345,
+          "width": 225,
+          "depth": 273
+        },
+        "weight": 8.0
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Neumann%20KH%20150/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -18066,8 +19098,53 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Neumann%20KH%20310A/metadata",
       "https://api.spinorama.org/v1/speaker/Neumann%20KH%20310A/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Neumann KH 310A",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201120",
+          "selected_for_curve": true,
+          "links": []
+        },
+        {
+          "version": "vendor-gll",
+          "origin": "Vendors-Neumann",
+          "method": "gll_hv_txt",
+          "quality": "medium",
+          "published": "20221110",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "max": 108,
+          "peak": 116,
+          "pink_noise": 93
+        },
+        "size": {
+          "height": 253,
+          "width": 383,
+          "depth": 292
+        },
+        "weight": 13.0
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Neumann%20KH%20310A/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Neumann KH 310A."
   },
   {
@@ -18097,6 +19174,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -18927,8 +20017,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20T5V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20T5V/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam T5V",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201204",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20T5V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam T5V."
   },
   {
@@ -19759,8 +20873,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20T7V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20T7V/version/misc-audioholics/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam T7V",
+      "selected_measurement": {
+        "version": "misc-audioholics",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-audioholics",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20T7V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam T7V."
   },
   {
@@ -20591,8 +21729,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20T8V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20T8V/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam T8V",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201028",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20T8V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam T8V."
   },
   {
@@ -20622,6 +21784,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -21452,8 +22627,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20A4V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20A4V/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam A4V",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20220822",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20A4V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam A4V."
   },
   {
@@ -21483,6 +22682,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -22313,8 +23525,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20A5X/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20A5X/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam A5X",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210427",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20A5X/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam A5X."
   },
   {
@@ -23145,9 +24381,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20A7V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20A7V/version/misc-sr/measurements/CEA2034",
       "https://www.soundandrecording.de/equipment/studiomonitor-adam-audio-a7v-im-test/"
     ],
+    "research": {
+      "spinorama_match": "Adam A7V",
+      "selected_measurement": {
+        "version": "misc-sr",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "medium"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-sr",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "medium",
+          "published": "20240914",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.soundandrecording.de/equipment/studiomonitor-adam-audio-a7v-im-test/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "size": {
+          "height": 337,
+          "width": 200,
+          "depth": 280
+        },
+        "weight": 8.7
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20A7V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam A7V."
   },
   {
@@ -23177,6 +24446,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -23206,6 +24488,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -23235,6 +24530,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -24065,8 +25373,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Adam%20S2V/metadata",
       "https://api.spinorama.org/v1/speaker/Adam%20S2V/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Adam S2V",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200213",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Adam%20S2V/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Adam S2V."
   },
   {
@@ -24096,6 +25428,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -24125,6 +25470,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -24154,6 +25512,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -24183,6 +25554,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -24212,6 +25596,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -25042,10 +26439,37 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2050%20Evo/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2050%20Evo/version/misc-nuyes/measurements/CEA2034",
       "https://gall.dcinside.com/mgallery/board/view/?id=speakers&no=195953",
       "https://www.audiosciencereview.com/forum/index.php?threads/focal-alpha-evo-line-new-speakers.21773/post-902825"
     ],
+    "research": {
+      "spinorama_match": "Focal Alpha 50 Evo",
+      "selected_measurement": {
+        "version": "misc-nuyes",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-nuyes",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": "20210906",
+          "selected_for_curve": true,
+          "links": [
+            "https://gall.dcinside.com/mgallery/board/view/?id=speakers&no=195953",
+            "https://www.audiosciencereview.com/forum/index.php?threads/focal-alpha-evo-line-new-speakers.21773/post-902825"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2050%20Evo/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -25876,10 +27300,37 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2065%20Evo/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2065%20Evo/version/asr/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/focal-alpha-65-evo-review-studio-monitor.28832/",
       "https://www.soundandrecording.de/equipment/focal-alpha-65-evo-im-test/"
     ],
+    "research": {
+      "spinorama_match": "Focal Alpha 65 Evo",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20211208",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/focal-alpha-65-evo-review-studio-monitor.28832/",
+            "https://www.soundandrecording.de/equipment/focal-alpha-65-evo-im-test/"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Alpha%2065%20Evo/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -26710,8 +28161,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Alpha%20Twin%20Evo/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Alpha%20Twin%20Evo/version/misc-sr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Focal Alpha Twin Evo",
+      "selected_measurement": {
+        "version": "misc-sr",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-sr",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": "20220812",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Alpha%20Twin%20Evo/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -26741,6 +28216,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -26770,6 +28258,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -26799,6 +28300,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -27629,8 +29143,41 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20Be/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20Be/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Focal Solo6 Be",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210801",
+          "selected_for_curve": true,
+          "links": []
+        },
+        {
+          "version": "misc-napilopez",
+          "origin": "Misc",
+          "method": "rew_text_dump",
+          "quality": "low",
+          "published": "20210517",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20Be/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -28461,8 +30008,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20ST6/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20ST6/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Focal Solo6 ST6",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20230621",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 110
+        },
+        "size": {
+          "height": 334,
+          "width": 246,
+          "depth": 295
+        },
+        "weight": 13.0
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Solo6%20ST6/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -29293,11 +30874,52 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Twin6%20Be/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Twin6%20Be/version/eac-horizontal/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/focal_twin6be/",
       "https://www.audiosciencereview.com/forum/index.php?threads/focal-twin6-be-studio-monitor-review.22254/",
       "https://www.soundonsound.com/reviews/focal-twin-6"
     ],
+    "research": {
+      "spinorama_match": "Focal Twin6 Be",
+      "selected_measurement": {
+        "version": "eac-horizontal",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac-horizontal",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210407",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/focal_twin6be/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/focal-twin6-be-studio-monitor-review.22254/",
+            "https://www.soundonsound.com/reviews/focal-twin-6"
+          ]
+        },
+        {
+          "version": "eac-vertical",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210407",
+          "selected_for_curve": false,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/focal_twin6be/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/focal-twin6-be-studio-monitor-review.22254/",
+            "https://www.soundonsound.com/reviews/focal-twin-6"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Twin6%20Be/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -29327,6 +30949,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -29356,6 +30991,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30186,9 +31834,45 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Focal%20Trio6%20ST6/metadata",
       "https://api.spinorama.org/v1/speaker/Focal%20Trio6%20ST6/version/misc-sr/measurements/CEA2034",
       "https://www.soundandrecording.de/equipment/focal-trio6-midfield-monitor-im-test/"
     ],
+    "research": {
+      "spinorama_match": "Focal Trio6 ST6",
+      "selected_measurement": {
+        "version": "misc-sr",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "medium"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-sr",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "medium",
+          "published": "20240612",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.soundandrecording.de/equipment/focal-trio6-midfield-monitor-im-test/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 115
+        },
+        "size": {
+          "height": 537,
+          "width": 292,
+          "depth": 369
+        },
+        "weight": 25
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Focal%20Trio6%20ST6/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -30218,6 +31902,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30247,6 +31944,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30276,6 +31986,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30305,6 +32028,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30334,6 +32070,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -30363,6 +32112,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -31193,8 +32955,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Dynaudio%20LYD%205/metadata",
       "https://api.spinorama.org/v1/speaker/Dynaudio%20LYD%205/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Dynaudio LYD 5",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Dynaudio%20LYD%205/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -31224,6 +33010,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -31253,6 +33052,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -31282,6 +33094,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -31311,6 +33136,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -31340,6 +33178,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32170,8 +34021,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Dynaudio%20Core%2047/metadata",
       "https://api.spinorama.org/v1/speaker/Dynaudio%20Core%2047/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Dynaudio Core 47",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210721",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Dynaudio%20Core%2047/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -32201,6 +34076,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32230,6 +34118,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32259,6 +34160,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32288,6 +34202,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32317,6 +34244,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32346,6 +34286,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32375,6 +34328,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32404,6 +34370,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32433,6 +34412,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -32462,6 +34454,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -33292,10 +35297,62 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20305P%20Mark%20ii/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20305P%20Mark%20ii/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/jbl_305pmk2/",
       "https://www.audiosciencereview.com/forum/index.php?threads/jbl-305p-mkii-review-erin.22999/"
     ],
+    "research": {
+      "spinorama_match": "JBL 305P Mark ii",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201001",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/jbl_305pmk2/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/jbl-305p-mkii-review-erin.22999/"
+          ]
+        },
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 120,
+          "vertical": 90
+        },
+        "sensitivity": 92,
+        "SPL": {
+          "max": 94,
+          "peak": 108
+        },
+        "size": {
+          "height": 298,
+          "width": 185,
+          "depth": 231
+        },
+        "weight": 4.73
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20305P%20Mark%20ii/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: JBL 305P Mark ii."
   },
   {
@@ -34126,8 +36183,48 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20306P%20Mark%20ii/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20306P%20Mark%20ii/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "JBL 306P Mark ii",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201217",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 120,
+          "vertical": 90
+        },
+        "sensitivity": 92,
+        "SPL": {
+          "max": 92,
+          "peak": 110
+        },
+        "size": {
+          "height": 361,
+          "width": 224,
+          "depth": 282
+        },
+        "weight": 6.1
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20306P%20Mark%20ii/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: JBL 306P Mark ii."
   },
   {
@@ -34958,8 +37055,48 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20308P%20Mark%20ii/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20308P%20Mark%20ii/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "JBL 308P Mark ii",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20201106",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 120,
+          "vertical": 90
+        },
+        "sensitivity": 92,
+        "SPL": {
+          "max": 102,
+          "peak": 112
+        },
+        "size": {
+          "height": 419,
+          "width": 254,
+          "depth": 308
+        },
+        "weight": 8.1
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20308P%20Mark%20ii/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: JBL 308P Mark ii."
   },
   {
@@ -35790,8 +37927,43 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20705P/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20705P/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "JBL 705P",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200309",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "max": 101,
+          "peak": 107
+        },
+        "size": {
+          "height": 268,
+          "width": 151,
+          "depth": 274
+        },
+        "weight": 5.68
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20705P/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -36622,10 +38794,57 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20708P/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20708P/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/jbl_708p/",
       "https://www.audiosciencereview.com/forum/index.php?threads/jbl-professional-708p-bi-amplified-8-inch-master-reference-monitor.23655/"
     ],
+    "research": {
+      "spinorama_match": "JBL 708P",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210201",
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210523",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/jbl_708p/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/jbl-professional-708p-bi-amplified-8-inch-master-reference-monitor.23655/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "max": 108,
+          "peak": 114
+        },
+        "size": {
+          "height": 441,
+          "width": 250,
+          "depth": 419
+        },
+        "weight": 18.1
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20708P/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -36655,6 +38874,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -37485,10 +39717,37 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%204329P/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%204329P/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/jbl_4329p/",
       "https://youtu.be/XhOz8WsKb8U"
     ],
+    "research": {
+      "spinorama_match": "JBL 4329P",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20231124",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/jbl_4329p/",
+            "https://youtu.be/XhOz8WsKb8U"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%204329P/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -38319,8 +40578,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20LSR6328P/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20LSR6328P/version/misc-speakerdata2034/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "JBL LSR6328P",
+      "selected_measurement": {
+        "version": "misc-speakerdata2034",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-speakerdata2034",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20LSR6328P/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -39151,10 +41434,61 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/JBL%20M2/metadata",
       "https://api.spinorama.org/v1/speaker/JBL%20M2/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/jbl_m2/",
       ""
     ],
+    "research": {
+      "spinorama_match": "JBL M2",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210821",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/jbl_m2/"
+          ]
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-JBL",
+          "method": "webplotdigitizer",
+          "quality": "medium",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 120,
+          "vertical": 100
+        },
+        "sensitivity": 92,
+        "SPL": {
+          "max": 117,
+          "peak": 123
+        },
+        "size": {
+          "height": 1256,
+          "width": 508,
+          "depth": 355
+        },
+        "weight": 58.5
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/JBL%20M2/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -39184,6 +41518,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -40014,9 +42361,35 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Mackie%20HR824/metadata",
       "https://api.spinorama.org/v1/speaker/Mackie%20HR824/version/harman/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/adam-t8v-studio-monitor-review.17118/page-2#post-553606"
     ],
+    "research": {
+      "spinorama_match": "Mackie HR824",
+      "selected_measurement": {
+        "version": "harman",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "unknown"
+      },
+      "measurement_evidence": [
+        {
+          "version": "harman",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "unknown",
+          "published": "20201029",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/adam-t8v-studio-monitor-review.17118/page-2#post-553606"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Mackie%20HR824/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -40046,6 +42419,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -40075,6 +42461,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -40905,8 +43304,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Kali%20LP-6/metadata",
       "https://api.spinorama.org/v1/speaker/Kali%20LP-6/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Kali LP-6",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Kali%20LP-6/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -41737,8 +44160,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Kali%20LP-8/metadata",
       "https://api.spinorama.org/v1/speaker/Kali%20LP-8/version/misc-audioholics/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Kali LP-8",
+      "selected_measurement": {
+        "version": "misc-audioholics",
+        "origin": "Misc",
+        "method": "webplotdigitizer",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-audioholics",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": null,
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Kali%20LP-8/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -42569,10 +45016,53 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Kali%20IN-5/metadata",
       "https://api.spinorama.org/v1/speaker/Kali%20IN-5/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/kali_in-5/",
       "https://www.audiosciencereview.com/forum/index.php?threads/kali-in-5-studio-monitor-review.22487/"
     ],
+    "research": {
+      "spinorama_match": "Kali IN-5",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210415",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/kali_in-5/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/kali-in-5-studio-monitor-review.22487/"
+          ]
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Kali",
+          "method": "gll_hv_txt",
+          "quality": "medium",
+          "published": "20240909",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "size": {
+          "height": 382,
+          "width": 206,
+          "depth": 286
+        },
+        "weight": 8.4
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Kali%20IN-5/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -43403,11 +45893,64 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Kali%20IN-8/metadata",
       "https://api.spinorama.org/v1/speaker/Kali%20IN-8/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/kali_in-8v1/",
       "https://www.audiosciencereview.com/forum/index.php?threads/kali-audio-in-8v1-3-way-studio-monitor-review.24241/#post-818243",
       "https://www.youtube.com/watch?v=DNpkizYXbVM"
     ],
+    "research": {
+      "spinorama_match": "Kali IN-8",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210615",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/kali_in-8v1/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/kali-audio-in-8v1-3-way-studio-monitor-review.24241/#post-818243",
+            "https://www.youtube.com/watch?v=DNpkizYXbVM"
+          ]
+        },
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200114",
+          "selected_for_curve": false,
+          "links": []
+        },
+        {
+          "version": "vendor",
+          "origin": "Vendors-Kali",
+          "method": "gll_hv_txt",
+          "quality": "medium",
+          "published": "20240909",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "size": {
+          "height": 441,
+          "width": 285,
+          "depth": 254
+        },
+        "weight": 10.4
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Kali%20IN-8/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -43437,6 +45980,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -43466,6 +46022,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -43495,6 +46064,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -43524,6 +46106,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -43553,6 +46148,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44383,8 +46991,41 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Hedd%20Type%2020%20MK2/metadata",
       "https://api.spinorama.org/v1/speaker/Hedd%20Type%2020%20MK2/version/asr-ported/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Hedd Type 20 MK2",
+      "selected_measurement": {
+        "version": "asr-ported",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr-ported",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20230129",
+          "selected_for_curve": true,
+          "links": []
+        },
+        {
+          "version": "asr-sealed",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20230129",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Hedd%20Type%2020%20MK2/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Hedd Type 20 MK2."
   },
   {
@@ -44414,6 +47055,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44443,6 +47097,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44472,6 +47139,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44501,6 +47181,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44530,6 +47223,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44559,6 +47265,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44588,6 +47307,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44617,6 +47349,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44646,6 +47391,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44675,6 +47433,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44704,6 +47475,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44733,6 +47517,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44762,6 +47559,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44791,6 +47601,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44820,6 +47643,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44849,6 +47685,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44878,6 +47727,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -44907,6 +47769,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45737,8 +48612,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/PMC%20Result6/metadata",
       "https://api.spinorama.org/v1/speaker/PMC%20Result6/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "PMC Result6",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20250220",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "SPL": {
+          "peak": 112
+        },
+        "size": {
+          "height": 380,
+          "width": 199,
+          "depth": 360
+        },
+        "weight": 8
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/PMC%20Result6/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -45768,6 +48677,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45797,6 +48719,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45826,6 +48761,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45855,6 +48803,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45884,6 +48845,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45913,6 +48887,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45942,6 +48929,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -45971,6 +48971,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -46000,6 +49013,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -46830,8 +49856,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2001/metadata",
       "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2001/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Barefoot Footprint 01",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20210519",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2001/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Barefoot Footprint 01."
   },
   {
@@ -47662,9 +50712,42 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2002/metadata",
       "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2002/version/misc-audiorekr/measurements/CEA2034",
       "https://audiore.kr/barefoot-footprint-02-%eb%a6%ac%eb%b7%b0/"
     ],
+    "research": {
+      "spinorama_match": "Barefoot Footprint 02",
+      "selected_measurement": {
+        "version": "misc-audiorekr",
+        "origin": "Misc",
+        "method": "spl_hv_txt",
+        "quality": "low"
+      },
+      "measurement_evidence": [
+        {
+          "version": "misc-audiorekr",
+          "origin": "Misc",
+          "method": "spl_hv_txt",
+          "quality": "low",
+          "published": "20250812",
+          "selected_for_curve": true,
+          "links": [
+            "https://audiore.kr/barefoot-footprint-02-%eb%a6%ac%eb%b7%b0/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "size": {
+          "height": 308,
+          "width": 222,
+          "depth": 330
+        },
+        "weight": 12.7
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Barefoot%20Footprint%2002/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Barefoot Footprint 02."
   },
   {
@@ -47694,6 +50777,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47723,6 +50819,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47752,6 +50861,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47781,6 +50903,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47810,6 +50945,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47839,6 +50987,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47868,6 +51029,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47897,6 +51071,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -47926,6 +51113,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48756,8 +51956,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Ocean%20Way%20HR5/metadata",
       "https://api.spinorama.org/v1/speaker/Ocean%20Way%20HR5/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Ocean Way HR5",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200608",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Ocean%20Way%20HR5/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -48787,6 +52011,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48816,6 +52053,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48845,6 +52095,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48874,6 +52137,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48903,6 +52179,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -48932,6 +52221,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -49762,10 +53064,53 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Meyer%20Sound%20Amie/metadata",
       "https://api.spinorama.org/v1/speaker/Meyer%20Sound%20Amie/version/asr/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/meyer-sound-amie-monitor-review.48281/",
       "https://www.production-partner.de/allgemein/test-meyer-sound-amie/"
     ],
+    "research": {
+      "spinorama_match": "Meyer Sound Amie",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20231001",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/meyer-sound-amie-monitor-review.48281/",
+            "https://www.production-partner.de/allgemein/test-meyer-sound-amie/"
+          ]
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 80,
+          "vertical": 50
+        },
+        "SPL": {
+          "m_noise": 120.5,
+          "pink_noise": 117.5,
+          "b_noise": 120
+        },
+        "size": {
+          "height": 389,
+          "width": 229,
+          "depth": 336
+        },
+        "weight": 11.3
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Meyer%20Sound%20Amie/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -49795,6 +53140,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -49824,6 +53182,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -50654,10 +54025,51 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Dutch%20Dutch%208C/metadata",
       "https://api.spinorama.org/v1/speaker/Dutch%20Dutch%208C/version/eac/measurements/CEA2034",
       "https://www.erinsaudiocorner.com/loudspeakers/dutch_dutch_8c/",
-      "https://www.audiosciencereview.com/forum/index.php?threads/dutch-dutch-8c-review.21016/"
+      "https://www.audiosciencereview.com/forum/index.php?threads/dutch-dutch-8c-review.21016/",
+      "https://www.audiosciencereview.com/forum/index.php?threads/dutch-dutch-8c-low-spinorama-and-measurements.12111/",
+      "https://thenextweb.com/news/dutch-dutch-8c-review-super-high-end-speakers-with-the-best-bass-ive-ever-heard"
     ],
+    "research": {
+      "spinorama_match": "Dutch Dutch 8C",
+      "selected_measurement": {
+        "version": "eac",
+        "origin": "ErinsAudioCorner",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "eac",
+          "origin": "ErinsAudioCorner",
+          "method": "klippel",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": [
+            "https://www.erinsaudiocorner.com/loudspeakers/dutch_dutch_8c/",
+            "https://www.audiosciencereview.com/forum/index.php?threads/dutch-dutch-8c-review.21016/"
+          ]
+        },
+        {
+          "version": "misc-napilopez",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": null,
+          "selected_for_curve": false,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/dutch-dutch-8c-low-spinorama-and-measurements.12111/",
+            "https://thenextweb.com/news/dutch-dutch-8c-review-super-high-end-speakers-with-the-best-bass-ive-ever-heard"
+          ]
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Dutch%20Dutch%208C/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "Spinorama match: Dutch Dutch 8C."
   },
   {
@@ -51488,10 +54900,46 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/GGNTKT%20M1/metadata",
       "https://api.spinorama.org/v1/speaker/GGNTKT%20M1/version/vendor-v2-202009-monopole/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/ggntkt-model-m1.12959/",
       "https://ggntkt.de/model-m1/technische-daten/"
     ],
+    "research": {
+      "spinorama_match": "GGNTKT M1",
+      "selected_measurement": {
+        "version": "vendor-v2-202009-monopole",
+        "origin": "Vendors-GGNTKT",
+        "method": "webplotdigitizer",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "vendor-v2-202009-monopole",
+          "origin": "Vendors-GGNTKT",
+          "method": "webplotdigitizer",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/ggntkt-model-m1.12959/",
+            "https://ggntkt.de/model-m1/technische-daten/"
+          ]
+        },
+        {
+          "version": "vendor-v1-202008",
+          "origin": "Vendors-GGNTKT",
+          "method": "webplotdigitizer",
+          "quality": "high",
+          "published": null,
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/GGNTKT%20M1/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -51521,6 +54969,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52351,10 +55812,61 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/PSI%20Audio%20A21-M/metadata",
       "https://api.spinorama.org/v1/speaker/PSI%20Audio%20A21-M/version/asr/measurements/CEA2034",
       "https://www.audiosciencereview.com/forum/index.php?threads/psi-a21-m-monitor-review.70026/",
       "https://www.soundandrecording.de/equipment/psi-a21-m-grosser-nahfeldmonitor-im-test/"
     ],
+    "research": {
+      "spinorama_match": "PSI Audio A21-M",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20260313",
+          "selected_for_curve": true,
+          "links": [
+            "https://www.audiosciencereview.com/forum/index.php?threads/psi-a21-m-monitor-review.70026/",
+            "https://www.soundandrecording.de/equipment/psi-a21-m-grosser-nahfeldmonitor-im-test/"
+          ]
+        },
+        {
+          "version": "misc-sr",
+          "origin": "Misc",
+          "method": "webplotdigitizer",
+          "quality": "low",
+          "published": "20221228",
+          "selected_for_curve": false,
+          "links": []
+        }
+      ],
+      "raw_specifications": {
+        "dispersion": {
+          "horizontal": 80,
+          "vertical": 30
+        },
+        "SPL": {
+          "max": 106,
+          "peak": 121
+        },
+        "size": {
+          "height": 400,
+          "width": 250,
+          "depth": 300
+        },
+        "weight": 12.8
+      },
+      "metadata_url": "https://api.spinorama.org/v1/speaker/PSI%20Audio%20A21-M/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -52384,6 +55896,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52413,6 +55938,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52442,6 +55980,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52471,6 +56022,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52500,6 +56064,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52529,6 +56106,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52558,6 +56148,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52587,6 +56190,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -52616,6 +56232,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -53446,8 +57075,32 @@
     },
     "shared_curve_with": null,
     "sources": [
+      "https://api.spinorama.org/v1/speaker/Tannoy%20System%20600/metadata",
       "https://api.spinorama.org/v1/speaker/Tannoy%20System%20600/version/asr/measurements/CEA2034"
     ],
+    "research": {
+      "spinorama_match": "Tannoy System 600",
+      "selected_measurement": {
+        "version": "asr",
+        "origin": "ASR",
+        "method": "klippel",
+        "quality": "high"
+      },
+      "measurement_evidence": [
+        {
+          "version": "asr",
+          "origin": "ASR",
+          "method": "klippel",
+          "quality": "high",
+          "published": "20200307",
+          "selected_for_curve": true,
+          "links": []
+        }
+      ],
+      "raw_specifications": {},
+      "metadata_url": "https://api.spinorama.org/v1/speaker/Tannoy%20System%20600/metadata",
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": ""
   },
   {
@@ -53477,6 +57130,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -53506,6 +57172,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -53535,6 +57214,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   },
   {
@@ -53564,6 +57256,19 @@
     },
     "shared_curve_with": null,
     "sources": [],
+    "research": {
+      "spinorama_match": null,
+      "selected_measurement": {
+        "version": null,
+        "origin": null,
+        "method": null,
+        "quality": null
+      },
+      "measurement_evidence": [],
+      "raw_specifications": {},
+      "metadata_url": null,
+      "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata."
+    },
     "notes": "No conservative exact/alias Spinorama match was found; response curve left null."
   }
 ]

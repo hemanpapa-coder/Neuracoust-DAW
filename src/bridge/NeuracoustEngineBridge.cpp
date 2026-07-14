@@ -3409,6 +3409,17 @@ int nc_plugin_scan(NCEngine* engine) {
     return static_cast<int>(engine->plugins.size());
 }
 
+// Force a fresh scan from disk (ignores the persistent cache) so a newly-installed plug-in
+// appears without restarting the app.
+int nc_plugin_rescan(NCEngine* engine) {
+    if (engine == nullptr) return 0;
+    engine->plugins = neuracoust::daw::scanKnownPluginLocations(true);
+    neuracoust::daw::sortPluginCandidatesForDisplay(engine->plugins);
+    engine->facets = neuracoust::daw::pluginCandidateFilterOptions(engine->plugins);
+    engine->filteredPlugins = engine->plugins;
+    return static_cast<int>(engine->plugins.size());
+}
+
 int nc_plugin_apply_filter(NCEngine* engine,
                            const char* text,
                            const char* brand,

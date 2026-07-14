@@ -139,6 +139,16 @@ struct PluginBrowser: View {
                     .font(Theme.Font.mono(8.5))
                     .foregroundStyle(Theme.Palette.textFaint)
                     .fixedSize()
+
+                // Force a fresh scan so a plug-in installed after launch appears.
+                Button { engine.rescanPlugins() } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.display).fill(Theme.Palette.background)
+                            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.display).stroke(Theme.Palette.divider, lineWidth: 1)))
+                }
+                .buttonStyle(.plain).help("플러그인 재스캔 (새로 설치한 플러그인 반영)")
             }
             .padding(Theme.Space.xxl)
 

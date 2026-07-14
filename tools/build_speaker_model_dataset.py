@@ -198,6 +198,29 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
     confidence = "datasheet" if points and is_vendor else "measured" if points else "estimated"
     specs = (measurement or {}).get("specifications", {})
     reviews = list(((measurement or {}).get("reviews") or {}).values())
+    metadata_url = (f"https://api.spinorama.org/v1/speaker/{urllib.parse.quote(matched, safe='')}/metadata"
+                    if matched else None)
+    evidence = []
+    all_links = []
+    for key, item in metadata.get("measurements", {}).items():
+        if not isinstance(item, dict):
+            continue
+        links = []
+        website = item.get("website")
+        if isinstance(website, str) and website.startswith(("http://", "https://")):
+            links.append(website)
+        links.extend(value for value in (item.get("reviews") or {}).values()
+                     if isinstance(value, str) and value.startswith(("http://", "https://")))
+        all_links.extend(links)
+        evidence.append({
+            "version": key,
+            "origin": item.get("origin"),
+            "method": item.get("format"),
+            "quality": item.get("quality"),
+            "published": item.get("review_published"),
+            "selected_for_curve": key == version,
+            "links": list(dict.fromkeys(links)),
+        })
     source_url = None
     if points and matched and version:
         source_url = f"https://api.spinorama.org/v1/speaker/{urllib.parse.quote(matched, safe='')}/version/{urllib.parse.quote(version, safe='')}/measurements/{urllib.parse.quote('CEA2034' if curve_name == 'Listening Window' else 'On Axis', safe='')}"
@@ -213,7 +236,9 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
         notes.append("No conservative exact/alias Spinorama match was found; response curve left null.")
     elif not points:
         notes.append("A catalog match exists, but no parseable Listening Window or On-Axis curve was returned; response curve left null.")
-    sources = list(dict.fromkeys(([source_url] if source_url else []) + [u for u in reviews if isinstance(u, str)]))
+    sources = list(dict.fromkeys(([metadata_url] if metadata_url else []) +
+                                ([source_url] if source_url else []) + all_links +
+                                [u for u in reviews if isinstance(u, str)]))
     return {
         "catalog_name": catalog_name,
         "brand": metadata.get("brand") or fallback_brand,
@@ -232,6 +257,19 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
         "response_curve": {"confidence": confidence, "source": f"Spinorama {curve_name}" if points else "estimated-from-class", "source_url": source_url, "points": points},
         "shared_curve_with": shared,
         "sources": sources,
+        "research": {
+            "spinorama_match": matched,
+            "selected_measurement": {
+                "version": version,
+                "origin": origin or None,
+                "method": fmt or None,
+                "quality": (measurement or {}).get("quality"),
+            },
+            "measurement_evidence": evidence,
+            "raw_specifications": specs,
+            "metadata_url": metadata_url,
+            "provenance_note": "Independent Klippel/anechoic measurements are preferred over vendor data; links retain the originating review or developer source when published in Spinorama metadata.",
+        },
         "notes": " ".join(notes),
     }
 

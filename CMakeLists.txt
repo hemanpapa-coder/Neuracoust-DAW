@@ -287,6 +287,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/TransportBar.swift
         src/app/swift/MonitorControls.swift
         src/app/swift/MonitorDock.swift
+        src/app/swift/SpeakerComparisonView.swift
         src/app/swift/ListenRoom.swift
         src/app/swift/ListenInviteQR.swift
         src/app/swift/AiAssistant.swift
@@ -355,6 +356,9 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/NeuracoustDAW.icns"
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/NeuracoustDAW.icns"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/speaker_model_dataset.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/speaker_model_dataset.json"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/main.d")
 

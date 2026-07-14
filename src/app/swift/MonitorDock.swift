@@ -8,6 +8,7 @@ struct MonitorDock: View {
     /// Opens the searchable model picker sheet. Nested context submenus of ~200 items do
     /// not render on macOS, so model selection uses this instead.
     @State var modelPicker: ModelPickerContext?
+    @State private var showSpeakerComparison = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +33,9 @@ struct MonitorDock: View {
         .background(Theme.Palette.panel)
         .sheet(item: $modelPicker) { ctx in
             ModelPickerSheet(context: ctx) { modelPicker = nil }
+        }
+        .sheet(isPresented: $showSpeakerComparison) {
+            SpeakerComparisonView()
         }
     }
 
@@ -325,6 +329,24 @@ struct MonitorDock: View {
                         )
                 )
             }
+
+            Button {
+                showSpeakerComparison = true
+            } label: {
+                Label("스피커 응답 비교", systemImage: "chart.xyaxis.line")
+                    .font(Theme.Font.ui(9.5, .semibold))
+                    .foregroundStyle(Theme.Palette.purpleLight)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .fill(Theme.Palette.purple.opacity(0.12))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(Theme.Palette.purple.opacity(0.38), lineWidth: 1))
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("스피커 응답 비교")
         }
     }
 

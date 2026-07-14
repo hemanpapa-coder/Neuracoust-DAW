@@ -771,10 +771,11 @@ PluginCandidate describeInstalledPluginCandidate(const std::string& pathString,
     };
 }
 
-std::vector<PluginCandidate> scanKnownPluginLocations() {
+std::vector<PluginCandidate> scanKnownPluginLocations(bool forceRescan) {
     std::vector<PluginCandidate> candidates;
     std::set<std::string> seenPaths;
-    const auto vst3Plugins = scanVst3PluginBundles();
+    const auto vst3Plugins = scanVst3PluginBundles(
+        forceRescan ? Vst3ScanMode::Refresh : Vst3ScanMode::UseCache);
 
     for (const auto& plugin : vst3Plugins) {
         if (isWavesInternalWrapperDescriptor(plugin)) {
