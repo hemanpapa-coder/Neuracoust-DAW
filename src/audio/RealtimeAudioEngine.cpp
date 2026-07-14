@@ -1329,7 +1329,8 @@ private:
         const bool projectMonitorDspRenderedInGraph = projectPlan_.renderMonitorDsp && !projectPlan_.clips.empty();
         if (!projectPlan_.clips.empty()) {
             ProjectAudioBlockMeters meters;
-            renderProjectAudioBlockWithStateAndMeters(projectPlan_, projectRenderState_, playbackFrame_, frameCount, projectBlock_, &meters);
+            renderProjectAudioBlockWithStateAndMeters(projectPlan_, projectRenderState_, playbackFrame_, frameCount, projectBlock_, &meters,
+                                                      /*offline=*/false, /*transportRunning=*/settings_.transportRunning);
             if (projectRenderState_.masterInsertProcessingFailed) {
                 std::fill(projectBlock_.begin(), projectBlock_.end(), 0.0f);
                 for (auto& peak : meters.trackPeakLeft) {

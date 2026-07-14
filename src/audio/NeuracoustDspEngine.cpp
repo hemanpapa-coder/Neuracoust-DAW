@@ -1788,7 +1788,9 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
                                                       segmentStartFrame,
                                                       segmentFrames,
                                                       projectSegmentBlock_,
-                                                      &projectSegmentMeters_);
+                                                      &projectSegmentMeters_,
+                                                      /*offline=*/false,
+                                                      /*transportRunning=*/transportRunning);
             applyRealtimeTrackInsertChainsLocked(segmentStartFrame, segmentFrames, projectSegmentBlock_);
             if (projectRenderState_.masterInsertProcessingFailed) {
                 std::fill(projectSegmentBlock_.begin(), projectSegmentBlock_.end(), 0.0f);
@@ -2060,7 +2062,8 @@ void NeuracoustDspEngine::warmRouteInsertChainsLocked() {
     }
     std::vector<float> warmBlock;
     renderProjectAudioBlockWithStateAndMeters(projectPlan_, projectRenderState_, 0,
-                                              std::max(1, maxBlockSize_), warmBlock, nullptr);
+                                              std::max(1, maxBlockSize_), warmBlock, nullptr,
+                                              /*offline=*/false, /*transportRunning=*/false);
     // Keep the prepared chains, but discard the warm block's transient DSP state so
     // real playback starts clean.
     projectRenderState_.resetForSeek();

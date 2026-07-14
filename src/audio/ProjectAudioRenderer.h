@@ -139,7 +139,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                int64_t frameCount,
                                                std::vector<float>& interleavedStereo,
                                                ProjectAudioBlockMeters* meters,
-                                               bool offline = false);
+                                               bool offline = false,
+                                               bool transportRunning = true);
 bool renderTrackPreFaderStereoBlock(const ProjectAudioRenderPlan& plan,
                                     const std::string& trackName,
                                     int64_t startFrame,

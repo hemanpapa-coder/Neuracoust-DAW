@@ -1882,7 +1882,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                int64_t frameCount,
                                                std::vector<float>& interleavedStereo,
                                                ProjectAudioBlockMeters* meters,
-                                               bool offline) {
+                                               bool offline,
+                                               bool transportRunning) {
     if (frameCount <= 0) {
         interleavedStereo.clear();
         if (meters != nullptr) {
@@ -1970,7 +1971,11 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
 
         std::vector<float> routeInput(blockSampleCount, 0.0f);
-        if (!timelinePlaybackSuppressed &&
+        // When the transport is stopped, timeline clips must contribute silence — otherwise a
+        // still-active insert render (always-on tail, or an instrument track keeping the render
+        // alive) re-samples the same parked clip window every block and it loops audibly, so
+        // "stop" never goes quiet. Inserts then ring out / meter on silence, which is correct.
+        if (!timelinePlaybackSuppressed && transportRunning &&
             (route->kind == MixerRouteKind::Audio || route->kind == MixerRouteKind::Instrument)) {
             for (int64_t frameOffset = 0; frameOffset < frameCount; ++frameOffset) {
                 const int64_t timelineFrame = timelineFrameForPlaybackFrame(plan, startFrame + frameOffset);
