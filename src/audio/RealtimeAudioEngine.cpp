@@ -1005,11 +1005,11 @@ public:
         bool updatedChain = false;
         if (const auto routeInsertIndex = nativeRouteGraphInsertIndex(*trackIt, insertIndex)) {
             auto routeChainIt = projectRenderState_.routeInsertChains.find(trackName);
-            if (routeChainIt != projectRenderState_.routeInsertChains.end()) {
-                updatedChain = routeChainIt->second.updateParameter(*routeInsertIndex,
-                                                                    parameterId,
-                                                                    displayName,
-                                                                    normalizedValue) || updatedChain;
+            if (routeChainIt != projectRenderState_.routeInsertChains.end() && routeChainIt->second) {
+                updatedChain = routeChainIt->second->updateParameter(*routeInsertIndex,
+                                                                     parameterId,
+                                                                     displayName,
+                                                                     normalizedValue) || updatedChain;
             }
         }
         status_.message = "Updated track VST3 parameter without reloading project.";

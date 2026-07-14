@@ -875,7 +875,9 @@ BounceResult bounceProjectToWav(const ProjectDocument& project, const std::strin
     mix.channels = 2;
     mix.sampleRate = sampleRate;
     ProjectAudioRenderState renderState;
-    renderProjectAudioBlockWithStateAndMeters(plan, renderState, startFrame, frameCount, mix.interleavedSamples, nullptr);
+    // offline=true: prepare insert chains synchronously (the async preparer can't keep up with
+    // faster-than-realtime rendering, and a bounce must not drop inserts to dry).
+    renderProjectAudioBlockWithStateAndMeters(plan, renderState, startFrame, frameCount, mix.interleavedSamples, nullptr, true);
     if (renderState.masterInsertProcessingFailed) {
         result.message = "VST3 insert failed: master insert: " + renderState.masterInsertLastError;
         return result;

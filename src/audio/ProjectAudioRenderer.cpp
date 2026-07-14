@@ -814,7 +814,8 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
                              std::vector<float>& interleavedStereo,
                              std::string& error,
                              const std::vector<RealtimeMasterInsertChain::InsertProcessMeter>** processMeters = nullptr,
-                             const std::vector<std::string>& bridgeShmKeys = {}) {
+                             const std::vector<std::string>& bridgeShmKeys = {},
+                             bool synchronousPrepare = false) {
     error.clear();
     if (processMeters != nullptr) {
         *processMeters = nullptr;
@@ -822,52 +823,81 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
     if (inserts.empty() || frameCount <= 0 || interleavedStereo.size() < static_cast<size_t>(frameCount) * 2u) {
         return true;
     }
-    ProjectAudioRenderPlan insertPlan;
-    insertPlan.sampleRate = sampleRate;
-    insertPlan.hasActiveVst3Inserts = true;
-    insertPlan.activeVst3Inserts = inserts;
     const int requestedBlock = static_cast<int>(std::max<int64_t>(1, frameCount));
     // Key on plug-in identity + sample rate only, NOT the per-segment block size.
     // Loop boundaries render a short final segment; keying on its size would tear
     // down and rebuild the chain (re-spawning the sandbox worker on the audio
     // thread → a big jitter spike and distortion at every loop). Instead we keep
     // one chain prepared for the largest block seen and just process fewer frames.
+    if (state.insertPreparer == nullptr) {
+        state.insertPreparer = std::make_unique<AsyncInsertChainPreparer>();
+    }
+    const int prepareMax = std::max(requestedBlock, 4096);   // one max-block prepare, reused
     const std::string key = routeInsertChainKey(inserts, sampleRate, 0);
-    const auto maxBlockIt = state.routeInsertChainMaxBlock.find(routeName);
-    const int preparedMax = maxBlockIt != state.routeInsertChainMaxBlock.end() ? maxBlockIt->second : 0;
     auto keyIt = state.routeInsertChainKeys.find(routeName);
     const bool identityChanged = keyIt == state.routeInsertChainKeys.end() || keyIt->second != key;
-    if (identityChanged || requestedBlock > preparedMax) {
-        state.routeInsertChains.erase(routeName);
+    if (identityChanged) {
+        // Retire the old chain OFF the audio thread (worker teardown blocks), and mark the new
+        // signature. Prepare happens in the background; until it's ready we pass dry.
+        auto old = state.routeInsertChains.find(routeName);
+        if (old != state.routeInsertChains.end()) {
+            state.insertPreparer->retire(std::move(old->second));
+            state.routeInsertChains.erase(old);
+        }
         state.routeInsertChainKeys[routeName] = key;
+        state.routeInsertChainMaxBlock.erase(routeName);
     }
     auto chainIt = state.routeInsertChains.find(routeName);
     if (chainIt == state.routeInsertChains.end()) {
-        const int prepareMax = std::max(requestedBlock, preparedMax);
-        auto [inserted, _] = state.routeInsertChains.emplace(routeName, RealtimeMasterInsertChain());
-        chainIt = inserted;
-        if (!chainIt->second.prepare(insertPlan, sampleRate, prepareMax, error, bridgeShmKeys)) {
-            state.routeInsertLastErrors[routeName] = error;
-            state.routeInsertChains.erase(routeName);
-            state.routeInsertChainMaxBlock.erase(routeName);
-            return false;
+        if (synchronousPrepare) {
+            // Offline (bounce): faster than realtime, so the background thread can't keep up —
+            // prepare inline. Blocking is fine off the audio thread.
+            ProjectAudioRenderPlan offlinePlan;
+            offlinePlan.sampleRate = sampleRate;
+            offlinePlan.hasActiveVst3Inserts = true;
+            offlinePlan.activeVst3Inserts = inserts;
+            auto chain = std::make_unique<RealtimeMasterInsertChain>();
+            if (!chain->prepare(offlinePlan, sampleRate, prepareMax, error, bridgeShmKeys)) {
+                state.routeInsertLastErrors[routeName] = error;
+                return false;
+            }
+            auto [inserted, _] = state.routeInsertChains.emplace(routeName, std::move(chain));
+            chainIt = inserted;
+            state.routeInsertChainMaxBlock[routeName] = prepareMax;
+            state.routeInsertLastErrors.erase(routeName);
+        } else {
+            // Realtime: ask the background thread to prepare it, and try to pick up a chain it
+            // already finished for this signature. No blocking prepare on the audio thread.
+            auto ready = state.insertPreparer->tryTake(key);
+            if (ready != nullptr) {
+                auto [inserted, _] = state.routeInsertChains.emplace(routeName, std::move(ready));
+                chainIt = inserted;
+                state.routeInsertChainMaxBlock[routeName] = prepareMax;
+                state.routeInsertLastErrors.erase(routeName);
+            } else {
+                state.insertPreparer->request(key, inserts, sampleRate, prepareMax, bridgeShmKeys);
+                const std::string err = state.insertPreparer->lastError(key);
+                if (!err.empty()) state.routeInsertLastErrors[routeName] = err;
+                // Play dry until the chain is ready — the input is already in interleavedStereo.
+                return true;
+            }
         }
-        state.routeInsertChainMaxBlock[routeName] = prepareMax;
     }
+    RealtimeMasterInsertChain& chain = *chainIt->second;
     for (size_t insertIndex = 0; insertIndex < inserts.size(); ++insertIndex) {
         for (const auto& parameter : inserts[insertIndex].parameters) {
-            chainIt->second.updateParameter(insertIndex,
-                                            parameter.parameterId,
-                                            parameter.displayName,
-                                            parameter.normalizedValue);
+            chain.updateParameter(insertIndex,
+                                  parameter.parameterId,
+                                  parameter.displayName,
+                                  parameter.normalizedValue);
         }
     }
-    if (!chainIt->second.processInterleavedStereo(interleavedStereo, static_cast<int>(frameCount), error)) {
+    if (!chain.processInterleavedStereo(interleavedStereo, static_cast<int>(frameCount), error)) {
         state.routeInsertLastErrors[routeName] = error;
         return false;
     }
     if (processMeters != nullptr) {
-        *processMeters = &chainIt->second.lastProcessMeters();
+        *processMeters = &chain.lastProcessMeters();
     }
     state.routeInsertLastErrors.erase(routeName);
     return true;
@@ -1851,7 +1881,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                int64_t startFrame,
                                                int64_t frameCount,
                                                std::vector<float>& interleavedStereo,
-                                               ProjectAudioBlockMeters* meters) {
+                                               ProjectAudioBlockMeters* meters,
+                                               bool offline) {
     if (frameCount <= 0) {
         interleavedStereo.clear();
         if (meters != nullptr) {
@@ -1988,7 +2019,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                          routeInput,
                                          insertError,
                                          &processMeters,
-                                         routeInsertShmKeys)) {
+                                         routeInsertShmKeys,
+                                         offline)) {   // offline bounce prepares synchronously
                 routeInput = dryRouteInput;
                 state.routeInsertLastErrors[route->name] = insertError;
             }
@@ -2339,7 +2371,10 @@ bool printRecordedTakeThroughTrackDsp(const ProjectDocument& project,
                                  stereo.sampleRate,
                                  stereo.frameCount(),
                                  stereo.interleavedSamples,
-                                 error)) {
+                                 error,
+                                 nullptr,
+                                 {},
+                                 /*synchronousPrepare=*/true)) {
         error = "Recorded take DSP print failed: " + error;
         return false;
     }

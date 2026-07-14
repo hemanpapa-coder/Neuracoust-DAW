@@ -2,6 +2,7 @@
 
 #include "audio/MixerGraph.h"
 #include "audio/MixerProcessorChain.h"
+#include "audio/AsyncInsertChainPreparer.h"
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MonitorDspProcessor.h"
 #include "audio/ProjectRenderTypes.h"
@@ -97,10 +98,13 @@ struct ProjectAudioRenderState {
     std::map<std::string, std::string> instrumentProcessorKeys;
     std::map<std::string, int> instrumentProcessorMaxBlock;
     std::map<std::string, std::string> instrumentLastErrors;
-    std::map<std::string, RealtimeMasterInsertChain> routeInsertChains;
+    // Chains as unique_ptr so a retired one can be moved off the audio thread for destruction.
+    std::map<std::string, std::unique_ptr<RealtimeMasterInsertChain>> routeInsertChains;
     std::map<std::string, std::string> routeInsertChainKeys;
     std::map<std::string, int> routeInsertChainMaxBlock;
     std::map<std::string, std::string> routeInsertLastErrors;
+    // Prepares/destroys insert chains off the audio thread; created lazily on first use.
+    std::unique_ptr<AsyncInsertChainPreparer> insertPreparer;
     // Declick: ramp a route's output up when its insert set changes (add/remove/reorder), so
     // the dry↔wet jump doesn't click.
     std::map<std::string, std::string> routeInsertSignatures;
@@ -134,7 +138,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                int64_t startFrame,
                                                int64_t frameCount,
                                                std::vector<float>& interleavedStereo,
-                                               ProjectAudioBlockMeters* meters);
+                                               ProjectAudioBlockMeters* meters,
+                                               bool offline = false);
 bool renderTrackPreFaderStereoBlock(const ProjectAudioRenderPlan& plan,
                                     const std::string& trackName,
                                     int64_t startFrame,

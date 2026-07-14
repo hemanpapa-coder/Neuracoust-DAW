@@ -78,6 +78,7 @@ add_library(neuracoust_daw_core
     src/audio/MixerProcessorChain.cpp
     src/audio/ProjectAudioRenderer.cpp
     src/audio/MasterInsertProcessor.cpp
+    src/audio/AsyncInsertChainPreparer.cpp
     src/audio/MidiInputRecorder.cpp
     src/audio/RecordingTake.cpp
     src/audio/AudioInputRecorder.cpp

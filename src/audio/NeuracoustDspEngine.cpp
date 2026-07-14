@@ -1463,11 +1463,11 @@ bool NeuracoustDspEngine::updateTrackVst3Parameter(const std::string& trackName,
     bool updatedChain = false;
     if (const auto routeInsertIndex = nativeRouteGraphInsertIndex(*trackIt, insertIndex)) {
         auto routeChainIt = projectRenderState_.routeInsertChains.find(trackName);
-        if (routeChainIt != projectRenderState_.routeInsertChains.end()) {
-            updatedChain = routeChainIt->second.updateParameter(*routeInsertIndex,
-                                                                parameterId,
-                                                                displayName,
-                                                                normalizedValue) || updatedChain;
+        if (routeChainIt != projectRenderState_.routeInsertChains.end() && routeChainIt->second) {
+            updatedChain = routeChainIt->second->updateParameter(*routeInsertIndex,
+                                                                 parameterId,
+                                                                 displayName,
+                                                                 normalizedValue) || updatedChain;
         }
     }
     for (auto& chain : realtimeTrackInsertChains_) {
