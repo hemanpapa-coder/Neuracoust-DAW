@@ -1003,6 +1003,7 @@ bool NeuracoustDspEngine::loadProject(const ProjectDocument& project, std::strin
     previousMonitorProcessor_ = monitorProcessor_;
     monitorDspModuleTransitionSamplesRemaining_ = 0;
     monitorDspModuleTransitionSamplesTotal_ = 0;
+    configureMonitorEqLocked(project, projectSampleRate);
     settings_.listenRoom.enabled = project.listenRoomEnabled;
     settings_.listenRoom.sessionName = project.listenRoomSessionName;
     settings_.listenRoom.source = project.listenRoomSource;
@@ -1118,6 +1119,7 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
         monitorDspModuleTransitionSamplesRemaining_ = 0;
         monitorDspModuleTransitionSamplesTotal_ = 0;
     }
+    configureMonitorEqLocked(project, projectSampleRate);
     settings_.listenRoom.enabled = project.listenRoomEnabled;
     settings_.listenRoom.sessionName = project.listenRoomSessionName;
     settings_.listenRoom.source = project.listenRoomSource;
@@ -1859,6 +1861,12 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     }
     if (!skipMonitorDsp) {
         applyMonitorOutputInsertChainLocked(interleavedStereo);
+        // The user's monitor parametric EQ (room correction / tone) sits at the end of the
+        // monitor chain — it colours what you hear, never the printed mix. Skipped on silence
+        // with everything else.
+        if (monitorEq_.active()) {
+            monitorEq_.processInterleavedStereo(interleavedStereo.data(), static_cast<int>(frameCount));
+        }
     }
     applyMonitorStationControlsLocked(interleavedStereo);
     applyReloadCrossfadeLocked(interleavedStereo);
@@ -2530,6 +2538,23 @@ void NeuracoustDspEngine::syncProjectMonitorDspRenderPathLocked() {
     }
     projectPlan_.renderMonitorDsp = shouldRenderInGraph;
     projectRenderState_.reset();
+}
+
+void NeuracoustDspEngine::configureMonitorEqLocked(const ProjectDocument& project, double sampleRate) {
+    auto typeFromString = [](const std::string& s) {
+        if (s == "low_shelf") return EqBandType::LowShelf;
+        if (s == "high_shelf") return EqBandType::HighShelf;
+        if (s == "high_pass") return EqBandType::HighPass;
+        if (s == "low_pass") return EqBandType::LowPass;
+        if (s == "notch") return EqBandType::Notch;
+        return EqBandType::Peaking;
+    };
+    std::vector<EqBandSpec> specs;
+    specs.reserve(project.monitorEqBands.size());
+    for (const auto& band : project.monitorEqBands) {
+        specs.push_back({band.enabled, typeFromString(band.type), band.frequencyHz, band.gainDb, band.q});
+    }
+    monitorEq_.configure(std::max(1.0, sampleRate), specs);
 }
 
 bool NeuracoustDspEngine::applyMonitorDspPathLocked(const std::string& mode, std::vector<float>& interleavedStereo) {

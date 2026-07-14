@@ -2,6 +2,7 @@
 
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MonitorDspProcessor.h"
+#include "audio/ParametricEq.h"
 #include "audio/ListenRoom.h"
 #include "audio/LoudnessMeter.h"
 #include "audio/ProjectAudioRenderer.h"
@@ -121,6 +122,7 @@ private:
     void applyMonitorOutputInsertChainLocked(std::vector<float>& interleavedStereo);
     void applyLocalMonitorDspLocked(std::vector<float>& interleavedStereo);
     void applyLocalMonitorDspLocked(MonitorDspProcessor& processor, std::vector<float>& interleavedStereo);
+    void configureMonitorEqLocked(const ProjectDocument& project, double sampleRate);
     bool applyRemoteMonitorDspLocked(std::vector<float>& interleavedStereo);
     void recordRemoteDspRoundTripLocked(double roundTripMs);
     void resetRemoteDspTelemetryLocked();
@@ -187,6 +189,8 @@ private:
     std::vector<float> monitorDspTransitionToBlock_;
     MonitorDspProcessor monitorProcessor_;
     MonitorDspProcessor previousMonitorProcessor_;
+    // User-built monitor parametric EQ (0–64 bands), applied in the monitor path only.
+    ParametricEq monitorEq_;
     double phase_ = 0.0;
     int64_t playbackFrame_ = 0;
     int64_t realtimeProcessFrame_ = 0;

@@ -1975,6 +1975,17 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
     out << "  \"physicalPowerAmpModel\": \"" << escapeJsonString(project.physicalPowerAmpModel) << "\",\n";
     out << "  \"physicalSpeakerCableModel\": \"" << escapeJsonString(project.physicalSpeakerCableModel) << "\",\n";
+    out << "  \"monitorEqBands\": [\n";
+    for (size_t i = 0; i < project.monitorEqBands.size(); ++i) {
+        const auto& band = project.monitorEqBands[i];
+        out << "    {\"enabled\":" << (band.enabled ? "true" : "false")
+            << ",\"type\":\"" << escapeJsonString(band.type) << "\""
+            << ",\"frequencyHz\":" << band.frequencyHz
+            << ",\"gainDb\":" << band.gainDb
+            << ",\"q\":" << band.q << "}";
+        out << (i + 1 == project.monitorEqBands.size() ? "\n" : ",\n");
+    }
+    out << "  ],\n";
     out << "  \"monitorSpeakerHeadphoneExclusive\": " << (project.monitorSpeakerHeadphoneExclusive ? "true" : "false") << ",\n";
     out << "  \"autoFadeOutSeconds\": " << project.autoFadeOutSeconds << ",\n";
     out << "  \"autoFadeOutCurve\": \"" << escapeJsonString(project.autoFadeOutCurve) << "\",\n";
@@ -2488,6 +2499,18 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
     parsed.physicalPowerAmpModel = stringAfterKey(text, "physicalPowerAmpModel");
     parsed.physicalSpeakerCableModel = stringAfterKey(text, "physicalSpeakerCableModel");
+    parsed.monitorEqBands.clear();
+    for (const auto& body : objectBodies(arrayBodyAfterKey(text, "monitorEqBands"))) {
+        if (parsed.monitorEqBands.size() >= 64) break;
+        MonitorEqBandState band;
+        band.enabled = boolAfterKey(body, "enabled", true);
+        band.type = stringAfterKey(body, "type");
+        if (band.type.empty()) band.type = "peaking";
+        band.frequencyHz = finiteRange(numberAfterKey(body, "frequencyHz", 1000.0), 1000.0, 10.0, 40000.0);
+        band.gainDb = finiteRange(numberAfterKey(body, "gainDb", 0.0), 0.0, -30.0, 30.0);
+        band.q = finiteRange(numberAfterKey(body, "q", 1.0), 1.0, 0.05, 40.0);
+        parsed.monitorEqBands.push_back(band);
+    }
     parsed.physicalHeadphoneModel = stringAfterKey(text, "physicalHeadphoneModel");
     parsed.monitorSpeakerHeadphoneExclusive = boolAfterKey(text, "monitorSpeakerHeadphoneExclusive", true);
     parsed.autoFadeOutSeconds = finiteRange(numberAfterKey(text, "autoFadeOutSeconds", 0.0), 0.0, 0.0, 600.0);

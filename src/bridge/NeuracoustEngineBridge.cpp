@@ -1,6 +1,7 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
 #include "ai/AiAssistant.h"
+#include "audio/ParametricEq.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
@@ -3193,6 +3194,7 @@ bool nc_apply_monitor_template(NCEngine* engine, const char* serialized) {
     if (!tmpl.monitorModules.empty()) {
         p.monitorModules = tmpl.monitorModules;
     }
+    p.monitorEqBands = tmpl.monitorEqBands;
     engine->reconcileProject();
     return true;
 }
@@ -4724,6 +4726,112 @@ void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* m
     if (engine->project.physicalSpeakerCableModel == model) return;
     engine->project.physicalSpeakerCableModel = model;
     engine->recordStep("Set speaker cable");
+}
+
+// --- Monitor parametric EQ (0–64 bands, added on demand; monitor path only) ---
+namespace {
+std::string sanitizeEqType(const char* type) {
+    const std::string t = type != nullptr ? type : "";
+    if (t == "low_shelf" || t == "high_shelf" || t == "high_pass" ||
+        t == "low_pass" || t == "notch" || t == "peaking") {
+        return t;
+    }
+    return "peaking";
+}
+} // namespace
+
+int nc_monitor_eq_band_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->project.monitorEqBands.size()) : 0;
+}
+
+bool nc_monitor_eq_band(NCEngine* engine, int index, bool* enabled, char* typeOut, size_t typeLen,
+                        double* freq, double* gain, double* q) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.monitorEqBands.size()) {
+        return false;
+    }
+    const auto& band = engine->project.monitorEqBands[static_cast<size_t>(index)];
+    if (enabled != nullptr) *enabled = band.enabled;
+    if (typeOut != nullptr) copyText(typeOut, typeLen, band.type);
+    if (freq != nullptr) *freq = band.frequencyHz;
+    if (gain != nullptr) *gain = band.gainDb;
+    if (q != nullptr) *q = band.q;
+    return true;
+}
+
+int nc_monitor_eq_add_band(NCEngine* engine, const char* type, double freq, double gain, double q) {
+    if (engine == nullptr || engine->project.monitorEqBands.size() >= 64) return -1;
+    neuracoust::daw::MonitorEqBandState band;
+    band.enabled = true;
+    band.type = sanitizeEqType(type);
+    band.frequencyHz = std::max(10.0, std::min(40000.0, freq));
+    band.gainDb = std::max(-30.0, std::min(30.0, gain));
+    band.q = std::max(0.05, std::min(40.0, q));
+    engine->project.monitorEqBands.push_back(band);
+    engine->reconcileProject();
+    engine->recordStep("Add EQ band");
+    return static_cast<int>(engine->project.monitorEqBands.size()) - 1;
+}
+
+bool nc_monitor_eq_set_band(NCEngine* engine, int index, bool enabled, const char* type,
+                            double freq, double gain, double q) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.monitorEqBands.size()) {
+        return false;
+    }
+    auto& band = engine->project.monitorEqBands[static_cast<size_t>(index)];
+    band.enabled = enabled;
+    band.type = sanitizeEqType(type);
+    band.frequencyHz = std::max(10.0, std::min(40000.0, freq));
+    band.gainDb = std::max(-30.0, std::min(30.0, gain));
+    band.q = std::max(0.05, std::min(40.0, q));
+    engine->reconcileProject();   // no undo step: a knob-drag is one gesture the UI commits
+    return true;
+}
+
+bool nc_monitor_eq_remove_band(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= engine->project.monitorEqBands.size()) {
+        return false;
+    }
+    engine->project.monitorEqBands.erase(engine->project.monitorEqBands.begin() + index);
+    engine->reconcileProject();
+    engine->recordStep("Remove EQ band");
+    return true;
+}
+
+void nc_monitor_eq_clear(NCEngine* engine) {
+    if (engine == nullptr || engine->project.monitorEqBands.empty()) return;
+    engine->project.monitorEqBands.clear();
+    engine->reconcileProject();
+    engine->recordStep("Clear EQ");
+}
+
+// Log-spaced magnitude response (dB) across [minHz, maxHz] for the UI curve.
+void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz) {
+    if (outMagsDb == nullptr || count <= 0) return;
+    for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
+    if (engine == nullptr) return;
+    neuracoust::daw::ParametricEq eq;
+    std::vector<neuracoust::daw::EqBandSpec> specs;
+    auto typeFrom = [](const std::string& s) {
+        if (s == "low_shelf") return neuracoust::daw::EqBandType::LowShelf;
+        if (s == "high_shelf") return neuracoust::daw::EqBandType::HighShelf;
+        if (s == "high_pass") return neuracoust::daw::EqBandType::HighPass;
+        if (s == "low_pass") return neuracoust::daw::EqBandType::LowPass;
+        if (s == "notch") return neuracoust::daw::EqBandType::Notch;
+        return neuracoust::daw::EqBandType::Peaking;
+    };
+    for (const auto& b : engine->project.monitorEqBands) {
+        specs.push_back({b.enabled, typeFrom(b.type), b.frequencyHz, b.gainDb, b.q});
+    }
+    eq.configure(48000.0, specs);
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
+    const double ratio = std::log(hi / lo);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
+        outMagsDb[i] = eq.magnitudeDb(f);
+    }
 }
 bool nc_monitor_output_exclusive(NCEngine* engine) {
     return engine != nullptr && engine->project.monitorSpeakerHeadphoneExclusive;

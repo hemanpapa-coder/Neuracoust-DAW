@@ -20,6 +20,16 @@ struct TimeSignatureMarkerState {
     int denominator = 4;
 };
 
+// One band of the monitor parametric EQ (0–64, added on demand). `type` is one of
+// "peaking" / "low_shelf" / "high_shelf" / "high_pass" / "low_pass" / "notch".
+struct MonitorEqBandState {
+    bool enabled = true;
+    std::string type = "peaking";
+    double frequencyHz = 1000.0;
+    double gainDb = 0.0;
+    double q = 1.0;
+};
+
 struct ChordEventState {
     std::string id;
     std::string name;
@@ -264,6 +274,8 @@ struct ProjectDocument {
     std::vector<MidiRegionState> midiRegions;
     std::vector<InsertState> masterInserts;
     std::vector<MonitorDspModule> monitorModules;
+    // Monitor parametric EQ — the user-built 0–64 band correction/tone EQ (monitor path only).
+    std::vector<MonitorEqBandState> monitorEqBands;
 };
 
 struct ProjectMediaCollectReport {

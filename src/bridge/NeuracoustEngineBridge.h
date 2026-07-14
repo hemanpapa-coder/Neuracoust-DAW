@@ -982,6 +982,18 @@ void nc_monitor_physical_power_amp_model(NCEngine* engine, char* out, size_t out
 void nc_monitor_set_physical_power_amp_model(NCEngine* engine, const char* model);
 void nc_monitor_physical_speaker_cable_model(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* model);
+
+// Monitor parametric EQ (0–64 bands, added on demand; monitor path only, never printed).
+// type is "peaking" / "low_shelf" / "high_shelf" / "high_pass" / "low_pass" / "notch".
+int  nc_monitor_eq_band_count(NCEngine* engine);
+bool nc_monitor_eq_band(NCEngine* engine, int index, bool* enabled, char* typeOut, size_t typeLen,
+                        double* freq, double* gain, double* q);
+int  nc_monitor_eq_add_band(NCEngine* engine, const char* type, double freq, double gain, double q);
+bool nc_monitor_eq_set_band(NCEngine* engine, int index, bool enabled, const char* type,
+                            double freq, double gain, double q);
+bool nc_monitor_eq_remove_band(NCEngine* engine, int index);
+void nc_monitor_eq_clear(NCEngine* engine);
+void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 
