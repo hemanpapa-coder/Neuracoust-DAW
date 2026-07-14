@@ -4704,6 +4704,37 @@ const std::vector<std::string>& speakerCableModelCatalog() {
     };
     return models;
 }
+// Measurement microphones for room measurement. Those with a per-unit or model calibration
+// file support ABSOLUTE tone correction; the rest are only trustworthy for L/R matching and
+// relative correction (their own coloration can't be removed).
+const std::vector<std::string>& measurementMicCatalog() {
+    static const std::vector<std::string> models = {
+        "미선택",
+        "miniDSP UMIK-1", "miniDSP UMIK-2",
+        "Dayton Audio EMM-6", "Dayton Audio UMM-6",
+        "Sonarworks SoundID XREF20", "iSEMcon EMX-7150", "Earthworks M23R", "Earthworks M30",
+        "Behringer ECM8000 (캘 파일 있음)", "Behringer ECM8000 (캘 없음)",
+        "Superlux ECM999", "Shure SM57 (측정용 아님)", "일반 측정 마이크 (캘 없음)",
+    };
+    return models;
+}
+// True if the mic carries a calibration file, so absolute tone correction is reliable.
+bool measurementMicHasCalibration(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (char c : name) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.find("캘 없음") != std::string::npos || lower.find("측정용 아님") != std::string::npos ||
+        lower.find("일반 측정") != std::string::npos || lower.find("미선택") != std::string::npos ||
+        lower.empty()) {
+        return false;
+    }
+    static const std::vector<std::string> calibrated = {
+        "umik", "umm-6", "emm-6", "xref", "emx-7150", "m23r", "m30", "earthworks", "캘 파일 있음",
+    };
+    for (const auto& c : calibrated) if (lower.find(c) != std::string::npos) return true;
+    return false;
+}
+
 // Passive speakers need an external amp + cable; active/powered monitors have the amp built in.
 bool speakerModelIsPassive(const std::string& name) {
     std::string lower;
@@ -4730,6 +4761,24 @@ int nc_speaker_cable_model_count() { return static_cast<int>(speakerCableModelCa
 void nc_speaker_cable_model_name(int index, char* out, size_t outLen) {
     const auto& c = speakerCableModelCatalog();
     copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+
+int nc_measurement_mic_model_count() { return static_cast<int>(measurementMicCatalog().size()); }
+void nc_measurement_mic_model_name(int index, char* out, size_t outLen) {
+    const auto& c = measurementMicCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+bool nc_measurement_mic_has_calibration(const char* name) {
+    return name != nullptr && measurementMicHasCalibration(name);
+}
+void nc_measurement_mic_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.measurementMicModel : std::string{});
+}
+void nc_set_measurement_mic_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.measurementMicModel == model) return;
+    engine->project.measurementMicModel = model;
+    engine->recordStep("Set measurement mic");
 }
 bool nc_speaker_model_is_passive(const char* name) {
     return name != nullptr && speakerModelIsPassive(name);

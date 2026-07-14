@@ -3762,6 +3762,7 @@ final class EngineController: ObservableObject {
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
         monitorSwapLeftRight = nc_monitor_swap_left_right(handle)
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
+        measurementMicModel = readString { nc_measurement_mic_model(handle, $0, $1) }
         reloadMonitorEq()
         autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
         autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
@@ -4303,6 +4304,24 @@ final class EngineController: ObservableObject {
     @Published private(set) var measurementActive = false
     @Published private(set) var measurementProgress: Double = 0
     private var measuringChannel = 0
+
+    // Measurement microphone selection. A mic with a calibration file supports absolute tone
+    // correction; without one, only L/R matching + relative correction is trustworthy.
+    @Published var measurementMicModel = ""
+    lazy var measurementMicCatalog: [String] = {
+        guard let handle else { return [] }
+        let count = Int(nc_measurement_mic_model_count())
+        return (0..<count).map { i in readString { nc_measurement_mic_model_name(Int32(i), $0, $1) } }
+    }()
+    func setMeasurementMic(_ name: String) {
+        guard let handle else { return }
+        _ = name.withCString { nc_set_measurement_mic_model(handle, $0) }
+        measurementMicModel = readString { nc_measurement_mic_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func measurementMicHasCalibration(_ name: String) -> Bool {
+        name.withCString { nc_measurement_mic_has_calibration($0) }
+    }
 
     func startMeasurement(channel: Int) {
         guard let handle, !measurementActive else { return }

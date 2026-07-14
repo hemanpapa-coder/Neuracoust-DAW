@@ -1973,6 +1973,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
     out << "  \"physicalSpeakerModel\": \"" << escapeJsonString(project.physicalSpeakerModel) << "\",\n";
     out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
+    out << "  \"measurementMicModel\": \"" << escapeJsonString(project.measurementMicModel) << "\",\n";
     out << "  \"physicalPowerAmpModel\": \"" << escapeJsonString(project.physicalPowerAmpModel) << "\",\n";
     out << "  \"physicalSpeakerCableModel\": \"" << escapeJsonString(project.physicalSpeakerCableModel) << "\",\n";
     out << "  \"monitorEqBands\": [\n";
@@ -2497,6 +2498,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         parsed.remoteDspHost = host.empty() ? std::string("studio.local") : host;
     }
     parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
+    parsed.measurementMicModel = stringAfterKey(text, "measurementMicModel");
     parsed.physicalPowerAmpModel = stringAfterKey(text, "physicalPowerAmpModel");
     parsed.physicalSpeakerCableModel = stringAfterKey(text, "physicalSpeakerCableModel");
     parsed.monitorEqBands.clear();

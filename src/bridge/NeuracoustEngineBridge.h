@@ -987,6 +987,13 @@ void nc_monitor_set_physical_power_amp_model(NCEngine* engine, const char* model
 void nc_monitor_physical_speaker_cable_model(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* model);
 
+// Measurement microphone selection (drives absolute vs relative-only room correction).
+int  nc_measurement_mic_model_count(void);
+void nc_measurement_mic_model_name(int index, char* out, size_t outLen);
+bool nc_measurement_mic_has_calibration(const char* name);
+void nc_measurement_mic_model(NCEngine* engine, char* out, size_t outLen);
+void nc_set_measurement_mic_model(NCEngine* engine, const char* model);
+
 // Monitor parametric EQ (0–64 bands, added on demand; monitor path only, never printed).
 // type is "peaking" / "low_shelf" / "high_shelf" / "high_pass" / "low_pass" / "notch".
 int  nc_monitor_eq_band_count(NCEngine* engine);

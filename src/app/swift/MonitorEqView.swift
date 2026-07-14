@@ -91,6 +91,43 @@ struct MonitorEqView: View {
 
     // Room measurement (②b) + correction (③): sweep a channel, then flatten to Harman.
     private var measureBar: some View {
+        VStack(spacing: 4) {
+            micRow
+            measureRow
+        }
+        .padding(.horizontal, 12).padding(.vertical, 5)
+    }
+
+    // Which measurement mic — decides whether absolute correction is trustworthy.
+    private var micRow: some View {
+        let mic = engine.measurementMicModel
+        let hasCurve = engine.measureHasCurve(0) || engine.measureHasCurve(1)
+        let calibrated = engine.measurementMicHasCalibration(mic)
+        let chosen = !mic.isEmpty && mic != "미선택"
+        return HStack(spacing: 6) {
+            Image(systemName: "mic.fill").font(.system(size: 9)).foregroundStyle(Theme.Palette.textFaint)
+            Text("측정 마이크").font(Theme.Font.ui(8.5)).foregroundStyle(Theme.Palette.textFaint)
+            Menu {
+                ForEach(engine.measurementMicCatalog, id: \.self) { name in
+                    Button(name) { engine.setMeasurementMic(name) }
+                }
+            } label: {
+                Text(chosen ? mic : "선택…")
+                    .font(Theme.Font.ui(9, .medium))
+                    .foregroundStyle(chosen ? Theme.Palette.textSecondary : Theme.Palette.accent)
+                    .lineLimit(1)
+            }.menuStyle(.button).buttonStyle(.plain)
+            if chosen {
+                Text(calibrated ? "절대 보정 가능" : "상대·L/R 매칭 권장")
+                    .font(Theme.Font.mono(7.5))
+                    .foregroundStyle(calibrated ? Theme.Palette.accent : Theme.Palette.orange)
+            }
+            Spacer(minLength: 0)
+            if hasCurve { Text("측정됨").font(Theme.Font.mono(7.5)).foregroundStyle(Theme.Palette.accent) }
+        }
+    }
+
+    private var measureRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "waveform.badge.mic").font(.system(size: 10)).foregroundStyle(Theme.Palette.purpleLight)
             Text("룸 측정").font(Theme.Font.ui(10, .semibold)).foregroundStyle(Theme.Palette.textSecondary)
@@ -110,7 +147,7 @@ struct MonitorEqView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).frame(height: 30)
+        .frame(height: 26)
     }
 
     private var bandList: some View {

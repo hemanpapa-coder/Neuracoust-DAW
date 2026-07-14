@@ -230,6 +230,9 @@ struct ProjectDocument {
     // The power amp and speaker cable driving a PASSIVE speaker; ignored for active monitors.
     std::string physicalPowerAmpModel;
     std::string physicalSpeakerCableModel;
+    // Measurement microphone used for room measurement; drives whether absolute tone correction
+    // is trustworthy (mic has a calibration file) or only L/R matching + relative correction.
+    std::string measurementMicModel;
     bool monitorSpeakerHeadphoneExclusive = true;
     // Auto fade-out: a fade written into the Master track's volume automation over the
     // last N seconds. 0 = off. Curve is one of linear/equal_power/exponential/logarithmic.
