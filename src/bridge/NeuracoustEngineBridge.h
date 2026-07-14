@@ -998,6 +998,12 @@ bool nc_monitor_eq_set_band(NCEngine* engine, int index, bool enabled, const cha
 bool nc_monitor_eq_remove_band(NCEngine* engine, int index);
 void nc_monitor_eq_clear(NCEngine* engine);
 void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz);
+
+// Virtual monitor: model a target speaker (by catalog name) on the physical monitor by loading
+// its fitted correction curve into the monitor EQ.
+int  nc_virtual_monitor_count(NCEngine* engine);
+void nc_virtual_monitor_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 

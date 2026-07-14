@@ -30,6 +30,20 @@ struct MonitorEqView: View {
             Text("모니터 EQ").font(Theme.Font.ui(13, .semibold)).foregroundStyle(Theme.Palette.textBright)
             Text("\(engine.monitorEqBands.count)/64").font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textFaint)
             Spacer()
+            // Virtual monitor: model a target speaker (loads its curve into this EQ).
+            Menu {
+                ForEach(engine.virtualMonitorTargets, id: \.self) { name in
+                    Button(stripSlotPrefix(name)) { engine.applyVirtualMonitor(name) }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "speaker.wave.2.fill").font(.system(size: 9))
+                    Text("가상 모니터").font(Theme.Font.ui(10, .medium))
+                }
+                .foregroundStyle(Theme.Palette.purpleLight)
+            }
+            .menuStyle(.button).buttonStyle(.plain)
+            .disabled(engine.virtualMonitorTargets.isEmpty)
             Button("+ 밴드") { engine.addEqBand(freq: 1000) }
                 .font(Theme.Font.ui(10, .semibold)).buttonStyle(.plain).foregroundStyle(Theme.Palette.accent)
                 .disabled(engine.monitorEqBands.count >= 64)

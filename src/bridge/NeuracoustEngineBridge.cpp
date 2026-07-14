@@ -2,6 +2,8 @@
 
 #include "ai/AiAssistant.h"
 #include "audio/ParametricEq.h"
+#include "audio/MonitorCorrection.h"
+#include "audio/SpeakerProfiles.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
@@ -4828,6 +4830,56 @@ void nc_monitor_eq_clear(NCEngine* engine) {
     engine->project.monitorEqBands.clear();
     engine->reconcileProject();
     engine->recordStep("Clear EQ");
+}
+
+// --- Virtual monitor (④): model a target speaker on the physical monitor ---
+// Fits the target's measured (flat-relative) curve to EQ bands and loads them into the monitor
+// EQ, so the output takes on that speaker's tonal character. Reuses the monitor EQ, so it
+// records one undo step; clearing the EQ removes it.
+namespace {
+std::vector<std::string>& virtualMonitorNames() {
+    static std::vector<std::string> names = neuracoust::daw::speakerProfilesWithCurve();
+    return names;
+}
+}
+
+int nc_virtual_monitor_count(NCEngine*) {
+    return static_cast<int>(virtualMonitorNames().size());
+}
+
+void nc_virtual_monitor_name(NCEngine*, int index, char* out, size_t outLen) {
+    const auto& names = virtualMonitorNames();
+    if (index < 0 || static_cast<size_t>(index) >= names.size()) { copyText(out, outLen, ""); return; }
+    copyText(out, outLen, names[static_cast<size_t>(index)]);
+}
+
+bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName) {
+    if (engine == nullptr || catalogName == nullptr) return false;
+    const auto curve = neuracoust::daw::speakerProfileCurve(catalogName);
+    if (curve.empty()) return false;
+    // The dataset curve is already midband-normalized, i.e. the speaker's deviation from flat —
+    // impose it directly to take on its character. 48 bands; boost limited more than cut.
+    const auto bands = neuracoust::daw::fitCurveToEqBands(curve, 48, 20.0, 20000.0, 9.0, 15.0);
+    engine->project.monitorEqBands.clear();
+    for (const auto& b : bands) {
+        neuracoust::daw::MonitorEqBandState state;
+        state.enabled = b.enabled;
+        switch (b.type) {
+            case neuracoust::daw::EqBandType::LowShelf: state.type = "low_shelf"; break;
+            case neuracoust::daw::EqBandType::HighShelf: state.type = "high_shelf"; break;
+            case neuracoust::daw::EqBandType::HighPass: state.type = "high_pass"; break;
+            case neuracoust::daw::EqBandType::LowPass: state.type = "low_pass"; break;
+            case neuracoust::daw::EqBandType::Notch: state.type = "notch"; break;
+            default: state.type = "peaking"; break;
+        }
+        state.frequencyHz = b.frequencyHz;
+        state.gainDb = b.gainDb;
+        state.q = b.q;
+        engine->project.monitorEqBands.push_back(state);
+    }
+    engine->reconcileProject();
+    engine->recordStep(std::string("Virtual monitor: ") + catalogName);
+    return true;
 }
 
 // Log-spaced magnitude response (dB) across [minHz, maxHz] for the UI curve.

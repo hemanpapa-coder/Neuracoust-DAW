@@ -86,6 +86,7 @@ add_library(neuracoust_daw_core
     src/audio/ParametricEq.cpp
     src/audio/SweepMeasurement.cpp
     src/audio/MonitorCorrection.cpp
+    src/audio/SpeakerProfiles.generated.cpp
     src/audio/OfflineBounce.cpp
     src/license/LicenseAgentClient.cpp
     src/nuclust/NuclustDspManager.cpp

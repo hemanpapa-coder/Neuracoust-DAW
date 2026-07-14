@@ -4299,6 +4299,24 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_eq_clear(handle); reloadMonitorEq(); refreshHistory()
     }
+    /// Speaker models with a measured curve — the targets the virtual monitor can model.
+    lazy var virtualMonitorTargets: [String] = {
+        guard let handle else { return [] }
+        let count = Int(nc_virtual_monitor_count(handle))
+        return (0..<count).map { i in
+            readString { nc_virtual_monitor_name(handle, Int32(i), $0, $1) }
+        }
+    }()
+
+    /// Model a target speaker on the physical monitor — loads its fitted curve into the monitor
+    /// EQ so the output takes on that speaker's tonal character.
+    func applyVirtualMonitor(_ catalogName: String) {
+        guard let handle else { return }
+        if catalogName.withCString({ nc_monitor_eq_apply_virtual_monitor(handle, $0) }) {
+            reloadMonitorEq(); refreshHistory()
+        }
+    }
+
     /// Log-spaced magnitude curve (dB) for the EQ display, 20 Hz–20 kHz.
     func monitorEqResponse(count: Int = 160) -> [Double] {
         guard let handle else { return Array(repeating: 0, count: count) }
