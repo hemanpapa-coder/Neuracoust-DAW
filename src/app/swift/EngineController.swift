@@ -277,6 +277,8 @@ final class EngineController: ObservableObject {
 
     /// Which track the browser will insert into. nil while it is closed.
     @Published private(set) var pluginTargetTrack: Int?
+    /// Set when the user tried to add an instrument as an insert (FX only) — the browser hints.
+    @Published var instrumentOnInsertRejected = false
     /// When set, the plugin browser loads the picked instrument into this rack slot (a layer)
     /// instead of the primary slot 0. Cleared after the pick.
     private var pluginTargetInstrumentSlot: Int?
@@ -433,6 +435,11 @@ final class EngineController: ObservableObject {
         } else if track.kind == .instrument && plugin?.category == "Instrument" {
             // No explicit target, but the plugin looks like an instrument → primary slot.
             changed = nc_track_set_instrument(handle, Int32(trackId), Int32(pluginIndex))
+        } else if plugin?.category == "Instrument" {
+            // An instrument on a non-instrument track / FX insert target — not allowed. Instruments
+            // live in an instrument track's instrument slot only. Flag it so the browser can hint.
+            changed = false
+            instrumentOnInsertRejected = true
         } else {
             changed = nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
         }

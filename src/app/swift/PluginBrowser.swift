@@ -267,6 +267,17 @@ struct PluginBrowser: View {
                 .buttonStyle(.plain)
             }
 
+            if engine.instrumentOnInsertRejected {
+                Text("악기는 인서트에 걸 수 없습니다 — 악기 트랙의 악기 슬롯에만. 인서트는 FX 전용.")
+                    .font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.orange)
+                    .padding(.horizontal, Theme.Space.md).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.orange.opacity(0.12)))
+                    .task {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        engine.instrumentOnInsertRejected = false
+                    }
+            }
+
             if engine.pluginBrowserOpen {
                 // An instrument track carries an instrument slot (+ layers) that is NOT an
                 // insert; show it here so a loaded instrument is visible in the browser, not

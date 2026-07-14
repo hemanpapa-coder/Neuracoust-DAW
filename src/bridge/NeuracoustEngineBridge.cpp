@@ -3813,6 +3813,12 @@ bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {
         return false;
     }
 
+    // FX only: a virtual instrument belongs in the instrument slot, never an insert. Reject it
+    // here so instruments and effects stay strictly separated regardless of which UI path called.
+    if (plugin->category.find("Instrument") != std::string::npos) {
+        return false;
+    }
+
     const std::string trackName = track->name;
 
     // First free slot, else append one. addTrackInsertSlot enforces the ceiling.
