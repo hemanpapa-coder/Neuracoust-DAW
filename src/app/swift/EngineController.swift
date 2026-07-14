@@ -3630,7 +3630,7 @@ final class EngineController: ObservableObject {
     /// view tree at 30 Hz (idle ≈ 40% CPU). Flooring lets an idle meter settle to no-publish.
     private static func decayedMeter(_ target: Float, _ previous: Float) -> Float {
         let v = max(target, previous * meterDecay)
-        return v < 0.0004 ? 0 : v
+        return v < 0.0016 ? 0 : v   // ~-56 dBFS: settle to exact silence so idle stops republishing
     }
 
     /// The analyzer type the small dock widget opens on click (right-click changes it).
@@ -3667,7 +3667,9 @@ final class EngineController: ObservableObject {
             let cur = spectrumBins[i]
             let next = incoming > cur ? incoming : cur * 0.72 + incoming * 0.28
             spectrumScratch[i] = next
-            if abs(next - cur) > 1e-4 { changed = true }
+            // ~-52 dBFS: below this the bins are jitter/noise-floor, and republishing them
+            // re-rendered the whole engine-observing tree (flickering open menus, high CPU).
+            if abs(next - cur) > 0.0025 { changed = true }
         }
         if changed { spectrumBins = Array(spectrumScratch[0..<count]) }
     }
@@ -3687,7 +3689,7 @@ final class EngineController: ObservableObject {
         // republish every tick and flicker open menus.
         var changed = goniometerSamples.count != count
         if !changed {
-            for i in 0..<count where abs(goniometerScratch[i] - goniometerSamples[i]) > 1e-4 {
+            for i in 0..<count where abs(goniometerScratch[i] - goniometerSamples[i]) > 0.0025 {
                 changed = true; break
             }
         }

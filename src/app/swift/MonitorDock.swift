@@ -231,24 +231,23 @@ struct MonitorDock: View {
     /// choice — the engine opens the OS default. Building the menu rescans the devices.
     @ViewBuilder
     private var deviceMenu: some View {
+        // The selected mark is a text glyph, not a swapped-in SF Symbol: a branch between
+        // Label(…, systemImage:) and Text re-inserts the image every time the menu re-renders,
+        // which SwiftUI animates (the checkmark "grows and shrinks"). A prefixed character has
+        // stable identity, so it never flickers no matter how often the menu re-evaluates.
         Text("출력 장치").font(.caption)
         Button {
             engine.setOutputDevice("")
         } label: {
-            let onDefault = engine.currentOutputDeviceId.isEmpty
-            let label = "시스템 기본 · \(engine.activeOutputDeviceName)"
-            if onDefault { Label(label, systemImage: "checkmark") } else { Text(label) }
+            Text((engine.currentOutputDeviceId.isEmpty ? "✓  " : "     ")
+                 + "시스템 기본 · \(engine.activeOutputDeviceName)")
         }
         Divider()
         ForEach(engine.outputDevices) { device in
             Button {
                 engine.setOutputDevice(device.id)
             } label: {
-                if engine.currentOutputDeviceId == device.id {
-                    Label(device.name, systemImage: "checkmark")
-                } else {
-                    Text(device.name)
-                }
+                Text((engine.currentOutputDeviceId == device.id ? "✓  " : "     ") + device.name)
             }
         }
     }

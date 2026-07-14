@@ -341,10 +341,20 @@ struct VerticalMeter: View {
 
     @State private var held: Float = 0
     @State private var heldAt: CFTimeInterval = 0
-    private let clock = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     /// Fraction of the throw above which the meter is into headroom (red).
     private let redZone: CGFloat = 0.88
+
+    // Peak-hold, driven by changes to `peak` (the engine's meter cadence) instead of a
+    // per-meter Timer. A Timer.publish here ran 20 Hz forever on EVERY strip's meter, so the
+    // main run loop re-rendered continuously even at idle — the real cause of the ~40% idle
+    // CPU and the flickering menus. Now nothing ticks when the meter is silent.
+    private func updateHold(_ newPeak: Float) {
+        let now = CACurrentMediaTime()
+        if newPeak >= held { held = newPeak; heldAt = now }
+        else if now - heldAt > 1.0 { held = max(newPeak, held - 0.06) }
+        if newPeak <= 0.0016 { held = 0 }   // silence: drop the cap so it doesn't freeze lit
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -379,11 +389,7 @@ struct VerticalMeter: View {
             .clipShape(RoundedRectangle(cornerRadius: 2))
         }
         .frame(width: width)
-        .onReceive(clock) { _ in
-            let now = CACurrentMediaTime()
-            if peak >= held { held = peak; heldAt = now }
-            else if now - heldAt > 1.0 { held = max(0, held - 0.035) }
-        }
+        .onChange(of: peak) { _, newPeak in updateHold(newPeak) }
     }
 }
 
