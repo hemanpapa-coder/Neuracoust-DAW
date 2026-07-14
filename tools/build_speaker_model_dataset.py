@@ -2,8 +2,8 @@
 """Build the virtual-monitor speaker catalog from the public Spinorama API.
 
 The script deliberately leaves unavailable specifications and curves empty.  It never
-synthesizes a frequency response.  Plotly binary arrays returned by the API are decoded,
-resampled to 200 logarithmic points, and normalized to their own arithmetic mean.
+synthesizes a frequency response. Plotly binary arrays returned by the API are decoded,
+resampled to 200 logarithmic points, and normalized so the 300 Hz–3 kHz mean is 0 dB.
 """
 
 from __future__ import annotations
@@ -40,6 +40,8 @@ ALIASES = {
     "JBL 305P MkII": "JBL 305P Mark ii", "JBL 306P MkII": "JBL 306P Mark ii",
     "JBL 308P MkII": "JBL 308P Mark ii", "Kali LP-6": "Kali LP-6v1",
     "Kali LP-8": "Kali LP-8v1", "Manger P1": "Manger Audio P1",
+    "Genelec S360A": "Genelec S360", "Neumann KH 420": "Neumann KH 420G",
+    "KRK Rokit 5 G4": "KRK Systems RoKit 5 G4", "Kii THREE": "Kii Audio Three",
 }
 
 BRANDS = sorted({
@@ -74,7 +76,10 @@ def clean_name(catalog_name: str) -> tuple[str, str]:
 
 
 def normalized(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", value.casefold().replace("markii", "mkii"))
+    value = value.casefold()
+    value = re.sub(r"\b(?:mark|mk)\s*(?:ii|2)\b", "mk2", value)
+    value = re.sub(r"\bii\b", "2", value)
+    return re.sub(r"[^a-z0-9]", "", value)
 
 
 def match_speaker(clean: str, speakers: list[str]) -> str | None:
@@ -92,17 +97,11 @@ def catalog_identity(clean: str) -> tuple[str, str]:
 
 
 def choose_measurement(metadata: dict) -> tuple[str, dict] | tuple[None, None]:
+    """Return Spinorama's declared default measurement, never a guessed alternative."""
     measurements = metadata.get("measurements", {})
-    def rank(item):
-        key, data = item
-        origin = str(data.get("origin", "")).casefold()
-        fmt = str(data.get("format", "")).casefold()
-        independent = any(tag in origin for tag in ("asr", "erin", "napilopez", "princeton", "klippel"))
-        return (3 if independent and fmt == "klippel" else 2 if independent else 1 if key == "vendor" or "vendor" in origin else 0,
-                1 if data.get("quality") == "high" else 0,
-                1 if key == metadata.get("default_measurement") else 0)
-    valid = [(k, v) for k, v in measurements.items() if isinstance(v, dict)]
-    return max(valid, key=rank) if valid else (None, None)
+    version = metadata.get("default_measurement")
+    measurement = measurements.get(version) if version else None
+    return (version, measurement) if isinstance(measurement, dict) else (None, None)
 
 
 def unpack_array(value) -> list[float]:
@@ -120,14 +119,21 @@ def unpack_array(value) -> list[float]:
     return [float(x[0]) for x in struct.iter_unpack("<" + code, raw[:len(raw) // size * size])]
 
 
+def normalize_midband(points: list[list[float]]) -> list[list[float]]:
+    mid = [level for freq, level in points if 300 <= freq <= 3000]
+    if not mid:
+        raise ValueError("curve has no samples between 300 Hz and 3 kHz")
+    mean = sum(mid) / len(mid)
+    return [[round(freq, 2), round(level - mean, 2)] for freq, level in points]
+
+
 def fetch_curve(speaker: str, version: str) -> tuple[list[list[float]] | None, str | None]:
     quoted_speaker = urllib.parse.quote(speaker, safe="")
     quoted_version = urllib.parse.quote(version, safe="")
     measurements = get_json(f"/speaker/{quoted_speaker}/version/{quoted_version}/measurements")
-    endpoint = "CEA2034" if "CEA2034" in measurements else "On Axis" if "On Axis" in measurements else None
-    if not endpoint:
+    if "CEA2034" not in measurements:
         return None, None
-    path = f"/speaker/{quoted_speaker}/version/{quoted_version}/measurements/{urllib.parse.quote(endpoint, safe='')}"
+    path = f"/speaker/{quoted_speaker}/version/{quoted_version}/measurements/CEA2034"
     payload = get_json(path)
     # API response is currently [plotly-json-string], but accept a direct object too.
     if isinstance(payload, list) and payload and isinstance(payload[0], str):
@@ -138,8 +144,6 @@ def fetch_curve(speaker: str, version: str) -> tuple[list[list[float]] | None, s
         plot = payload
     traces = plot.get("data", []) if isinstance(plot, dict) else []
     trace = next((t for t in traces if t.get("name") == "Listening Window"), None)
-    if trace is None:
-        trace = next((t for t in traces if t.get("name") == "On Axis"), None)
     if trace is None:
         return None, None
     xs, ys = unpack_array(trace.get("x")), unpack_array(trace.get("y"))
@@ -160,8 +164,7 @@ def fetch_curve(speaker: str, version: str) -> tuple[list[list[float]] | None, s
             ratio = (math.log(target) - math.log(x0)) / (math.log(x1) - math.log(x0))
             value = y0 + ratio * (y1 - y0)
         out.append([round(target, 2), value])
-    mean = sum(point[1] for point in out) / len(out)
-    return [[freq, round(level - mean, 2)] for freq, level in out], trace.get("name")
+    return normalize_midband(out), trace.get("name")
 
 
 def tonal_summary(points: list[list[float]] | None) -> str:
@@ -194,8 +197,7 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
             pass
     origin = str((measurement or {}).get("origin", ""))
     fmt = str((measurement or {}).get("format", ""))
-    is_vendor = version == "vendor" or "vendor" in origin.casefold()
-    confidence = "datasheet" if points and is_vendor else "measured" if points else "estimated"
+    confidence = "measured" if points else "estimated"
     specs = (measurement or {}).get("specifications", {})
     reviews = list(((measurement or {}).get("reviews") or {}).values())
     metadata_url = (f"https://api.spinorama.org/v1/speaker/{urllib.parse.quote(matched, safe='')}/metadata"
@@ -254,7 +256,10 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
         "amplification": "passive (external amp)" if metadata.get("type") == "passive" else "active (power breakdown unavailable)" if metadata.get("type") == "active" else None,
         "crossover_hz": [],
         "tonal_signature": tonal_summary(points),
-        "response_curve": {"confidence": confidence, "source": f"Spinorama {curve_name}" if points else "estimated-from-class", "source_url": source_url, "points": points},
+        "response_curve": {"confidence": confidence,
+                           "source": "Spinorama Listening Window" if points else "estimated-from-class",
+                           "source_url": source_url, "points": points,
+                           "normalized": bool(points)},
         "shared_curve_with": shared,
         "sources": sources,
         "research": {
@@ -275,15 +280,84 @@ def build_one(catalog_name: str, speakers: list[str]) -> dict:
 
 
 def main() -> int:
-    request = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_REQUEST
-    output = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_OUTPUT
-    names = catalog_names(request)
+    output = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUTPUT
+    if not output.exists():
+        raise FileNotFoundError(f"existing dataset not found: {output}")
+    rows = json.loads(output.read_text(encoding="utf-8"))
+    if not isinstance(rows, list) or len(rows) != 184:
+        raise ValueError(f"expected existing 184-item array, got {len(rows) if isinstance(rows, list) else type(rows)}")
     speakers = get_json("/speakers")
+    failures: list[str] = []
+    unavailable: list[str] = []
+    filled: list[str] = []
+
+    def update(row: dict) -> tuple[dict, str, str | None]:
+        catalog_name = row["catalog_name"]
+        clean, _ = clean_name(catalog_name)
+        matched = match_speaker(clean, speakers)
+        curve = row.setdefault("response_curve", {})
+        if not matched:
+            # Existing measured curves still receive the required mid-band normalization.
+            if curve.get("confidence") == "measured" and curve.get("points"):
+                curve["points"] = normalize_midband(curve["points"])
+                curve["normalized"] = True
+            return row, "match_failed", None
+        try:
+            metadata = get_json(f"/speaker/{urllib.parse.quote(matched, safe='')}/metadata")
+            version, _ = choose_measurement(metadata)
+            if not version:
+                return row, "unavailable", matched
+            points, curve_name = fetch_curve(matched, version)
+            if not points or curve_name != "Listening Window":
+                return row, "unavailable", matched
+            url = (f"https://api.spinorama.org/v1/speaker/{urllib.parse.quote(matched, safe='')}"
+                   f"/version/{urllib.parse.quote(version, safe='')}/measurements/CEA2034")
+            was_missing = curve.get("confidence") != "measured" or not curve.get("points")
+            curve.update({
+                "confidence": "measured",
+                "source": "Spinorama Listening Window",
+                "source_url": url,
+                "points": points,
+                "normalized": True,
+            })
+            sources = row.setdefault("sources", [])
+            if url not in sources:
+                sources.append(url)
+            research = row.get("research")
+            if isinstance(research, dict):
+                research["spinorama_match"] = matched
+            return row, "filled" if was_missing else "refreshed", matched
+        except (urllib.error.URLError, ValueError, KeyError, json.JSONDecodeError) as error:
+            # Do not destroy a previously measured curve because of a transient API error.
+            if curve.get("confidence") == "measured" and curve.get("points"):
+                curve["points"] = normalize_midband(curve["points"])
+                curve["normalized"] = True
+            return row, f"error: {error}", matched
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        rows = list(pool.map(lambda name: build_one(name, speakers), names))
+        results = list(pool.map(update, rows))
+    rows = [row for row, _, _ in results]
+    for row, status, matched in results:
+        name = row["catalog_name"]
+        if status == "filled":
+            filled.append(f"{name} -> {matched}")
+        elif status == "match_failed":
+            failures.append(name)
+        elif status.startswith("error:"):
+            unavailable.append(f"{name} -> {matched} ({status})")
+        elif status == "unavailable":
+            unavailable.append(f"{name} -> {matched} (default CEA2034 Listening Window unavailable)")
+
     output.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    measured = sum(row["response_curve"]["points"] is not None for row in rows)
-    print(f"wrote {len(rows)} models ({measured} with curves) to {output}", file=sys.stderr)
+    measured = sum(bool(row["response_curve"].get("confidence") == "measured" and
+                        row["response_curve"].get("points")) for row in rows)
+    print(f"updated {output}: {len(rows)} models, {measured} measured, {len(filled)} newly filled")
+    print(f"\nNEWLY FILLED ({len(filled)}):")
+    print("\n".join(filled) if filled else "(none)")
+    print(f"\nMATCH FAILED ({len(failures)}):")
+    print("\n".join(failures) if failures else "(none)")
+    print(f"\nMATCHED BUT DEFAULT LW UNAVAILABLE ({len(unavailable)}):")
+    print("\n".join(unavailable) if unavailable else "(none)")
     return 0
 
 

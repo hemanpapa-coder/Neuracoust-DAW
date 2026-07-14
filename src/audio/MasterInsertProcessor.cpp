@@ -135,10 +135,22 @@ bool RealtimeMasterInsertChain::prepare(const ProjectAudioRenderPlan& plan,
         const std::string bridgeShmKey = insertIndex < bridgeShmKeys.size()
             ? bridgeShmKeys[insertIndex]
             : std::string{};
-        // "internal" execution mode = local Internal DSP → force the plugin to run
-        // out-of-process on the isolated core, even when it is in-process-safe.
-        const bool forceOutOfProcess = insert.dspExecutionMode == "internal";
-        if (!processor.prepare(descriptor, sampleRate, maxBlockSize_, message, bridgeShmKey, forceOutOfProcess)) {
+        // "internal" execution mode = local Internal DSP → prefer running the plugin
+        // out-of-process on the isolated core. But if that worker/bridge fails to come up,
+        // fall back to in-process (the path instruments already use successfully) so the
+        // insert still processes — otherwise a broken worker silently kills EVERY insert.
+        const bool preferOutOfProcess = insert.dspExecutionMode == "internal";
+        bool prepared = processor.prepare(descriptor, sampleRate, maxBlockSize_, message,
+                                          bridgeShmKey, preferOutOfProcess);
+        if (!prepared && preferOutOfProcess) {
+            std::string fallbackMessage;
+            prepared = processor.prepare(descriptor, sampleRate, maxBlockSize_, fallbackMessage,
+                                         std::string{}, false);
+            if (!prepared) {
+                message += "; in-process fallback: " + fallbackMessage;
+            }
+        }
+        if (!prepared) {
             error = "VST3 realtime insert failed: " + insert.pluginName + ": " + message;
             reset();
             return false;
