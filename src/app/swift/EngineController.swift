@@ -4518,12 +4518,16 @@ final class EngineController: ObservableObject {
         let elapsed = CACurrentMediaTime() - transportWallClockStart
         let predicted = transportWallClockBase + elapsed
 
+        // Guard the publish: if the transport is "running" but the engine playhead is wedged
+        // (frozen), the value doesn't change, so republishing it every tick would re-render
+        // the whole UI (the heavy MonitorDock re-lays-out) for nothing — a 70%-CPU layout
+        // storm. setIfChanged still publishes on every real advance during normal playback.
         if abs(predicted - engineSeconds) > resyncThreshold {
-            playheadSeconds = engineSeconds
+            setIfChanged(\.playheadSeconds, engineSeconds)
             transportWallClockBase = engineSeconds
             transportWallClockStart = CACurrentMediaTime()
         } else {
-            playheadSeconds = predicted
+            setIfChanged(\.playheadSeconds, predicted)
         }
     }
 
