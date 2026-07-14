@@ -3615,8 +3615,8 @@ final class EngineController: ObservableObject {
             // Ballistic, so a track meter falls to silence on stop instead of freezing.
             // Assign only on change: an idle strip must not republish tracks every tick, or
             // every menu observing the controller flickers.
-            let nl = max(left, tracks[index].peakLeft * Self.meterDecay)
-            let nr = max(right, tracks[index].peakRight * Self.meterDecay)
+            let nl = Self.decayedMeter(left, tracks[index].peakLeft)
+            let nr = Self.decayedMeter(right, tracks[index].peakRight)
             if nl != tracks[index].peakLeft { tracks[index].peakLeft = nl }
             if nr != tracks[index].peakRight { tracks[index].peakRight = nr }
         }
@@ -3624,6 +3624,14 @@ final class EngineController: ObservableObject {
 
     /// Per-tick meter release. At ~30 Hz this falls a held peak to silence in ~0.2 s.
     private static let meterDecay: Float = 0.80
+    /// Ballistic meter step that SNAPS to exact silence once it drops below ~-68 dBFS.
+    /// A pure multiplicative decay only asymptotes toward 0, so `setIfChanged` saw a change
+    /// every tick forever and republished the meter — re-rendering the whole engine-observing
+    /// view tree at 30 Hz (idle ≈ 40% CPU). Flooring lets an idle meter settle to no-publish.
+    private static func decayedMeter(_ target: Float, _ previous: Float) -> Float {
+        let v = max(target, previous * meterDecay)
+        return v < 0.0004 ? 0 : v
+    }
 
     /// The analyzer type the small dock widget opens on click (right-click changes it).
     @Published var dockAnalyzerKind: AnalyzerKind = .spectrum
@@ -4165,30 +4173,25 @@ final class EngineController: ObservableObject {
     /// The speaker-model catalog and physical-output routes, read once from the engine.
     // These catalogs are static engine data (no handle needed). Computed, not lazy, so a
     // one-time access before the engine existed can never cache an empty list.
-    var speakerModelCatalog: [String] {
-        (0..<Int(nc_speaker_model_count())).map { i in
-            readString { nc_speaker_model_name(Int32(i), $0, $1) }
-        }
+    // These catalogs are static (a fixed ~200-entry speaker list, etc.). They were computed
+    // properties, so every access re-ran hundreds of bridge calls + String allocations —
+    // and SwiftUI eagerly evaluates the monitor dock's context-menu content on every body
+    // recompute (30 Hz), so rebuilding them each tick pinned the main thread near 40% CPU at
+    // idle. Cache them once (lazy), since they never change during a session.
+    lazy var speakerModelCatalog: [String] = (0..<Int(nc_speaker_model_count())).map { i in
+        readString { nc_speaker_model_name(Int32(i), $0, $1) }
     }
-    var speakerOutputRoutes: [String] {
-        (0..<Int(nc_speaker_output_route_count())).map { i in
-            readString { nc_speaker_output_route(Int32(i), $0, $1) }
-        }
+    lazy var speakerOutputRoutes: [String] = (0..<Int(nc_speaker_output_route_count())).map { i in
+        readString { nc_speaker_output_route(Int32(i), $0, $1) }
     }
-    var headphoneModelCatalog: [String] {
-        (0..<Int(nc_headphone_model_count())).map { i in
-            readString { nc_headphone_model_name(Int32(i), $0, $1) }
-        }
+    lazy var headphoneModelCatalog: [String] = (0..<Int(nc_headphone_model_count())).map { i in
+        readString { nc_headphone_model_name(Int32(i), $0, $1) }
     }
-    var powerAmpModelCatalog: [String] {
-        (0..<Int(nc_power_amp_model_count())).map { i in
-            readString { nc_power_amp_model_name(Int32(i), $0, $1) }
-        }
+    lazy var powerAmpModelCatalog: [String] = (0..<Int(nc_power_amp_model_count())).map { i in
+        readString { nc_power_amp_model_name(Int32(i), $0, $1) }
     }
-    var speakerCableModelCatalog: [String] {
-        (0..<Int(nc_speaker_cable_model_count())).map { i in
-            readString { nc_speaker_cable_model_name(Int32(i), $0, $1) }
-        }
+    lazy var speakerCableModelCatalog: [String] = (0..<Int(nc_speaker_cable_model_count())).map { i in
+        readString { nc_speaker_cable_model_name(Int32(i), $0, $1) }
     }
 
     // The real speaker/headphone the user monitors on (definition, not a simulation),
@@ -4425,14 +4428,24 @@ final class EngineController: ObservableObject {
         var status = NCEngineStatus()
         nc_engine_status(handle, &status)
 
-        setIfChanged(\.phaseCorrelation, status.phaseCorrelation)
+        // Timing telemetry (jitter, render duration, phase correlation, DSP load) drifts a
+        // hair every audio callback, so publishing it each 30 Hz poll re-rendered the whole
+        // UI — the heavy MonitorDock re-laid-out ~30×/s even at idle, pinning the main thread.
+        // Round it and refresh it at ~6 Hz: with the engine idle the rounded values settle and
+        // stop publishing entirely; a readout that ticks 6×/s is plenty.
+        telemetrySlowCounter += 1
+        if telemetrySlowCounter >= 5 {
+            telemetrySlowCounter = 0
+            setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
+            setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs.rounded())
+            setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
+            setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)
+        }
         setIfChanged(\.delayCompensationSamples, Int(nc_delay_compensation_samples(handle)))
         setIfChanged(\.spectrumLow, status.spectrumLow)
         setIfChanged(\.spectrumMid, status.spectrumMid)
         setIfChanged(\.spectrumHigh, status.spectrumHigh)
-        setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs)
         setIfChanged(\.remoteDspActive, status.remoteDspMonitorActive)
-        setIfChanged(\.remoteDspRoundTripMs, status.remoteDspRoundTripMs)
         setIfChanged(\.activeInsertCount, Int(status.activeRealtimeVst3TrackInserts)
             + Int(status.activeRealtimeVst3MasterInserts)
             + Int(status.activeRemoteDspTrackInserts))
@@ -4443,22 +4456,29 @@ final class EngineController: ObservableObject {
         if wasTransportRunning && !transportRunning { finishAutomationPass() }
         // Ballistic meters: snap up to a new peak, decay down. Without the decay a held
         // engine peak stays lit after stop; with it the meter always falls to silence.
-        setIfChanged(\.outputPeakLeft, max(status.outputPeakLeft, outputPeakLeft * Self.meterDecay))
-        setIfChanged(\.outputPeakRight, max(status.outputPeakRight, outputPeakRight * Self.meterDecay))
-        updateSpectrumBins(handle)
-        updateGoniometer(handle)
-        setIfChanged(\.momentaryLufs, status.momentaryLufs)
-        setIfChanged(\.shortTermLufs, status.shortTermLufs)
-        setIfChanged(\.integratedLufs, status.integratedLufs)
-        setIfChanged(\.loudnessRange, status.loudnessRange)
-        setIfChanged(\.truePeakDb, status.truePeakDb)
-        // Input meter follows the peak immediately on the way up and decays on the way
-        // down, so a transient stays readable for a moment.
-        setIfChanged(\.inputPeak, max(status.inputPeak, inputPeak * 0.82))
+        // Visual telemetry (meters, spectrum, goniometer, LUFS) at ~15 Hz, not 30. When a
+        // signal is present these move every audio poll, and each publish re-renders the whole
+        // engine-observing view tree — the dominant idle/playback CPU cost. Halving the rate
+        // halves that cost and is imperceptible on a meter; the transport, playhead and
+        // automation below still run every tick.
+        visualTelemetryTick = visualTelemetryTick &+ 1
+        if visualTelemetryTick & 1 == 0 {
+            // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
+            setIfChanged(\.outputPeakLeft, Self.decayedMeter(status.outputPeakLeft, outputPeakLeft))
+            setIfChanged(\.outputPeakRight, Self.decayedMeter(status.outputPeakRight, outputPeakRight))
+            updateSpectrumBins(handle)
+            updateGoniometer(handle)
+            setIfChanged(\.momentaryLufs, status.momentaryLufs)
+            setIfChanged(\.shortTermLufs, status.shortTermLufs)
+            setIfChanged(\.integratedLufs, status.integratedLufs)
+            setIfChanged(\.loudnessRange, status.loudnessRange)
+            setIfChanged(\.truePeakDb, status.truePeakDb)
+            setIfChanged(\.inputPeak, Self.decayedMeter(status.inputPeak, inputPeak))
+            applyTrackMeters(status)
+        }
         setIfChanged(\.sampleRate, status.sampleRate)
         setIfChanged(\.bufferSize, Int(status.requestedBufferSize))
         setIfChanged(\.delayCompensationMs, status.delayCompensationMs)
-        setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs)
         setIfChanged(\.deviceName, withUnsafePointer(to: status.deviceName) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(NC_TEXT_LEN)) { String(cString: $0) }
         })
@@ -4468,7 +4488,6 @@ final class EngineController: ObservableObject {
         // curve is heard live. (Volume/pan are baked by the renderer; this covers inserts.)
         if transportRunning { nc_apply_plugin_automation(handle, playheadSeconds) }
         serviceAutomation()
-        applyTrackMeters(status)
 
         // Pulse the solo-implied blink ~2 Hz while any track is soloed; hold it off
         // otherwise so idle strips do not repaint. Only publish on a change.
@@ -4493,17 +4512,18 @@ final class EngineController: ObservableObject {
         // only when the list actually changed, so this stays flicker-free.
         // Rescan for hot-plugged interfaces a few seconds apart — enumerateAudioDevices can be
         // slow for virtual/network devices (SoundGrid, Splashtop), so keep the cadence gentle.
-        // Republishes only on change, so it never flickers menus.
-        deviceRescanTicks += 1
-        if deviceRescanTicks >= 90 {   // ~3 s at the 30 Hz poll
-            deviceRescanTicks = 0
-            refreshOutputDevices()
-            refreshInputDevices()
-        }
+        // NOTE: no periodic device rescan here. enumerateAudioDevices() walks every CoreAudio
+        // device synchronously on the main thread, and slow virtual/network devices (SoundGrid,
+        // Splashtop) can block long enough to stall the 30 Hz poll during playback — a few-second
+        // hitch/restart loop and a main-thread CPU storm. Devices are rescanned when a device
+        // menu / the dock appears instead; a proper CoreAudio change-listener is the way to add
+        // hot-plug detection without polling.
 
         listenRoom?.refresh()
     }
     private var deviceRescanTicks = 0
+    private var telemetrySlowCounter = 0
+    private var visualTelemetryTick: UInt = 0
 
     private func updatePlayhead(engineSeconds: Double) {
         guard transportRunning else {

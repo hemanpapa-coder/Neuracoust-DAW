@@ -34,16 +34,50 @@ AudioObjectID defaultOutputDevice() {
     return device;
 }
 
+int outputDeviceChannelCount(AudioObjectID device);   // defined below
+
+// Any real output device, for when the chosen one turns out to be input-only. Prevents the
+// output AudioUnit from being pointed at a microphone (0 output channels), which it cannot
+// render — it then spins/retries, the engine status thrashes, and the whole UI storms
+// (measured ~60% CPU). Seen at startup when the system-default output resolved to a mic.
+AudioObjectID firstDeviceWithOutput() {
+    AudioObjectPropertyAddress address {
+        kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, nullptr, &size) != noErr || size == 0) {
+        return kAudioObjectUnknown;
+    }
+    std::vector<AudioObjectID> devices(size / sizeof(AudioObjectID));
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, devices.data()) != noErr) {
+        return kAudioObjectUnknown;
+    }
+    for (auto device : devices) {
+        if (outputDeviceChannelCount(device) > 0) return device;
+    }
+    return kAudioObjectUnknown;
+}
+
 AudioObjectID outputDeviceFromSettings(const AudioEngineSettings& settings) {
-    if (settings.outputDeviceId.empty()) {
-        return defaultOutputDevice();
+    AudioObjectID chosen = kAudioObjectUnknown;
+    if (!settings.outputDeviceId.empty()) {
+        char* end = nullptr;
+        const auto parsed = std::strtoul(settings.outputDeviceId.c_str(), &end, 10);
+        if (end != settings.outputDeviceId.c_str() && parsed != 0) {
+            chosen = static_cast<AudioObjectID>(parsed);
+        }
     }
-    char* end = nullptr;
-    const auto parsed = std::strtoul(settings.outputDeviceId.c_str(), &end, 10);
-    if (end == settings.outputDeviceId.c_str() || parsed == 0) {
-        return defaultOutputDevice();
+    if (chosen == kAudioObjectUnknown) {
+        chosen = defaultOutputDevice();
     }
-    return static_cast<AudioObjectID>(parsed);
+    // Never open an input-only device for output — fall back to the system default, then to
+    // any device that actually has output channels.
+    if (chosen == kAudioObjectUnknown || outputDeviceChannelCount(chosen) == 0) {
+        const AudioObjectID def = defaultOutputDevice();
+        chosen = (def != kAudioObjectUnknown && outputDeviceChannelCount(def) > 0)
+            ? def : firstDeviceWithOutput();
+    }
+    return chosen;
 }
 
 std::string deviceName(AudioObjectID device) {
