@@ -162,6 +162,7 @@ public:
     bool loadProject(const ProjectDocument& project, std::string& error);
     bool updateProject(const ProjectDocument& project, std::string& error);
     void updateMonitorEq(const std::vector<MonitorEqBandState>& bands);
+    void updateTrackSendGain(const std::string& trackName, int slot, float gainDb);
     void startMeasurement(int channel, std::vector<float> signal);
     void cancelMeasurement();
     bool measurementActive() const;

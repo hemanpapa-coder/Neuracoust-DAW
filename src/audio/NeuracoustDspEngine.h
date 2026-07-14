@@ -47,6 +47,9 @@ public:
     // render graph — so dragging a band's frequency doesn't glitch the audio the way a full
     // reconcileProject() per drag frame does.
     void updateMonitorEq(const std::vector<MonitorEqBandState>& bands);
+    // Lightweight aux-send level push: patches only the live render plan's send gain, NOT the
+    // whole graph — so dragging a send level during playback doesn't reconcile and drop out.
+    void updateTrackSendGain(const std::string& trackName, int slot, float gainDb);
     bool updateClipGain(const std::string& clipId, float gainDb);
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);

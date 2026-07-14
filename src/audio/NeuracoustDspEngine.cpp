@@ -2608,6 +2608,17 @@ void NeuracoustDspEngine::syncProjectMonitorDspRenderPathLocked() {
     projectRenderState_.reset();
 }
 
+void NeuracoustDspEngine::updateTrackSendGain(const std::string& trackName, int slot, float gainDb) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& track : projectPlan_.tracks) {
+        if (track.name != trackName) continue;
+        if (slot >= 0 && static_cast<size_t>(slot) < track.sends.size()) {
+            track.sends[static_cast<size_t>(slot)].gainDb = gainDb;
+        }
+        return;
+    }
+}
+
 void NeuracoustDspEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) {
     std::lock_guard<std::mutex> lock(mutex_);
     ProjectDocument shim;

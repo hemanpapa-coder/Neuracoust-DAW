@@ -626,6 +626,10 @@ public:
         dspEngine_.updateMonitorEq(bands);
     }
 
+    void updateTrackSendGain(const std::string& trackName, int slot, float gainDb) {
+        dspEngine_.updateTrackSendGain(trackName, slot, gainDb);
+    }
+
     void startMeasurement(int channel, std::vector<float> signal) { dspEngine_.startMeasurement(channel, std::move(signal)); }
     void cancelMeasurement() { dspEngine_.cancelMeasurement(); }
     bool measurementActive() const { return dspEngine_.measurementActive(); }
@@ -1110,6 +1114,7 @@ bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& er
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
 void RealtimeAudioEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) { impl_->updateMonitorEq(bands); }
+void RealtimeAudioEngine::updateTrackSendGain(const std::string& trackName, int slot, float gainDb) { impl_->updateTrackSendGain(trackName, slot, gainDb); }
 void RealtimeAudioEngine::startMeasurement(int channel, std::vector<float> signal) { impl_->startMeasurement(channel, std::move(signal)); }
 void RealtimeAudioEngine::cancelMeasurement() { impl_->cancelMeasurement(); }
 bool RealtimeAudioEngine::measurementActive() const { return impl_->measurementActive(); }

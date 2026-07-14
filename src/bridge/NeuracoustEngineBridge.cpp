@@ -1237,8 +1237,9 @@ void nc_track_set_send_gain_db(NCEngine* engine, int index, int slot, float db) 
     neuracoust::daw::TrackSendState send = track->sends[static_cast<size_t>(slot)];
     send.gainDb = db;
     if (!neuracoust::daw::setTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot), send)) return;
-    engine->recordStep("Set send level");
-    engine->reconcileProject();
+    // Continuous: push only the live send gain (no graph reconcile → no dropout). The view
+    // records one history step when the drag ends, like the fader.
+    engine->engine.updateTrackSendGain(track->name, slot, db);
 }
 
 float nc_track_send_pan(NCEngine* engine, int index, int slot) {

@@ -81,7 +81,10 @@ struct SendMenuContent: View {
         Text(send.bus)
         Menu("레벨") {
             ForEach(SendControls.levels, id: \.self) { db in
-                Button("\(db) dB") { engine.setSendGain(trackId, slot: slot, gainDb: Float(db)) }
+                Button("\(db) dB") {
+                    engine.setSendGain(trackId, slot: slot, gainDb: Float(db))
+                    engine.recordGesture("Send level")   // discrete pick = one undo step
+                }
             }
         }
         Menu("팬") {
