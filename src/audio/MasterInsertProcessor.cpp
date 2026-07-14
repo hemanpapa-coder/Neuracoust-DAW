@@ -132,25 +132,15 @@ bool RealtimeMasterInsertChain::prepare(const ProjectAudioRenderPlan& plan,
         auto descriptor = descriptorForInsert(insert);
         Vst3RealtimeProcessor processor;
         std::string message;
-        const std::string bridgeShmKey = insertIndex < bridgeShmKeys.size()
-            ? bridgeShmKeys[insertIndex]
-            : std::string{};
-        // "internal" execution mode = local Internal DSP → prefer running the plugin
-        // out-of-process on the isolated core. But if that worker/bridge fails to come up,
-        // fall back to in-process (the path instruments already use successfully) so the
-        // insert still processes — otherwise a broken worker silently kills EVERY insert.
-        const bool preferOutOfProcess = insert.dspExecutionMode == "internal";
-        bool prepared = processor.prepare(descriptor, sampleRate, maxBlockSize_, message,
-                                          bridgeShmKey, preferOutOfProcess);
-        if (!prepared && preferOutOfProcess) {
-            std::string fallbackMessage;
-            prepared = processor.prepare(descriptor, sampleRate, maxBlockSize_, fallbackMessage,
-                                         std::string{}, false);
-            if (!prepared) {
-                message += "; in-process fallback: " + fallbackMessage;
-            }
-        }
-        if (!prepared) {
+        (void)bridgeShmKeys;   // out-of-process worker path retired for inserts (see below)
+        // Host inserts IN-PROCESS (the path instruments already use successfully). The
+        // "internal" / isolated-core out-of-process worker was gapping the audio: spawning
+        // and tearing it down happens on the realtime chain-rebuild, so adding or removing
+        // an insert during playback froze the playhead until the worker settled — and when
+        // the worker failed to come up at all, every insert silently passed through dry.
+        // In-process prepare is fast and reliable; the isolated-core path returns once its
+        // teardown is off the audio thread.
+        if (!processor.prepare(descriptor, sampleRate, maxBlockSize_, message, std::string{}, false)) {
             error = "VST3 realtime insert failed: " + insert.pluginName + ": " + message;
             reset();
             return false;
