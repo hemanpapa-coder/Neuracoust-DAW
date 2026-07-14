@@ -4785,7 +4785,9 @@ bool nc_monitor_eq_set_band(NCEngine* engine, int index, bool enabled, const cha
     band.frequencyHz = std::max(10.0, std::min(40000.0, freq));
     band.gainDb = std::max(-30.0, std::min(30.0, gain));
     band.q = std::max(0.05, std::min(40.0, q));
-    engine->reconcileProject();   // no undo step: a knob-drag is one gesture the UI commits
+    // Lightweight: push ONLY the EQ, not a full graph reconcile — a frequency drag calls this
+    // 30–60×/s and reconcileProject() per frame gapped the audio. No undo step (one gesture).
+    engine->engine.updateMonitorEq(engine->project.monitorEqBands);
     return true;
 }
 

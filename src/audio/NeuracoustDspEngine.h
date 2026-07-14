@@ -43,6 +43,10 @@ public:
     bool loadAudioFile(const std::string& path, std::string& error);
     bool loadProject(const ProjectDocument& project, std::string& error);
     bool updateProject(const ProjectDocument& project, std::string& error);
+    // Lightweight monitor-EQ push: reconfigures only the EQ (state preserved), NOT the whole
+    // render graph — so dragging a band's frequency doesn't glitch the audio the way a full
+    // reconcileProject() per drag frame does.
+    void updateMonitorEq(const std::vector<MonitorEqBandState>& bands);
     bool updateClipGain(const std::string& clipId, float gainDb);
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);

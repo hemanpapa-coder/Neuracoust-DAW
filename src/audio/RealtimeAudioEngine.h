@@ -161,6 +161,7 @@ public:
     bool loadAudioFile(const std::string& path, std::string& error);
     bool loadProject(const ProjectDocument& project, std::string& error);
     bool updateProject(const ProjectDocument& project, std::string& error);
+    void updateMonitorEq(const std::vector<MonitorEqBandState>& bands);
     bool updateClipGain(const std::string& clipId, float gainDb);
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);

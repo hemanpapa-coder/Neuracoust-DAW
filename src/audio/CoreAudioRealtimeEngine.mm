@@ -622,6 +622,10 @@ public:
         return updated;
     }
 
+    void updateMonitorEq(const std::vector<neuracoust::daw::MonitorEqBandState>& bands) {
+        dspEngine_.updateMonitorEq(bands);
+    }
+
     bool updateClipGain(const std::string& clipId, float gainDb) {
         const bool updated = dspEngine_.updateClipGain(clipId, gainDb);
         if (updated) {
@@ -1099,6 +1103,7 @@ void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->se
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
+void RealtimeAudioEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) { impl_->updateMonitorEq(bands); }
 bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }

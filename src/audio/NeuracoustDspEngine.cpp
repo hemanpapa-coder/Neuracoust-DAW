@@ -2540,6 +2540,13 @@ void NeuracoustDspEngine::syncProjectMonitorDspRenderPathLocked() {
     projectRenderState_.reset();
 }
 
+void NeuracoustDspEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ProjectDocument shim;
+    shim.monitorEqBands = bands;
+    configureMonitorEqLocked(shim, sampleRateForStatus_.load(std::memory_order_relaxed));
+}
+
 void NeuracoustDspEngine::configureMonitorEqLocked(const ProjectDocument& project, double sampleRate) {
     auto typeFromString = [](const std::string& s) {
         if (s == "low_shelf") return EqBandType::LowShelf;
