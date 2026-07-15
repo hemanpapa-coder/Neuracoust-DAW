@@ -920,22 +920,31 @@ bool nc_track_insert_observer(NCEngine* engine, int index, int slot,
         return false;
     }
 
-    // The out-of-process rule keys on brand/vendor, which the insert slot does not
-    // store; the scan does. Match the slot back to the plug-in it came from.
-    const auto found = std::find_if(engine->plugins.begin(), engine->plugins.end(),
-                                    [&](const neuracoust::daw::PluginCandidate& candidate) {
-                                        return candidate.path == insert->pluginPath;
-                                    });
-    if (found == engine->plugins.end()) {
-        return false;
+    // Report the editor observer whenever this insert ACTUALLY runs out-of-process in the render,
+    // because only then does a worker exist to publish the observer shm. This MUST match the
+    // render's rule (MasterInsertProcessor: preferOutOfProcess = dspExecutionMode == "internal",
+    // OR the plug-in's brand is force-sandboxed). Keying this purely on the brand policy — as it
+    // did — meant an Internal-DSP insert whose brand isn't on the sandbox list got an observer shm
+    // the editor was never told about, so its meters sat dark. FabFilter set to Internal DSP was
+    // exactly that case: audio hosted out-of-process, but no observer name handed to the editor.
+    bool outOfProcess = insert->dspExecutionMode == "internal";
+    if (!outOfProcess) {
+        // Brand-forced sandbox (e.g. an "unsafe in-process" vendor). The slot doesn't store the
+        // brand; the scan does, so match the slot back to the plug-in it came from.
+        const auto found = std::find_if(engine->plugins.begin(), engine->plugins.end(),
+                                        [&](const neuracoust::daw::PluginCandidate& candidate) {
+                                            return candidate.path == insert->pluginPath;
+                                        });
+        if (found != engine->plugins.end()) {
+            neuracoust::daw::Vst3PluginDescriptor descriptor;
+            descriptor.name = found->pluginName.empty() ? found->name : found->pluginName;
+            descriptor.brand = found->brand;
+            descriptor.vendor = found->brand;
+            descriptor.bundlePath = found->path;
+            outOfProcess = neuracoust::daw::isVst3HostedOutOfProcess(descriptor);
+        }
     }
-
-    neuracoust::daw::Vst3PluginDescriptor descriptor;
-    descriptor.name = found->pluginName.empty() ? found->name : found->pluginName;
-    descriptor.brand = found->brand;
-    descriptor.vendor = found->brand;
-    descriptor.bundlePath = found->path;
-    if (!neuracoust::daw::isVst3HostedOutOfProcess(descriptor)) {
+    if (!outOfProcess) {
         return false;
     }
 
