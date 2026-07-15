@@ -182,6 +182,22 @@ bool RealtimeMasterInsertChain::isPrepared() const {
     return !vst3Processors_.empty();
 }
 
+bool RealtimeMasterInsertChain::producedWetLastBlock() const {
+    if (vst3Processors_.empty()) {
+        return false;
+    }
+    // Fully engaged only when every active insert emitted its real output. A bypassed insert
+    // intentionally passes dry, so it never blocks engagement (its output doesn't change when a
+    // neighbouring worker warms up). Any non-bypassed insert still warming keeps the chain "dry".
+    for (size_t i = 0; i < vst3Processors_.size(); ++i) {
+        const bool bypassed = i < vst3BypassStates_.size() && vst3BypassStates_[i];
+        if (!bypassed && !vst3Processors_[i].producedWetLastBlock()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 size_t RealtimeMasterInsertChain::activeVst3Count() const {
     return vst3Processors_.size();
 }

@@ -23,6 +23,7 @@ bool Vst3RealtimeBridgeClient::prepare(const Vst3PluginDescriptor&, double, int,
 }
 void Vst3RealtimeBridgeClient::reset() {}
 bool Vst3RealtimeBridgeClient::isReady() const { return false; }
+bool Vst3RealtimeBridgeClient::producedWetLastBlock() const { return false; }
 bool Vst3RealtimeBridgeClient::process(float*, int, const std::vector<Vst3ParameterValueState>&, std::vector<Vst3ParameterValueState>&, std::string& message) {
     message = "Out-of-process VST3 hosting is not supported on this platform.";
     return false;
@@ -97,6 +98,7 @@ struct Vst3RealtimeBridgeClient::Impl {
     Vst3BridgeLayout layout;
     int maxBlockSize = 0;
     bool ready = false;
+    bool producedWet = false;   // did the last process() substitute the worker's output?
     bool firstBlock = true;
     int consecutiveFailures = 0;
     int maxFailures = 12;
@@ -380,6 +382,10 @@ bool Vst3RealtimeBridgeClient::isReady() const {
     return impl_->ready;
 }
 
+bool Vst3RealtimeBridgeClient::producedWetLastBlock() const {
+    return impl_->producedWet;
+}
+
 bool Vst3RealtimeBridgeClient::process(float* interleavedStereo,
                                        int frameCount,
                                        const std::vector<Vst3ParameterValueState>& parameters,
@@ -412,6 +418,9 @@ bool Vst3RealtimeBridgeClient::process(float* interleavedStereo,
     // pass the dry signal through for this one block.
     if (pthread_mutex_trylock(&cb->mutex) != 0) {
         ++impl_->stallBlocks;
+        // Do NOT clear producedWet here: a one-off busy block under load is not a dis-engage. The
+        // latch only rises (once, when the worker first engages) and is reset by prepare/reset, so
+        // transient stalls can't make the declick flap the reload crossfade during steady playback.
         message = "Out-of-process VST3 worker busy; dry for this block.";
         return true; // interleavedStereo left unchanged = dry passthrough
     }
@@ -440,6 +449,9 @@ bool Vst3RealtimeBridgeClient::process(float* interleavedStereo,
     }
     const bool useOutput = responseSeq != 0 && cb->processedOk != 0 &&
         impl_->stallBlocks <= impl_->maxStallBlocks;
+    if (useOutput) {
+        impl_->producedWet = true;   // latch: the worker has engaged (real output substituted)
+    }
     if (useOutput) {
         const float* output = vst3BridgeAudioRegion(base, impl_->layout.outputOffset);
         std::memcpy(interleavedStereo, output, sampleCount * sizeof(float));

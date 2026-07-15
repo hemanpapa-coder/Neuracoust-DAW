@@ -913,7 +913,11 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
         *processMeters = &chain.lastProcessMeters();
     }
     if (processedWet != nullptr) {
-        *processedWet = true;
+        // Not merely "the chain ran" but "the chain emitted its real output": an out-of-process
+        // insert passes DRY while its worker warms up, so reporting wet here (as it used to) armed
+        // the declick a block early — before the audible dry→wet swap — and the click slipped
+        // through. Report the true wet edge so the engine's 80 ms crossfade lands on the swap.
+        *processedWet = chain.producedWetLastBlock();
     }
     state.routeInsertLastErrors.erase(routeName);
     return true;

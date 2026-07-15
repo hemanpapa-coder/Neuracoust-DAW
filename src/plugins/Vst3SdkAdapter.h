@@ -141,6 +141,10 @@ public:
                  bool forceOutOfProcess = false);
     void reset();
     bool isPrepared() const;
+    // True when the last process produced this insert's real (wet) output. In-process hosting is
+    // always wet; an out-of-process insert is dry while its worker warms up — this reports that edge
+    // so the render can mask the dry→wet swap when the worker finally engages.
+    bool producedWetLastBlock() const;
     Vst3ProcessorProbe probe() const;
     Vst3ProcessResult processInterleavedStereo(float* interleavedStereo,
                                                int frameCount,

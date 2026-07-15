@@ -33,6 +33,9 @@ public:
                  const std::vector<std::string>& bridgeShmKeys = {});
     void reset();
     bool isPrepared() const;
+    // True when every active (non-bypassed) insert produced its real output on the last block — i.e.
+    // the whole chain is engaged, not still passing dry while an out-of-process worker warms up.
+    bool producedWetLastBlock() const;
     size_t activeVst3Count() const;
     unsigned int totalLatencySamples() const;
     bool updateParameter(size_t processorIndex,

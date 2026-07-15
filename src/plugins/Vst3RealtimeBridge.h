@@ -40,6 +40,10 @@ public:
                  const std::string& preferredShmName = {});
     void reset();
     bool isReady() const;
+    // Latched: false until the worker first substitutes its real output, then true for the life of
+    // this bridge (reset by prepare/reset). It marks the one dry→wet engage edge the declick must
+    // mask, without flapping on the odd busy/warming block during steady playback.
+    bool producedWetLastBlock() const;
 
     // Realtime-safe (bounded wait). Processes one interleaved-stereo block in
     // place. Returns false and leaves the buffer untouched if the worker did

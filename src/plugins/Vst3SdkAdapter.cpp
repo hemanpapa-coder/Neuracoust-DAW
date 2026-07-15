@@ -1997,6 +1997,15 @@ void Vst3RealtimeProcessor::reset() {
 #endif
 }
 
+bool Vst3RealtimeProcessor::producedWetLastBlock() const {
+    // Out-of-process: the worker is dry until it engages, so ask the bridge. In-process hosting has
+    // no warm-up gap — its output is always the real (wet) signal.
+    if (impl_ && impl_->bridge) {
+        return impl_->bridge->producedWetLastBlock();
+    }
+    return isPrepared();
+}
+
 bool Vst3RealtimeProcessor::isPrepared() const {
     if (impl_ && impl_->bridge) {
         return impl_->bridge->isReady();
