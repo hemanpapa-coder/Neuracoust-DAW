@@ -11,6 +11,10 @@ struct TitleBar: View {
                 Text("Neuracoust DAW")
                     .font(Theme.Font.ui(10.5, .semibold))
                     .foregroundStyle(Theme.Palette.textMuted)
+                Text(TitleBar.buildStamp)
+                    .font(Theme.Font.mono(9))
+                    .foregroundStyle(Theme.Palette.textFainter)
+                    .help("빌드 시각 (연월일.시분) — 실행 중인 바이너리")
                 Text("· \(documentLabel)")
                     .font(Theme.Font.ui(10.5))
                     .foregroundStyle(Theme.Palette.text)
@@ -40,6 +44,18 @@ struct TitleBar: View {
         .frame(maxWidth: .infinity)
         .background(Theme.Gradient.titlebar)
     }
+
+    /// Build identifier shown in the titlebar: the running binary's own modification time as
+    /// 연월일.시분 (e.g. "260715.1634"). Read from the executable so it always reflects the
+    /// binary actually running — no build-system plumbing, no chance of a stale hardcoded value.
+    static let buildStamp: String = {
+        guard let url = Bundle.main.executableURL,
+              let date = try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        else { return "" }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyMMdd.HHmm"
+        return fmt.string(from: date)
+    }()
 
     /// The file name once the document has a home; otherwise its in-memory name.
     private var documentLabel: String {
