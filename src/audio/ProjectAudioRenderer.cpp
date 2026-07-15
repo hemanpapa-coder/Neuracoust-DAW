@@ -815,10 +815,14 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
                              std::string& error,
                              const std::vector<RealtimeMasterInsertChain::InsertProcessMeter>** processMeters = nullptr,
                              const std::vector<std::string>& bridgeShmKeys = {},
-                             bool synchronousPrepare = false) {
+                             bool synchronousPrepare = false,
+                             bool* processedWet = nullptr) {
     error.clear();
     if (processMeters != nullptr) {
         *processMeters = nullptr;
+    }
+    if (processedWet != nullptr) {
+        *processedWet = false;   // true only once the chain actually runs on this block
     }
     if (inserts.empty() || frameCount <= 0 || interleavedStereo.size() < static_cast<size_t>(frameCount) * 2u) {
         return true;
@@ -898,6 +902,9 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
     }
     if (processMeters != nullptr) {
         *processMeters = &chain.lastProcessMeters();
+    }
+    if (processedWet != nullptr) {
+        *processedWet = true;
     }
     state.routeInsertLastErrors.erase(routeName);
     return true;
@@ -1856,6 +1863,10 @@ void ProjectAudioRenderState::reset() {
     routeInsertChainKeys.clear();
     routeInsertChainMaxBlock.clear();
     routeInsertLastErrors.clear();
+    routeInsertWasWet.clear();
+    routeInsertDeclickHold.clear();
+    routeInsertDeclickRemaining.clear();
+    routeInsertDeclickTotal.clear();
     sourceGeneratorPhases.clear();
     liveMidiEvents.clear();
     masterInsertDryFallback.clear();
@@ -2010,6 +2021,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
         applyTrackChannelFormatToBlock(routeInput, track, route->kind);
 
+        bool routeProcessedWet = false;   // did an insert actually run on this block (vs dry)?
         if (!routeInserts.empty()) {
             const auto dryRouteInput = routeInput;
             const float insertInputPeak = blockPeakAbs(dryRouteInput);
@@ -2025,39 +2037,10 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                          insertError,
                                          &processMeters,
                                          routeInsertShmKeys,
-                                         offline)) {   // offline bounce prepares synchronously
+                                         offline,           // offline bounce prepares synchronously
+                                         &routeProcessedWet)) {
                 routeInput = dryRouteInput;
                 state.routeInsertLastErrors[route->name] = insertError;
-            }
-            // Declick add/reorder: on a change to the insert set, crossfade the route output
-            // from dry to the freshly-processed (wet) signal over ~15 ms so it doesn't click
-            // ("지직"). A failed insert leaves routeInput == dry, so this is dry→dry — no
-            // attenuation, and dry playback stays full level.
-            {
-                std::string signature = std::to_string(routeInserts.size());
-                for (const auto& ins : routeInserts) { signature += '|'; signature += ins.pluginPath; }
-                auto& stored = state.routeInsertSignatures[route->name];
-                if (stored != signature) {
-                    const bool firstTime = stored.empty();
-                    stored = signature;
-                    if (!firstTime) {
-                        const int fade = std::max(1, static_cast<int>(plan.sampleRate * 0.015));
-                        state.routeInsertDeclickTotal[route->name] = fade;
-                        state.routeInsertDeclickRemaining[route->name] = fade;
-                    }
-                }
-                int& remaining = state.routeInsertDeclickRemaining[route->name];
-                if (remaining > 0) {
-                    const int total = std::max(1, state.routeInsertDeclickTotal[route->name]);
-                    for (int64_t f = 0; f < frameCount && remaining > 0; ++f) {
-                        const double prog = std::min(1.0, 1.0 - static_cast<double>(remaining) / total);
-                        const float a = static_cast<float>(0.5 - 0.5 * std::cos(M_PI * prog));  // 0→1
-                        const auto idx = static_cast<size_t>(f) * 2u;
-                        routeInput[idx] = dryRouteInput[idx] * (1.0f - a) + routeInput[idx] * a;
-                        routeInput[idx + 1u] = dryRouteInput[idx + 1u] * (1.0f - a) + routeInput[idx + 1u] * a;
-                        --remaining;
-                    }
-                }
             }
             if (insertInputPeak <= 0.000001f &&
                 blockPeakAbs(routeInput) <= 0.000001f &&
@@ -2090,6 +2073,43 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                     }
                     ++slotIndex;
                 }
+            }
+        }
+
+        // Declick add / remove / reorder. Whenever a route flips between dry and wet — a chain
+        // becomes ready (async), is retired, is replaced, or the last insert is removed (which
+        // skips the block above entirely) — crossfade over ~15 ms from the last output sample we
+        // emitted into the current output. The held sample is continuous with whatever was playing
+        // a block ago, so the seam never clicks ("지직"). This runs for every route, inserts or
+        // not, so removing the last insert is covered too.
+        {
+            const int wetNow = routeProcessedWet ? 1 : 0;
+            auto wasIt = state.routeInsertWasWet.find(route->name);
+            const int wasWet = (wasIt == state.routeInsertWasWet.end()) ? -1 : wasIt->second;
+            auto& hold = state.routeInsertDeclickHold[route->name];
+            if (wasWet != -1 && wasWet != wetNow) {
+                const int fade = std::max(1, static_cast<int>(plan.sampleRate * 0.015));
+                state.routeInsertDeclickTotal[route->name] = fade;
+                state.routeInsertDeclickRemaining[route->name] = fade;
+            }
+            state.routeInsertWasWet[route->name] = wetNow;
+            int& remaining = state.routeInsertDeclickRemaining[route->name];
+            if (remaining > 0 && routeInput.size() >= static_cast<size_t>(frameCount) * 2u) {
+                const int total = std::max(1, state.routeInsertDeclickTotal[route->name]);
+                for (int64_t f = 0; f < frameCount && remaining > 0; ++f) {
+                    const double prog = std::min(1.0, 1.0 - static_cast<double>(remaining) / total);
+                    const float a = static_cast<float>(0.5 - 0.5 * std::cos(M_PI * prog));  // 0→1
+                    const auto idx = static_cast<size_t>(f) * 2u;
+                    routeInput[idx] = hold.first * (1.0f - a) + routeInput[idx] * a;
+                    routeInput[idx + 1u] = hold.second * (1.0f - a) + routeInput[idx + 1u] * a;
+                    --remaining;
+                }
+            }
+            // Remember the last emitted sample for the next transition's crossfade seam.
+            if (frameCount > 0 && routeInput.size() >= static_cast<size_t>(frameCount) * 2u) {
+                const auto last = static_cast<size_t>(frameCount - 1) * 2u;
+                hold.first = routeInput[last];
+                hold.second = routeInput[last + 1u];
             }
         }
 

@@ -105,9 +105,12 @@ struct ProjectAudioRenderState {
     std::map<std::string, std::string> routeInsertLastErrors;
     // Prepares/destroys insert chains off the audio thread; created lazily on first use.
     std::unique_ptr<AsyncInsertChainPreparer> insertPreparer;
-    // Declick: ramp a route's output up when its insert set changes (add/remove/reorder), so
-    // the dry↔wet jump doesn't click.
-    std::map<std::string, std::string> routeInsertSignatures;
+    // Declick: crossfade a route's output whenever it flips between dry and wet (a chain becomes
+    // ready, is retired, or is replaced), so the jump doesn't click. Held from the last emitted
+    // sample so the seam is continuous; covers add, remove (even the last insert), and the async
+    // dry↔wet swap.
+    std::map<std::string, int> routeInsertWasWet;                     // -absent = first sight
+    std::map<std::string, std::pair<float, float>> routeInsertDeclickHold;
     std::map<std::string, int> routeInsertDeclickRemaining;
     std::map<std::string, int> routeInsertDeclickTotal;
     std::map<std::string, double> sourceGeneratorPhases;

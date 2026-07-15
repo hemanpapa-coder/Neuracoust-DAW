@@ -3082,15 +3082,16 @@ public:
             context.tempo = 120.0;
             context.timeSigNumerator = 4;
             context.timeSigDenominator = 4;
+            // Drive the meter instance with the controller's CURRENT parameter values — the same
+            // thing the synthetic (probe) meter path does. The engine only streams changed params
+            // into the shm on the first sub-block and then goes quiet, so `params` is empty once a
+            // plug-in settles; feeding those alone left the meter component at its instantiation
+            // defaults, so every parameter-dependent readout (Pro-C gain reduction, Pro-DS
+            // reduction, Pro-L output/spectrum, Pro-MB spectrum) sat dead while only the raw input
+            // analyzer drew. The controller already tracks the user's values (state sync at open +
+            // PARAM_SET), so a full snapshot each block makes the meter self-sufficient.
             EditorParameterChanges parameterChanges;
-            for (const auto& param : params) {
-                Steinberg::int32 queueIndex = 0;
-                auto* queue = parameterChanges.addParameterData(param.id, queueIndex);
-                if (queue != nullptr) {
-                    Steinberg::int32 pointIndex = 0;
-                    queue->addPoint(0, std::clamp(static_cast<double>(param.value), 0.0, 1.0), pointIndex);
-                }
-            }
+            parameterChanges.addControllerSnapshot(controller_);
             EditorParameterChanges outputParameterChanges;
             Steinberg::Vst::ProcessData processData {};
             processData.processMode = Steinberg::Vst::kRealtime;
@@ -3111,6 +3112,14 @@ public:
             }
             if (result != Steinberg::kResultOk) {
                 return false;
+            }
+            // Forward any output (read-only meter) parameters the plug-in wrote back to the
+            // controller so GUIs that draw meters from output parameters update — same as the
+            // synthetic path.
+            if (controller_ != nullptr) {
+                for (const auto& [parameterId, value] : outputParameterChanges.latestValues()) {
+                    controller_->setParamNormalized(static_cast<Steinberg::Vst::ParamID>(parameterId), value);
+                }
             }
             const bool haveOutput = meterOutputBusCount_ > 0 && outCh > 0;
             for (int f = 0; f < frameCount; ++f) {
