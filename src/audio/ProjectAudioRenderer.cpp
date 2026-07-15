@@ -838,9 +838,18 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
     }
     const int prepareMax = std::max(requestedBlock, 4096);   // one max-block prepare, reused
     const std::string key = routeInsertChainKey(inserts, sampleRate, 0);
+    // The preparer is shared across every route; key its queue per-route so discarding this route's
+    // stale signature never evicts another route that happens to run the same plug-in set.
+    const std::string prepKey = routeName + "\x1f" + key;
     auto keyIt = state.routeInsertChainKeys.find(routeName);
     const bool identityChanged = keyIt == state.routeInsertChainKeys.end() || keyIt->second != key;
     if (identityChanged) {
+        // Discard whatever the preparer was still building / holding for this route's PREVIOUS
+        // signature, so its out-of-process worker is torn down instead of leaking (adding a 2nd
+        // insert before the 1st's slow worker finished loading orphaned the first one).
+        if (keyIt != state.routeInsertChainKeys.end()) {
+            state.insertPreparer->discard(routeName + "\x1f" + keyIt->second);
+        }
         // Retire the old chain OFF the audio thread (worker teardown blocks), and mark the new
         // signature. Prepare happens in the background; until it's ready we pass dry.
         auto old = state.routeInsertChains.find(routeName);
@@ -872,15 +881,15 @@ bool processRouteInsertBlock(ProjectAudioRenderState& state,
         } else {
             // Realtime: ask the background thread to prepare it, and try to pick up a chain it
             // already finished for this signature. No blocking prepare on the audio thread.
-            auto ready = state.insertPreparer->tryTake(key);
+            auto ready = state.insertPreparer->tryTake(prepKey);
             if (ready != nullptr) {
                 auto [inserted, _] = state.routeInsertChains.emplace(routeName, std::move(ready));
                 chainIt = inserted;
                 state.routeInsertChainMaxBlock[routeName] = prepareMax;
                 state.routeInsertLastErrors.erase(routeName);
             } else {
-                state.insertPreparer->request(key, inserts, sampleRate, prepareMax, bridgeShmKeys);
-                const std::string err = state.insertPreparer->lastError(key);
+                state.insertPreparer->request(prepKey, inserts, sampleRate, prepareMax, bridgeShmKeys);
+                const std::string err = state.insertPreparer->lastError(prepKey);
                 if (!err.empty()) state.routeInsertLastErrors[routeName] = err;
                 // Play dry until the chain is ready — the input is already in interleavedStereo.
                 return true;

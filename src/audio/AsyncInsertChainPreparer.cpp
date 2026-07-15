@@ -55,6 +55,20 @@ void AsyncInsertChainPreparer::retire(std::unique_ptr<RealtimeMasterInsertChain>
     chain.reset();
 }
 
+void AsyncInsertChainPreparer::discard(const std::string& key) {
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return;   // busy — the caller re-runs every block, so it'll land soon
+    auto readyIt = ready_.find(key);
+    if (readyIt != ready_.end()) {
+        retired_.push_back(std::move(readyIt->second));   // destroy its worker off-thread
+        ready_.erase(readyIt);
+    }
+    inFlight_.erase(key);   // a prepare still running for it will be dropped in run() (not in inFlight_)
+    errors_.erase(key);
+    lock.unlock();
+    cv_.notify_one();
+}
+
 std::string AsyncInsertChainPreparer::lastError(const std::string& key) {
     std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) return {};
@@ -104,7 +118,13 @@ void AsyncInsertChainPreparer::run() {
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
-        inFlight_.erase(job.key);
+        // If the key was discarded while we were preparing (user moved past this signature), it is
+        // no longer in inFlight_ — drop the freshly-built chain for background destruction instead
+        // of stashing it in ready_ where nothing would ever collect it (worker leak).
+        if (inFlight_.erase(job.key) == 0) {
+            if (chain != nullptr) retired_.push_back(std::move(chain));
+            continue;
+        }
         if (ok) {
             ready_[job.key] = std::move(chain);
             errors_.erase(job.key);

@@ -37,6 +37,13 @@ public:
     // Hand a no-longer-needed chain back for background destruction (worker teardown blocks).
     void retire(std::unique_ptr<RealtimeMasterInsertChain> chain);
 
+    // Drop a key that is no longer wanted: destroy any ready chain for it off-thread, forget its
+    // in-flight/error state, and mark it so a prepare still running for it is discarded (not stored)
+    // when it finishes. Without this, a chain prepared for a signature the user already moved past
+    // (add a 2nd insert before the 1st's slow FabFilter worker finished loading) sits in `ready_`
+    // forever, holding its worker process — the leak that piled up dozens of orphaned workers.
+    void discard(const std::string& key);
+
     // Last prepare error for a key ("" if none). Cheap; for surfacing a failed load.
     std::string lastError(const std::string& key);
 
