@@ -2606,43 +2606,66 @@ public:
             if (!audioBridgeActive_) {
                 return;
             }
-            // Feed the plug-in EXACTLY ONE block per fire. FabFilter's limiter scope fills its
-            // waveform history by the wall-clock gap between successive process() calls, so if a
-            // single fire issued several process() calls back-to-back the plug-in stamped them all
-            // at the same instant (overlap) and then left a hole until the next fire — the comb.
-            // One call per fast (~2 ms) fire makes each process() land at its own wall-clock tick,
-            // exactly like a live host's per-buffer callback. An empty fire simply skips (the scope
-            // pauses a tick, never holes); the ~2 ms fire outruns the ~2.2 ms average block arrival
-            // so the queue never backs up for long. A deep backlog (a sub-block burst) is caught up
-            // one-per-fire over the next few ms — still one call per tick, so still no overlap.
-            BridgeCapturedBlock block;
-            bool haveBlock = false;
+            // Re-host the plug-in EXACTLY as a live DAW does: fixed-size buffers, one per buffer
+            // period. The engine emits its block as a burst of odd-sized sub-blocks; feeding those
+            // straight through (any size, any cadence) combed FabFilter's limiter scope, which lays
+            // out its waveform by the wall-clock gap between process() calls. So instead: pour every
+            // captured sample into a FIFO, then hand the plug-in one full audioBridgeMaxBlock_-sized
+            // block per real buffer period — timed by a sample debt so the rate is exactly real-time,
+            // and at most ONE process() call per fire so no two blocks share a wall-clock instant.
+            const int blk = std::max(1, audioBridgeMaxBlock_);
+            const size_t blkFloats = static_cast<size_t>(blk) * 2u;
             {
                 std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
-                if (!bridgeCaptureQueue_.empty()) {
-                    block = std::move(bridgeCaptureQueue_.front());
+                while (!bridgeCaptureQueue_.empty()) {
+                    auto& b = bridgeCaptureQueue_.front();
+                    if (b.frameCount > 0 && b.input.size() >= static_cast<size_t>(b.frameCount) * 2u) {
+                        bridgeSampleFifo_.insert(bridgeSampleFifo_.end(),
+                                                 b.input.begin(),
+                                                 b.input.begin() + static_cast<long>(b.frameCount) * 2);
+                        if (!b.params.empty()) {
+                            bridgeLatestParams_ = b.params;   // metering doesn't need per-sample params
+                        }
+                    }
                     bridgeCaptureQueue_.pop_front();
-                    haveBlock = true;
                 }
             }
-            if (haveBlock) {
+            // Cap the FIFO so a long stall can't grow it without bound (drop oldest — a rare tiny skip).
+            const size_t fifoCap = blkFloats * 32u;
+            if (bridgeSampleFifo_.size() > fifoCap) {
+                bridgeSampleFifo_.erase(bridgeSampleFifo_.begin(),
+                                        bridgeSampleFifo_.begin() +
+                                            static_cast<long>(bridgeSampleFifo_.size() - fifoCap));
+            }
+            const double now = [NSDate timeIntervalSinceReferenceDate];
+            const double elapsed = (bridgeLastPumpSeconds_ > 0.0)
+                ? std::max(0.0, now - bridgeLastPumpSeconds_) : 0.0;
+            bridgeLastPumpSeconds_ = now;
+            const double sr = std::max(1.0, audioBridgeSampleRate_);
+            // Accrue the real elapsed time as a sample debt (clamped so a hiccup can't dump a burst),
+            // and emit one buffer's worth once a whole buffer of real time has passed AND a whole
+            // buffer of audio is queued — i.e. exactly one 256-block every ~5.3 ms, like the host.
+            bridgeMeterSampleDebt_ = std::min(bridgeMeterSampleDebt_ + elapsed * sr,
+                                              static_cast<double>(blk) * 3.0);
+            if (bridgeMeterSampleDebt_ >= blk && bridgeSampleFifo_.size() >= blkFloats) {
+                std::vector<float> in(bridgeSampleFifo_.begin(), bridgeSampleFifo_.begin() + static_cast<long>(blkFloats));
+                bridgeSampleFifo_.erase(bridgeSampleFifo_.begin(), bridgeSampleFifo_.begin() + static_cast<long>(blkFloats));
+                bridgeMeterSampleDebt_ -= blk;
                 bridgeEmptyDrainTicks_ = 0;
-                if (block.frameCount > 0 &&
-                    block.input.size() >= static_cast<size_t>(block.frameCount) * 2u) {
-                    std::vector<float> scratch(static_cast<size_t>(block.frameCount) * 2u, 0.0f);
-                    processBridgeBlock(block.input.data(), block.frameCount, block.params, scratch.data());
-                }
+                std::vector<float> scratch(blkFloats, 0.0f);
+                processBridgeBlock(in.data(), blk, bridgeLatestParams_, scratch.data());
                 return;
             }
-            // Nothing queued. A momentary gap mid-playback just skips (the scope pauses); only once
-            // genuinely dry for a while (transport stopped) do we push decay-silence so the meters
-            // fall to zero — feeding silence between real blocks would comb the scope.
-            ++bridgeEmptyDrainTicks_;
-            if (bridgeEmptyDrainTicks_ >= 64) {   // ~130 ms at ~2 ms/fire → stopped, not a gap
-                const int fc = std::min(256, audioBridgeMaxBlock_);
-                std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
-                std::vector<float> silenceScratch(static_cast<size_t>(fc) * 2u, 0.0f);
-                processBridgeBlock(silence.data(), fc, {}, silenceScratch.data());
+            // Not enough queued to make a buffer. Only once genuinely dry for a while (transport
+            // stopped) do we push decay-silence so the meters fall to zero.
+            if (bridgeSampleFifo_.size() < blkFloats) {
+                ++bridgeEmptyDrainTicks_;
+                if (bridgeEmptyDrainTicks_ >= 64) {   // ~130 ms at ~2 ms/fire → stopped, not a gap
+                    bridgeMeterSampleDebt_ = 0.0;
+                    std::vector<float> silence(blkFloats, 0.0f);
+                    std::vector<float> silenceScratch(blkFloats, 0.0f);
+                    processBridgeBlock(silence.data(), blk, {}, silenceScratch.data());
+                }
             }
         }
 
@@ -3527,6 +3550,10 @@ public:
         };
         std::mutex bridgeCaptureMutex_;
         std::deque<BridgeCapturedBlock> bridgeCaptureQueue_;
+        std::deque<float> bridgeSampleFifo_;   // main-thread: re-blocked into fixed host-size buffers
+        std::vector<neuracoust::daw::Vst3BridgeParam> bridgeLatestParams_;
+        double bridgeMeterSampleDebt_ = 0.0;   // samples of real time owed to the scope
+        double bridgeLastPumpSeconds_ = 0.0;
         static constexpr size_t kBridgeCaptureQueueCap = 64;   // ~340 ms at 256/48k; drop oldest past this
 	};
 #endif
