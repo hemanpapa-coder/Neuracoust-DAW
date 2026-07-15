@@ -415,6 +415,8 @@ final class EngineController: ObservableObject {
             if nc_master_add_insert(handle, Int32(pluginIndex)) {
                 reloadMasterInserts()
                 refreshHistory()
+                // Dismiss the browser first so the editor isn't buried under it, then show it.
+                closePluginBrowser()
                 if !masterInserts.isEmpty {
                     pluginEditors.toggle(trackId: Self.masterInsertTargetId, insertIndex: masterInserts.count - 1)
                 }
@@ -451,6 +453,9 @@ final class EngineController: ObservableObject {
         if changed {
             reloadTracks()
             refreshHistory()
+            // Dismiss the browser first — leaving it open buried the editor behind it and blocked
+            // clicks on the insert chip underneath, which made the whole flow feel broken.
+            closePluginBrowser()
             // Auto-open the editor for a freshly added FX insert — the plug-in appears with its
             // window up, no hunting for the chip and clicking it. (Instrument slots open from
             // their own chip.) The new insert is the last slot in the chain.
