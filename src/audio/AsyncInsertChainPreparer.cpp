@@ -2,6 +2,10 @@
 
 #include "audio/ProjectAudioRenderer.h"   // ProjectAudioRenderPlan
 
+#if defined(__APPLE__)
+#include <pthread.h>   // pthread_set_qos_class_self_np, QOS_CLASS_UTILITY
+#endif
+
 namespace neuracoust::daw {
 
 AsyncInsertChainPreparer::AsyncInsertChainPreparer() {
@@ -77,6 +81,14 @@ std::string AsyncInsertChainPreparer::lastError(const std::string& key) {
 }
 
 void AsyncInsertChainPreparer::run() {
+    // Worker load / teardown belongs BELOW worker processing and far below the realtime render
+    // (audio RT > worker USER_INITIATED > worker load UTILITY). Spawning a heavy plug-in's worker
+    // or SIGKILL-reaping a retired one at default priority stole a performance core from the audio
+    // callback for a few ms — an underrun heard as a click on insert add/remove that no crossfade
+    // can mask. Pin this thread to UTILITY so the OS keeps it off the render's cores.
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#endif
     for (;;) {
         Job job;
         bool haveJob = false;
