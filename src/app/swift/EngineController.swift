@@ -406,6 +406,15 @@ final class EngineController: ObservableObject {
 
     // MARK: Inserts
 
+    /// Add a plug-in straight onto a track's insert chain without opening the browser — for the
+    /// insert slot's right-click "플러그인 선택" submenu. Routes through addInsert so the browser
+    /// dismiss + editor auto-open + instrument guard all apply.
+    func addInsertDirect(track trackId: Int, pluginIndex: Int) {
+        pluginTargetTrack = trackId
+        pluginTargetInstrumentSlot = nil
+        addInsert(pluginIndex)
+    }
+
     /// An instrument dropped on an instrument track fills its instrument slot rather
     /// than an insert — an insert cannot turn MIDI notes into sound.
     func addInsert(_ pluginIndex: Int) {

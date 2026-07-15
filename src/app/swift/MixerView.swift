@@ -30,6 +30,120 @@ private struct InsertDragDrop: ViewModifier {
     }
 }
 
+/// One insert slot's chip + its right-click menu, pulled out of ChannelStrip so it does NOT
+/// observe EngineController. The strip re-renders ~30 Hz as meters update; when this chip lived
+/// inline, an OPEN context menu was rebuilt on every one of those ticks and its submenu disclosure
+/// arrow flickered. Here `engine`/`editors` are plain refs (not @EnvironmentObject), so SwiftUI
+/// skips this view's body whenever the value inputs are unchanged, and the menu stays still.
+private struct InsertSlotChipView: View {
+    let engine: EngineController
+    let editors: PluginEditorHost
+    let accent: Color
+    let isMaster: Bool
+    let ownerId: Int
+    let slot: Int
+    let name: String
+    let isEmpty: Bool
+    let bypassed: Bool
+    let badge: String
+    let chainCount: Int
+    let lit: Bool
+
+    var body: some View {
+        SlotChip(label: isEmpty ? "" : name, accent: accent, bypassed: bypassed, badge: badge, lit: lit) {
+            let filled = !isEmpty
+            if NSEvent.modifierFlags.contains(.command) && filled {
+                if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
+                else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
+            } else if filled {
+                editors.toggle(trackId: ownerId, insertIndex: slot)
+            } else {
+                engine.openPluginBrowser(forTrack: ownerId)
+            }
+        }
+        .contextMenu {
+            if isEmpty {
+                pluginPickerMenu
+                Button("플러그인 추가…") { engine.openPluginBrowser(forTrack: ownerId) }
+            } else {
+                Button("에디터 열기") { editors.toggle(trackId: ownerId, insertIndex: slot) }
+                Button(bypassed ? "바이패스 해제" : "바이패스") {
+                    if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
+                    else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
+                }
+                Divider()
+                if !isMaster {
+                    Menu("슬롯으로 이동") {
+                        ForEach(0..<5, id: \.self) { target in
+                            Button("슬롯 \(["A","B","C","D","E"][target])") {
+                                engine.moveInsert(track: ownerId, from: slot, to: target)
+                            }
+                            .disabled(target == slot)
+                        }
+                    }
+                }
+                Button("앞으로 이동") {
+                    if isMaster { engine.moveMasterInsert(slot: slot, direction: -1) }
+                    else { engine.moveInsert(track: ownerId, slot: slot, direction: -1) }
+                }
+                .disabled(slot == 0)
+                Button("뒤로 이동") {
+                    if isMaster { engine.moveMasterInsert(slot: slot, direction: 1) }
+                    else { engine.moveInsert(track: ownerId, slot: slot, direction: 1) }
+                }
+                .disabled(slot >= chainCount - 1)
+                Divider()
+                Button("제거", role: .destructive) {
+                    if isMaster { engine.removeMasterInsert(slot: slot) }
+                    else { engine.removeInsert(track: ownerId, slot: slot) }
+                }
+            }
+        }
+        .modifier(InsertDragDrop(isMaster: isMaster, trackId: ownerId, slot: slot,
+                                 filled: !isEmpty,
+                                 onDropInsert: { srcTrack, srcSlot, dstSlot, copy in
+                                     if copy {
+                                         engine.copyInsert(srcTrack: srcTrack, srcSlot: srcSlot,
+                                                           dstTrack: ownerId, dstSlot: dstSlot)
+                                     } else if srcTrack == ownerId {
+                                         engine.moveInsert(track: ownerId, from: srcSlot, to: dstSlot)
+                                     } else {
+                                         engine.moveInsertAcross(srcTrack: srcTrack, srcSlot: srcSlot,
+                                                                 dstTrack: ownerId, dstSlot: dstSlot)
+                                     }
+                                 }))
+    }
+
+    /// Pick a plug-in straight from the slot's menu, grouped by category, so an empty slot doesn't
+    /// force a trip through the browser. Instruments are excluded — they can't be inserts.
+    @ViewBuilder private var pluginPickerMenu: some View {
+        let fx = engine.plugins.filter { $0.category != "Instrument" }
+        if !fx.isEmpty {
+            Menu("플러그인 선택") {
+                ForEach(categoriesOf(fx), id: \.self) { cat in
+                    Menu(cat) {
+                        ForEach(fx.filter { $0.category == cat }) { plugin in
+                            Button(plugin.name) {
+                                engine.addInsertDirect(track: ownerId, pluginIndex: plugin.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func categoriesOf(_ list: [EngineController.PluginCandidate]) -> [String] {
+        var seen = Set<String>()
+        var order: [String] = []
+        for plugin in list where !seen.contains(plugin.category) {
+            seen.insert(plugin.category)
+            order.append(plugin.category)
+        }
+        return order.sorted()
+    }
+}
+
 struct MixerView: View {
     @EnvironmentObject private var engine: EngineController
 
@@ -527,76 +641,20 @@ struct ChannelStrip: View {
                 let ownerId = isMaster ? EngineController.masterInsertTargetId : track.id
                 let chain = isMaster ? engine.masterInserts : track.inserts
                 let insert = slot < chain.count ? chain[slot] : nil
-                SlotChip(
-                    label: (insert?.isEmpty ?? true) ? "" : insert!.name,
+                InsertSlotChipView(
+                    engine: engine,
+                    editors: editors,
                     accent: accent,
+                    isMaster: isMaster,
+                    ownerId: ownerId,
+                    slot: slot,
+                    name: insert?.name ?? "",
+                    isEmpty: insert?.isEmpty ?? true,
                     bypassed: insert?.bypassed ?? false,
                     badge: insert?.modeBadge ?? "",
+                    chainCount: chain.count,
                     lit: editors.isOpen(.init(trackId: ownerId, insertIndex: slot))
-                ) {
-                    let filled = !(insert?.isEmpty ?? true)
-                    if NSEvent.modifierFlags.contains(.command) && filled {
-                        // Pro Tools: ⌘-click an insert bypasses it.
-                        if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
-                        else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
-                    } else if filled {
-                        editors.toggle(trackId: ownerId, insertIndex: slot)
-                    } else {
-                        engine.openPluginBrowser(forTrack: ownerId)
-                    }
-                }
-                .contextMenu {
-                    if insert?.isEmpty ?? true {
-                        Button("플러그인 추가…") { engine.openPluginBrowser(forTrack: ownerId) }
-                    } else {
-                        Button("에디터 열기") { editors.toggle(trackId: ownerId, insertIndex: slot) }
-                        Button(insert!.bypassed ? "바이패스 해제" : "바이패스") {
-                            if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
-                            else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
-                        }
-                        Divider()
-                        if !isMaster {
-                            Menu("슬롯으로 이동") {
-                                ForEach(0..<5, id: \.self) { target in
-                                    Button("슬롯 \(["A","B","C","D","E"][target])") {
-                                        engine.moveInsert(track: ownerId, from: slot, to: target)
-                                    }
-                                    .disabled(target == slot)
-                                }
-                            }
-                        }
-                        Button("앞으로 이동") {
-                            if isMaster { engine.moveMasterInsert(slot: slot, direction: -1) }
-                            else { engine.moveInsert(track: ownerId, slot: slot, direction: -1) }
-                        }
-                        .disabled(slot == 0)
-                        Button("뒤로 이동") {
-                            if isMaster { engine.moveMasterInsert(slot: slot, direction: 1) }
-                            else { engine.moveInsert(track: ownerId, slot: slot, direction: 1) }
-                        }
-                        .disabled(slot >= chain.count - 1)
-                        Divider()
-                        Button("제거", role: .destructive) {
-                            if isMaster { engine.removeMasterInsert(slot: slot) }
-                            else { engine.removeInsert(track: ownerId, slot: slot) }
-                        }
-                    }
-                }
-                // Drag a plugin onto another slot to move it (within or across tracks);
-                // hold Option to copy. Master chain stays reorder-free (its own path).
-                .modifier(InsertDragDrop(isMaster: isMaster, trackId: ownerId, slot: slot,
-                                         filled: !(insert?.isEmpty ?? true),
-                                         onDropInsert: { srcTrack, srcSlot, dstSlot, copy in
-                                             if copy {
-                                                 engine.copyInsert(srcTrack: srcTrack, srcSlot: srcSlot,
-                                                                   dstTrack: ownerId, dstSlot: dstSlot)
-                                             } else if srcTrack == ownerId {
-                                                 engine.moveInsert(track: ownerId, from: srcSlot, to: dstSlot)
-                                             } else {
-                                                 engine.moveInsertAcross(srcTrack: srcTrack, srcSlot: srcSlot,
-                                                                         dstTrack: ownerId, dstSlot: dstSlot)
-                                             }
-                                         }))
+                )
             }
         }
     }
