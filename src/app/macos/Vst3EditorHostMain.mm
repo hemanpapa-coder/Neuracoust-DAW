@@ -3619,7 +3619,7 @@ int main(int argc, const char* argv[]) {
                     _Exit(0);
                 }
                 __block Vst3EditorSession* pollingSession = deferredSession;
-                [NSTimer scheduledTimerWithTimeInterval:(1.0 / 30.0)
+                [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0)
                                                 repeats:YES
                                                   block:^(NSTimer*) {
                     if (pollingSession != nullptr) {
