@@ -2606,34 +2606,61 @@ public:
             if (!audioBridgeActive_) {
                 return;
             }
-            std::deque<BridgeCapturedBlock> blocks;
+            // Move everything the observer captured into a main-thread-only backlog. The engine emits
+            // its 5.3 ms buffer as a cluster of sub-blocks then pauses, so arrivals are bursty; the
+            // backlog is a jitter buffer that lets us re-emit them at a STEADY real-time rate.
             {
                 std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
-                blocks.swap(bridgeCaptureQueue_);
-            }
-            if (blocks.empty()) {
-                // A momentary empty fire during playback (the observer just hasn't captured the next
-                // block yet) must NOT be filled with a silence block — feeding silence between real
-                // blocks tore the scope into a comb. Only once we've been dry a while (transport
-                // genuinely stopped) do we feed decay-silence so the meters fall back to zero.
-                ++bridgeEmptyDrainTicks_;
-                if (bridgeEmptyDrainTicks_ >= 64) {   // ~130 ms at ~2 ms/fire → stopped, not a gap
-                    const int fc = std::min(256, audioBridgeMaxBlock_);
-                    std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
-                    std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
-                    processBridgeBlock(silence.data(), fc, {}, scratch.data());
+                while (!bridgeCaptureQueue_.empty()) {
+                    bridgeBacklog_.push_back(std::move(bridgeCaptureQueue_.front()));
+                    bridgeCaptureQueue_.pop_front();
                 }
+            }
+            const double now = [NSDate timeIntervalSinceReferenceDate];
+            const double elapsed = (bridgeLastPumpSeconds_ > 0.0)
+                ? std::max(0.0, now - bridgeLastPumpSeconds_) : 0.0;
+            bridgeLastPumpSeconds_ = now;
+            // Release blocks worth the real time that actually elapsed, so the plug-in's wall-clock
+            // scope advances exactly as it would under live playback — no burst (comb), no starve
+            // (gap). Clamp the debt so a scheduling hiccup can't dump a huge catch-up burst.
+            bridgeMeterTimeDebt_ = std::min(bridgeMeterTimeDebt_ + elapsed, 0.040);
+            const double sr = std::max(1.0, audioBridgeSampleRate_);
+            std::vector<float> scratch;
+            bool fedAny = false;
+            while (!bridgeBacklog_.empty()) {
+                const auto& front = bridgeBacklog_.front();
+                const double dur = std::max(1, front.frameCount) / sr;
+                // Feed when enough real time has accrued; if the backlog is deep (we fell behind or
+                // a big burst landed), drain past the debt so latency can't creep up unbounded.
+                const bool behind = bridgeBacklog_.size() > 12;
+                if (bridgeMeterTimeDebt_ < dur && !behind) {
+                    break;
+                }
+                if (front.frameCount > 0 &&
+                    front.input.size() >= static_cast<size_t>(front.frameCount) * 2u) {
+                    scratch.assign(static_cast<size_t>(front.frameCount) * 2u, 0.0f);
+                    processBridgeBlock(front.input.data(), front.frameCount, front.params, scratch.data());
+                    fedAny = true;
+                }
+                bridgeMeterTimeDebt_ = std::max(0.0, bridgeMeterTimeDebt_ - dur);
+                bridgeBacklog_.pop_front();
+            }
+            if (fedAny) {
+                bridgeEmptyDrainTicks_ = 0;
                 return;
             }
-            bridgeEmptyDrainTicks_ = 0;
-            std::vector<float> scratch;
-            for (auto& block : blocks) {
-                if (block.frameCount <= 0 ||
-                    block.input.size() < static_cast<size_t>(block.frameCount) * 2u) {
-                    continue;
+            // Nothing to feed. A momentary gap mid-playback must stay silent (feeding a silence block
+            // between real blocks combs the scope); only once genuinely dry for a while (stopped) do
+            // we push decay-silence so the meters fall to zero.
+            if (bridgeBacklog_.empty()) {
+                ++bridgeEmptyDrainTicks_;
+                if (bridgeEmptyDrainTicks_ >= 64) {   // ~130 ms at ~2 ms/fire → stopped, not a gap
+                    bridgeMeterTimeDebt_ = 0.0;
+                    const int fc = std::min(256, audioBridgeMaxBlock_);
+                    std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
+                    std::vector<float> silenceScratch(static_cast<size_t>(fc) * 2u, 0.0f);
+                    processBridgeBlock(silence.data(), fc, {}, silenceScratch.data());
                 }
-                scratch.assign(static_cast<size_t>(block.frameCount) * 2u, 0.0f);
-                processBridgeBlock(block.input.data(), block.frameCount, block.params, scratch.data());
             }
         }
 
@@ -3494,6 +3521,8 @@ public:
         // the real track audio (and its own meters reflect it).
         bool audioBridgeActive_ = false;
         dispatch_source_t bridgeMeterTimer_ = nullptr;   // fast (~2 ms) main-thread pump for real-time-paced metering
+        double bridgeLastPumpSeconds_ = 0.0;
+        double bridgeMeterTimeDebt_ = 0.0;   // accrued real time still owed to the scope, in seconds
         int bridgeEmptyDrainTicks_ = 0;   // consecutive empty meter ticks; feed decay-silence only once genuinely stopped
         bool audioBridgeObserver_ = false;
         std::string audioBridgeShmName_;
@@ -3518,6 +3547,7 @@ public:
         };
         std::mutex bridgeCaptureMutex_;
         std::deque<BridgeCapturedBlock> bridgeCaptureQueue_;
+        std::deque<BridgeCapturedBlock> bridgeBacklog_;   // main-thread jitter buffer, re-emitted at real-time rate
         static constexpr size_t kBridgeCaptureQueueCap = 64;   // ~340 ms at 256/48k; drop oldest past this
 	};
 #endif
