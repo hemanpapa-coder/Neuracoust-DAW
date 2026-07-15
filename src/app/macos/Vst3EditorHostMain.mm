@@ -3548,7 +3548,11 @@ int main(int argc, const char* argv[]) {
         logHostStage("app.begin");
 	        [NSApplication sharedApplication];
         logHostStage("app.shared.ok");
-	        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+	        // Regular, not Accessory: an Accessory (background-helper) process can't reliably pull its
+		        // window in front of the DAW on modern macOS, so the editor kept opening hidden BEHIND
+		        // the main window. Regular lets activateIgnoringOtherApps + orderFront actually raise it.
+		        // Cost is a Dock icon per open editor, acceptable for a window the user works in.
+		        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         logHostStage("app.activation.ok");
         // While a plug-in editor window has focus, the spacebar goes to this
         // process instead of the DAW, so transport wouldn't toggle. Forward an

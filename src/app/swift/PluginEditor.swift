@@ -58,6 +58,13 @@ final class PluginEditorHost: ObservableObject {
         }
     }
 
+    /// Open the editor if it isn't already up — for auto-opening a freshly added insert, where a
+    /// toggle could accidentally CLOSE an editor that happens to occupy the same slot index.
+    func openIfNeeded(trackId: Int, insertIndex: Int) {
+        let slot = Slot(trackId: trackId, insertIndex: insertIndex)
+        if sessions[slot] == nil { open(slot) }
+    }
+
     func close(_ slot: Slot) {
         guard let session = sessions.removeValue(forKey: slot) else { return }
         openSlots.remove(slot)

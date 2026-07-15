@@ -114,33 +114,38 @@ private struct InsertSlotChipView: View {
                                  }))
     }
 
-    /// Pick a plug-in straight from the slot's menu, grouped by category, so an empty slot doesn't
-    /// force a trip through the browser. Instruments are excluded — they can't be inserts.
+    /// Pick a plug-in straight from the slot's menu — grouped by category OR by brand — so an empty
+    /// slot doesn't force a trip through the browser. Instruments are excluded — they can't be inserts.
     @ViewBuilder private var pluginPickerMenu: some View {
         let fx = engine.plugins.filter { $0.category != "Instrument" }
         if !fx.isEmpty {
             Menu("플러그인 선택") {
-                ForEach(categoriesOf(fx), id: \.self) { cat in
-                    Menu(cat) {
-                        ForEach(fx.filter { $0.category == cat }) { plugin in
-                            Button(plugin.name) {
-                                engine.addInsertDirect(track: ownerId, pluginIndex: plugin.id)
-                            }
-                        }
+                Menu("카테고리별") {
+                    ForEach(groupKeys(fx, \.category), id: \.self) { cat in
+                        Menu(cat) { pluginButtons(fx.filter { $0.category == cat }) }
+                    }
+                }
+                Menu("브랜드별") {
+                    ForEach(groupKeys(fx, \.brand), id: \.self) { brand in
+                        Menu(brand) { pluginButtons(fx.filter { $0.brand == brand }) }
                     }
                 }
             }
         }
     }
 
-    private func categoriesOf(_ list: [EngineController.PluginCandidate]) -> [String] {
-        var seen = Set<String>()
-        var order: [String] = []
-        for plugin in list where !seen.contains(plugin.category) {
-            seen.insert(plugin.category)
-            order.append(plugin.category)
+    @ViewBuilder private func pluginButtons(_ list: [EngineController.PluginCandidate]) -> some View {
+        ForEach(list.sorted { $0.name < $1.name }) { plugin in
+            Button(plugin.name) { engine.addInsertDirect(track: ownerId, pluginIndex: plugin.id) }
         }
-        return order.sorted()
+    }
+
+    /// Distinct non-empty values for a key, sorted — the submenu headings.
+    private func groupKeys(_ list: [EngineController.PluginCandidate],
+                           _ key: (EngineController.PluginCandidate) -> String) -> [String] {
+        var seen = Set<String>()
+        for plugin in list where !key(plugin).isEmpty { seen.insert(key(plugin)) }
+        return seen.sorted()
     }
 }
 

@@ -89,6 +89,19 @@ void AsyncInsertChainPreparer::run() {
         auto chain = std::make_unique<RealtimeMasterInsertChain>();
         std::string error;
         const bool ok = chain->prepare(plan, job.sampleRate, job.maxBlock, error, job.shmKeys);
+        if (ok) {
+            // Warm the process path off the audio thread: the FIRST process() otherwise pays the
+            // out-of-process worker's lazy first-block cost — a shared-memory round-trip stall that
+            // lands as a click the instant the insert engages. Pushing a few silent blocks through
+            // here (still off-thread, safe to block) means the audio thread's first real block is
+            // already warm. Best-effort — a warm-up failure doesn't fail the chain.
+            std::vector<float> silence(static_cast<size_t>(job.maxBlock) * 2u, 0.0f);
+            std::string warmError;
+            for (int i = 0; i < 8; ++i) {
+                std::fill(silence.begin(), silence.end(), 0.0f);
+                chain->processInterleavedStereo(silence, job.maxBlock, warmError);
+            }
+        }
 
         std::lock_guard<std::mutex> lock(mutex_);
         inFlight_.erase(job.key);

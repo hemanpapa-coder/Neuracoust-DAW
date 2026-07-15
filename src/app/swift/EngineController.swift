@@ -427,7 +427,7 @@ final class EngineController: ObservableObject {
                 // Dismiss the browser first so the editor isn't buried under it, then show it.
                 closePluginBrowser()
                 if !masterInserts.isEmpty {
-                    pluginEditors.toggle(trackId: Self.masterInsertTargetId, insertIndex: masterInserts.count - 1)
+                    pluginEditors.openIfNeeded(trackId: Self.masterInsertTargetId, insertIndex: masterInserts.count - 1)
                 }
             }
             return
@@ -471,7 +471,7 @@ final class EngineController: ObservableObject {
             if addedFxInsert,
                let updated = tracks.first(where: { $0.id == trackId }),
                !updated.inserts.isEmpty {
-                pluginEditors.toggle(trackId: trackId, insertIndex: updated.inserts.count - 1)
+                pluginEditors.openIfNeeded(trackId: trackId, insertIndex: updated.inserts.count - 1)
             }
         }
     }
