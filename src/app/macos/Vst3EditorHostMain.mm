@@ -2600,12 +2600,21 @@ public:
                     blocks.swap(bridgeCaptureQueue_);
                 }
                 if (blocks.empty()) {
-                    const int fc = std::min(256, audioBridgeMaxBlock_);
-                    std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
-                    std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
-                    processBridgeBlock(silence.data(), fc, {}, scratch.data());
+                    // A momentary empty tick during playback (the observer just hasn't captured the
+                    // next block yet) must NOT be filled with a silence block — feeding silence
+                    // between real blocks tore the limiters' time-domain scope into a regular comb.
+                    // Only once we've been dry for a while (transport genuinely stopped) do we feed
+                    // decay-silence so the meters fall back to zero.
+                    ++bridgeEmptyDrainTicks_;
+                    if (bridgeEmptyDrainTicks_ >= 8) {   // ~130 ms at 60 Hz → stopped, not a gap
+                        const int fc = std::min(256, audioBridgeMaxBlock_);
+                        std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
+                        std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
+                        processBridgeBlock(silence.data(), fc, {}, scratch.data());
+                    }
                     return;
                 }
+                bridgeEmptyDrainTicks_ = 0;
                 std::vector<float> scratch;
                 for (auto& block : blocks) {
                     if (block.frameCount <= 0 ||
@@ -3109,10 +3118,18 @@ public:
                 Steinberg::Vst::ProcessContext::kProjectTimeMusicValid |
                 Steinberg::Vst::ProcessContext::kTempoValid |
                 Steinberg::Vst::ProcessContext::kTimeSigValid |
+                Steinberg::Vst::ProcessContext::kSystemTimeValid |
                 Steinberg::Vst::ProcessContext::kContTimeValid;
             context.sampleRate = audioBridgeSampleRate_;
             context.projectTimeSamples = bridgeProcessedSamples_;
             context.continousTimeSamples = bridgeProcessedSamples_;
+            // A meter tick drains a whole burst of blocks in <1 ms of wall-clock, but a real-time
+            // scope (FabFilter Pro-L) places its waveform by systemTime — feeding them all at "now"
+            // stacked them at one x and left 16 ms gaps, a regular comb. Derive systemTime from the
+            // sample position instead so the burst spreads across the scope exactly as it would at
+            // real-time playback.
+            context.systemTime = static_cast<Steinberg::int64>(
+                (static_cast<double>(bridgeProcessedSamples_) / std::max(1.0, audioBridgeSampleRate_)) * 1.0e9);
             context.projectTimeMusic = (static_cast<double>(bridgeProcessedSamples_) /
                                         std::max(1.0, audioBridgeSampleRate_)) * 2.0;   // 120 BPM → beats
             context.tempo = 120.0;
@@ -3449,6 +3466,7 @@ public:
         // server for its insert, so the SAME instance the user sees also processes
         // the real track audio (and its own meters reflect it).
         bool audioBridgeActive_ = false;
+        int bridgeEmptyDrainTicks_ = 0;   // consecutive empty meter ticks; feed decay-silence only once genuinely stopped
         bool audioBridgeObserver_ = false;
         std::string audioBridgeShmName_;
         int audioBridgeMaxBlock_ = 256;
