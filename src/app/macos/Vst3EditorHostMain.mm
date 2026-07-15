@@ -5,6 +5,8 @@
 #include "plugins/Vst3RealtimeBridgeProtocol.h"
 
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <pthread/qos.h>
 #include <thread>
 
@@ -2585,8 +2587,34 @@ public:
 
         void tickEditorMeterProcessor() {
             if (audioBridgeActive_) {
-                // The audio-bridge thread drives the plugin with the real track
-                // audio; the synthetic probe must not also touch the processor.
+                // Observer mode. The background bridge thread only CAPTURES the engine's blocks;
+                // we run the plug-in's process() HERE, on the main thread, so its gain-reduction /
+                // limiting / analyzer messages (pushed processor→controller via IConnectionPoint
+                // during process()) reach and repaint the GUI — running process() on the bridge
+                // thread emitted them off-main and they were dropped. Drain the queue in order so
+                // the analyzer sees a continuous stream; feed one silence block when it's dry so
+                // meters decay while stopped.
+                std::deque<BridgeCapturedBlock> blocks;
+                {
+                    std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
+                    blocks.swap(bridgeCaptureQueue_);
+                }
+                if (blocks.empty()) {
+                    const int fc = std::min(256, audioBridgeMaxBlock_);
+                    std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
+                    std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
+                    processBridgeBlock(silence.data(), fc, {}, scratch.data());
+                    return;
+                }
+                std::vector<float> scratch;
+                for (auto& block : blocks) {
+                    if (block.frameCount <= 0 ||
+                        block.input.size() < static_cast<size_t>(block.frameCount) * 2u) {
+                        continue;
+                    }
+                    scratch.assign(static_cast<size_t>(block.frameCount) * 2u, 0.0f);
+                    processBridgeBlock(block.input.data(), block.frameCount, block.params, scratch.data());
+                }
                 return;
             }
             const NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
@@ -2671,8 +2699,6 @@ public:
             const auto layout = neuracoust::daw::vst3BridgeComputeLayout(maxBlock);
             void* mapping = nullptr;
             int fd = -1;
-            std::vector<float> outputScratch(static_cast<size_t>(maxBlock) * 2u, 0.0f);
-            std::vector<float> syntheticInput(static_cast<size_t>(maxBlock) * 2u, 0.0f);
             std::vector<neuracoust::daw::Vst3BridgeParam> params;
             uint32_t lastRequestSeq = 0;
             int staleIterations = 0;
@@ -2740,7 +2766,21 @@ public:
                             params.push_back(inParams[i]);
                         }
                         const float* input = neuracoust::daw::vst3BridgeAudioRegion(const_cast<void*>(mapping), layout.inputOffset);
-                        processBridgeBlock(input, frameCount, params, outputScratch.data());
+                        // Hand the block to the main thread — DON'T run process() here. The
+                        // plug-in's meter/analyzer messages fire during process() over its
+                        // component↔controller connection; on this background thread they never
+                        // reach the GUI. Queued in order so the analyzer stream stays continuous.
+                        BridgeCapturedBlock captured;
+                        captured.input.assign(input, input + static_cast<size_t>(frameCount) * 2u);
+                        captured.frameCount = frameCount;
+                        captured.params = params;
+                        {
+                            std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
+                            if (bridgeCaptureQueue_.size() >= kBridgeCaptureQueueCap) {
+                                bridgeCaptureQueue_.pop_front();   // UI stalled — drop oldest
+                            }
+                            bridgeCaptureQueue_.push_back(std::move(captured));
+                        }
                     }
                     if (staleIterations > kReattachLimit) {
                         // Long-idle: re-open in case the shm was torn down and a new one
@@ -2748,15 +2788,8 @@ public:
                         detach();
                     }
                 }
-
-                // Feed silence ONLY when there is clearly no live audio — no bridge at
-                // all (Native/bypassed) or the transport has been stopped for a while.
-                // NOT merely between blocks during playback, which would chop the tone.
-                if (!freshBlock && (mapping == nullptr || staleIterations > kSilenceThreshold)) {
-                    const int fc = std::min(256, maxBlock);
-                    std::fill(syntheticInput.begin(), syntheticInput.begin() + static_cast<std::ptrdiff_t>(fc) * 2, 0.0f);
-                    processBridgeBlock(syntheticInput.data(), fc, {}, outputScratch.data());
-                }
+                // Idle silence is fed by the main-thread tick when the queue runs dry, so the
+                // meters decay on the same thread the plug-in expects — nothing to do here.
                 usleep(2000);
             }
             detach();
@@ -3073,12 +3106,15 @@ public:
             outputBus.channelBuffers32 = outChannels;
             Steinberg::Vst::ProcessContext context {};
             context.state = Steinberg::Vst::ProcessContext::kPlaying |
+                Steinberg::Vst::ProcessContext::kProjectTimeMusicValid |
                 Steinberg::Vst::ProcessContext::kTempoValid |
                 Steinberg::Vst::ProcessContext::kTimeSigValid |
                 Steinberg::Vst::ProcessContext::kContTimeValid;
             context.sampleRate = audioBridgeSampleRate_;
             context.projectTimeSamples = bridgeProcessedSamples_;
             context.continousTimeSamples = bridgeProcessedSamples_;
+            context.projectTimeMusic = (static_cast<double>(bridgeProcessedSamples_) /
+                                        std::max(1.0, audioBridgeSampleRate_)) * 2.0;   // 120 BPM → beats
             context.tempo = 120.0;
             context.timeSigNumerator = 4;
             context.timeSigDenominator = 4;
@@ -3424,6 +3460,19 @@ public:
         std::vector<float> bridgeInRight_;
         std::vector<float> bridgeOutLeft_;
         std::vector<float> bridgeOutRight_;
+        // Observer capture queue: the background thread reads the engine's bridge and PUSHES each
+        // fresh block here; the main-thread meter tick DRAINS and runs the plug-in's process() so
+        // its gain-reduction / analyzer notify() lands on the GUI thread. Blocks are kept in order
+        // so a spectrum analyzer sees a continuous stream; the queue is capped so a stalled UI
+        // can't grow it without bound.
+        struct BridgeCapturedBlock {
+            std::vector<float> input;   // interleaved stereo, frameCount * 2
+            int frameCount = 0;
+            std::vector<neuracoust::daw::Vst3BridgeParam> params;
+        };
+        std::mutex bridgeCaptureMutex_;
+        std::deque<BridgeCapturedBlock> bridgeCaptureQueue_;
+        static constexpr size_t kBridgeCaptureQueueCap = 64;   // ~340 ms at 256/48k; drop oldest past this
 	};
 #endif
 
