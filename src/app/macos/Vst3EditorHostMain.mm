@@ -3554,6 +3554,15 @@ int main(int argc, const char* argv[]) {
 		        // Cost is a Dock icon per open editor, acceptable for a window the user works in.
 		        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         logHostStage("app.activation.ok");
+        // Defeat App Nap. Live metering runs on a 1/30 s main-thread timer; when this editor's
+        // window is behind the DAW, App Nap throttles background timers to a crawl and the meters
+        // (gain reduction, analyzer, output level) freeze — only the frontmost editor kept moving.
+        // A held NSActivity with a latency-critical option keeps the timer at full rate. The token
+        // is intentionally leaked for the process lifetime (one editor = one process).
+        static id sAppNapToken = [[NSProcessInfo processInfo]
+            beginActivityWithOptions:(NSActivityUserInitiated | NSActivityLatencyCritical)
+                              reason:@"live plug-in metering"];
+        (void)sAppNapToken;
         // While a plug-in editor window has focus, the spacebar goes to this
         // process instead of the DAW, so transport wouldn't toggle. Forward an
         // unmodified spacebar to the DAW over stdout (unless a text field is being
