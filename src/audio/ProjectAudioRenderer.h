@@ -113,6 +113,12 @@ struct ProjectAudioRenderState {
     std::map<std::string, std::pair<float, float>> routeInsertDeclickHold;
     std::map<std::string, int> routeInsertDeclickRemaining;
     std::map<std::string, int> routeInsertDeclickTotal;
+    // Set for one block whenever ANY route flips dry↔wet (an async insert chain engages, is
+    // retired, or is replaced). The engine reads it to re-arm its 80 ms full-waveform output
+    // crossfade at the real swap instant — the graph-signature arming happens at edit time, while
+    // the chain is still preparing off-thread and the route is dry, so the window closes before the
+    // wet audio arrives. Owned/reset by the engine each block.
+    bool routeInsertEngagementChangedThisBlock = false;
     std::map<std::string, double> sourceGeneratorPhases;
     std::map<std::string, std::vector<Vst3MidiEvent>> liveMidiEvents;
     std::vector<float> masterInsertDryFallback;

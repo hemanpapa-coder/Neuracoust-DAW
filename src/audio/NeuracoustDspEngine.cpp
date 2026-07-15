@@ -1918,6 +1918,15 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         }
     }
     applyMonitorStationControlsLocked(interleavedStereo);
+    // An async insert chain engaged/disengaged this block (dry↔wet). Re-arm the 80 ms output
+    // crossfade NOW so it masks the real swap with the previous (dry) waveform — the edit-time
+    // arming already decayed while the chain prepared off-thread. Robust: runs after PDC and the
+    // monitor path, and fades a real waveform, unlike the per-route 15 ms held-sample fade.
+    if (projectRenderState_.routeInsertEngagementChangedThisBlock && !previousOutputBlock_.empty()) {
+        reloadCrossfadeSamplesTotal_ = std::max<int64_t>(1, static_cast<int64_t>(settings_.sampleRate * 0.080));
+        reloadCrossfadeSamplesRemaining_ = reloadCrossfadeSamplesTotal_;
+    }
+    projectRenderState_.routeInsertEngagementChangedThisBlock = false;
     applyReloadCrossfadeLocked(interleavedStereo);
     applySeekRampLocked(interleavedStereo);
     publishListenRoomLocked(interleavedStereo);

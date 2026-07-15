@@ -1867,6 +1867,7 @@ void ProjectAudioRenderState::reset() {
     routeInsertDeclickHold.clear();
     routeInsertDeclickRemaining.clear();
     routeInsertDeclickTotal.clear();
+    routeInsertEngagementChangedThisBlock = false;
     sourceGeneratorPhases.clear();
     liveMidiEvents.clear();
     masterInsertDryFallback.clear();
@@ -1885,6 +1886,9 @@ void ProjectAudioRenderState::resetForSeek() {
     masterInsertLastError.clear();
     instrumentLastErrors.clear();
     routeInsertLastErrors.clear();
+    // A warm-up render (done while stopped) may have flipped a route dry↔wet; don't let that arm
+    // the output crossfade on the first real playback block.
+    routeInsertEngagementChangedThisBlock = false;
 }
 
 void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& plan,
@@ -2091,6 +2095,9 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 const int fade = std::max(1, static_cast<int>(plan.sampleRate * 0.015));
                 state.routeInsertDeclickTotal[route->name] = fade;
                 state.routeInsertDeclickRemaining[route->name] = fade;
+                // Tell the engine to re-arm its 80 ms full-waveform output crossfade at THIS block —
+                // the real dry→wet swap instant — so the click is masked after PDC/monitor DSP.
+                state.routeInsertEngagementChangedThisBlock = true;
             }
             state.routeInsertWasWet[route->name] = wetNow;
             int& remaining = state.routeInsertDeclickRemaining[route->name];
