@@ -2216,6 +2216,16 @@ public:
 	    }
 
     void close() {
+        // Stop the real-time meter pump first: it holds a raw `this` and fires on the main queue,
+        // so it must never fire once the session's meterProcessor_/controller_ are torn down below.
+        // close() runs on the main thread and the timer fires on the main queue, so cancel here can
+        // not race a live handler.
+        audioBridgeStop_.store(true);
+        if (bridgeMeterTimer_ != nullptr) {
+            dispatch_source_cancel(bridgeMeterTimer_);
+            dispatch_release(bridgeMeterTimer_);
+            bridgeMeterTimer_ = nullptr;
+        }
         if (transportKeyMonitor_ != nil) {
             [NSEvent removeMonitor:transportKeyMonitor_];
             transportKeyMonitor_ = nil;
@@ -2585,46 +2595,51 @@ public:
             [meterOverlay_ setInputLeft:inputLeft inputRight:inputRight outputLeft:outputLeft outputRight:outputRight];
         }
 
-        void tickEditorMeterProcessor() {
-            if (audioBridgeActive_) {
-                // Observer mode. The background bridge thread only CAPTURES the engine's blocks;
-                // we run the plug-in's process() HERE, on the main thread, so its gain-reduction /
-                // limiting / analyzer messages (pushed processor→controller via IConnectionPoint
-                // during process()) reach and repaint the GUI — running process() on the bridge
-                // thread emitted them off-main and they were dropped. Drain the queue in order so
-                // the analyzer sees a continuous stream; feed one silence block when it's dry so
-                // meters decay while stopped.
-                std::deque<BridgeCapturedBlock> blocks;
-                {
-                    std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
-                    blocks.swap(bridgeCaptureQueue_);
-                }
-                if (blocks.empty()) {
-                    // A momentary empty tick during playback (the observer just hasn't captured the
-                    // next block yet) must NOT be filled with a silence block — feeding silence
-                    // between real blocks tore the limiters' time-domain scope into a regular comb.
-                    // Only once we've been dry for a while (transport genuinely stopped) do we feed
-                    // decay-silence so the meters fall back to zero.
-                    ++bridgeEmptyDrainTicks_;
-                    if (bridgeEmptyDrainTicks_ >= 8) {   // ~130 ms at 60 Hz → stopped, not a gap
-                        const int fc = std::min(256, audioBridgeMaxBlock_);
-                        std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
-                        std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
-                        processBridgeBlock(silence.data(), fc, {}, scratch.data());
-                    }
-                    return;
-                }
-                bridgeEmptyDrainTicks_ = 0;
-                std::vector<float> scratch;
-                for (auto& block : blocks) {
-                    if (block.frameCount <= 0 ||
-                        block.input.size() < static_cast<size_t>(block.frameCount) * 2u) {
-                        continue;
-                    }
-                    scratch.assign(static_cast<size_t>(block.frameCount) * 2u, 0.0f);
-                    processBridgeBlock(block.input.data(), block.frameCount, block.params, scratch.data());
+        // Real-time-paced bridge metering. Runs on a fast (~2 ms) main-thread timer, NOT the 60 Hz
+        // meter tick: FabFilter's limiter scopes place their waveform by the real wall-clock gap
+        // between process() calls, so draining a whole 60 Hz burst at once stacked every block at
+        // one x and left the rest of the frame blank — a regular comb. Firing ~every audio-block
+        // period feeds one block at a time, so the scope advances smoothly like real playback.
+        // process() stays on the main thread so the plug-in's IConnectionPoint meter/analyzer
+        // messages still reach and repaint the GUI.
+        void pumpBridgeMeterBlocks() {
+            if (!audioBridgeActive_) {
+                return;
+            }
+            std::deque<BridgeCapturedBlock> blocks;
+            {
+                std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
+                blocks.swap(bridgeCaptureQueue_);
+            }
+            if (blocks.empty()) {
+                // A momentary empty fire during playback (the observer just hasn't captured the next
+                // block yet) must NOT be filled with a silence block — feeding silence between real
+                // blocks tore the scope into a comb. Only once we've been dry a while (transport
+                // genuinely stopped) do we feed decay-silence so the meters fall back to zero.
+                ++bridgeEmptyDrainTicks_;
+                if (bridgeEmptyDrainTicks_ >= 64) {   // ~130 ms at ~2 ms/fire → stopped, not a gap
+                    const int fc = std::min(256, audioBridgeMaxBlock_);
+                    std::vector<float> silence(static_cast<size_t>(fc) * 2u, 0.0f);
+                    std::vector<float> scratch(static_cast<size_t>(fc) * 2u, 0.0f);
+                    processBridgeBlock(silence.data(), fc, {}, scratch.data());
                 }
                 return;
+            }
+            bridgeEmptyDrainTicks_ = 0;
+            std::vector<float> scratch;
+            for (auto& block : blocks) {
+                if (block.frameCount <= 0 ||
+                    block.input.size() < static_cast<size_t>(block.frameCount) * 2u) {
+                    continue;
+                }
+                scratch.assign(static_cast<size_t>(block.frameCount) * 2u, 0.0f);
+                processBridgeBlock(block.input.data(), block.frameCount, block.params, scratch.data());
+            }
+        }
+
+        void tickEditorMeterProcessor() {
+            if (audioBridgeActive_) {
+                return;   // bridge metering runs on its own real-time-paced timer (pumpBridgeMeterBlocks)
             }
             const NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
             const bool recentlyUpdated = lastMeterUpdateSeconds_ > 0.0 && now - lastMeterUpdateSeconds_ < 0.50;
@@ -2670,6 +2685,18 @@ public:
             if (audioBridgeObserver_) {
                 audioBridgeThread_ = std::thread([this, shm, maxBlock]() { runObserverLoop(shm, maxBlock); });
                 audioBridgeThread_.detach();
+                // Drain the captured blocks on a fast main-thread timer (~2 ms, an audio-block
+                // period) so process() is paced like real playback and the limiter scopes don't
+                // comb. Main queue → the plug-in's meter/analyzer GUI messages still land on-main.
+                bridgeMeterTimer_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                           dispatch_get_main_queue());
+                if (bridgeMeterTimer_ != nullptr) {
+                    dispatch_source_set_timer(bridgeMeterTimer_, DISPATCH_TIME_NOW,
+                                              2ull * NSEC_PER_MSEC, 1ull * NSEC_PER_MSEC);
+                    __block Vst3EditorSession* self = this;
+                    dispatch_source_set_event_handler(bridgeMeterTimer_, ^{ self->pumpBridgeMeterBlocks(); });
+                    dispatch_resume(bridgeMeterTimer_);
+                }
                 return;
             }
             audioBridgeThread_ = std::thread([this, shm, maxBlock]() {
@@ -3466,6 +3493,7 @@ public:
         // server for its insert, so the SAME instance the user sees also processes
         // the real track audio (and its own meters reflect it).
         bool audioBridgeActive_ = false;
+        dispatch_source_t bridgeMeterTimer_ = nullptr;   // fast (~2 ms) main-thread pump for real-time-paced metering
         int bridgeEmptyDrainTicks_ = 0;   // consecutive empty meter ticks; feed decay-silence only once genuinely stopped
         bool audioBridgeObserver_ = false;
         std::string audioBridgeShmName_;
