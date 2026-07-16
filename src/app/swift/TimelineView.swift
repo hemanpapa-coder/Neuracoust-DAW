@@ -2177,7 +2177,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private func gainLineY(_ clip: TimelineModel.Clip, in rect: NSRect) -> CGFloat {
         let span = Self.gainRange.upperBound - Self.gainRange.lowerBound
         let fraction = (clip.gainDb - Self.gainRange.lowerBound) / span
-        return rect.maxY - CGFloat(fraction) * rect.height
+        let y = rect.maxY - CGFloat(fraction) * rect.height
+        // Keep the line — and its ±4 pt grab band — fully inside the clip. Unclamped, the -24 dB floor
+        // puts it exactly on the bottom edge, so half the grab band falls into the next lane and the
+        // line can no longer be caught to drag it back up. (+12 dB has the same problem at the top.)
+        let margin: CGFloat = 6
+        guard rect.height > margin * 2 else { return rect.midY }
+        return min(rect.maxY - margin, max(rect.minY + margin, y))
     }
 
     /// Fades are drawn as the region the clip loses: a wedge from silence up to
