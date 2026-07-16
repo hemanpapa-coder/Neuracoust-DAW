@@ -287,7 +287,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     /// Clip gain is drawn as a horizontal line across this dB span.
-    private static let gainRange: ClosedRange<Float> = -24...12
+    private static let gainRange: ClosedRange<Float> = -24...24
     private static let fadeHandleSize: CGFloat = 9
 
     private var drag = Drag.none
