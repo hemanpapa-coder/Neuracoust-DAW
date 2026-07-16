@@ -261,6 +261,7 @@ bool Vst3RealtimeBridgeClient::prepare(const Vst3PluginDescriptor& descriptor,
     cb->command = kVst3BridgeCommandProcess;
     cb->workerReady = 0;
     cb->workerFailed = 0;
+    cb->observerRingWrite = 0;   // metering ring starts empty (whole mapping is zeroed above)
 
     pthread_mutexattr_t mutexAttr;
     pthread_mutexattr_init(&mutexAttr);
@@ -427,6 +428,20 @@ bool Vst3RealtimeBridgeClient::process(float* interleavedStereo,
     float* input = vst3BridgeAudioRegion(base, impl_->layout.inputOffset);
     std::memcpy(input, interleavedStereo, sampleCount * sizeof(float));
     cb->frameCount = frameCount;
+
+    // Observer ring: also append this block for the passive metering reader (the editor scope).
+    // Written under the same trylock as the worker request, so publishes are serialized; the
+    // reader is lock-free and synchronizes on the release-store of observerRingWrite below. This
+    // is what stops the scope combing: bursts of blocks all survive instead of overwriting one slot.
+    {
+        float* ringBase = vst3BridgeAudioRegion(base, impl_->layout.observerRingOffset);
+        const uint64_t w = cb->observerRingWrite;
+        const size_t slot = static_cast<size_t>(w % static_cast<uint64_t>(kVst3BridgeObserverRingBlocks));
+        const size_t slotStride = static_cast<size_t>(impl_->maxBlockSize) * 2u;
+        std::memcpy(ringBase + slot * slotStride, interleavedStereo, sampleCount * sizeof(float));
+        cb->observerRingFrames[slot] = frameCount;
+        __atomic_store_n(&cb->observerRingWrite, w + 1u, __ATOMIC_RELEASE);
+    }
 
     const int paramCount = std::min(static_cast<int>(parameters.size()), kVst3BridgeMaxParams);
     Vst3BridgeParam* inParams = vst3BridgeParamRegion(base, impl_->layout.inParamsOffset);

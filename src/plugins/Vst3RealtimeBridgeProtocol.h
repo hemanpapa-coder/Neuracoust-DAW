@@ -17,10 +17,16 @@
 namespace neuracoust::daw {
 
 constexpr uint32_t kVst3BridgeMagic = 0x4E435642u; // "NCVB"
-constexpr uint32_t kVst3BridgeAbiVersion = 1u;
+constexpr uint32_t kVst3BridgeAbiVersion = 2u;     // 2: added the observer block ring
 constexpr int32_t kVst3BridgeCommandProcess = 0;
 constexpr int32_t kVst3BridgeCommandTerminate = 1;
 constexpr int kVst3BridgeMaxParams = 512;
+// A passive metering reader (the editor's scope) reads a small ring of recent blocks rather
+// than a single latest slot: the engine hands the bridge its audio in bursts (SoundGrid wakes
+// several buffers at once), so a one-block slot dropped every block but the last in a burst —
+// the scope was fed ~60% of realtime and combed into vertical stripes. The ring holds enough
+// blocks (~85 ms at 256/48k) that a UTILITY-priority reader never loses one to a burst.
+constexpr int kVst3BridgeObserverRingBlocks = 16;
 
 struct Vst3BridgeParam {
     uint32_t id = 0;
@@ -83,6 +89,13 @@ struct Vst3BridgeControlBlock {
     int32_t numInParams;
     int32_t processedOk;
     int32_t numOutParams;
+
+    // Observer block ring (metering only; the worker never reads these). The publisher
+    // appends every process block here and release-stores observerRingWrite last; a passive
+    // reader acquire-loads observerRingWrite and drains slots [read, write) in order, so it
+    // sees EVERY block even when several are published between its polls.
+    uint64_t observerRingWrite;
+    int32_t observerRingFrames[kVst3BridgeObserverRingBlocks];
 };
 
 struct Vst3BridgeLayout {
@@ -91,6 +104,7 @@ struct Vst3BridgeLayout {
     size_t outputOffset = 0;
     size_t inParamsOffset = 0;
     size_t outParamsOffset = 0;
+    size_t observerRingOffset = 0;
     size_t totalSize = 0;
 };
 
@@ -108,7 +122,9 @@ inline Vst3BridgeLayout vst3BridgeComputeLayout(int maxBlockSize) {
     layout.outputOffset = vst3BridgeAlignUp(layout.inputOffset + audioBytes, 64);
     layout.inParamsOffset = vst3BridgeAlignUp(layout.outputOffset + audioBytes, 64);
     layout.outParamsOffset = vst3BridgeAlignUp(layout.inParamsOffset + paramBytes, 64);
-    layout.totalSize = vst3BridgeAlignUp(layout.outParamsOffset + paramBytes, 4096);
+    layout.observerRingOffset = vst3BridgeAlignUp(layout.outParamsOffset + paramBytes, 64);
+    const size_t ringBytes = audioBytes * static_cast<size_t>(kVst3BridgeObserverRingBlocks);
+    layout.totalSize = vst3BridgeAlignUp(layout.observerRingOffset + ringBytes, 4096);
     return layout;
 }
 

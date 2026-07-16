@@ -2768,9 +2768,8 @@ public:
             void* mapping = nullptr;
             int fd = -1;
             std::vector<neuracoust::daw::Vst3BridgeParam> params;
-            uint32_t lastRequestSeq = 0;
+            uint64_t observerRingRead = 0;   // next ring block to drain; set to the write index on attach
             int staleIterations = 0;
-            bool advancedSinceAttach = false;
             constexpr int kSilenceThreshold = 50;  // ~100 ms of no new block → stopped → silence
             constexpr int kReattachLimit = 250;    // ~500 ms stale → re-open to catch a recreated shm
             auto detach = [&]() {
@@ -2795,9 +2794,11 @@ public:
                             const auto* cb = reinterpret_cast<const neuracoust::daw::Vst3BridgeControlBlock*>(m);
                             if (cb->magic == neuracoust::daw::kVst3BridgeMagic) {
                                 mapping = m;
-                                lastRequestSeq = cb->requestSeq;
+                                // Start fresh from the current write position so we never replay stale
+                                // ring blocks left over from before this editor attached.
+                                observerRingRead = __atomic_load_n(
+                                    const_cast<uint64_t*>(&cb->observerRingWrite), __ATOMIC_ACQUIRE);
                                 staleIterations = 0;
-                                advancedSinceAttach = false;
                             } else {
                                 munmap(m, layout.totalSize);
                             }
@@ -2809,46 +2810,55 @@ public:
                     }
                 }
 
-                bool freshBlock = false;
                 if (mapping != nullptr) {
-                    const auto* cb = reinterpret_cast<const neuracoust::daw::Vst3BridgeControlBlock*>(mapping);
-                    if (cb->requestSeq != lastRequestSeq) {
-                        lastRequestSeq = cb->requestSeq;
+                    auto* cb = reinterpret_cast<neuracoust::daw::Vst3BridgeControlBlock*>(mapping);
+                    // Drain the observer ring: EVERY block published since our last read, in order.
+                    // A single latest-slot read dropped whole bursts (the engine wakes several buffers
+                    // at once), starving the scope to ~60% of realtime and combing it into stripes.
+                    // observerRingWrite is release-stored by the publisher; acquire-load it here.
+                    const uint64_t writeIndex =
+                        __atomic_load_n(&cb->observerRingWrite, __ATOMIC_ACQUIRE);
+                    if (writeIndex != observerRingRead) {
                         staleIterations = 0;
-                        advancedSinceAttach = true;
-                        freshBlock = true;
-                    } else {
-                        ++staleIterations;
-                    }
-                    const int frameCount = std::max(0, std::min(cb->frameCount, maxBlock));
-                    // Feed each engine block through the plug-in EXACTLY ONCE, in order,
-                    // and only when it is genuinely new. Re-feeding the same block (or
-                    // skipping) breaks sample continuity, which a spectrum analyzer shows
-                    // as a smeared tone. Polling faster than the block rate lets us catch
-                    // every block without repeats.
-                    if (freshBlock && advancedSinceAttach && frameCount > 0) {
+                        // Fell more than a ring behind (this UTILITY thread was starved): the oldest
+                        // slots have already been overwritten, so skip to the oldest still-intact block.
+                        const uint64_t ring = static_cast<uint64_t>(neuracoust::daw::kVst3BridgeObserverRingBlocks);
+                        if (writeIndex - observerRingRead > ring) {
+                            observerRingRead = writeIndex - ring;
+                        }
+                        // Params are metering-only; the latest snapshot covers the whole burst.
                         const int paramCount = std::max(0, std::min(cb->numInParams, neuracoust::daw::kVst3BridgeMaxParams));
                         params.clear();
-                        const auto* inParams = neuracoust::daw::vst3BridgeParamRegion(const_cast<void*>(mapping), layout.inParamsOffset);
+                        const auto* inParams = neuracoust::daw::vst3BridgeParamRegion(mapping, layout.inParamsOffset);
                         for (int i = 0; i < paramCount; ++i) {
                             params.push_back(inParams[i]);
                         }
-                        const float* input = neuracoust::daw::vst3BridgeAudioRegion(const_cast<void*>(mapping), layout.inputOffset);
-                        // Hand the block to the main thread — DON'T run process() here. The
-                        // plug-in's meter/analyzer messages fire during process() over its
-                        // component↔controller connection; on this background thread they never
-                        // reach the GUI. Queued in order so the analyzer stream stays continuous.
-                        BridgeCapturedBlock captured;
-                        captured.input.assign(input, input + static_cast<size_t>(frameCount) * 2u);
-                        captured.frameCount = frameCount;
-                        captured.params = params;
-                        {
-                            std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
+                        const float* ringBase = neuracoust::daw::vst3BridgeAudioRegion(mapping, layout.observerRingOffset);
+                        const size_t slotStride = static_cast<size_t>(maxBlock) * 2u;
+                        // Hand each block to the main thread — DON'T run process() here. The plug-in's
+                        // meter/analyzer messages fire during process() over its component↔controller
+                        // connection; on this background thread they never reach the GUI. Queued in
+                        // order so the analyzer stream stays continuous.
+                        std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
+                        while (observerRingRead != writeIndex) {
+                            const size_t slot = static_cast<size_t>(observerRingRead % ring);
+                            const int frameCount = std::max(0, std::min(cb->observerRingFrames[slot], maxBlock));
+                            ++observerRingRead;
+                            if (frameCount <= 0) {
+                                continue;
+                            }
+                            const float* slotAudio = ringBase + slot * slotStride;
+                            BridgeCapturedBlock captured;
+                            captured.input.assign(slotAudio, slotAudio + static_cast<size_t>(frameCount) * 2u);
+                            captured.frameCount = frameCount;
+                            captured.params = params;
                             if (bridgeCaptureQueue_.size() >= kBridgeCaptureQueueCap) {
                                 bridgeCaptureQueue_.pop_front();   // UI stalled — drop oldest
                             }
                             bridgeCaptureQueue_.push_back(std::move(captured));
                         }
+                    } else {
+                        ++staleIterations;
                     }
                     if (staleIterations > kReattachLimit) {
                         // Long-idle: re-open in case the shm was torn down and a new one
