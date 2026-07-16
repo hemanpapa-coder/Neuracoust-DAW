@@ -5319,6 +5319,13 @@ void nc_midi_pump_live_input(NCEngine* engine) {
     // instrument. A track with no instrument plug-in simply renders nothing.
     for (const auto& track : engine->project.tracks) {
         if (track.trackType != "instrument") continue;
+        // Only feed a track that actually carries a loaded instrument. Queuing to an empty-slot track
+        // renders nothing, but it flips the engine into "has render content" for that one block and
+        // back, and the engage/disengage transition ticks — a short blip on every keypress even though
+        // no instrument is playing. No instrument → no queue → no blip.
+        const bool hasInstrument = instrumentSlotFilled(track.instrument) ||
+            std::any_of(track.instrumentSlots.begin(), track.instrumentSlots.end(), instrumentSlotFilled);
+        if (!hasInstrument) continue;
         const bool isTarget = !engine->liveMidiTargetTrack.empty() && track.name == engine->liveMidiTargetTrack;
         if (!(track.recordArmed || track.inputMonitoring || isTarget)) continue;
         engine->engine.queueLiveMidiEvents(track.name, liveEvents);
