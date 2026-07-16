@@ -1089,6 +1089,10 @@ public:
         return true;
     }
 
+    // Instrument-editor monitor is a macOS editor-host feature; nothing to mix here.
+    void setEditorInstrumentMonitor(bool, const std::string&) {}
+    void pushEditorInstrumentMonitorInterleaved(const float*, int64_t) {}
+
     void queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) {
         if (trackName.empty() || events.empty()) {
             return;
@@ -1586,6 +1590,8 @@ bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName,
 bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
+void RealtimeAudioEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) { impl_->setEditorInstrumentMonitor(active, trackName); }
+void RealtimeAudioEngine::pushEditorInstrumentMonitorInterleaved(const float* samples, int64_t frameCount) { impl_->pushEditorInstrumentMonitorInterleaved(samples, frameCount); }
 void RealtimeAudioEngine::setTransportRecordingActive(bool active) { impl_->setTransportRecordingActive(active); }
 void RealtimeAudioEngine::rewind() { impl_->rewind(); }
 void RealtimeAudioEngine::seek(double seconds) { impl_->seek(seconds); }
@@ -1713,6 +1719,8 @@ public:
     bool updateInstrumentVst3Parameter(const std::string&, size_t, uint32_t, const std::string&, double) { return false; }
     bool updateMonitorSpeakerVst3Parameter(int, size_t, uint32_t, const std::string&, double) { return false; }
     void queueLiveMidiEvents(const std::string&, const std::vector<Vst3MidiEvent>&) {}
+    void setEditorInstrumentMonitor(bool, const std::string&) {}
+    void pushEditorInstrumentMonitorInterleaved(const float*, int64_t) {}
     void setTransportRunning(bool running) {
         settings_.transportRunning = running;
         status_.transportRunning = running;
@@ -1770,6 +1778,8 @@ bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName,
 bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
+void RealtimeAudioEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) { impl_->setEditorInstrumentMonitor(active, trackName); }
+void RealtimeAudioEngine::pushEditorInstrumentMonitorInterleaved(const float* samples, int64_t frameCount) { impl_->pushEditorInstrumentMonitorInterleaved(samples, frameCount); }
 void RealtimeAudioEngine::setTransportRunning(bool running) { impl_->setTransportRunning(running); }
 void RealtimeAudioEngine::setTransportRecordingActive(bool active) { impl_->setTransportRecordingActive(active); }
 void RealtimeAudioEngine::rewind() { impl_->rewind(); }

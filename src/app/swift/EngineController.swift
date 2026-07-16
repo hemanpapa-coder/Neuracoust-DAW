@@ -4545,6 +4545,25 @@ final class EngineController: ObservableObject {
         if active != midiLiveActive { midiLiveActive = active }
     }
 
+    /// Creates the reverse-audio monitor ring for an opening instrument editor: the editor's
+    /// own instance renders GUI keyboard clicks (and the forwarded live MIDI) and the engine
+    /// mixes that audio into the monitor path. Returns the shm coordinates for the spawn.
+    func instrumentEditorOpened(trackId: Int) -> (shmName: String, maxBlock: Int, sampleRate: Double)? {
+        guard let handle else { return nil }
+        var name = [CChar](repeating: 0, count: 128)
+        var maxBlock: Int32 = 0
+        var sampleRate: Double = 0
+        guard nc_track_instrument_editor_opened(handle, Int32(trackId), &name, name.count,
+                                                &maxBlock, &sampleRate) else { return nil }
+        return (String(cString: name), Int(maxBlock), sampleRate)
+    }
+
+    /// Tears that ring down and returns the live-MIDI path to the render instance.
+    func instrumentEditorClosed(trackId: Int) {
+        guard let handle else { return }
+        nc_track_instrument_editor_closed(handle, Int32(trackId))
+    }
+
     /// Pumps pending keyboard input into the instruments and mirrors the drained batch to
     /// any open instrument editor, whose separate-process plug-in instance would otherwise
     /// never see it — this is what makes a plug-in GUI's keyboard/wheel move while playing.

@@ -50,6 +50,22 @@ inline std::string vst3BridgeObserverShmName(const std::string& key) {
     return std::string(buffer);
 }
 
+// Name for an instrument editor's REVERSE audio ring (editor → DAW). The editor
+// host publishes the audio its own instrument instance renders (GUI keyboard
+// clicks, forwarded live MIDI) and the DAW mixes it into the monitor path — the
+// only way a note born inside the plug-in's GUI can be heard, since the GUI's
+// note messages are vendor-private and never visible to the host.
+inline std::string vst3InstrumentMonitorShmName(const std::string& key) {
+    uint32_t hash = 2166136261u;
+    for (unsigned char ch : key) {
+        hash ^= ch;
+        hash *= 16777619u;
+    }
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "/ncim%08x", hash);
+    return std::string(buffer);
+}
+
 } // namespace neuracoust::daw
 
 #if !defined(_WIN32)
@@ -299,6 +315,209 @@ private:
     uint32_t handledSeq_ = 0;
     int lastFrameCount_ = 0;
     std::vector<float> inputScratch_;
+};
+
+// ---------------------------------------------------------------------------
+// Instrument editor monitor ring (editor host → DAW, audio only)
+// ---------------------------------------------------------------------------
+//
+// Single writer (the editor host's paced instrument pump), single reader (a
+// UTILITY thread in the DAW that feeds the engine's monitor FIFO). Lock-free:
+// the writer fills a slot then release-stores ringWrite; the reader
+// acquire-loads ringWrite and drains [read, write). Same discipline as the
+// insert bridge's observer ring. The DAW creates and initializes the segment
+// before spawning the editor host; the host only attaches.
+
+constexpr uint32_t kVst3InstrumentMonitorMagic = 0x4E43494Du; // "NCIM"
+constexpr uint32_t kVst3InstrumentMonitorAbiVersion = 1u;
+constexpr int kVst3InstrumentMonitorRingBlocks = 16;
+
+struct Vst3InstrumentMonitorControl {
+    uint32_t magic;
+    uint32_t abiVersion;
+    int32_t maxBlockSize;
+    double sampleRate;
+    uint64_t ringWrite; // release-stored by the writer after filling a slot
+    int32_t ringFrames[kVst3InstrumentMonitorRingBlocks];
+};
+
+inline size_t vst3InstrumentMonitorSegmentSize(int maxBlockSize) {
+    const size_t block = static_cast<size_t>(std::max(1, maxBlockSize));
+    const size_t audioBytes = block * 2u * sizeof(float) *
+        static_cast<size_t>(kVst3InstrumentMonitorRingBlocks);
+    return vst3BridgeAlignUp(vst3BridgeAlignUp(sizeof(Vst3InstrumentMonitorControl), 64) + audioBytes, 4096);
+}
+
+inline size_t vst3InstrumentMonitorRingOffset() {
+    return vst3BridgeAlignUp(sizeof(Vst3InstrumentMonitorControl), 64);
+}
+
+// DAW side: create + initialize the segment. Returns true when the mapping is
+// ready for a writer to attach. Safe to call again for the same name (recreates).
+class Vst3InstrumentMonitorReader {
+public:
+    Vst3InstrumentMonitorReader() = default;
+    ~Vst3InstrumentMonitorReader() { close(); }
+    Vst3InstrumentMonitorReader(const Vst3InstrumentMonitorReader&) = delete;
+    Vst3InstrumentMonitorReader& operator=(const Vst3InstrumentMonitorReader&) = delete;
+
+    bool create(const std::string& shmName, int maxBlockSize, double sampleRate) {
+        close();
+        maxBlockSize_ = std::max(1, maxBlockSize);
+        const size_t total = vst3InstrumentMonitorSegmentSize(maxBlockSize_);
+        shm_unlink(shmName.c_str()); // stale segment from a crashed run
+        fd_ = shm_open(shmName.c_str(), O_CREAT | O_RDWR, 0600);
+        if (fd_ < 0) {
+            return false;
+        }
+        if (ftruncate(fd_, static_cast<off_t>(total)) != 0) {
+            close();
+            return false;
+        }
+        mapping_ = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+        if (mapping_ == MAP_FAILED) {
+            mapping_ = nullptr;
+            close();
+            return false;
+        }
+        totalSize_ = total;
+        control_ = reinterpret_cast<Vst3InstrumentMonitorControl*>(mapping_);
+        std::memset(control_, 0, sizeof(*control_));
+        control_->maxBlockSize = maxBlockSize_;
+        control_->sampleRate = sampleRate;
+        control_->abiVersion = kVst3InstrumentMonitorAbiVersion;
+        __atomic_store_n(&control_->ringWrite, 0ull, __ATOMIC_RELEASE);
+        // Magic last: a writer that maps mid-initialization sees no magic and waits.
+        __atomic_store_n(&control_->magic, kVst3InstrumentMonitorMagic, __ATOMIC_RELEASE);
+        readCursor_ = 0;
+        name_ = shmName;
+        return true;
+    }
+
+    void close() {
+        if (mapping_ != nullptr) {
+            munmap(mapping_, totalSize_);
+            mapping_ = nullptr;
+        }
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        if (!name_.empty()) {
+            shm_unlink(name_.c_str());
+            name_.clear();
+        }
+        control_ = nullptr;
+    }
+
+    bool ready() const { return control_ != nullptr; }
+
+    // Drains every block published since the last call. `sink(samples, frames)`
+    // receives interleaved stereo. Falls behind → skips ahead (drop-oldest).
+    template <typename Sink>
+    void drain(Sink&& sink) {
+        if (control_ == nullptr) {
+            return;
+        }
+        const uint64_t write = __atomic_load_n(&control_->ringWrite, __ATOMIC_ACQUIRE);
+        if (write <= readCursor_) {
+            return;
+        }
+        if (write - readCursor_ > static_cast<uint64_t>(kVst3InstrumentMonitorRingBlocks)) {
+            readCursor_ = write - static_cast<uint64_t>(kVst3InstrumentMonitorRingBlocks);
+        }
+        const float* ring = reinterpret_cast<const float*>(
+            static_cast<const char*>(mapping_) + vst3InstrumentMonitorRingOffset());
+        const size_t slotSamples = static_cast<size_t>(maxBlockSize_) * 2u;
+        while (readCursor_ < write) {
+            const int slot = static_cast<int>(readCursor_ % kVst3InstrumentMonitorRingBlocks);
+            const int frames = std::max(0, std::min(control_->ringFrames[slot], maxBlockSize_));
+            if (frames > 0) {
+                sink(ring + static_cast<size_t>(slot) * slotSamples, frames);
+            }
+            ++readCursor_;
+        }
+    }
+
+private:
+    int fd_ = -1;
+    void* mapping_ = nullptr;
+    size_t totalSize_ = 0;
+    Vst3InstrumentMonitorControl* control_ = nullptr;
+    int maxBlockSize_ = 0;
+    uint64_t readCursor_ = 0;
+    std::string name_;
+};
+
+// Editor-host side: attach to the DAW-created segment and publish blocks.
+class Vst3InstrumentMonitorWriter {
+public:
+    Vst3InstrumentMonitorWriter() = default;
+    ~Vst3InstrumentMonitorWriter() { detach(); }
+    Vst3InstrumentMonitorWriter(const Vst3InstrumentMonitorWriter&) = delete;
+    Vst3InstrumentMonitorWriter& operator=(const Vst3InstrumentMonitorWriter&) = delete;
+
+    bool attach(const std::string& shmName, int maxBlockSize) {
+        detach();
+        maxBlockSize_ = std::max(1, maxBlockSize);
+        const size_t total = vst3InstrumentMonitorSegmentSize(maxBlockSize_);
+        fd_ = shm_open(shmName.c_str(), O_RDWR, 0600);
+        if (fd_ < 0) {
+            return false;
+        }
+        mapping_ = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+        if (mapping_ == MAP_FAILED) {
+            mapping_ = nullptr;
+            detach();
+            return false;
+        }
+        totalSize_ = total;
+        control_ = reinterpret_cast<Vst3InstrumentMonitorControl*>(mapping_);
+        if (__atomic_load_n(&control_->magic, __ATOMIC_ACQUIRE) != kVst3InstrumentMonitorMagic ||
+            control_->abiVersion != kVst3InstrumentMonitorAbiVersion ||
+            control_->maxBlockSize != maxBlockSize_) {
+            detach();
+            return false;
+        }
+        return true;
+    }
+
+    void detach() {
+        if (mapping_ != nullptr) {
+            munmap(mapping_, totalSize_);
+            mapping_ = nullptr;
+        }
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        control_ = nullptr;
+    }
+
+    bool attached() const { return control_ != nullptr; }
+
+    void publish(const float* interleavedStereo, int frames) {
+        if (control_ == nullptr || interleavedStereo == nullptr || frames <= 0) {
+            return;
+        }
+        frames = std::min(frames, maxBlockSize_);
+        const uint64_t write = __atomic_load_n(&control_->ringWrite, __ATOMIC_RELAXED);
+        const int slot = static_cast<int>(write % kVst3InstrumentMonitorRingBlocks);
+        float* ring = reinterpret_cast<float*>(
+            static_cast<char*>(mapping_) + vst3InstrumentMonitorRingOffset());
+        std::memcpy(ring + static_cast<size_t>(slot) * static_cast<size_t>(maxBlockSize_) * 2u,
+                    interleavedStereo,
+                    static_cast<size_t>(frames) * 2u * sizeof(float));
+        control_->ringFrames[slot] = frames;
+        __atomic_store_n(&control_->ringWrite, write + 1u, __ATOMIC_RELEASE);
+    }
+
+private:
+    int fd_ = -1;
+    void* mapping_ = nullptr;
+    size_t totalSize_ = 0;
+    Vst3InstrumentMonitorControl* control_ = nullptr;
+    int maxBlockSize_ = 0;
 };
 
 } // namespace neuracoust::daw

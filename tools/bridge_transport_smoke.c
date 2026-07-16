@@ -3,8 +3,10 @@
 
 #include "bridge/NeuracoustEngineBridge.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 int main(void) {
@@ -592,6 +594,37 @@ int main(void) {
         nc_monitor_speaker_output(engine, 1, buf, sizeof buf);
         if (strcmp(buf, "Output 3-4") == 0) { fprintf(stderr, "FAIL: slot A output leaked to slot B\n"); failures++; }
         printf("speaker set model/output OK\n");
+    }
+
+    // --- Instrument editor reverse monitor: lifecycle + shm handoff -------------
+    {
+        char shm[128] = {0};
+        int maxBlock = 0;
+        double rate = 0.0;
+        // An audio track never gets the ring.
+        if (nc_track_instrument_editor_opened(engine, 0, shm, sizeof shm, &maxBlock, &rate)) {
+            fprintf(stderr, "FAIL: editor monitor opened on an audio track\n"); failures++;
+        }
+        const int inst = nc_track_add_instrument(engine);
+        if (inst < 0) { fprintf(stderr, "FAIL: could not add an instrument track\n"); failures++; }
+        if (!nc_track_instrument_editor_opened(engine, inst, shm, sizeof shm, &maxBlock, &rate)) {
+            fprintf(stderr, "FAIL: editor monitor did not open on an instrument track\n"); failures++;
+        }
+        if (shm[0] != '/' || maxBlock <= 0 || rate <= 1000.0) {
+            fprintf(stderr, "FAIL: editor monitor handoff ('%s', %d, %.0f)\n", shm, maxBlock, rate); failures++;
+        }
+        // The segment must exist for the editor host to attach to.
+        int fd = shm_open(shm, O_RDWR, 0600);
+        if (fd < 0) { fprintf(stderr, "FAIL: monitor shm '%s' missing after open\n", shm); failures++; }
+        else { close(fd); }
+        // Reopening (a newer editor) recreates it; closing tears down and unlinks.
+        if (!nc_track_instrument_editor_opened(engine, inst, shm, sizeof shm, &maxBlock, &rate)) {
+            fprintf(stderr, "FAIL: editor monitor reopen failed\n"); failures++;
+        }
+        nc_track_instrument_editor_closed(engine, inst);
+        fd = shm_open(shm, O_RDWR, 0600);
+        if (fd >= 0) { fprintf(stderr, "FAIL: monitor shm survived close\n"); failures++; close(fd); }
+        printf("instrument editor monitor lifecycle OK\n");
     }
 
     nc_engine_stop(engine);

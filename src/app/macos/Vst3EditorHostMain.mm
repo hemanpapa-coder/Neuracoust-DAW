@@ -221,7 +221,7 @@ public:
         index = static_cast<Steinberg::int32>(queues_.size() - 1u);
         return queues_.back().get();
     }
-    void addControllerSnapshot(Steinberg::Vst::IEditController* controller) {
+    void addControllerSnapshot(Steinberg::Vst::IEditController* controller, bool automatableOnly = false) {
         if (controller == nullptr) {
             return;
         }
@@ -230,6 +230,12 @@ public:
             Steinberg::Vst::ParameterInfo info {};
             if (controller->getParameterInfo(parameterIndex, info) != Steinberg::kResultOk ||
                 (info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0) {
+                continue;
+            }
+            // Instrument mode: hidden "Internal" / MIDI-CC bookkeeping parameters read 0
+            // from the controller; pushing those zeros into the processor every block
+            // detunes/quiets the synth. Only the user-facing automatable set is state.
+            if (automatableOnly && (info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) == 0) {
                 continue;
             }
             Steinberg::int32 queueIndex = 0;
@@ -2259,6 +2265,12 @@ public:
             dispatch_release(bridgeMeterTimer_);
             bridgeMeterTimer_ = nullptr;
         }
+        if (instrumentPumpTimer_ != nullptr) {
+            dispatch_source_cancel(instrumentPumpTimer_);
+            dispatch_release(instrumentPumpTimer_);
+            instrumentPumpTimer_ = nullptr;
+        }
+        monitorWriter_.detach();
         if (transportKeyMonitor_ != nil) {
             [NSEvent removeMonitor:transportKeyMonitor_];
             transportKeyMonitor_ = nil;
@@ -2703,8 +2715,8 @@ public:
         }
 
         void tickEditorMeterProcessor() {
-            if (audioBridgeActive_) {
-                return;   // bridge metering runs on its own real-time-paced timer (pumpBridgeMeterBlocks)
+            if (audioBridgeActive_ || instrumentMode_) {
+                return;   // both run on their own real-time-paced timers
             }
             const NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
             const bool recentlyUpdated = lastMeterUpdateSeconds_ > 0.0 && now - lastMeterUpdateSeconds_ < 0.50;
@@ -2734,13 +2746,72 @@ public:
 
         // Instrument mode: the DAW forwards the live MIDI stream over stdin so this
         // editor's own plug-in instance processes it and the GUI keyboard/wheels move.
-        // The audio this instance renders is discarded — the DAW's in-process render
-        // instance is the one that sounds — so there is no doubling.
+        // With a monitor ring configured, the audio this instance renders goes BACK to
+        // the DAW (GUI keyboard clicks become audible) and the editor owns the track's
+        // live path; without one the audio is discarded and the render instance sounds.
         void setInstrumentMode(bool enabled) { instrumentMode_ = enabled; }
+
+        void configureInstrumentMonitor(const std::string& shmName, int maxBlock, double sampleRate) {
+            instrumentMonitorShmName_ = shmName;
+            instrumentMonitorMaxBlock_ = std::max(1, maxBlock);
+            if (sampleRate > 1000.0) {
+                instrumentSampleRate_ = sampleRate;
+            }
+        }
+
+        int instrumentBlockFrames() const {
+            return instrumentMonitorShmName_.empty() ? 256 : instrumentMonitorMaxBlock_;
+        }
+
+        // Real-time-paced instrument processing, same sample-debt discipline as
+        // pumpBridgeMeterBlocks: one block per real block period, so both the GUI
+        // animation and the published monitor audio advance like real playback.
+        void startInstrumentPump() {
+            if (!instrumentMode_ || instrumentPumpTimer_ != nullptr) {
+                return;
+            }
+            if (!instrumentMonitorShmName_.empty() &&
+                !monitorWriter_.attach(instrumentMonitorShmName_, instrumentMonitorMaxBlock_)) {
+                logHostStage("instrument.monitor.attach.failed");
+            } else if (!instrumentMonitorShmName_.empty()) {
+                logHostStage("instrument.monitor.attach.ok");
+            }
+            instrumentPumpTimer_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                          dispatch_get_main_queue());
+            if (instrumentPumpTimer_ == nullptr) {
+                return;
+            }
+            dispatch_source_set_timer(instrumentPumpTimer_, DISPATCH_TIME_NOW,
+                                      2ull * NSEC_PER_MSEC, 1ull * NSEC_PER_MSEC);
+            __block Vst3EditorSession* self = this;
+            dispatch_source_set_event_handler(instrumentPumpTimer_, ^{ self->pumpInstrumentBlocks(); });
+            dispatch_resume(instrumentPumpTimer_);
+        }
+
+        void pumpInstrumentBlocks() {
+            if (meterProcessor_ == nullptr) {
+                return;
+            }
+            const int blk = instrumentBlockFrames();
+            const double now = [NSDate timeIntervalSinceReferenceDate];
+            const double elapsed = (instrumentPumpLastSeconds_ > 0.0)
+                ? std::max(0.0, now - instrumentPumpLastSeconds_) : 0.0;
+            instrumentPumpLastSeconds_ = now;
+            instrumentPumpSampleDebt_ = std::min(instrumentPumpSampleDebt_ + elapsed * instrumentSampleRate_,
+                                                 static_cast<double>(blk) * 3.0);
+            if (instrumentPumpSampleDebt_ >= blk) {
+                instrumentPumpSampleDebt_ -= blk;
+                processInstrumentBlock(blk);
+            }
+        }
 
         // Called from the stdin reader queue; drained on the main thread each process block.
         void enqueueLiveMidi(uint8_t status, uint8_t data1, uint8_t data2) {
             std::lock_guard<std::mutex> lock(liveMidiMutex_);
+            if (!liveMidiSeen_) {
+                liveMidiSeen_ = true;
+                logHostStage("instrument.midi.first");
+            }
             if (pendingLiveMidi_.size() < 4096) {
                 pendingLiveMidi_.push_back({status, data1, data2});
             }
@@ -3106,8 +3177,10 @@ public:
             Steinberg::Vst::ProcessSetup setup {};
             setup.processMode = Steinberg::Vst::kRealtime;
             setup.symbolicSampleSize = Steinberg::Vst::kSample32;
-            setup.maxSamplesPerBlock = audioBridgeActive_ ? audioBridgeMaxBlock_ : 256;
-            setup.sampleRate = audioBridgeActive_ ? audioBridgeSampleRate_ : 48000.0;
+            setup.maxSamplesPerBlock = audioBridgeActive_ ? audioBridgeMaxBlock_
+                                     : (instrumentMode_ ? instrumentBlockFrames() : 256);
+            setup.sampleRate = audioBridgeActive_ ? audioBridgeSampleRate_
+                             : (instrumentMode_ ? instrumentSampleRate_ : 48000.0);
             if (meterProcessor_->setupProcessing(setup) != Steinberg::kResultOk ||
                 component_->setActive(true) != Steinberg::kResultOk ||
                 meterProcessor_->setProcessing(true) != Steinberg::kResultOk) {
@@ -3116,10 +3189,11 @@ public:
                 meterProcessor_ = nullptr;
                 return;
             }
-            meterInputLeft_.assign(256, 0.0f);
-            meterInputRight_.assign(256, 0.0f);
-            meterOutputLeft_.assign(256, 0.0f);
-            meterOutputRight_.assign(256, 0.0f);
+            const size_t meterBufferFrames = static_cast<size_t>(std::max(256, setup.maxSamplesPerBlock));
+            meterInputLeft_.assign(meterBufferFrames, 0.0f);
+            meterInputRight_.assign(meterBufferFrames, 0.0f);
+            meterOutputLeft_.assign(meterBufferFrames, 0.0f);
+            meterOutputRight_.assign(meterBufferFrames, 0.0f);
             std::ostringstream stage;
             stage << "editor.meter.processor.ok inputs=" << meterInputBusCount_
                   << " outputs=" << meterOutputBusCount_
@@ -3190,6 +3264,117 @@ public:
             }
         }
 
+        // One instrument block: silence in, forwarded live MIDI + GUI-originated state in,
+        // the plug-in's rendered audio out — published to the DAW's monitor ring when one
+        // is configured, discarded otherwise. The GUI animates either way because this IS
+        // the instance the editor window is attached to.
+        void processInstrumentBlock(int frames) {
+            if (meterProcessor_ == nullptr ||
+                meterInputLeft_.empty() || meterOutputLeft_.empty() ||
+                frames <= 0 || static_cast<size_t>(frames) > meterOutputLeft_.size()) {
+                return;
+            }
+            std::fill(meterInputLeft_.begin(), meterInputLeft_.end(), 0.0f);
+            std::fill(meterInputRight_.begin(), meterInputRight_.end(), 0.0f);
+            std::fill(meterOutputLeft_.begin(), meterOutputLeft_.end(), 0.0f);
+            std::fill(meterOutputRight_.begin(), meterOutputRight_.end(), 0.0f);
+            EditorEventList inputEvents;
+            std::vector<std::pair<uint32_t, double>> mappedParameterValues;
+            drainLiveMidiInto(inputEvents, mappedParameterValues);
+            EditorParameterChanges parameterChanges;
+            parameterChanges.addControllerSnapshot(controller_, /*automatableOnly=*/true);
+            // The snapshot only covers the first 128 parameters; a wheel/bend parameter
+            // mapped via IMidiMapping usually lives outside that range, so add it
+            // explicitly (appended points win over the snapshot's).
+            for (const auto& [parameterId, value] : mappedParameterValues) {
+                Steinberg::int32 queueIndex = 0;
+                if (auto* queue = parameterChanges.addParameterData(parameterId, queueIndex)) {
+                    Steinberg::int32 pointIndex = 0;
+                    queue->addPoint(0, std::clamp(value, 0.0, 1.0), pointIndex);
+                }
+            }
+            EditorParameterChanges outputParameterChanges;
+            Steinberg::Vst::Sample32* inputChannels[2] = {meterInputLeft_.data(), meterInputRight_.data()};
+            Steinberg::Vst::Sample32* outputChannels[2] = {meterOutputLeft_.data(), meterOutputRight_.data()};
+            Steinberg::Vst::AudioBusBuffers inputBus {};
+            Steinberg::Vst::AudioBusBuffers outputBus {};
+            inputBus.numChannels = std::max(1, std::min(2, meterInputChannelCount_));
+            inputBus.silenceFlags = (1 << inputBus.numChannels) - 1;
+            inputBus.channelBuffers32 = inputChannels;
+            outputBus.numChannels = std::max(1, std::min(2, meterOutputChannelCount_));
+            outputBus.silenceFlags = 0;
+            outputBus.channelBuffers32 = outputChannels;
+            Steinberg::Vst::ProcessContext context {};
+            context.state = Steinberg::Vst::ProcessContext::kPlaying |
+                Steinberg::Vst::ProcessContext::kProjectTimeMusicValid |
+                Steinberg::Vst::ProcessContext::kTempoValid |
+                Steinberg::Vst::ProcessContext::kTimeSigValid |
+                Steinberg::Vst::ProcessContext::kSystemTimeValid |
+                Steinberg::Vst::ProcessContext::kContTimeValid;
+            context.sampleRate = instrumentSampleRate_;
+            context.projectTimeSamples = instrumentProcessedSamples_;
+            context.continousTimeSamples = instrumentProcessedSamples_;
+            context.systemTime = static_cast<Steinberg::int64>(
+                (static_cast<double>(instrumentProcessedSamples_) / std::max(1.0, instrumentSampleRate_)) * 1.0e9);
+            context.projectTimeMusic = (static_cast<double>(instrumentProcessedSamples_) /
+                                        std::max(1.0, instrumentSampleRate_)) * 2.0;   // 120 BPM → beats
+            context.tempo = 120.0;
+            context.timeSigNumerator = 4;
+            context.timeSigDenominator = 4;
+            Steinberg::Vst::ProcessData processData {};
+            processData.processMode = Steinberg::Vst::kRealtime;
+            processData.symbolicSampleSize = Steinberg::Vst::kSample32;
+            processData.numSamples = frames;
+            processData.processContext = &context;
+            processData.numInputs = meterInputBusCount_ > 0 ? 1 : 0;
+            processData.numOutputs = meterOutputBusCount_ > 0 ? 1 : 0;
+            processData.inputs = processData.numInputs > 0 ? &inputBus : nullptr;
+            processData.outputs = processData.numOutputs > 0 ? &outputBus : nullptr;
+            processData.inputEvents = inputEvents.getEventCount() > 0 ? &inputEvents : nullptr;
+            processData.inputParameterChanges = parameterChanges.getParameterCount() > 0 ? &parameterChanges : nullptr;
+            processData.outputParameterChanges = &outputParameterChanges;
+            try {
+                if (meterProcessor_->process(processData) != Steinberg::kResultOk) {
+                    return;
+                }
+            } catch (...) {
+                return;
+            }
+            instrumentProcessedSamples_ += frames;
+            if (!instrumentEventsProcessedLogged_ && inputEvents.getEventCount() > 0) {
+                instrumentEventsProcessedLogged_ = true;
+                logHostStage("instrument.midi.processed.first");
+            }
+            // Unlike the effect meter paths, output parameter changes are NOT written back
+            // to the controller here: FabFilter instruments emit zeros there, and writing
+            // them corrupted the controller state, which the next block's snapshot then
+            // pushed into the processor — everything (including Volume) pinned to 0 and
+            // the synth fell silent. Instrument GUIs animate from the plug-in's own
+            // component↔controller connection instead.
+            if (!instrumentNonSilentLogged_) {
+                for (int frame = 0; frame < frames; ++frame) {
+                    if (std::fabs(meterOutputLeft_[static_cast<size_t>(frame)]) > 1.0e-5f) {
+                        instrumentNonSilentLogged_ = true;
+                        logHostStage("instrument.audio.nonsilent.first");
+                        break;
+                    }
+                }
+            }
+            if (monitorWriter_.attached() && meterOutputBusCount_ > 0) {
+                const bool stereoOut = std::max(1, std::min(2, meterOutputChannelCount_)) > 1;
+                if (instrumentPublishBlock_.size() < static_cast<size_t>(frames) * 2u) {
+                    instrumentPublishBlock_.assign(static_cast<size_t>(frames) * 2u, 0.0f);
+                }
+                for (int frame = 0; frame < frames; ++frame) {
+                    const float left = meterOutputLeft_[static_cast<size_t>(frame)];
+                    const float right = stereoOut ? meterOutputRight_[static_cast<size_t>(frame)] : left;
+                    instrumentPublishBlock_[static_cast<size_t>(frame) * 2u] = left;
+                    instrumentPublishBlock_[static_cast<size_t>(frame) * 2u + 1u] = right;
+                }
+                monitorWriter_.publish(instrumentPublishBlock_.data(), frames);
+            }
+        }
+
         void processEditorMeterAudio(double inputLeftPeak, double inputRightPeak) {
             if ((suppressSyntheticEditorAudio_ && !instrumentMode_) ||
                 meterProcessor_ == nullptr ||
@@ -3254,25 +3439,8 @@ public:
             context.tempo = 120.0;
             context.timeSigNumerator = 4;
             context.timeSigDenominator = 4;
-            // Live MIDI forwarded from the DAW (instrument mode). Drained BEFORE the
-            // controller snapshot so a mapped wheel/bend value rides into this block.
-            EditorEventList inputEvents;
-            std::vector<std::pair<uint32_t, double>> mappedParameterValues;
-            if (instrumentMode_) {
-                drainLiveMidiInto(inputEvents, mappedParameterValues);
-            }
             EditorParameterChanges parameterChanges;
             parameterChanges.addControllerSnapshot(controller_);
-            // The snapshot only covers the first 128 parameters; a wheel/bend parameter
-            // mapped via IMidiMapping usually lives outside that range, so add it
-            // explicitly (appended points win over the snapshot's).
-            for (const auto& [parameterId, value] : mappedParameterValues) {
-                Steinberg::int32 queueIndex = 0;
-                if (auto* queue = parameterChanges.addParameterData(parameterId, queueIndex)) {
-                    Steinberg::int32 pointIndex = 0;
-                    queue->addPoint(0, std::clamp(value, 0.0, 1.0), pointIndex);
-                }
-            }
             EditorParameterChanges outputParameterChanges;
             Steinberg::Vst::ProcessData processData {};
             processData.processMode = Steinberg::Vst::kRealtime;
@@ -3283,7 +3451,6 @@ public:
             processData.numOutputs = meterOutputBusCount_ > 0 ? 1 : 0;
             processData.inputs = processData.numInputs > 0 ? &inputBus : nullptr;
             processData.outputs = processData.numOutputs > 0 ? &outputBus : nullptr;
-            processData.inputEvents = inputEvents.getEventCount() > 0 ? &inputEvents : nullptr;
             processData.inputParameterChanges = parameterChanges.getParameterCount() > 0 ? &parameterChanges : nullptr;
             processData.outputParameterChanges = &outputParameterChanges;
             try {
@@ -3668,6 +3835,20 @@ public:
         bool instrumentMode_ = false;
         std::mutex liveMidiMutex_;
         std::vector<std::array<uint8_t, 3>> pendingLiveMidi_;
+        // Reverse audio ring back to the DAW (GUI keyboard clicks → speakers) plus the
+        // real-time-paced pump state that drives instrument processing.
+        std::string instrumentMonitorShmName_;
+        bool liveMidiSeen_ = false;
+        bool instrumentEventsProcessedLogged_ = false;
+        bool instrumentNonSilentLogged_ = false;
+        int instrumentMonitorMaxBlock_ = 256;
+        double instrumentSampleRate_ = 48000.0;
+        neuracoust::daw::Vst3InstrumentMonitorWriter monitorWriter_;
+        dispatch_source_t instrumentPumpTimer_ = nullptr;
+        double instrumentPumpSampleDebt_ = 0.0;
+        double instrumentPumpLastSeconds_ = 0.0;
+        int64_t instrumentProcessedSamples_ = 0;
+        std::vector<float> instrumentPublishBlock_;
         std::vector<float> meterInputLeft_;
         std::vector<float> meterInputRight_;
         std::vector<float> meterOutputLeft_;
@@ -3740,8 +3921,17 @@ int main(int argc, const char* argv[]) {
             const bool inspectParametersMode = hasArgument(argc, argv, "--inspect-parameters");
             const bool meterOverlayEnabled = hasArgument(argc, argv, "--meter-overlay");
             // Instrument slot: the DAW forwards live MIDI over stdin ("MIDI <status> <d1> <d2>")
-            // so this editor's own instance animates its keyboard/wheels. Audio is discarded.
+            // so this editor's own instance animates its keyboard/wheels. With --monitor-shm
+            // the rendered audio is published BACK to the DAW's monitor (GUI clicks become
+            // audible); without it the audio is discarded.
             const bool instrumentMode = hasArgument(argc, argv, "--instrument");
+            const std::string instrumentMonitorShm = argumentValue(argc, argv, "--monitor-shm");
+            const int instrumentMonitorMaxBlock = instrumentMonitorShm.empty()
+                ? 256
+                : std::max(1, std::atoi(argumentValue(argc, argv, "--monitor-max-block").c_str()));
+            const double instrumentMonitorSampleRate = instrumentMonitorShm.empty()
+                ? 48000.0
+                : std::strtod(argumentValue(argc, argv, "--monitor-sample-rate").c_str(), nullptr);
             // --observe-shm: read-only observer that animates the plugin's own
             // meters/graphics from the engine's real per-insert audio (safe; does
             // not touch the audio path). --audio-bridge-shm: full server mode.
@@ -3849,6 +4039,7 @@ int main(int argc, const char* argv[]) {
                 std::string deferredError;
                 deferredSession->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
                 deferredSession->setInstrumentMode(instrumentMode);
+                deferredSession->configureInstrumentMonitor(instrumentMonitorShm, instrumentMonitorMaxBlock, instrumentMonitorSampleRate);
                 @try {
                     try {
                         if (!deferredSession->open(descriptor, nsTitle, meterOverlayEnabled, deferredError)) {
@@ -3869,6 +4060,7 @@ int main(int argc, const char* argv[]) {
                 }
                 deferredSession->initializeParameterPolling();
                 deferredSession->startAudioBridge();
+                deferredSession->startInstrumentPump();
                 std::cout << "READY" << std::endl;
                 if (probeMode) {
                     _Exit(0);
@@ -3892,6 +4084,7 @@ int main(int argc, const char* argv[]) {
         auto session = std::make_unique<Vst3EditorSession>();
         session->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
         session->setInstrumentMode(instrumentMode);
+        session->configureInstrumentMonitor(instrumentMonitorShm, instrumentMonitorMaxBlock, instrumentMonitorSampleRate);
         NSString* nsTitle = title.empty()
             ? [NSString stringWithFormat:@"%s", pluginName.empty() ? "VST3 Plug-in" : pluginName.c_str()]
             : [NSString stringWithUTF8String:title.c_str()];
@@ -3918,6 +4111,7 @@ int main(int argc, const char* argv[]) {
                 __block Vst3EditorSession* sessionForParameterPolling = session.get();
                 session->initializeParameterPolling();
                 session->startAudioBridge();
+                session->startInstrumentPump();
                 NSTimer* parameterPollTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 30.0)
                                                                               repeats:YES
                                                                                 block:^(NSTimer*) {

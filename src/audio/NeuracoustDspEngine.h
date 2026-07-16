@@ -89,6 +89,13 @@ public:
 
     void pushInputMonitorInterleaved(const float* samples, int64_t frameCount, int channels);
 
+    // Instrument-editor monitor: audio rendered by an OPEN instrument editor's own
+    // plug-in instance (GUI keyboard clicks, forwarded live MIDI), mixed into the
+    // monitor path like input monitoring. `trackName` scales the mix by that
+    // track's fader/pan so it sits where the render instance would.
+    void setEditorInstrumentMonitor(bool active, const std::string& trackName);
+    void pushEditorInstrumentMonitorInterleaved(const float* samples, int64_t frameCount);
+
     // Acoustic measurement (roadmap ②b): emit `signal` out one output channel (0=L,1=R) while
     // capturing the mic, so the caller can deconvolve to the system's response. The signal
     // should already include a trailing tail of silence for the room decay. Requires input
@@ -154,6 +161,7 @@ private:
     void resetRemoteDspTelemetryLocked();
     void updateProjectMonitorPolicyLocked();
     void mixInputMonitorLocked(int64_t frameCount, std::vector<float>& interleavedStereo);
+    void mixEditorInstrumentMonitorLocked(int64_t frameCount, std::vector<float>& interleavedStereo);
     void applyMonitorStationControlsLocked(std::vector<float>& interleavedStereo);
     void storeMetering(const std::vector<float>& interleavedStereo);
     void updateSpectrum(const std::vector<float>& interleavedStereo);
@@ -232,6 +240,11 @@ private:
     int inputMonitorChannels_ = 0;
     float inputPeak_ = 0.0f;
     std::vector<float> inputMonitorBuffer_;
+    // Instrument-editor monitor FIFO (see pushEditorInstrumentMonitorInterleaved).
+    mutable std::mutex editorMonitorMutex_;
+    std::vector<float> editorMonitorBuffer_;
+    std::string editorMonitorTrackName_;
+    std::atomic<bool> editorMonitorActive_ {false};
     std::string message_ = "Neuracoust DSP engine ready.";
     std::atomic<int64_t> playbackFrameForStatus_ {0};
     std::atomic<double> sampleRateForStatus_ {48000.0};

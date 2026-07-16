@@ -1716,6 +1716,37 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
     inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
 }
 
+void NeuracoustDspEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        editorMonitorTrackName_ = active ? trackName : std::string{};
+    }
+    editorMonitorActive_.store(active, std::memory_order_relaxed);
+    if (!active) {
+        std::lock_guard<std::mutex> lock(editorMonitorMutex_);
+        editorMonitorBuffer_.clear();
+    }
+}
+
+void NeuracoustDspEngine::pushEditorInstrumentMonitorInterleaved(const float* samples, int64_t frameCount) {
+    if (samples == nullptr || frameCount <= 0 || !editorMonitorActive_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    // Pusher is a UTILITY thread, so it may block briefly; the render side only
+    // try_locks, so the audio thread never waits on this mutex.
+    std::lock_guard<std::mutex> lock(editorMonitorMutex_);
+    editorMonitorBuffer_.insert(editorMonitorBuffer_.end(), samples,
+                                samples + static_cast<size_t>(frameCount) * 2u);
+    // Same discipline as the input-monitor FIFO: cap to a few render buffers so a
+    // pacing hiccup can't accumulate latency; older audio is dropped (skips ahead).
+    const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
+    const size_t maxSamples = static_cast<size_t>(blockFrames * 4) * 2u;
+    if (editorMonitorBuffer_.size() > maxSamples) {
+        editorMonitorBuffer_.erase(editorMonitorBuffer_.begin(),
+                                   editorMonitorBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
+    }
+}
+
 void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vector<float>& interleavedStereo) {
     if (frameCount <= 0) {
         interleavedStereo.clear();
@@ -1914,6 +1945,10 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     // The analyzer must show the printed mix; turning the monitor knob must not move the spectrum.
     spectrumSourceBlock_.assign(interleavedStereo.begin(), interleavedStereo.end());
     mixInputMonitorLocked(frameCount, interleavedStereo);
+    // Audio from an open instrument editor's own instance (GUI clicks, live MIDI while the
+    // editor owns the live path). Mixed here — before the monitor DSP path — so it is
+    // coloured exactly like the rest of the monitored mix.
+    mixEditorInstrumentMonitorLocked(frameCount, interleavedStereo);
     const float monitorInputTrimGain = projectMonitorDspRenderedInGraph
         ? 1.0f
         : dbToGain(std::max(-12.0f, std::min(0.0f, settings_.monitorInputTrimDb)));
@@ -2998,6 +3033,67 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     }
     inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
     inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
+}
+
+void NeuracoustDspEngine::mixEditorInstrumentMonitorLocked(int64_t frameCount,
+                                                           std::vector<float>& interleavedStereo) {
+    if (!editorMonitorActive_.load(std::memory_order_relaxed) || frameCount <= 0 ||
+        interleavedStereo.empty()) {
+        return;
+    }
+    std::unique_lock<std::mutex> monitorLock(editorMonitorMutex_, std::try_to_lock);
+    if (!monitorLock.owns_lock()) {
+        return;
+    }
+    if (editorMonitorBuffer_.empty()) {
+        return;
+    }
+    // Sit where the render instance would: the track's fader/pan/mute (and solo
+    // elsewhere silencing it), then the master fader — the editor instance renders
+    // raw plug-in output and knows nothing of the mixer.
+    float gainDb = 0.0f;
+    float pan = 0.0f;
+    bool silenced = false;
+    if (const TrackState* track = findTrack(projectPlan_, editorMonitorTrackName_)) {
+        gainDb = track->volumeDb;
+        pan = track->pan;
+        if (track->muted) {
+            silenced = true;
+        }
+        if (!track->solo) {
+            for (const auto& other : projectPlan_.tracks) {
+                if (other.solo && other.trackType != "master" && other.trackType != "monitor") {
+                    silenced = true;
+                    break;
+                }
+            }
+        }
+    }
+    float masterGainDb = 0.0f;
+    float masterPan = 0.0f;
+    if (const TrackState* master = findTrack(projectPlan_, "Master")) {
+        masterGainDb = master->volumeDb;
+        masterPan = master->pan;
+        if (master->muted) {
+            silenced = true;
+        }
+    }
+    const size_t neededSamples = static_cast<size_t>(frameCount) * 2u;
+    const size_t availableSamples = std::min(neededSamples, editorMonitorBuffer_.size());
+    if (!silenced) {
+        for (size_t index = 0; index + 1 < availableSamples; index += 2) {
+            auto [left, right] = applyStereoGainPan(editorMonitorBuffer_[index],
+                                                    editorMonitorBuffer_[index + 1],
+                                                    gainDb, pan);
+            std::tie(left, right) = applyStereoGainPan(left, right, masterGainDb, masterPan);
+            interleavedStereo[index] += left;
+            interleavedStereo[index + 1] += right;
+        }
+    }
+    if (availableSamples > 0) {
+        editorMonitorBuffer_.erase(editorMonitorBuffer_.begin(),
+                                   editorMonitorBuffer_.begin() + static_cast<std::ptrdiff_t>(availableSamples));
+    }
 }
 
 void NeuracoustDspEngine::resetTrackMetersLocked() {

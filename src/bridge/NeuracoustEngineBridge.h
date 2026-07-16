@@ -1066,6 +1066,18 @@ int nc_midi_pump_live_input(NCEngine* engine, NCMidiLiveEvent* outEvents, int ma
 /// Route the keyboard to the selected instrument track even when it is not record-armed
 /// (Logic/Live convention). Pass the track index, or -1 to clear. Transient, no undo.
 void nc_set_live_midi_target(NCEngine* engine, int trackIndex);
+/// Instrument editor reverse-audio monitor. While an instrument editor is open, its own
+/// plug-in instance renders GUI keyboard clicks and the forwarded live MIDI; this creates
+/// the shared-memory ring the editor publishes into, mixes it into the monitor path, and
+/// hands the track's live-MIDI path to the editor instance (the render instance stops
+/// hearing the keyboard so nothing doubles). One editor at a time — opening another moves
+/// the monitor. Pass the returned shm name/block/rate to the editor host (--monitor-shm).
+bool nc_track_instrument_editor_opened(NCEngine* engine, int index,
+                                       char* shmName, size_t shmNameLen,
+                                       int* maxBlock, double* sampleRate);
+/// Tears the ring down and returns the live-MIDI path to the render instance. Safe to
+/// call for an editor that never owned the monitor (a newer editor's ring survives).
+void nc_track_instrument_editor_closed(NCEngine* engine, int index);
 // Peak MIDI-input activity (0..1) since the last call; reading it resets it, so the UI
 // applies its own decay. Bump it by calling nc_midi_pump_live_input first each tick.
 float nc_midi_input_activity(NCEngine* engine);

@@ -23,11 +23,17 @@
 #include "project/AudioImport.h"
 #include "project/ProjectHistory.h"
 
+#include <pthread/qos.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <thread>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -99,6 +105,33 @@ struct NCEngine {
     /// Logic/Live convention. Transient (not project state, no undo), set from the UI on
     /// selection; the live-MIDI pump queues to this track in addition to armed ones.
     std::string liveMidiTargetTrack;
+
+    /// Reverse audio ring from an open instrument editor: the editor's own instance
+    /// renders GUI keyboard clicks (and the forwarded live MIDI), publishes into the
+    /// shm ring, and this pump thread feeds it to the engine's monitor mix. One at a
+    /// time — the most recently opened instrument editor owns the live path.
+    struct InstrumentEditorMonitor {
+        std::string trackName;
+        std::unique_ptr<neuracoust::daw::Vst3InstrumentMonitorReader> reader;
+        std::thread pumpThread;
+        std::shared_ptr<std::atomic<bool>> stop;
+    };
+    InstrumentEditorMonitor instrumentEditorMonitor;
+
+    void stopInstrumentEditorMonitor() {
+        if (instrumentEditorMonitor.stop) {
+            instrumentEditorMonitor.stop->store(true, std::memory_order_relaxed);
+        }
+        if (instrumentEditorMonitor.pumpThread.joinable()) {
+            instrumentEditorMonitor.pumpThread.join();
+        }
+        if (!instrumentEditorMonitor.trackName.empty()) {
+            engine.setEditorInstrumentMonitor(false, "");
+        }
+        instrumentEditorMonitor = {};
+    }
+
+    ~NCEngine() { stopInstrumentEditorMonitor(); }
 
     std::vector<neuracoust::daw::PluginCandidate> plugins;         // full scan
     std::vector<neuracoust::daw::PluginCandidate> filteredPlugins; // current browser view
@@ -5388,9 +5421,78 @@ int nc_midi_pump_live_input(NCEngine* engine, NCMidiLiveEvent* outEvents, int ma
         if (!hasInstrument) continue;
         const bool isTarget = !engine->liveMidiTargetTrack.empty() && track.name == engine->liveMidiTargetTrack;
         if (!(track.recordArmed || track.inputMonitoring || isTarget)) continue;
+        // While this track's instrument editor is open, the EDITOR's instance owns the
+        // live path (its audio comes back over the monitor ring); queueing here too
+        // would sound every note twice.
+        if (!engine->instrumentEditorMonitor.trackName.empty() &&
+            track.name == engine->instrumentEditorMonitor.trackName) continue;
         engine->engine.queueLiveMidiEvents(track.name, liveEvents);
     }
     return mirrored;
+}
+
+// ---------------------------------------------------------------------------
+// Instrument editor reverse-audio monitor (GUI keyboard clicks → speakers)
+// ---------------------------------------------------------------------------
+
+bool nc_track_instrument_editor_opened(NCEngine* engine, int index,
+                                       char* shmName, size_t shmNameLen,
+                                       int* maxBlock, double* sampleRate) {
+    auto* track = trackAt(engine, index);
+    if (engine == nullptr || track == nullptr || track->trackType != "instrument") {
+        return false;
+    }
+    engine->stopInstrumentEditorMonitor();
+
+    const int block = engine->project.defaultBufferSize > 0 ? engine->project.defaultBufferSize : 256;
+    const double rate = engine->project.sampleRate > 0.0 ? engine->project.sampleRate : 48000.0;
+    const std::string name =
+        neuracoust::daw::vst3InstrumentMonitorShmName(track->name + "\x1finstmon");
+    auto reader = std::make_unique<neuracoust::daw::Vst3InstrumentMonitorReader>();
+    if (!reader->create(name, block, rate)) {
+        return false;
+    }
+
+    engine->engine.setEditorInstrumentMonitor(true, track->name);
+    auto stop = std::make_shared<std::atomic<bool>>(false);
+    auto* readerPtr = reader.get();
+    auto* realtimeEngine = &engine->engine;
+    engine->instrumentEditorMonitor.trackName = track->name;
+    engine->instrumentEditorMonitor.reader = std::move(reader);
+    engine->instrumentEditorMonitor.stop = stop;
+    // Drain the ring every ~2 ms (one audio-block period) into the engine's monitor
+    // FIFO. The reader object outlives the thread: stopInstrumentEditorMonitor joins
+    // before releasing it.
+    engine->instrumentEditorMonitor.pumpThread = std::thread([readerPtr, stop, realtimeEngine]() {
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        while (!stop->load(std::memory_order_relaxed)) {
+            readerPtr->drain([&](const float* samples, int frames) {
+                realtimeEngine->pushEditorInstrumentMonitorInterleaved(samples, frames);
+            });
+            usleep(2000);
+        }
+    });
+
+    copyText(shmName, shmNameLen, name);
+    if (maxBlock != nullptr) {
+        *maxBlock = block;
+    }
+    if (sampleRate != nullptr) {
+        *sampleRate = rate;
+    }
+    return true;
+}
+
+void nc_track_instrument_editor_closed(NCEngine* engine, int index) {
+    if (engine == nullptr) {
+        return;
+    }
+    // Only tear down if the closing editor is the one that owns the monitor — a
+    // stale close from an earlier editor must not kill a newer one's ring.
+    const auto* track = trackAt(engine, index);
+    if (track == nullptr || engine->instrumentEditorMonitor.trackName == track->name) {
+        engine->stopInstrumentEditorMonitor();
+    }
 }
 
 // The selected instrument track hears the keyboard without being record-armed (Logic/Live

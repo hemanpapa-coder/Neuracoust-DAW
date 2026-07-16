@@ -199,6 +199,10 @@ public:
                                            const std::string& displayName,
                                            double normalizedValue);
     void queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events);
+    // Instrument-editor monitor: mix audio rendered by an open instrument editor's own
+    // plug-in instance into the monitor path (macOS CoreAudio engine only; no-op elsewhere).
+    void setEditorInstrumentMonitor(bool active, const std::string& trackName);
+    void pushEditorInstrumentMonitorInterleaved(const float* samples, int64_t frameCount);
     void setTransportRunning(bool running);
     void setTransportRecordingActive(bool active);
     void rewind();

@@ -73,6 +73,11 @@ final class PluginEditorHost: ObservableObject {
         if session.process.isRunning {
             session.process.terminate()
         }
+        if slot.insertIndex == -1 {
+            // Tear the reverse monitor ring down and give the live-MIDI path back to
+            // the render instance. A no-op if a newer editor owns the ring by now.
+            engine.instrumentEditorClosed(trackId: slot.trackId)
+        }
     }
 
     /// Removing a track insert shifts the higher slots down, so any editor at or above the
@@ -124,9 +129,18 @@ final class PluginEditorHost: ObservableObject {
         if slot.insertIndex < 0 {
             // Instrument rack slot: the DAW mirrors the live MIDI stream over the pipe
             // ("MIDI <status> <d1> <d2>") so the editor's own instance animates its GUI
-            // keyboard/wheels. The editor instance's audio is discarded — the in-process
-            // render instance is the one that sounds.
+            // keyboard/wheels.
             arguments += ["--instrument"]
+            // Primary slot only: the reverse monitor ring makes the editor instance the
+            // track's live voice (GUI keyboard clicks become audible). A layer editor
+            // (insertIndex < -1) renders just its own layer, so handing it the whole
+            // track's live path would silence the other layers — layers stay GUI-only.
+            if slot.insertIndex == -1,
+               let monitor = engine.instrumentEditorOpened(trackId: slot.trackId) {
+                arguments += ["--monitor-shm", monitor.shmName,
+                              "--monitor-max-block", String(monitor.maxBlock),
+                              "--monitor-sample-rate", String(monitor.sampleRate)]
+            }
         }
 
         let process = Process()
@@ -166,6 +180,11 @@ final class PluginEditorHost: ObservableObject {
                 }
                 self.sessions.removeValue(forKey: slot)
                 self.openSlots.remove(slot)
+                if slot.insertIndex == -1 {
+                    // Crash or window-close exit: give the live path back to the render
+                    // instance so the keyboard keeps sounding without its editor.
+                    self.engine.instrumentEditorClosed(trackId: slot.trackId)
+                }
             }
         }
 
@@ -173,6 +192,9 @@ final class PluginEditorHost: ObservableObject {
             try process.run()
         } catch {
             lastError = "에디터 호스트를 실행할 수 없습니다: \(error.localizedDescription)"
+            if slot.insertIndex == -1 {
+                engine.instrumentEditorClosed(trackId: slot.trackId)
+            }
             return
         }
 
