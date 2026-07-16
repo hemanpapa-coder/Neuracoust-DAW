@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <exception>
 #include <filesystem>
 #include <cstdio>
@@ -2764,7 +2765,14 @@ public:
             // load the meters may lag a little, which is harmless, but audio stays
             // glitch-free.
             pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
-            const auto layout = neuracoust::daw::vst3BridgeComputeLayout(maxBlock);
+            // The layout depends on the block size, and the ENGINE prepares the bridge with its own
+            // max block (ProjectAudioRenderer uses >= 4096), NOT the buffer size passed to us here.
+            // So we can't trust `maxBlock` for the ring offset — read the publisher's real block size
+            // from the control block on attach and recompute the layout from THAT, or the ring reads
+            // land in the wrong region (the publisher's input buffer) and the scope shows garbage/silence.
+            neuracoust::daw::Vst3BridgeLayout layout = neuracoust::daw::vst3BridgeComputeLayout(maxBlock);
+            int effMaxBlock = std::max(1, maxBlock);
+            size_t mappedSize = 0;
             void* mapping = nullptr;
             int fd = -1;
             std::vector<neuracoust::daw::Vst3BridgeParam> params;
@@ -2774,8 +2782,9 @@ public:
             constexpr int kReattachLimit = 250;    // ~500 ms stale → re-open to catch a recreated shm
             auto detach = [&]() {
                 if (mapping != nullptr) {
-                    munmap(mapping, layout.totalSize);
+                    munmap(mapping, mappedSize);
                     mapping = nullptr;
+                    mappedSize = 0;
                 }
                 if (fd >= 0) {
                     ::close(fd);
@@ -2789,18 +2798,31 @@ public:
                 if (mapping == nullptr) {
                     fd = shm_open(shmName.c_str(), O_RDONLY, 0600);
                     if (fd >= 0) {
-                        void* m = mmap(nullptr, layout.totalSize, PROT_READ, MAP_SHARED, fd, 0);
+                        // Map the whole shm (its real size — the publisher chose the block size, so
+                        // we don't know it up front) and read the actual block size from the control
+                        // block before computing offsets.
+                        struct stat st {};
+                        const size_t mapSize = (fstat(fd, &st) == 0 &&
+                                                st.st_size >= static_cast<off_t>(sizeof(neuracoust::daw::Vst3BridgeControlBlock)))
+                            ? static_cast<size_t>(st.st_size) : 0;
+                        void* m = mapSize > 0 ? mmap(nullptr, mapSize, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
                         if (m != MAP_FAILED) {
                             const auto* cb = reinterpret_cast<const neuracoust::daw::Vst3BridgeControlBlock*>(m);
-                            if (cb->magic == neuracoust::daw::kVst3BridgeMagic) {
+                            const int pubMax = cb->maxBlockSize;
+                            const auto pubLayout = neuracoust::daw::vst3BridgeComputeLayout(std::max(1, pubMax));
+                            if (cb->magic == neuracoust::daw::kVst3BridgeMagic && pubMax > 0 &&
+                                pubLayout.totalSize <= mapSize) {
                                 mapping = m;
+                                mappedSize = mapSize;
+                                effMaxBlock = pubMax;              // the publisher's real block size
+                                layout = pubLayout;                // offsets now match the publisher's
                                 // Start fresh from the current write position so we never replay stale
                                 // ring blocks left over from before this editor attached.
                                 observerRingRead = __atomic_load_n(
                                     const_cast<uint64_t*>(&cb->observerRingWrite), __ATOMIC_ACQUIRE);
                                 staleIterations = 0;
                             } else {
-                                munmap(m, layout.totalSize);
+                                munmap(m, mapSize);   // magic/size not ready yet — retry next poll
                             }
                         }
                         if (mapping == nullptr) {
@@ -2834,7 +2856,7 @@ public:
                             params.push_back(inParams[i]);
                         }
                         const float* ringBase = neuracoust::daw::vst3BridgeAudioRegion(mapping, layout.observerRingOffset);
-                        const size_t slotStride = static_cast<size_t>(maxBlock) * 2u;
+                        const size_t slotStride = static_cast<size_t>(effMaxBlock) * 2u;
                         // Hand each block to the main thread — DON'T run process() here. The plug-in's
                         // meter/analyzer messages fire during process() over its component↔controller
                         // connection; on this background thread they never reach the GUI. Queued in
@@ -2842,7 +2864,7 @@ public:
                         std::lock_guard<std::mutex> lock(bridgeCaptureMutex_);
                         while (observerRingRead != writeIndex) {
                             const size_t slot = static_cast<size_t>(observerRingRead % ring);
-                            const int frameCount = std::max(0, std::min(cb->observerRingFrames[slot], maxBlock));
+                            const int frameCount = std::max(0, std::min(cb->observerRingFrames[slot], effMaxBlock));
                             ++observerRingRead;
                             if (frameCount <= 0) {
                                 continue;
