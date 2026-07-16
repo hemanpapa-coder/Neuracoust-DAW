@@ -1898,7 +1898,12 @@ bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
 // smooth. The heavy reconcile happens once on commit via nc_clip_set_gain_db.
 bool nc_clip_set_gain_db_preview(NCEngine* engine, const char* clipId, float gainDb) {
     if (engine == nullptr || clipId == nullptr) return false;
-    return neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb);
+    // Two updates, no reconcile (so the drag stays smooth and can't click): the project model drives
+    // the waveform redraw, and updateClipGain patches the SAME clip in the live render plan in place,
+    // so the new gain is heard in real time while dragging. Commit later reconciles for undo.
+    const bool changed = neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb);
+    engine->engine.updateClipGain(clipId, gainDb);
+    return changed;
 }
 
 double nc_clip_fade_in(NCEngine* engine, int index) {
