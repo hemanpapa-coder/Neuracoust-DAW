@@ -1225,72 +1225,60 @@ bool shuffleMoveClip(ProjectDocument& project, const std::string& clipId, double
         return false;
     }
 
-    const double oldStart = clip->startSeconds;
     const double duration = std::max(0.0, clip->durationSeconds);
-    const double oldEnd = oldStart + duration;
-    const double insertStart = std::max(0.0, newStartSeconds);
-    bool changed = false;
+    const double dropStart = std::max(0.0, newStartSeconds);
 
-    if (targetTrack == sourceTrack) {
-        if (std::abs(insertStart - oldStart) < 0.0000001) {
-            return false;
-        }
-        if (insertStart > oldStart) {
-            const double insertionPoint = std::max(oldStart, insertStart - duration);
-            for (auto& other : project.clips) {
-                if (other.id == clipId || other.locked || other.trackName != sourceTrack) {
-                    continue;
-                }
-                if (other.startSeconds >= oldEnd && other.startSeconds < insertStart + 0.0000001) {
-                    other.startSeconds = std::max(0.0, other.startSeconds - duration);
-                    changed = true;
-                }
-            }
-            clip = findClip(project, clipId);
-            if (clip == nullptr || clipIsLocked(clip)) {
-                return changed;
-            }
-            clip->startSeconds = insertionPoint;
-            changed = true;
-        } else {
-            for (auto& other : project.clips) {
-                if (other.id == clipId || other.locked || other.trackName != sourceTrack) {
-                    continue;
-                }
-                if (other.startSeconds >= insertStart && other.startSeconds < oldStart) {
-                    other.startSeconds += duration;
-                    changed = true;
-                }
-            }
-            clip = findClip(project, clipId);
-            if (clip == nullptr || clipIsLocked(clip)) {
-                return changed;
-            }
-            clip->startSeconds = insertStart;
-            changed = true;
-        }
-        return changed;
-    }
-
+    // Shuffle keeps the target track PACKED — no gaps, no overlaps. Collect the other clips on the
+    // track, decide where the dropped clip lands in the sequence from its drop position, then lay
+    // them all end to end so the moved clip butts flush against its new neighbour (and any gap the
+    // move opened or the drop crossed closes up). Locked clips are left where they are.
+    std::vector<ClipState*> lane;
     for (auto& other : project.clips) {
-        if (other.id == clipId || other.locked) {
+        if (other.id == clipId || other.locked || other.trackName != targetTrack) {
             continue;
         }
-        if (other.trackName == sourceTrack && other.startSeconds >= oldEnd) {
-            other.startSeconds = std::max(0.0, other.startSeconds - duration);
-            changed = true;
-        } else if (other.trackName == targetTrack && other.startSeconds >= insertStart) {
-            other.startSeconds += duration;
-            changed = true;
+        lane.push_back(&other);
+    }
+    std::sort(lane.begin(), lane.end(), [](const ClipState* a, const ClipState* b) {
+        return a->startSeconds < b->startSeconds;
+    });
+
+    // The dropped clip goes ahead of the first existing clip that starts at or after the drop point.
+    size_t insertIndex = 0;
+    while (insertIndex < lane.size() && lane[insertIndex]->startSeconds < dropStart) {
+        ++insertIndex;
+    }
+
+    // Pack from the track's current left edge (earliest of the moved clip and its neighbours) so the
+    // content doesn't jump to 0 on the first shuffle; an empty target track packs from the drop point.
+    double origin = clip->startSeconds;
+    if (!lane.empty()) {
+        origin = std::min(origin, lane.front()->startSeconds);
+    } else {
+        origin = dropStart;
+    }
+    origin = std::max(0.0, origin);
+
+    double cursor = origin;
+    bool changed = false;
+    for (size_t i = 0; i <= lane.size(); ++i) {
+        if (i == insertIndex) {
+            if (std::abs(clip->startSeconds - cursor) > 0.0000001 || clip->trackName != targetTrack) {
+                clip->startSeconds = cursor;
+                clip->trackName = targetTrack;
+                changed = true;
+            }
+            cursor += duration;
+        }
+        if (i < lane.size()) {
+            if (std::abs(lane[i]->startSeconds - cursor) > 0.0000001) {
+                lane[i]->startSeconds = cursor;
+                changed = true;
+            }
+            cursor += std::max(0.0, lane[i]->durationSeconds);
         }
     }
-    clip = findClip(project, clipId);
-    if (clip == nullptr || clipIsLocked(clip)) {
-        return changed;
-    }
-    clip->trackName = targetTrack;
-    clip->startSeconds = insertStart;
-    return true;
+    return changed;
 }
 
 bool nudgeClip(ProjectDocument& project, const std::string& clipId, double deltaSeconds) {
