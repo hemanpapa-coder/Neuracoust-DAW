@@ -270,6 +270,10 @@ private:
     mutable std::mutex spectrumMutex_;
     std::vector<float> spectrumAccumulator_;
     std::vector<float> spectrumBins_;
+    // Snapshot of the master output taken BEFORE the monitor path (input monitoring, monitor DSP,
+    // monitor station volume) so the spectrum analyzer reflects the printed mix, not the level the
+    // monitor knob happens to be at. Captured each render block right after the mix is summed.
+    std::vector<float> spectrumSourceBlock_;
     // Goniometer: the most recent L/R sample pairs (interleaved), subsampled to a fixed
     // point count so the vectorscope stays cheap to draw.
     static constexpr int kGoniometerPoints = 512;

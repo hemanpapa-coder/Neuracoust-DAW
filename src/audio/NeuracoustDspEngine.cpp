@@ -1874,6 +1874,10 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             phase_ -= kTwoPi;
         }
     }
+    // Tap the master output for the spectrum analyzer HERE — the summed, master-fadered mix, before
+    // input monitoring, the monitor DSP simulation, and the monitor station volume colour or scale it.
+    // The analyzer must show the printed mix; turning the monitor knob must not move the spectrum.
+    spectrumSourceBlock_.assign(interleavedStereo.begin(), interleavedStereo.end());
     mixInputMonitorLocked(frameCount, interleavedStereo);
     const float monitorInputTrimGain = projectMonitorDspRenderedInGraph
         ? 1.0f
@@ -3305,7 +3309,9 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
     spectrumMid_.store(std::min(1.0f, static_cast<float>(std::sqrt(midEnergy / frames))));
     spectrumHigh_.store(std::min(1.0f, static_cast<float>(std::sqrt(highEnergy / frames))));
 
-    updateSpectrum(interleavedStereo);
+    // Spectrum analyzer taps the master output (pre-monitor), captured above; everything else in this
+    // function still reflects the signal passed in.
+    updateSpectrum(spectrumSourceBlock_.empty() ? interleavedStereo : spectrumSourceBlock_);
 
     // Loudness (BS.1770). Re-prepare the filter when the sample rate changes.
     const double sr = sampleRateForStatus_.load(std::memory_order_relaxed);
