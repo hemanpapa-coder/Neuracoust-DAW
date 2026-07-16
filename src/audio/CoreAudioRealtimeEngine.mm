@@ -720,6 +720,14 @@ public:
         return updated;
     }
 
+    bool updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
+        const bool updated = dspEngine_.updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue);
+        if (updated) {
+            status_.message = dspEngine_.lastMessage();
+        }
+        return updated;
+    }
+
     bool updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
         const bool updated = dspEngine_.updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue);
         if (updated) {
@@ -1130,6 +1138,7 @@ bool RealtimeAudioEngine::updateTrackPlaybackState(const std::string& trackName,
 bool RealtimeAudioEngine::updateTrackRealtimeState(const std::string& trackName, bool recordArmed, bool inputMonitoring, bool muted, bool solo) { return impl_->updateTrackRealtimeState(trackName, recordArmed, inputMonitoring, muted, solo); }
 bool RealtimeAudioEngine::updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
 void RealtimeAudioEngine::setTransportRunning(bool running) { impl_->setTransportRunning(running); }

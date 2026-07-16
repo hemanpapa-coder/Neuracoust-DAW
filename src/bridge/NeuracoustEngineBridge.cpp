@@ -1114,12 +1114,18 @@ bool nc_track_set_instrument_slot_vst3_parameter(NCEngine* engine, int index, in
                               clamped});
     }
     // Keep the legacy mirror in step so display/name reads stay correct for slot 0.
-    if (auto* track = trackAt(engine, index);
-        track != nullptr && slotIndex == 0 && !track->instrumentSlots.empty()) {
+    auto* track = trackAt(engine, index);
+    if (track != nullptr && slotIndex == 0 && !track->instrumentSlots.empty()) {
         track->instrument = track->instrumentSlots.front();
     }
-    // Instrument parameters live in the render plan, so reconcile for the change to be heard.
-    engine->reconcileProject();
+    // Push straight into the live render plan instead of reconciling: the renderer reads instrument
+    // parameters from the plan every block, so a knob turn is heard on the next block with no plugin
+    // rebuild — no more sound dropping out and re-appearing while adjusting an instrument. The project
+    // model above is still the source of truth for save / undo / a later full reconcile.
+    if (track != nullptr) {
+        engine->engine.updateInstrumentVst3Parameter(track->name, static_cast<size_t>(slotIndex),
+                                                      parameterId, name, clamped);
+    }
     return true;
 }
 

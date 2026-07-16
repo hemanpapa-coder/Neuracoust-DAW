@@ -185,6 +185,14 @@ public:
                                   uint32_t parameterId,
                                   const std::string& displayName,
                                   double normalizedValue);
+    // Live push for an instrument-rack slot's parameter: the renderer reads instrument parameters
+    // from the plan each block, so patching the plan here is heard on the next block with no reconcile
+    // (no processor rebuild, no audible gap while turning an instrument knob).
+    bool updateInstrumentVst3Parameter(const std::string& trackName,
+                                       size_t slotIndex,
+                                       uint32_t parameterId,
+                                       const std::string& displayName,
+                                       double normalizedValue);
     bool updateMonitorSpeakerVst3Parameter(int speakerSlot,
                                            size_t insertIndex,
                                            uint32_t parameterId,

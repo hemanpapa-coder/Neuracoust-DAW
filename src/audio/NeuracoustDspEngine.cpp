@@ -1487,6 +1487,41 @@ bool NeuracoustDspEngine::updateTrackVst3Parameter(const std::string& trackName,
     return true;
 }
 
+bool NeuracoustDspEngine::updateInstrumentVst3Parameter(const std::string& trackName,
+                                                        size_t slotIndex,
+                                                        uint32_t parameterId,
+                                                        const std::string& displayName,
+                                                        double normalizedValue) {
+    if (trackName.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto trackIt = std::find_if(projectPlan_.tracks.begin(), projectPlan_.tracks.end(),
+                                [&](const TrackState& track) { return track.name == trackName; });
+    if (trackIt == projectPlan_.tracks.end()) {
+        return false;
+    }
+    // The renderer builds its per-block instrument list from THIS plan track each block — a copy of
+    // track.instrumentSlots, or track.instrument when the rack is empty — and hands instrument.parameters
+    // straight to processMidiInstrument. Patching them here is heard on the next block with no reconcile.
+    // Keep the legacy `instrument` mirror in step with slot 0, exactly as the render fallback expects.
+    bool updated = false;
+    if (slotIndex < trackIt->instrumentSlots.size()) {
+        upsertVst3ParameterState(trackIt->instrumentSlots[slotIndex].parameters,
+                                 parameterId, displayName, normalizedValue);
+        updated = true;
+    }
+    if (slotIndex == 0) {
+        upsertVst3ParameterState(trackIt->instrument.parameters, parameterId, displayName, normalizedValue);
+        updated = true;
+    }
+    if (!updated) {
+        return false;
+    }
+    message_ = "Updated instrument VST3 parameter without reconciling.";
+    return true;
+}
+
 bool NeuracoustDspEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot,
                                                             size_t insertIndex,
                                                             uint32_t parameterId,
