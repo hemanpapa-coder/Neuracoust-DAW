@@ -1688,6 +1688,57 @@ Vst3ProcessResult processStereoBufferWithVst3(const Vst3PluginDescriptor& descri
 #endif
 }
 
+// Translate mod-wheel / CC / pitch-bend MIDI into the PARAMETER changes VST3 instruments actually
+// respond to. Synths (FabFilter Twin, most others) map these controllers to parameters via IMidiMapping
+// and ignore raw MIDI CC events, so without this mod wheel and pitch bend do nothing. Adds a parameter
+// point for each controller the plug-in has mapped; unmapped ones fall through to the legacy CC events.
+inline void addMappedMidiControllerParameters(Steinberg::Vst::IEditController* controller,
+                                              const std::vector<Vst3MidiEvent>& midiEvents,
+                                              int blockStartFrame,
+                                              int blockFrameCount,
+                                              SimpleParameterChanges& out) {
+    if (controller == nullptr || midiEvents.empty() || blockFrameCount <= 0) {
+        return;
+    }
+    Steinberg::Vst::IMidiMapping* mapping = nullptr;
+    if (controller->queryInterface(Steinberg::Vst::IMidiMapping::iid, reinterpret_cast<void**>(&mapping)) != Steinberg::kResultOk ||
+        mapping == nullptr) {
+        return;
+    }
+    const int blockEndFrame = blockStartFrame + blockFrameCount;
+    for (const auto& midiEvent : midiEvents) {
+        if (midiEvent.frameOffset < blockStartFrame || midiEvent.frameOffset >= blockEndFrame) {
+            continue;
+        }
+        Steinberg::Vst::CtrlNumber controllerNumber = -1;
+        double normalized = 0.0;
+        if (midiEvent.kind == Vst3MidiEventKind::Controller) {
+            controllerNumber = static_cast<Steinberg::Vst::CtrlNumber>(std::max(0, std::min(127, midiEvent.controller)));
+            normalized = static_cast<double>(std::max(0, std::min(127, midiEvent.value))) / 127.0;
+        } else if (midiEvent.kind == Vst3MidiEventKind::PitchBend) {
+            controllerNumber = Steinberg::Vst::kPitchBend;
+            normalized = static_cast<double>(std::max(0, std::min(16383, midiEvent.value))) / 16383.0;
+        } else {
+            continue;
+        }
+        const Steinberg::int16 channel = static_cast<Steinberg::int16>(std::max(0, std::min(15, midiEvent.channel - 1)));
+        Steinberg::Vst::ParamID paramId = 0;
+        if (mapping->getMidiControllerAssignment(0, channel, controllerNumber, paramId) != Steinberg::kResultOk) {
+            continue;
+        }
+        Steinberg::int32 queueIndex = 0;
+        auto* queue = out.addParameterData(paramId, queueIndex);
+        if (queue == nullptr) {
+            continue;
+        }
+        const Steinberg::int32 sampleOffset =
+            std::max(0, std::min(blockFrameCount - 1, midiEvent.frameOffset - blockStartFrame));
+        Steinberg::int32 pointIndex = 0;
+        queue->addPoint(sampleOffset, std::clamp(normalized, 0.0, 1.0), pointIndex);
+    }
+    mapping->release();
+}
+
 Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& descriptor,
                                                 const std::vector<Vst3MidiEvent>& midiEvents,
                                                 WavAudioData& outputAudio,
@@ -1767,10 +1818,6 @@ Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& desc
     Steinberg::Vst::Sample32* outputChannels[2] = {outputLeft.data(), outputRight.data()};
     outputBus.channelBuffers32 = outputChannels;
 
-    SimpleParameterChanges parameterChanges;
-    if (!parameters.empty()) {
-        parameterChanges.addValues(parameters);
-    }
     SimpleEventList inputEvents;
 
     for (int frameStart = 0; frameStart < totalFrames; frameStart += blockSize) {
@@ -1778,6 +1825,13 @@ Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& desc
         std::fill(outputLeft.begin(), outputLeft.end(), 0.0f);
         std::fill(outputRight.begin(), outputRight.end(), 0.0f);
         inputEvents.addMidiEvents(midiEvents, frameStart, framesThisBlock);
+        // Fresh per block so mapped-controller points don't accumulate across blocks; base params are
+        // idempotent to re-send each block.
+        SimpleParameterChanges parameterChanges;
+        if (!parameters.empty()) {
+            parameterChanges.addValues(parameters);
+        }
+        addMappedMidiControllerParameters(prepared.controller, midiEvents, frameStart, framesThisBlock, parameterChanges);
 
         Steinberg::Vst::ProcessData processData {};
         processData.processMode = Steinberg::Vst::kOffline;
@@ -1788,9 +1842,7 @@ Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& desc
         processData.inputs = nullptr;
         processData.outputs = &outputBus;
         processData.inputEvents = inputEvents.getEventCount() > 0 ? &inputEvents : nullptr;
-        if (!parameters.empty()) {
-            processData.inputParameterChanges = &parameterChanges;
-        }
+        processData.inputParameterChanges = parameterChanges.getParameterCount() > 0 ? &parameterChanges : nullptr;
 
         if (prepared.processor->process(processData) != Steinberg::kResultOk) {
             result.message = "VST3 instrument process() failed.";
@@ -2293,6 +2345,10 @@ Vst3ProcessResult Vst3RealtimeProcessor::processMidiInstrument(float* interleave
     SimpleParameterChanges parameterChanges;
     if (!effectiveParameters.empty()) {
         parameterChanges.addValues(effectiveParameters);
+    }
+    // Mod wheel / pitch bend / mapped CC → the parameter changes the synth actually responds to.
+    addMappedMidiControllerParameters(impl_->prepared.controller, midiEvents, 0, frameCount, parameterChanges);
+    if (parameterChanges.getParameterCount() > 0) {
         processData.inputParameterChanges = &parameterChanges;
     }
 
