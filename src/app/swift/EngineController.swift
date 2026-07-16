@@ -1102,7 +1102,7 @@ final class EngineController: ObservableObject {
         let midiTimer = Timer(timeInterval: midiPumpInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let handle = self.handle else { return }
-                nc_midi_pump_live_input(handle)
+                self.drainLiveMidi(handle)
             }
         }
         midiTimer.tolerance = 0
@@ -4540,9 +4540,26 @@ final class EngineController: ObservableObject {
                 midiLiveAutoStarted = false
             }
         }
-        nc_midi_pump_live_input(handle)
+        drainLiveMidi(handle)
         let active = nc_midi_live_active(handle)
         if active != midiLiveActive { midiLiveActive = active }
+    }
+
+    /// Pumps pending keyboard input into the instruments and mirrors the drained batch to
+    /// any open instrument editor, whose separate-process plug-in instance would otherwise
+    /// never see it — this is what makes a plug-in GUI's keyboard/wheel move while playing.
+    private func drainLiveMidi(_ handle: OpaquePointer) {
+        var events = [NCMidiLiveEvent](repeating: NCMidiLiveEvent(), count: 128)
+        let count = Int(nc_midi_pump_live_input(handle, &events, Int32(events.count)))
+        guard count > 0 else { return }
+        // Mirror the engine's routing rule: armed / input-monitoring tracks hear the
+        // keyboard, plus the selected track (the live-MIDI target). Only instrument
+        // editors (insertIndex < 0) receive the stream, so audio tracks filter out there.
+        let eligible = Set(tracks.filter {
+            $0.recordArmed || $0.inputMonitoring || $0.id == selectedTrackId
+        }.map(\.id))
+        guard !eligible.isEmpty else { return }
+        pluginEditors.forwardLiveMidi(trackIds: eligible, events: Array(events.prefix(count)))
     }
 
     /// The available MIDI input sources (id, name), for a source picker.

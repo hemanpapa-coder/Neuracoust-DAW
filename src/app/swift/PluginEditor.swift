@@ -121,6 +121,13 @@ final class PluginEditorHost: ObservableObject {
                           "--observe-max-block", String(descriptor.observerMaxBlock),
                           "--observe-sample-rate", String(descriptor.observerSampleRate)]
         }
+        if slot.insertIndex < 0 {
+            // Instrument rack slot: the DAW mirrors the live MIDI stream over the pipe
+            // ("MIDI <status> <d1> <d2>") so the editor's own instance animates its GUI
+            // keyboard/wheels. The editor instance's audio is discarded — the in-process
+            // render instance is the one that sounds.
+            arguments += ["--instrument"]
+        }
 
         let process = Process()
         process.executableURL = helper
@@ -227,6 +234,25 @@ final class PluginEditorHost: ObservableObject {
             return
         }
         // HOST_STAGE, INSPECT, PARAMINFO: nothing to do yet.
+    }
+
+    /// Mirrors the live MIDI stream to the open instrument editors on `trackIds` (the tracks
+    /// actually hearing the keyboard), so their GUI keyboards and wheels move with the input.
+    func forwardLiveMidi(trackIds: Set<Int>, events: [NCMidiLiveEvent]) {
+        guard !events.isEmpty, !openSlots.isEmpty else { return }
+        var payload: String?
+        for (slot, session) in sessions
+        where slot.insertIndex < 0 && session.ready && trackIds.contains(slot.trackId) {
+            if payload == nil {
+                payload = events.map { "MIDI \($0.status) \($0.data1) \($0.data2)\n" }.joined()
+            }
+            guard let data = payload?.data(using: .utf8) else { return }
+            do {
+                try session.input.write(contentsOf: data)
+            } catch {
+                close(slot)
+            }
+        }
     }
 
     /// Restores what the project saved, so reopening an editor shows the mix, not the defaults.

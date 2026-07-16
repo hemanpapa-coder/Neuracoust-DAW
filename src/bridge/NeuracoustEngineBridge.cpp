@@ -5301,10 +5301,48 @@ float nc_midi_input_activity(NCEngine* engine) {
     return value;
 }
 
-void nc_midi_pump_live_input(NCEngine* engine) {
-    if (engine == nullptr || !engine->midiInputRecorder.status().recording) return;
+namespace {
+
+/// Raw MIDI bytes for a recorded event, for mirroring the live stream to editor processes.
+bool recordedMidiEventToRawBytes(const neuracoust::daw::RecordedMidiEvent& e, NCMidiLiveEvent& out) {
+    using neuracoust::daw::RecordedMidiEventKind;
+    const unsigned char channel = static_cast<unsigned char>(std::max(1, std::min(16, e.channel)) - 1);
+    switch (e.kind) {
+    case RecordedMidiEventKind::NoteOn:
+        out = {static_cast<unsigned char>(0x90u | channel),
+               static_cast<unsigned char>(std::max(0, std::min(127, e.pitch))),
+               static_cast<unsigned char>(std::max(1, std::min(127, e.velocity)))};
+        return true;
+    case RecordedMidiEventKind::NoteOff:
+        out = {static_cast<unsigned char>(0x80u | channel),
+               static_cast<unsigned char>(std::max(0, std::min(127, e.pitch))), 0u};
+        return true;
+    case RecordedMidiEventKind::Controller:
+        out = {static_cast<unsigned char>(0xB0u | channel),
+               static_cast<unsigned char>(std::max(0, std::min(127, e.controller))),
+               static_cast<unsigned char>(std::max(0, std::min(127, e.value)))};
+        return true;
+    case RecordedMidiEventKind::PitchBend: {
+        const int bend = std::max(0, std::min(16383, e.value));
+        out = {static_cast<unsigned char>(0xE0u | channel),
+               static_cast<unsigned char>(bend & 0x7F),
+               static_cast<unsigned char>((bend >> 7) & 0x7F)};
+        return true;
+    }
+    case RecordedMidiEventKind::ProgramChange:
+        out = {static_cast<unsigned char>(0xC0u | channel),
+               static_cast<unsigned char>(std::max(0, std::min(127, e.program))), 0u};
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+int nc_midi_pump_live_input(NCEngine* engine, NCMidiLiveEvent* outEvents, int maxEvents) {
+    if (engine == nullptr || !engine->midiInputRecorder.status().recording) return 0;
     const auto pending = engine->midiInputRecorder.consumePendingEvents();
-    if (pending.empty()) return;
+    if (pending.empty()) return 0;
     // Track the loudest thing seen for the input meter (velocity / CC / bend magnitude).
     using neuracoust::daw::RecordedMidiEventKind;
     for (const auto& e : pending) {
@@ -5318,13 +5356,24 @@ void nc_midi_pump_live_input(NCEngine* engine) {
         }
         engine->midiInputActivity = std::max(engine->midiInputActivity, level);
     }
+    // Mirror the drained batch back to the caller so the UI can forward it to any open
+    // instrument editor process (the editor hosts a SECOND plug-in instance whose GUI
+    // keyboard/wheels otherwise never hear the keyboard).
+    int mirrored = 0;
+    if (outEvents != nullptr && maxEvents > 0) {
+        for (const auto& event : pending) {
+            if (mirrored >= maxEvents) break;
+            NCMidiLiveEvent raw {};
+            if (recordedMidiEventToRawBytes(event, raw)) outEvents[mirrored++] = raw;
+        }
+    }
     std::vector<neuracoust::daw::Vst3MidiEvent> liveEvents;
     liveEvents.reserve(pending.size());
     for (const auto& event : pending) {
         neuracoust::daw::Vst3MidiEvent v;
         if (recordedMidiEventToVst3Event(event, v)) liveEvents.push_back(v);
     }
-    if (liveEvents.empty()) return;
+    if (liveEvents.empty()) return mirrored;
     // Every armed / input-monitoring instrument track hears the keyboard, plus the currently
     // selected instrument track (the live-MIDI target) so playing just works after loading an
     // instrument. A track with no instrument plug-in simply renders nothing.
@@ -5341,6 +5390,7 @@ void nc_midi_pump_live_input(NCEngine* engine) {
         if (!(track.recordArmed || track.inputMonitoring || isTarget)) continue;
         engine->engine.queueLiveMidiEvents(track.name, liveEvents);
     }
+    return mirrored;
 }
 
 // The selected instrument track hears the keyboard without being record-armed (Logic/Live

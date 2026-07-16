@@ -1052,7 +1052,17 @@ void nc_midi_input_name(NCEngine* engine, int index, char* out, size_t outLen);
 bool nc_midi_live_start(NCEngine* engine, const char* sourceId);
 void nc_midi_live_stop(NCEngine* engine);
 bool nc_midi_live_active(NCEngine* engine);
-void nc_midi_pump_live_input(NCEngine* engine);
+/// One pumped live-MIDI event as raw MIDI bytes, so the UI can mirror the stream to an
+/// open plug-in editor process (whose GUI keyboard/wheel otherwise never sees the input).
+typedef struct NCMidiLiveEvent {
+    unsigned char status; ///< status byte incl. channel (0x9n note-on, 0x8n off, 0xBn CC, 0xEn bend, 0xCn program)
+    unsigned char data1;
+    unsigned char data2;
+} NCMidiLiveEvent;
+/// Drains pending keyboard input into the armed/monitored instrument tracks (as before) and
+/// also copies up to maxEvents of the drained batch into outEvents. Returns how many were
+/// written; pass NULL/0 to just pump.
+int nc_midi_pump_live_input(NCEngine* engine, NCMidiLiveEvent* outEvents, int maxEvents);
 /// Route the keyboard to the selected instrument track even when it is not record-armed
 /// (Logic/Live convention). Pass the track index, or -1 to clear. Transient, no undo.
 void nc_set_live_midi_target(NCEngine* engine, int trackIndex);

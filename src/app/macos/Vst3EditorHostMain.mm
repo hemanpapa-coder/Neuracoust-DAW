@@ -4,6 +4,7 @@
 #include "plugins/Vst3SdkAdapter.h"
 #include "plugins/Vst3RealtimeBridgeProtocol.h"
 
+#include <array>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -21,6 +22,8 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "pluginterfaces/vst/ivstpluginterfacesupport.h"
 
@@ -258,6 +261,35 @@ public:
 
 private:
     std::vector<std::unique_ptr<EditorParamValueQueue>> queues_;
+};
+
+// Stack-allocated event list for feeding live MIDI (forwarded from the DAW over stdin)
+// into the editor's own plug-in instance, so an instrument GUI's keyboard animates.
+class EditorEventList final : public Steinberg::Vst::IEventList {
+public:
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override {
+        QUERY_INTERFACE(iid, obj, Steinberg::FUnknown::iid, Steinberg::Vst::IEventList)
+        QUERY_INTERFACE(iid, obj, Steinberg::Vst::IEventList::iid, Steinberg::Vst::IEventList)
+        *obj = nullptr;
+        return Steinberg::kNoInterface;
+    }
+    Steinberg::uint32 PLUGIN_API addRef() override { return 1; }
+    Steinberg::uint32 PLUGIN_API release() override { return 1; }
+    Steinberg::int32 PLUGIN_API getEventCount() override { return static_cast<Steinberg::int32>(events_.size()); }
+    Steinberg::tresult PLUGIN_API getEvent(Steinberg::int32 index, Steinberg::Vst::Event& event) override {
+        if (index < 0 || static_cast<size_t>(index) >= events_.size()) {
+            return Steinberg::kResultFalse;
+        }
+        event = events_[static_cast<size_t>(index)];
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API addEvent(Steinberg::Vst::Event& event) override {
+        events_.push_back(event);
+        return Steinberg::kResultOk;
+    }
+
+private:
+    std::vector<Steinberg::Vst::Event> events_;
 };
 
 class HostAttributeList final : public Steinberg::Vst::IAttributeList {
@@ -2700,6 +2732,20 @@ public:
             audioBridgeObserver_ = observer;
         }
 
+        // Instrument mode: the DAW forwards the live MIDI stream over stdin so this
+        // editor's own plug-in instance processes it and the GUI keyboard/wheels move.
+        // The audio this instance renders is discarded — the DAW's in-process render
+        // instance is the one that sounds — so there is no doubling.
+        void setInstrumentMode(bool enabled) { instrumentMode_ = enabled; }
+
+        // Called from the stdin reader queue; drained on the main thread each process block.
+        void enqueueLiveMidi(uint8_t status, uint8_t data1, uint8_t data2) {
+            std::lock_guard<std::mutex> lock(liveMidiMutex_);
+            if (pendingLiveMidi_.size() < 4096) {
+                pendingLiveMidi_.push_back({status, data1, data2});
+            }
+        }
+
         bool audioBridgeActive() const { return audioBridgeActive_; }
 
         // Serve the engine's realtime audio for this insert using the SAME plugin
@@ -3007,11 +3053,12 @@ public:
 	        void prepareEditorMeterProcessor() {
 	            // In audio-bridge mode the processor must be prepared even when the
 	            // synthetic meter probe is disabled, because it processes the real
-	            // track audio for this insert.
-	            if ((suppressSyntheticEditorAudio_ && !audioBridgeActive_) ||
+	            // track audio for this insert. Instrument mode likewise: the processor
+	            // must run so forwarded live MIDI animates the GUI keyboard/wheels.
+	            if ((suppressSyntheticEditorAudio_ && !audioBridgeActive_ && !instrumentMode_) ||
 	                component_ == nullptr ||
 	                meterProcessor_ != nullptr) {
-	                if (suppressSyntheticEditorAudio_ && !audioBridgeActive_) {
+	                if (suppressSyntheticEditorAudio_ && !audioBridgeActive_ && !instrumentMode_) {
 	                    logHostStage("editor.meter.processor.skipped.synthetic_audio_disabled");
 	                }
 	                return;
@@ -3034,6 +3081,11 @@ public:
             }
             if (meterOutputBusCount_ > 0) {
                 component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, 0, true);
+            }
+            // An instrument listens on an event bus, not an audio input.
+            if (instrumentMode_ &&
+                component_->getBusCount(Steinberg::Vst::kEvent, Steinberg::Vst::kInput) > 0) {
+                component_->activateBus(Steinberg::Vst::kEvent, Steinberg::Vst::kInput, 0, true);
             }
             if (!setPreferredEditorMeterBusArrangement(meterProcessor_,
                                                        meterInputBusCount_,
@@ -3076,8 +3128,70 @@ public:
             logHostStage(stage.str());
         }
 
+        // Translate the queued raw-MIDI bytes into note events (for processData.inputEvents)
+        // and, for CC / pitch-bend, into the parameters the plug-in maps them to via
+        // IMidiMapping — same translation the DAW's render does. Applying the mapped value
+        // through setHostParameterValue moves the GUI (wheel) immediately, records it in
+        // lastPolledParameterValues_ so it is NOT echoed back to the DAW as a PARAM edit
+        // (the render already heard the CC directly), and the controller snapshot taken by
+        // the caller's process block carries it into the processor.
+        void drainLiveMidiInto(EditorEventList& events,
+                               std::vector<std::pair<uint32_t, double>>& mappedParameterValues) {
+            std::vector<std::array<uint8_t, 3>> midi;
+            {
+                std::lock_guard<std::mutex> lock(liveMidiMutex_);
+                midi.swap(pendingLiveMidi_);
+            }
+            if (midi.empty()) {
+                return;
+            }
+            Steinberg::Vst::IMidiMapping* mapping = nullptr;
+            if (controller_ != nullptr &&
+                controller_->queryInterface(Steinberg::Vst::IMidiMapping::iid,
+                                            reinterpret_cast<void**>(&mapping)) != Steinberg::kResultOk) {
+                mapping = nullptr;
+            }
+            for (const auto& bytes : midi) {
+                const uint8_t status = bytes[0] & 0xF0u;
+                const Steinberg::int16 channel = static_cast<Steinberg::int16>(bytes[0] & 0x0Fu);
+                if (status == 0x90u && bytes[2] > 0) {
+                    Steinberg::Vst::Event event {};
+                    event.type = Steinberg::Vst::Event::kNoteOnEvent;
+                    event.noteOn.channel = channel;
+                    event.noteOn.pitch = static_cast<Steinberg::int16>(bytes[1] & 0x7Fu);
+                    event.noteOn.velocity = static_cast<float>(bytes[2] & 0x7Fu) / 127.0f;
+                    event.noteOn.noteId = -1;
+                    events.addEvent(event);
+                } else if (status == 0x80u || status == 0x90u) {
+                    Steinberg::Vst::Event event {};
+                    event.type = Steinberg::Vst::Event::kNoteOffEvent;
+                    event.noteOff.channel = channel;
+                    event.noteOff.pitch = static_cast<Steinberg::int16>(bytes[1] & 0x7Fu);
+                    event.noteOff.velocity = 0.0f;
+                    event.noteOff.noteId = -1;
+                    events.addEvent(event);
+                } else if (mapping != nullptr && (status == 0xB0u || status == 0xE0u)) {
+                    const Steinberg::Vst::CtrlNumber controllerNumber = status == 0xB0u
+                        ? static_cast<Steinberg::Vst::CtrlNumber>(bytes[1] & 0x7Fu)
+                        : Steinberg::Vst::kPitchBend;
+                    const double normalized = status == 0xB0u
+                        ? static_cast<double>(bytes[2] & 0x7Fu) / 127.0
+                        : static_cast<double>((bytes[1] & 0x7Fu) | ((bytes[2] & 0x7Fu) << 7)) / 16383.0;
+                    Steinberg::Vst::ParamID parameterId = 0;
+                    if (mapping->getMidiControllerAssignment(0, channel, controllerNumber, parameterId) ==
+                        Steinberg::kResultOk) {
+                        setHostParameterValue(static_cast<uint32_t>(parameterId), normalized);
+                        mappedParameterValues.push_back({static_cast<uint32_t>(parameterId), normalized});
+                    }
+                }
+            }
+            if (mapping != nullptr) {
+                mapping->release();
+            }
+        }
+
         void processEditorMeterAudio(double inputLeftPeak, double inputRightPeak) {
-            if (suppressSyntheticEditorAudio_ ||
+            if ((suppressSyntheticEditorAudio_ && !instrumentMode_) ||
                 meterProcessor_ == nullptr ||
                 meterInputLeft_.empty() ||
                 meterInputRight_.empty() ||
@@ -3140,8 +3254,25 @@ public:
             context.tempo = 120.0;
             context.timeSigNumerator = 4;
             context.timeSigDenominator = 4;
+            // Live MIDI forwarded from the DAW (instrument mode). Drained BEFORE the
+            // controller snapshot so a mapped wheel/bend value rides into this block.
+            EditorEventList inputEvents;
+            std::vector<std::pair<uint32_t, double>> mappedParameterValues;
+            if (instrumentMode_) {
+                drainLiveMidiInto(inputEvents, mappedParameterValues);
+            }
             EditorParameterChanges parameterChanges;
             parameterChanges.addControllerSnapshot(controller_);
+            // The snapshot only covers the first 128 parameters; a wheel/bend parameter
+            // mapped via IMidiMapping usually lives outside that range, so add it
+            // explicitly (appended points win over the snapshot's).
+            for (const auto& [parameterId, value] : mappedParameterValues) {
+                Steinberg::int32 queueIndex = 0;
+                if (auto* queue = parameterChanges.addParameterData(parameterId, queueIndex)) {
+                    Steinberg::int32 pointIndex = 0;
+                    queue->addPoint(0, std::clamp(value, 0.0, 1.0), pointIndex);
+                }
+            }
             EditorParameterChanges outputParameterChanges;
             Steinberg::Vst::ProcessData processData {};
             processData.processMode = Steinberg::Vst::kRealtime;
@@ -3152,6 +3283,7 @@ public:
             processData.numOutputs = meterOutputBusCount_ > 0 ? 1 : 0;
             processData.inputs = processData.numInputs > 0 ? &inputBus : nullptr;
             processData.outputs = processData.numOutputs > 0 ? &outputBus : nullptr;
+            processData.inputEvents = inputEvents.getEventCount() > 0 ? &inputEvents : nullptr;
             processData.inputParameterChanges = parameterChanges.getParameterCount() > 0 ? &parameterChanges : nullptr;
             processData.outputParameterChanges = &outputParameterChanges;
             try {
@@ -3531,6 +3663,11 @@ public:
 	        bool suppressSyntheticEditorAudio_ = false;
         Steinberg::int32 flexibleInitialSizeCapHeight_ = 0;
         bool meterOverlayEnabled_ = false;
+        // Instrument mode: live MIDI forwarded from the DAW over stdin, queued here
+        // (reader queue) and drained into process blocks (main thread).
+        bool instrumentMode_ = false;
+        std::mutex liveMidiMutex_;
+        std::vector<std::array<uint8_t, 3>> pendingLiveMidi_;
         std::vector<float> meterInputLeft_;
         std::vector<float> meterInputRight_;
         std::vector<float> meterOutputLeft_;
@@ -3602,6 +3739,9 @@ int main(int argc, const char* argv[]) {
             const bool probeMode = hasArgument(argc, argv, "--probe");
             const bool inspectParametersMode = hasArgument(argc, argv, "--inspect-parameters");
             const bool meterOverlayEnabled = hasArgument(argc, argv, "--meter-overlay");
+            // Instrument slot: the DAW forwards live MIDI over stdin ("MIDI <status> <d1> <d2>")
+            // so this editor's own instance animates its keyboard/wheels. Audio is discarded.
+            const bool instrumentMode = hasArgument(argc, argv, "--instrument");
             // --observe-shm: read-only observer that animates the plugin's own
             // meters/graphics from the engine's real per-insert audio (safe; does
             // not touch the audio path). --audio-bridge-shm: full server mode.
@@ -3708,6 +3848,7 @@ int main(int argc, const char* argv[]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 std::string deferredError;
                 deferredSession->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
+                deferredSession->setInstrumentMode(instrumentMode);
                 @try {
                     try {
                         if (!deferredSession->open(descriptor, nsTitle, meterOverlayEnabled, deferredError)) {
@@ -3750,6 +3891,7 @@ int main(int argc, const char* argv[]) {
         std::string error;
         auto session = std::make_unique<Vst3EditorSession>();
         session->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
+        session->setInstrumentMode(instrumentMode);
         NSString* nsTitle = title.empty()
             ? [NSString stringWithFormat:@"%s", pluginName.empty() ? "VST3 Plug-in" : pluginName.c_str()]
             : [NSString stringWithUTF8String:title.c_str()];
@@ -3803,6 +3945,22 @@ int main(int argc, const char* argv[]) {
                         NSData* lineData = [meterInputBuffer subdataWithRange:NSMakeRange(0, lineLength)];
                         NSString* line = [[[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding] autorelease];
                         [meterInputBuffer replaceBytesInRange:NSMakeRange(0, lineLength + 1) withBytes:nullptr length:0];
+                        if ([line hasPrefix:@"MIDI "]) {
+                            // Live MIDI forwarded from the DAW (instrument mode). Queued
+                            // straight from this reader queue — enqueueLiveMidi is
+                            // mutex-guarded — and drained on the next process block.
+                            NSArray<NSString*>* parts = [line componentsSeparatedByString:@" "];
+                            if (parts.count >= 4 && sessionForMeters != nullptr) {
+                                const long status = std::strtol(parts[1].UTF8String, nullptr, 10);
+                                const long data1 = std::strtol(parts[2].UTF8String, nullptr, 10);
+                                const long data2 = std::strtol(parts[3].UTF8String, nullptr, 10);
+                                sessionForMeters->enqueueLiveMidi(
+                                    static_cast<uint8_t>(std::clamp<long>(status, 0, 255)),
+                                    static_cast<uint8_t>(std::clamp<long>(data1, 0, 127)),
+                                    static_cast<uint8_t>(std::clamp<long>(data2, 0, 127)));
+                            }
+                            continue;
+                        }
                         if ([line hasPrefix:@"PARAM_SET "]) {
                             NSArray<NSString*>* parts = [line componentsSeparatedByString:@" "];
                             if (parts.count >= 3) {
