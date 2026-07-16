@@ -434,6 +434,7 @@ private struct EditView: View {
                     onDropCopyToNewTrack: { engine.dropClipCopyToNewTrack($0, startSeconds: $1) },
                     onSplitClip: { engine.splitClipAt($0, seconds: $1) },
                     editTool: engine.editTool.rawValue,
+                    onBeginCopySelection: { engine.beginCopySelection(anchorId: $0) },
                     onMoveSelection: { engine.moveSelection(by: $0) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },

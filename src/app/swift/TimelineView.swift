@@ -208,6 +208,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onDropCopy: ((String, Int, Double) -> Void)?     // (clipId, laneIndex, startSeconds)
     var onDropCopyToNewTrack: ((String, Double) -> Void)?  // drop past last lane → new track
     var onMoveSelection: ((Double) -> Void)?             // delta seconds
+    // Duplicate the whole clip selection in place and select the copies; returns the copy of the
+    // passed anchor clip (or nil on failure) so the drag can continue moving the copies.
+    var onBeginCopySelection: ((String) -> String?)?
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
@@ -265,6 +268,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         /// live start is read back from the model each frame, so a clamp at zero
         /// simply stops the whole selection instead of drifting it apart.
         case movingSelection(anchorId: String, grabOffsetSeconds: Double, startX: CGFloat, axisUnlocked: Bool)
+        /// Option-drag of a multi-selection = copy. Once the drag crosses the axis-lock threshold the
+        /// whole selection is duplicated in place and the gesture continues as a movingSelection on the
+        /// copies, so the originals stay put. A click that never crosses the threshold copies nothing.
+        case copyMovingSelection(anchorId: String, grabOffsetSeconds: Double, startX: CGFloat)
         case trimmingStart(clipId: String)
         case trimmingEnd(clipId: String)
         case fadingIn(clip: TimelineModel.Clip)
@@ -840,9 +847,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
         let grabOffset = seconds(atX: point.x) - hit.startSeconds
         if hit.selected, selectionCount > 1 {
-            // Trimming a whole selection has no obvious meaning; a drag moves it.
-            drag = .movingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset,
-                                    startX: point.x, axisUnlocked: false)
+            // Trimming a whole selection has no obvious meaning; a drag moves it. Holding ⌥ copies
+            // the whole selection instead — the same as ⌥-dragging a single clip, but for all of them.
+            if event.modifierFlags.contains(.option) {
+                drag = .copyMovingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset, startX: point.x)
+            } else {
+                drag = .movingSelection(anchorId: hit.id, grabOffsetSeconds: grabOffset,
+                                        startX: point.x, axisUnlocked: false)
+            }
         } else if point.x - rect.minX <= Self.trimHandleWidth {
             drag = .trimmingStart(clipId: hit.id)
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
@@ -932,6 +944,19 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                                         grabOffsetSeconds: seconds(atX: point.x) - anchor.startSeconds,
                                         startX: startX, axisUnlocked: true)
             }
+        case .copyMovingSelection(let anchorId, let grabOffset, let startX):
+            dragCursor = point
+            needsDisplay = true
+            // Only once the drag really moves: duplicate the whole selection in place, then continue
+            // as a normal selection-move on the copies (originals left put). A click never copies.
+            if abs(point.x - startX) > Self.axisLockThreshold {
+                if let newAnchor = onBeginCopySelection?(anchorId) {
+                    drag = .movingSelection(anchorId: newAnchor, grabOffsetSeconds: grabOffset,
+                                            startX: startX, axisUnlocked: true)
+                } else {
+                    drag = .none
+                }
+            }
         case .trimmingStart(let clipId):
             onTrimStart?(clipId, snapped(time))
         case .trimmingEnd(let clipId):
@@ -1011,6 +1036,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onCommitGain?(clip.id)
         case .movingSelection:
             onCommitEdit?("Move clips")
+        case .copyMovingSelection:
+            break   // never crossed the threshold — nothing was copied, nothing to commit
         case .marquee(let origin, let current):
             if origin == current {
                 // A click, not a sweep: the playhead follows, snapped to the grid.
@@ -2366,6 +2393,7 @@ struct TimelineView: NSViewRepresentable {
     var onDropCopyToNewTrack: ((String, Double) -> Void)? = nil
     var onSplitClip: ((String, Double) -> Void)? = nil
     var editTool: String = "smart"
+    var onBeginCopySelection: ((String) -> String?)? = nil
     let onMoveSelection: (Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
@@ -2463,6 +2491,7 @@ struct TimelineView: NSViewRepresentable {
         view.onSplitClip = onSplitClip
         view.editTool = editTool
         view.onMoveSelection = onMoveSelection
+        view.onBeginCopySelection = onBeginCopySelection
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd
         view.onSetFades = onSetFades

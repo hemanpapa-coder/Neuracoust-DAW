@@ -2255,6 +2255,33 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Option-drag copy of a multi-selection: duplicate every selected clip in place, select the
+    /// copies, and return the copy of `anchorId` so the timeline keeps dragging the copies while the
+    /// originals stay put. One undo step for the whole duplication.
+    func beginCopySelection(anchorId: String) -> String? {
+        guard let handle else { return nil }
+        let originals = selection   // stable id order over the current selection
+        guard !originals.isEmpty else { return nil }
+        var newIds: [String] = []
+        var newAnchor: String?
+        for id in originals {
+            guard let clip = clips.first(where: { $0.id == id }) else { continue }
+            var buffer = [CChar](repeating: 0, count: 128)
+            guard nc_clip_duplicate(handle, id, &buffer, buffer.count) else { continue }
+            let newId = String(cString: buffer)
+            // Pin the copy exactly onto its original (same track, same start) so the selection-move
+            // delta that follows is measured from the right place.
+            _ = nc_clip_move(handle, newId, clip.startSeconds)
+            newIds.append(newId)
+            if id == anchorId { newAnchor = newId }
+        }
+        guard !newIds.isEmpty else { return nil }
+        selectedClipIds = Set(newIds)
+        reloadClips()
+        refreshHistory()
+        return newAnchor ?? newIds.first
+    }
+
     func trimClipStart(_ clipId: String, to startSeconds: Double) {
         guard let handle else { return }
         if nc_clip_trim_start(handle, clipId, startSeconds) { reloadClips() }
