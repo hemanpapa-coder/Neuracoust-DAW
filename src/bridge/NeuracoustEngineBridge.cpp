@@ -4375,7 +4375,10 @@ void nc_set_input_device(NCEngine* engine, const char* deviceId) {
         return;
     }
     engine->inputDeviceId = next;
-    restartEngineForSettings(engine);
+    // The monitor input device only feeds the input queue, so swap it live rather than
+    // restarting the whole engine — the master transport keeps playing while you A/B a
+    // reference source (BlackHole). A restart would stop playback.
+    engine->engine.setInputDeviceLive(next);
 }
 
 void nc_monitor_path_mode(NCEngine* engine, char* out, size_t outLen) {

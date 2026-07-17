@@ -160,6 +160,9 @@ public:
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room");
     void setPhysicalInputAccessAllowed(bool allowed);
     void setMonitorListenSource(bool active);
+    /// Change the monitor input device live (reopens only the input queue; the output engine
+    /// and its transport keep running). macOS CoreAudio engine only; no-op elsewhere.
+    void setInputDeviceLive(const std::string& deviceId);
     void setInsertTailOnStopSeconds(double seconds);
     bool loadAudioFile(const std::string& path, std::string& error);
     bool loadProject(const ProjectDocument& project, std::string& error);

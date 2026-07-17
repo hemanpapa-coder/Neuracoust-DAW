@@ -246,6 +246,14 @@ private:
     int inputMonitorChannels_ = 0;
     float inputPeak_ = 0.0f;
     std::vector<float> inputMonitorBuffer_;
+    // Reference monitoring (listen source, e.g. BlackHole) runs on a clock independent of
+    // the output, so it is varispeed-resampled to the output clock: the read advances by a
+    // ratio that is nudged to hold the FIFO near a target depth. This locks input to output
+    // with no drift, underrun, or drop — a fixed FIFO alone can only stutter.
+    bool listenSourcePrerolling_ = true;
+    double listenReadPosFrames_ = 0.0;   // fractional read position into the FIFO (frames)
+    double listenResampleRatio_ = 1.0;   // input frames consumed per output frame
+    double listenSmoothedDepth_ = 0.0;   // heavily low-passed FIFO depth (drives the ratio)
     // Instrument-editor monitor FIFO (see pushEditorInstrumentMonitorInterleaved).
     mutable std::mutex editorMonitorMutex_;
     std::vector<float> editorMonitorBuffer_;

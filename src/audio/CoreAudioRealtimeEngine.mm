@@ -596,6 +596,14 @@ public:
         // capturing immediately instead of waiting for a record-arm or talkback.
         refreshInputMonitorForCurrentProject();
     }
+    // Change the monitor INPUT device without restarting the output engine — only the input
+    // queue reopens, so the master transport keeps playing uninterrupted while you A/B a
+    // reference source. A full restart (as for the output device) would stop the transport.
+    void setInputDeviceLive(const std::string& deviceId) {
+        settings_.inputDeviceId = deviceId;
+        stopInputMonitor();                       // close on the old device
+        refreshInputMonitorForCurrentProject();   // reopen on the new device if a feature needs it
+    }
     void setInsertTailOnStopSeconds(double seconds) { dspEngine_.setInsertTailOnStopSeconds(seconds); }
 
     void setPhysicalInputAccessAllowed(bool allowed) {
@@ -1159,6 +1167,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }

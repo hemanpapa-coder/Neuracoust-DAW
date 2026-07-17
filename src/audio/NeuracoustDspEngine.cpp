@@ -1699,12 +1699,15 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
         inputMonitorBuffer_[destination + 1] = right;
         peak = std::max(peak, std::max(std::abs(left), std::abs(right)));
     }
-    // Keep the input-monitor FIFO to a few render buffers, not the old 0.5 s, so monitoring
-    // latency can't accumulate — the SoundGrid driver delivers callbacks in bursts, which
-    // would otherwise pile up in this queue. Anything older than the cap is dropped (the
-    // monitor skips ahead), bounding worst-case latency to ~a few buffers. Talkback tighter.
+    // Record-arm / talkback monitoring wants a shallow FIFO (low latency: your voice must
+    // reach the speaker fast). Listening to a source (BlackHole reference music) is the
+    // opposite — latency is irrelevant, but the input and output run on independent clocks
+    // and the driver delivers in bursts, so a shallow cap dropped and starved constantly
+    // (severe stutter). Give the reference feed a deep cushion (~170 ms) to ride over both.
     const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
-    const int64_t capFrames = blockFrames * (talkbackActive ? 2 : 4);
+    const bool listenSourceFeed = listenSourceActive_.load(std::memory_order_relaxed);
+    const int64_t capFrames = listenSourceFeed ? blockFrames * 96
+                                               : blockFrames * (talkbackActive ? 2 : 4);
     const size_t maxSamples = static_cast<size_t>(capFrames) * 2;
     if (inputMonitorBuffer_.size() > maxSamples) {
         inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(), inputMonitorBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
@@ -2926,6 +2929,10 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
         std::lock_guard<std::mutex> inputLock(inputMonitorMutex_);
         physicalInputMonitoringActive_ = false;
         inputMonitorBuffer_.clear();
+        listenSourcePrerolling_ = true;   // next engagement pre-rolls a fresh cushion
+        listenReadPosFrames_ = 0.0;
+        listenResampleRatio_ = 1.0;
+        listenSmoothedDepth_ = 0.0;
         inputPeak_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActiveForStatus_.store(false, std::memory_order_relaxed);
@@ -3007,10 +3014,80 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     if (!inputLock.owns_lock()) {
         return;
     }
-    // Listening to a source (BlackHole) passes it through at unity like talkback — the
-    // record-monitor gain/pan/mute belong to a record-armed track, not the reference feed.
     const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
-    const bool unityPassthrough = talkbackToMonitor || listenSource;
+    // --- Reference feed (BlackHole): varispeed-resample to the output clock -----------
+    // The input runs on its own clock, so a 1:1 copy drifts and stutters. Instead read the
+    // FIFO with a fractional position advanced by listenResampleRatio_, and nudge that ratio
+    // to hold the FIFO near a target depth. The ratio self-tunes to the true input/output
+    // rate — correcting both drift and a 44.1↔48 mismatch — with no pre-roll or underrun.
+    if (listenSource) {
+        const int64_t availFrames = static_cast<int64_t>(inputMonitorBuffer_.size() / 2);
+        // Deep cushion (~213 ms): reference monitoring tolerates latency, and a deep FIFO lets
+        // the ratio control be slow (stable pitch) yet never underrun on the driver's bursty,
+        // core-isolation-starved delivery. Cap (pushInputMonitorInterleaved) is deeper still.
+        const double targetFrames = static_cast<double>(std::max<int64_t>(16, maxBlockSize_)) * 40.0;
+        // Prime the cushion once, then never stop reading.
+        if (listenSourcePrerolling_) {
+            if (availFrames < static_cast<int64_t>(targetFrames)) {
+                inputPeak_ *= 0.96f;
+                inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
+                return;
+            }
+            listenSourcePrerolling_ = false;
+            listenReadPosFrames_ = 0.0;
+            listenResampleRatio_ = 1.0;
+            listenSmoothedDepth_ = static_cast<double>(availFrames);
+        }
+        // Source monitoring is exclusive, not additive: while listening to the source you
+        // hear ONLY it, not the DAW master on top. The master transport keeps running
+        // underneath (silenced here), so switching back resumes it in place.
+        std::fill(interleavedStereo.begin(), interleavedStereo.end(), 0.0f);
+        const double depthFrames = static_cast<double>(availFrames) - listenReadPosFrames_;
+        // PROPORTIONAL control (not integral). The FIFO depth is already the integral of the
+        // rate mismatch, so an integral controller on top made a double integrator — a pure
+        // oscillator that drove the depth empty↔full and swung the ratio ±10% (severe pitch
+        // wobble + dropouts). A proportional law is unconditionally stable: the ratio settles
+        // at the true input/output rate with the depth parked a little off target, and holds
+        // there. Smooth the depth first so burst jitter does not reach the ratio (pitch waver).
+        listenSmoothedDepth_ += 0.02 * (depthFrames - listenSmoothedDepth_);
+        const double err = (listenSmoothedDepth_ - targetFrames) / targetFrames;
+        listenResampleRatio_ = std::clamp(1.0 + 0.02 * err, 0.94, 1.06);
+        for (int64_t f = 0; f < frameCount; ++f) {
+            const int64_t i0 = static_cast<int64_t>(listenReadPosFrames_);
+            const int64_t i1 = i0 + 1;
+            if (i1 >= availFrames) {
+                break;   // genuinely dry this block; ratio control will refill the cushion
+            }
+            const float frac = static_cast<float>(listenReadPosFrames_ - static_cast<double>(i0));
+            const float l = inputMonitorBuffer_[static_cast<size_t>(i0) * 2u] * (1.0f - frac) +
+                            inputMonitorBuffer_[static_cast<size_t>(i1) * 2u] * frac;
+            const float r = inputMonitorBuffer_[static_cast<size_t>(i0) * 2u + 1u] * (1.0f - frac) +
+                            inputMonitorBuffer_[static_cast<size_t>(i1) * 2u + 1u] * frac;
+            // Add raw — the monitor DSP path colours the summed block downstream, so running
+            // the speaker sim per input sample here was redundant (double processing) and the
+            // biggest per-block cost. The reference feed gets the same monitor colour as the mix.
+            interleavedStereo[static_cast<size_t>(f) * 2u] += l;
+            interleavedStereo[static_cast<size_t>(f) * 2u + 1u] += r;
+            listenReadPosFrames_ += listenResampleRatio_;
+        }
+        const int64_t consumedFrames = static_cast<int64_t>(listenReadPosFrames_);
+        if (consumedFrames > 0) {
+            const size_t consumedSamples = std::min(inputMonitorBuffer_.size(),
+                                                    static_cast<size_t>(consumedFrames) * 2u);
+            inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(),
+                                      inputMonitorBuffer_.begin() + static_cast<std::ptrdiff_t>(consumedSamples));
+            listenReadPosFrames_ -= static_cast<double>(consumedFrames);
+        }
+        inputPeak_ *= 0.96f;
+        if (inputMonitorBuffer_.empty() && inputPeak_ < 0.0001f) {
+            inputPeak_ = 0.0f;
+        }
+        inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
+        inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
+        return;
+    }
+    // --- Talkback / record-arm monitoring: low-latency 1:1 (unchanged) ----------------
+    const bool unityPassthrough = talkbackToMonitor;
     const size_t neededSamples = static_cast<size_t>(frameCount) * 2;
     const size_t availableSamples = std::min(neededSamples, inputMonitorBuffer_.size());
     for (size_t index = 0; index + 1 < availableSamples; index += 2) {

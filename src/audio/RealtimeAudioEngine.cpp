@@ -660,6 +660,7 @@ public:
         settings_.physicalInputAccessAllowed = allowed;
     }
     void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setInputDeviceLive(const std::string&) {}
     void setInsertTailOnStopSeconds(double) {}
 
     bool loadAudioFile(const std::string& path, std::string& error) {
@@ -1574,6 +1575,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
@@ -1693,6 +1695,7 @@ public:
     }
     void setPhysicalInputAccessAllowed(bool allowed) { settings_.physicalInputAccessAllowed = allowed; }
     void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setInputDeviceLive(const std::string&) {}
     void setInsertTailOnStopSeconds(double) {}
     bool loadAudioFile(const std::string&, std::string& error) {
         error = "Audio file playback is not implemented on this platform yet.";
@@ -1761,6 +1764,7 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
