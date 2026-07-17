@@ -13,7 +13,12 @@ enum class AudioDriverKind {
 };
 
 struct AudioDeviceInfo {
+    /// Stable identity persisted by the UI: the CoreAudio device UID, which survives
+    /// re-plug / re-enumeration (unlike the ephemeral numeric AudioObjectID). Falls
+    /// back to the numeric id only when a device exposes no UID.
     std::string id;
+    /// The CoreAudio device UID (same value as id on macOS; kept explicit for clarity).
+    std::string uid;
     std::string name;
     AudioDriverKind driver = AudioDriverKind::Unknown;
     int inputChannels = 0;

@@ -22,6 +22,8 @@ namespace neuracoust::daw {
 
 namespace {
 
+AudioObjectID deviceIdFromStoredIdentity(const std::string& identity);
+
 AudioObjectID defaultOutputDevice() {
     AudioObjectID device = kAudioObjectUnknown;
     UInt32 size = sizeof(device);
@@ -59,14 +61,7 @@ AudioObjectID firstDeviceWithOutput() {
 }
 
 AudioObjectID outputDeviceFromSettings(const AudioEngineSettings& settings) {
-    AudioObjectID chosen = kAudioObjectUnknown;
-    if (!settings.outputDeviceId.empty()) {
-        char* end = nullptr;
-        const auto parsed = std::strtoul(settings.outputDeviceId.c_str(), &end, 10);
-        if (end != settings.outputDeviceId.c_str() && parsed != 0) {
-            chosen = static_cast<AudioObjectID>(parsed);
-        }
-    }
+    AudioObjectID chosen = deviceIdFromStoredIdentity(settings.outputDeviceId);
     if (chosen == kAudioObjectUnknown) {
         chosen = defaultOutputDevice();
     }
@@ -97,16 +92,48 @@ std::string deviceName(AudioObjectID device) {
     return buffer;
 }
 
-CFStringRef deviceUidFromId(const std::string& deviceId) {
-    if (deviceId.empty()) {
-        return nullptr;
+// Resolve a stored device identity to the CURRENT AudioObjectID. The identity is a
+// stable UID string; a legacy value is a numeric AudioObjectID. Returns kAudioObjectUnknown
+// when neither resolves.
+AudioObjectID deviceIdFromStoredIdentity(const std::string& identity) {
+    if (identity.empty()) {
+        return kAudioObjectUnknown;
     }
+    // UID path (preferred): translate the stable UID to whatever id it holds now.
+    CFStringRef cfUid = CFStringCreateWithCString(nullptr, identity.c_str(), kCFStringEncodingUTF8);
+    if (cfUid != nullptr) {
+        AudioObjectID device = kAudioObjectUnknown;
+        AudioValueTranslation translation {};
+        translation.mInputData = &cfUid;
+        translation.mInputDataSize = sizeof(cfUid);
+        translation.mOutputData = &device;
+        translation.mOutputDataSize = sizeof(device);
+        UInt32 size = sizeof(translation);
+        AudioObjectPropertyAddress address {
+            kAudioHardwarePropertyDeviceForUID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        const OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, &translation);
+        CFRelease(cfUid);
+        if (status == noErr && device != kAudioObjectUnknown) {
+            return device;
+        }
+    }
+    // Legacy numeric AudioObjectID (persisted before device identity became the UID).
     char* end = nullptr;
-    const auto parsed = std::strtoul(deviceId.c_str(), &end, 10);
-    if (end == deviceId.c_str() || parsed == 0) {
+    const auto parsed = std::strtoul(identity.c_str(), &end, 10);
+    if (end != identity.c_str() && parsed != 0) {
+        return static_cast<AudioObjectID>(parsed);
+    }
+    return kAudioObjectUnknown;
+}
+
+CFStringRef deviceUidFromId(const std::string& deviceId) {
+    const AudioObjectID device = deviceIdFromStoredIdentity(deviceId);
+    if (device == kAudioObjectUnknown) {
         return nullptr;
     }
-    AudioObjectID device = static_cast<AudioObjectID>(parsed);
     CFStringRef uid = nullptr;
     UInt32 size = sizeof(uid);
     AudioObjectPropertyAddress address {

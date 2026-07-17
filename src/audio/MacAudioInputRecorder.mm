@@ -154,12 +154,35 @@ private:
         if (inputDeviceId.empty()) {
             return nullptr;
         }
-        char* end = nullptr;
-        const auto parsed = std::strtoul(inputDeviceId.c_str(), &end, 10);
-        if (end == inputDeviceId.c_str() || parsed == 0) {
-            return nullptr;
+        // Stored identity is a stable UID; resolve it (or a legacy numeric id) to the
+        // current AudioObjectID, then read the device's UID back for the AudioQueue.
+        AudioObjectID device = kAudioObjectUnknown;
+        CFStringRef cfUid = CFStringCreateWithCString(nullptr, inputDeviceId.c_str(), kCFStringEncodingUTF8);
+        if (cfUid != nullptr) {
+            AudioValueTranslation translation {};
+            translation.mInputData = &cfUid;
+            translation.mInputDataSize = sizeof(cfUid);
+            translation.mOutputData = &device;
+            translation.mOutputDataSize = sizeof(device);
+            UInt32 tsize = sizeof(translation);
+            AudioObjectPropertyAddress taddr {
+                kAudioHardwarePropertyDeviceForUID,
+                kAudioObjectPropertyScopeGlobal,
+                kAudioObjectPropertyElementMain
+            };
+            if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &taddr, 0, nullptr, &tsize, &translation) != noErr) {
+                device = kAudioObjectUnknown;
+            }
+            CFRelease(cfUid);
         }
-        AudioObjectID device = static_cast<AudioObjectID>(parsed);
+        if (device == kAudioObjectUnknown) {
+            char* end = nullptr;
+            const auto parsed = std::strtoul(inputDeviceId.c_str(), &end, 10);
+            if (end == inputDeviceId.c_str() || parsed == 0) {
+                return nullptr;
+            }
+            device = static_cast<AudioObjectID>(parsed);
+        }
         CFStringRef uid = nullptr;
         UInt32 size = sizeof(uid);
         AudioObjectPropertyAddress address {

@@ -76,9 +76,25 @@ std::vector<AudioDeviceInfo> enumerateAudioDevices() {
         };
         AudioObjectGetPropertyData(deviceId, &sampleRateAddress, 0, nullptr, &sampleRateSize, &sampleRate);
 
+        CFStringRef uid = nullptr;
+        UInt32 uidSize = sizeof(uid);
+        AudioObjectPropertyAddress uidAddress {
+            kAudioDevicePropertyDeviceUID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        AudioObjectGetPropertyData(deviceId, &uidAddress, 0, nullptr, &uidSize, &uid);
+
         AudioDeviceInfo info;
-        info.id = std::to_string(deviceId);
+        info.uid = cfStringToStd(uid);
+        // The persisted identity is the UID — stable across re-plug and re-enumeration,
+        // unlike the numeric AudioObjectID, which coreaudiod reassigns and which left the
+        // saved output device pointing at the wrong (or a silent virtual) device.
+        info.id = info.uid.empty() ? std::to_string(deviceId) : info.uid;
         info.name = cfStringToStd(name);
+        if (uid != nullptr) {
+            CFRelease(uid);
+        }
         info.driver = AudioDriverKind::CoreAudio;
         info.inputChannels = static_cast<int>(countChannels(deviceId, kAudioDevicePropertyScopeInput));
         info.outputChannels = static_cast<int>(countChannels(deviceId, kAudioDevicePropertyScopeOutput));

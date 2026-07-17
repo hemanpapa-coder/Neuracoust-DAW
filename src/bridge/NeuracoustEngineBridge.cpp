@@ -4293,9 +4293,28 @@ void nc_active_output_device_name(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->engine.status().deviceName : std::string{});
 }
 
+namespace {
+
+/// Canonicalize a device identity to its stable UID, so a legacy numeric AudioObjectID
+/// (persisted before device identity became the UID) heals to the UID on the next save.
+/// An empty string (system default) and an unrecognized id pass through unchanged.
+std::string canonicalDeviceIdentity(const std::string& identity) {
+    if (identity.empty()) {
+        return identity;
+    }
+    for (const auto& device : neuracoust::daw::enumerateAudioDevices()) {
+        if (device.id == identity || device.uid == identity) {
+            return device.id;   // the UID (see enumerateAudioDevices)
+        }
+    }
+    return identity;
+}
+
+} // namespace
+
 void nc_set_output_device(NCEngine* engine, const char* deviceId) {
     if (engine == nullptr) return;
-    const std::string next = deviceId != nullptr ? deviceId : "";
+    const std::string next = canonicalDeviceIdentity(deviceId != nullptr ? deviceId : "");
     if (next == engine->outputDeviceId) {
         return;
     }
@@ -4346,7 +4365,7 @@ void nc_current_input_device_id(NCEngine* engine, char* out, size_t outLen) {
 
 void nc_set_input_device(NCEngine* engine, const char* deviceId) {
     if (engine == nullptr) return;
-    const std::string next = deviceId != nullptr ? deviceId : "";
+    const std::string next = canonicalDeviceIdentity(deviceId != nullptr ? deviceId : "");
     if (next == engine->inputDeviceId) {
         return;
     }
