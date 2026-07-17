@@ -1948,6 +1948,13 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     // The analyzer must show the printed mix; turning the monitor knob must not move the spectrum.
     spectrumSourceBlock_.assign(interleavedStereo.begin(), interleavedStereo.end());
     mixInputMonitorLocked(frameCount, interleavedStereo);
+    // When monitoring a reference source (BlackHole), the master is silenced and replaced by
+    // the source, so the analyzer and goniometer should show the SOURCE you are hearing, not
+    // the muted master — retap after the input mix (still before the monitor-station volume,
+    // so the monitor knob does not move it).
+    if (listenSourceActive_.load(std::memory_order_relaxed)) {
+        spectrumSourceBlock_.assign(interleavedStereo.begin(), interleavedStereo.end());
+    }
     // Audio from an open instrument editor's own instance (GUI clicks, live MIDI while the
     // editor owns the live path). Mixed here — before the monitor DSP path — so it is
     // coloured exactly like the rest of the monitored mix.
@@ -3007,14 +3014,22 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
         talkbackActive &&
         (settings_.monitorStationTalkbackRoute == "monitor_bus" ||
          settings_.monitorStationTalkbackRoute == "all");
+    const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
     if ((!monitorCaptureActive && !talkbackToMonitor) || frameCount <= 0 || interleavedStereo.empty()) {
         return;
+    }
+    // Source monitoring is EXCLUSIVE: while a source is selected you hear only it, never the
+    // DAW master. Silence the master here — before the buffer lock and before the resample
+    // pre-roll — so switching to the source never lets the master leak through during the
+    // ~1 s the input device takes to open and prime (you get brief silence, then the source).
+    // The master transport keeps running underneath, so switching back resumes it in place.
+    if (listenSource) {
+        std::fill(interleavedStereo.begin(), interleavedStereo.end(), 0.0f);
     }
     std::unique_lock<std::mutex> inputLock(inputMonitorMutex_, std::try_to_lock);
     if (!inputLock.owns_lock()) {
         return;
     }
-    const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
     // --- Reference feed (BlackHole): varispeed-resample to the output clock -----------
     // The input runs on its own clock, so a 1:1 copy drifts and stutters. Instead read the
     // FIFO with a fractional position advanced by listenResampleRatio_, and nudge that ratio
@@ -3038,10 +3053,7 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
             listenResampleRatio_ = 1.0;
             listenSmoothedDepth_ = static_cast<double>(availFrames);
         }
-        // Source monitoring is exclusive, not additive: while listening to the source you
-        // hear ONLY it, not the DAW master on top. The master transport keeps running
-        // underneath (silenced here), so switching back resumes it in place.
-        std::fill(interleavedStereo.begin(), interleavedStereo.end(), 0.0f);
+        // (master already silenced above; the resampler now adds the source on top of silence)
         const double depthFrames = static_cast<double>(availFrames) - listenReadPosFrames_;
         // PROPORTIONAL control (not integral). The FIFO depth is already the integral of the
         // rate mismatch, so an integral controller on top made a double integrator — a pure
@@ -3517,7 +3529,10 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
         : 0.0f;
     outputPeakLeft_.store(std::min(1.0f, peakLeft));
     outputPeakRight_.store(std::min(1.0f, peakRight));
-    phaseCorrelation_.store(correlation);
+    // Standard correlation-meter ballistics: the raw per-block value (~5 ms) jitters, so
+    // integrate it with a ~100 ms time constant — stable to read, still quick to react.
+    phaseCorrelationBallistics_ += 0.05f * (correlation - phaseCorrelationBallistics_);
+    phaseCorrelation_.store(phaseCorrelationBallistics_);
     spectrumLow_.store(std::min(1.0f, static_cast<float>(std::sqrt(lowEnergy / frames))));
     spectrumMid_.store(std::min(1.0f, static_cast<float>(std::sqrt(midEnergy / frames))));
     spectrumHigh_.store(std::min(1.0f, static_cast<float>(std::sqrt(highEnergy / frames))));
@@ -3562,6 +3577,7 @@ void NeuracoustDspEngine::resetMeteringLocked() {
     outputPeakLeft_.store(0.0f);
     outputPeakRight_.store(0.0f);
     phaseCorrelation_.store(0.0f);
+    phaseCorrelationBallistics_ = 0.0f;
     spectrumLow_.store(0.0f);
     spectrumMid_.store(0.0f);
     spectrumHigh_.store(0.0f);

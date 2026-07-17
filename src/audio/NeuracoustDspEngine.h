@@ -265,6 +265,7 @@ private:
     std::atomic<float> outputPeakLeft_ {0.0f};
     std::atomic<float> outputPeakRight_ {0.0f};
     std::atomic<float> phaseCorrelation_ {0.0f};
+    float phaseCorrelationBallistics_ = 0.0f;   // render-thread meter smoothing (~100 ms)
     std::atomic<float> spectrumLow_ {0.0f};
     std::atomic<float> spectrumMid_ {0.0f};
     std::atomic<float> spectrumHigh_ {0.0f};

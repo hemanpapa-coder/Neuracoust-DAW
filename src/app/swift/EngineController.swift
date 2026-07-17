@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -4213,13 +4214,51 @@ final class EngineController: ObservableObject {
     /// computer's audio). Two mutually-exclusive choices, like the Monitor DSP app.
     func selectMonitorInput(blackHole: Bool) {
         if blackHole {
-            refreshInputDevices()
-            if let bh = inputDevices.first(where: { $0.name.lowercased().contains("blackhole") }) {
-                setInputDevice(bh.id)
+            // Capturing any input device (even a virtual loopback like BlackHole) goes through
+            // the macOS microphone privacy gate. Request it explicitly so the system prompt
+            // reliably appears — the implicit prompt that opening the input queue would raise
+            // does not fire dependably for a locally-built (ad-hoc-signed) app.
+            requestMicrophoneAccess { [weak self] granted in
+                guard let self else { return }
+                guard granted else {
+                    self.lastError = "마이크(입력) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Neuracoust DAW를 켜 주세요."
+                    return
+                }
+                // Light the button now, then open the input device on the next runloop. The
+                // device enumeration + AudioQueue open are synchronous CoreAudio calls that
+                // block the main thread ~1 s; deferring them lets the UI reflect the press
+                // immediately instead of stalling until the device is up.
+                self.monitorListenSource = true
+                DispatchQueue.main.async {
+                    // Re-enumerate devices only if BlackHole isn't already known (the dock
+                    // refreshes on appear); enumeration is a slow CoreAudio round-trip.
+                    if !self.inputDevices.contains(where: { $0.name.lowercased().contains("blackhole") }) {
+                        self.refreshInputDevices()
+                    }
+                    if let bh = self.inputDevices.first(where: { $0.name.lowercased().contains("blackhole") }) {
+                        self.setInputDevice(bh.id)
+                    }
+                    self.setMonitorListenSource(true)
+                }
             }
-            setMonitorListenSource(true)
         } else {
             setMonitorListenSource(false)
+        }
+    }
+
+    /// Ask macOS for microphone (audio input) access, invoking `completion` on the main actor
+    /// with the result. Already-authorized returns true immediately; a first request shows the
+    /// system prompt; a prior denial returns false (the caller points the user at System Settings).
+    private func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            completion(true)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                Task { @MainActor in completion(granted) }
+            }
+        default:
+            completion(false)
         }
     }
 
@@ -4711,15 +4750,16 @@ final class EngineController: ObservableObject {
         var status = NCEngineStatus()
         nc_engine_status(handle, &status)
 
-        // Timing telemetry (jitter, render duration, phase correlation, DSP load) drifts a
-        // hair every audio callback, so publishing it each 30 Hz poll re-rendered the whole
-        // UI — the heavy MonitorDock re-laid-out ~30×/s even at idle, pinning the main thread.
-        // Round it and refresh it at ~6 Hz: with the engine idle the rounded values settle and
-        // stop publishing entirely; a readout that ticks 6×/s is plenty.
+        // The phase-correlation meter must move like a real correlation meter, so publish it
+        // every poll (~30 Hz). It only re-renders when the rounded value actually changes, and
+        // at idle the engine's ballistics settle it to a constant → no publish, no re-layout.
+        setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
+        // The rest of the timing telemetry (jitter, render duration, DSP load) drifts a hair
+        // every audio callback, so publishing it each poll re-laid-out the heavy MonitorDock
+        // ~30×/s even at idle. Round it and refresh at ~6 Hz; a readout that ticks 6×/s is plenty.
         telemetrySlowCounter += 1
         if telemetrySlowCounter >= 5 {
             telemetrySlowCounter = 0
-            setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
             setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs.rounded())
             setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)

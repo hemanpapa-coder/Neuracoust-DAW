@@ -341,7 +341,11 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         MACOSX_BUNDLE_DISPLAY_NAME "Neuracoust DAW"
         MACOSX_BUNDLE_ICON_FILE "NeuracoustDAW.icns"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
-        MACOSX_BUNDLE_BUNDLE_VERSION "${NEURACOUST_DAW_VERSION}")
+        MACOSX_BUNDLE_BUNDLE_VERSION "${NEURACOUST_DAW_VERSION}"
+        # Without this the app shipped CMake's stub Info.plist (no NSMicrophoneUsageDescription),
+        # so the moment it asked for microphone/input access macOS hard-crashed it (TCC privacy
+        # violation). The template carries the usage strings and localizations.
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
 
     # The engine spawns these; keep them next to the app the way it expects.
     # The swift driver also drops a main.d depfile beside the executable — evict it
@@ -399,6 +403,16 @@ if(NEURACOUST_BUILD_SWIFT_APP)
     else()
         message(STATUS "Listen relay assets not found at ${NEURACOUST_LISTEN_SOURCE_DIR} — Listen Room will report a missing relay at runtime.")
     endif()
+
+    # Re-sign the finished bundle with a plain ad-hoc signature (codesign, not the linker's
+    # auto-signature). The linker-signed flag makes macOS treat the app as a loose binary, so
+    # the microphone privacy prompt never appears and input capture (BlackHole monitoring,
+    # recording) is silently denied. A real ad-hoc signature — same as the shipped Monitor DSP
+    # app — gives it a proper code identity, so the prompt appears and the grant persists.
+    # Runs LAST (after the editor hosts are copied in) so the whole bundle is covered.
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NeuracoustDAW>"
+        COMMENT "Ad-hoc code-signing Neuracoust DAW.app (microphone/TCC identity)")
 else()
     message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
 endif()

@@ -46,8 +46,6 @@ struct GlobalTracksBar: View {
     @State private var heights: [String: CGFloat] = [:]
     @State private var addTarget: AddTarget?
     @State private var dragSeconds: [String: Double] = [:]
-    // Markers dragged far out of the lane vertically — shown as a trash icon, deleted on drop.
-    @State private var markerTrashing: Set<String> = []
     private struct AddTarget: Identifiable { let id = UUID(); let ruler: Ruler; let seconds: Double }
 
     private func height(_ r: Ruler) -> CGFloat { heights[r.rawValue] ?? r.defaultHeight }
@@ -288,21 +286,15 @@ struct GlobalTracksBar: View {
                             onMove: @escaping (Double) -> Void, onDelete: @escaping () -> Void) -> some View {
         let key = "m\(time)"
         let px = x(dragSeconds[key] ?? time, laneWidth)
-        let trashing = markerTrashing.contains(key)
         let selected = engine.selectedConductor == .marker(time)
         let pinW: CGFloat = 9
         return Group {
             if px >= Self.headerWidth - 40 && px <= Self.headerWidth + laneWidth {
                 HStack(spacing: 2) {
-                    if trashing {
-                        Image(systemName: "trash.fill").font(.system(size: 10))
-                            .foregroundStyle(Theme.Palette.red)
-                    } else {
-                        MarkerPin().fill(Ruler.marker.color)
-                            .frame(width: pinW, height: 12)
-                            .overlay(selected ? MarkerPin().stroke(Color.white, lineWidth: 1.2).frame(width: pinW, height: 12) : nil)
-                    }
-                    if !label.isEmpty && !trashing {
+                    MarkerPin().fill(Ruler.marker.color)
+                        .frame(width: pinW, height: 12)
+                        .overlay(selected ? MarkerPin().stroke(Color.white, lineWidth: 1.2).frame(width: pinW, height: 12) : nil)
+                    if !label.isEmpty {
                         Text(label).font(Theme.Font.mono(9, .medium))
                             .foregroundStyle(selected ? .white : Ruler.marker.color).lineLimit(1)
                     }
@@ -310,37 +302,25 @@ struct GlobalTracksBar: View {
                 // Anchor the pin's tip (its horizontal centre) on the marker time, not the
                 // left corner.
                 .offset(x: px - Self.headerWidth - pinW / 2)
-                .opacity(trashing ? 0.7 : 1)
-                .gesture(markerDragGesture(key: key, start: time, laneWidth: laneWidth,
-                                           onMove: onMove, onDelete: onDelete))
+                .gesture(markerDragGesture(key: key, start: time, laneWidth: laneWidth, onMove: onMove))
                 .contextMenu { Button("삭제", role: .destructive) { onDelete() } }
             }
         }
     }
 
-    /// Marker interaction: a plain click seeks the playhead to it; a horizontal drag moves
-    /// it; dragging it far out of the lane (vertically) turns it into a trash icon and
-    /// deletes it on release.
+    /// Marker interaction: a plain click selects it (Delete removes it) and seeks the playhead
+    /// to it; a horizontal drag moves it. Deletion is by selection + Delete or the right-click
+    /// menu — there is no drag-to-trash gesture (it deleted markers by accident).
     private func markerDragGesture(key: String, start: Double, laneWidth: CGFloat,
-                                   onMove: @escaping (Double) -> Void,
-                                   onDelete: @escaping () -> Void) -> some Gesture {
+                                   onMove: @escaping (Double) -> Void) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
                 dragSeconds[key] = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
-                // Drag the pin clearly off the lane to trash it. Require the drag to be
-                // vertical-dominant (and past the ~22 pt lane) so a horizontal move — which
-                // is how a marker is repositioned in time — never trashes by accident.
-                let offLane = abs(v.translation.height) > 22 && abs(v.translation.height) > abs(v.translation.width)
-                if offLane { markerTrashing.insert(key) } else { markerTrashing.remove(key) }
             }
             .onEnded { v in
                 let t = max(0, start + Double(v.translation.width / laneWidth) * engine.visibleDuration)
-                let trash = markerTrashing.contains(key)
                 dragSeconds[key] = nil
-                markerTrashing.remove(key)
-                if trash {
-                    onDelete()
-                } else if abs(v.translation.width) < 3 && abs(v.translation.height) < 3 {
+                if abs(v.translation.width) < 3 && abs(v.translation.height) < 3 {
                     engine.selectConductor(.marker(start))   // select it (Delete removes it)
                     engine.seek(start)                       // and move the playhead to it
                 } else {
