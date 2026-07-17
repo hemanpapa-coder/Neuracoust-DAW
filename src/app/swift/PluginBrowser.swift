@@ -48,13 +48,26 @@ struct PluginBrowser: View {
                 .foregroundStyle(Theme.Palette.textBright)
 
             facetGroup("Format", engine.formats, selection: $engine.pluginFormat)
-            // An FX-insert target can't take instruments (the pick is rejected), so the
-            // list excludes them — offering the Instrument facet would show an empty list.
-            facetGroup("Category",
-                       engine.browseTargetAcceptsInstruments
-                           ? engine.categories
-                           : engine.categories.filter { $0.name != "Instrument" },
-                       selection: $engine.pluginCategory)
+            // The category axis is decided by the target, not the user: an instrument
+            // slot lists instruments only (no group to pick from), and an FX insert
+            // lists everything BUT instruments (offering the Instrument facet could
+            // only ever show an empty list).
+            if engine.browseTargetIsInstrumentSlot {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Category")
+                        .font(Theme.Font.mono(7))
+                        .tracking(0.6)
+                        .foregroundStyle(Theme.Palette.textFaint)
+                        .padding(.bottom, 2)
+                    Text("악기만 표시")
+                        .font(Theme.Font.ui(10, .semibold))
+                        .foregroundStyle(Theme.Palette.textDim)
+                }
+            } else {
+                facetGroup("Category",
+                           engine.categories.filter { $0.name != "Instrument" },
+                           selection: $engine.pluginCategory)
+            }
             facetGroup("Brand", engine.brands, selection: $engine.pluginBrand)
 
             Spacer()

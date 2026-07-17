@@ -24,8 +24,8 @@ namespace neuracoust::daw {
 
 namespace {
 
-constexpr const char* kPersistentVst3InventoryFileName = "vst3_inventory_v9.tsv";
-constexpr const char* kPersistentVst3InventoryHeader = "Neuracoust DAW VST3 Inventory v9";
+constexpr const char* kPersistentVst3InventoryFileName = "vst3_inventory_v10.tsv";
+constexpr const char* kPersistentVst3InventoryHeader = "Neuracoust DAW VST3 Inventory v10";
 
 void appendVst3Root(std::vector<std::filesystem::path>& roots,
                     std::set<std::string>& seen,
@@ -152,7 +152,8 @@ void removeLegacyPersistentScanCaches(const std::filesystem::path& activePath) {
         directory / "vst3_inventory_v5.tsv",
         directory / "vst3_inventory_v6.tsv",
         directory / "vst3_inventory_v7.tsv",
-        directory / "vst3_inventory_v8.tsv"
+        directory / "vst3_inventory_v8.tsv",
+        directory / "vst3_inventory_v9.tsv"
     };
     std::error_code error;
     for (const auto& legacy : legacyFiles) {

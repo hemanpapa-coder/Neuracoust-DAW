@@ -309,9 +309,9 @@ final class EngineController: ObservableObject {
             reloadFacets()
         }
         pluginTargetTrack = trackId
-        // A leftover Instrument facet from an instrument-track browse would combine
-        // with the FX-insert exclusion into a guaranteed-empty list.
-        if !browseTargetAcceptsInstruments && pluginCategory == "Instrument" {
+        // A leftover Instrument facet from an earlier browse would combine with the
+        // FX-insert exclusion into a guaranteed-empty list.
+        if !browseTargetIsInstrumentSlot && pluginCategory == "Instrument" {
             pluginCategory = ""
         }
         applyPluginFilter()
@@ -347,20 +347,18 @@ final class EngineController: ObservableObject {
         formats = facets(.format)
     }
 
-    /// Whether the current browse target can take an instrument at all. An FX insert
-    /// (audio/aux track, master chain) rejects instruments on pick, so the browser
-    /// should not offer them; an instrument track takes both (slot + inserts).
-    var browseTargetAcceptsInstruments: Bool {
-        guard let target = pluginTargetTrack else { return true }
-        if target == Self.masterInsertTargetId { return false }
-        return tracks.first(where: { $0.id == target })?.kind == .instrument
-    }
+    /// The browser serves two different pickers and each shows ONLY what its target
+    /// can take: an instrument-slot target (빈 칩 / 악기 교체 / 레이어 추가) lists
+    /// instruments only, every other target — an FX insert chain on ANY track kind,
+    /// or the master chain — lists everything BUT instruments.
+    var browseTargetIsInstrumentSlot: Bool { pluginTargetInstrumentSlot != nil }
 
     private func applyPluginFilter() {
         guard let handle, totalPluginCount > 0 else { return }
 
-        let excludeCategory = browseTargetAcceptsInstruments ? "" : "Instrument"
-        let count = Int(nc_plugin_apply_filter(handle, pluginSearch, pluginBrand, pluginCategory,
+        let category = browseTargetIsInstrumentSlot ? "Instrument" : pluginCategory
+        let excludeCategory = browseTargetIsInstrumentSlot ? "" : "Instrument"
+        let count = Int(nc_plugin_apply_filter(handle, pluginSearch, pluginBrand, category,
                                                pluginFormat, excludeCategory))
 
         // A thousand rows of SwiftUI is fine in a LazyVStack, but building a thousand
