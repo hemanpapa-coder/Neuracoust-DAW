@@ -102,6 +102,9 @@ struct AudioEngineStatus {
     bool directMonitoringEnabled = true;
     bool lowLatencyRecordMonitoringActive = false;
     bool physicalInputMonitoringActive = false;
+    /// "Listen to source" (e.g. BlackHole) routes a physical input through the monitor
+    /// bus with no record-armed track, so the input queue must open for it too.
+    bool listenSourceActive = false;
     int recordArmedTrackCount = 0;
     int inputChannels = 0;
     float inputPeak = 0.0f;

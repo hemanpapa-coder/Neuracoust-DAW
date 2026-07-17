@@ -2077,6 +2077,7 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
         : 0.0;
     status.directMonitoringEnabled = settings_.lowLatencyRecordMonitoringEnabled;
     status.lowLatencyRecordMonitoringActive = lowLatencyRecordMonitoringActive_;
+    status.listenSourceActive = listenSourceActive_.load(std::memory_order_relaxed);
     status.physicalInputMonitoringActive = physicalInputMonitoringActiveForStatus_.load(std::memory_order_relaxed);
     status.recordArmedTrackCount = recordArmedTrackCount_;
     status.inputChannels = inputMonitorChannelsForStatus_.load(std::memory_order_relaxed);
@@ -3006,10 +3007,14 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     if (!inputLock.owns_lock()) {
         return;
     }
+    // Listening to a source (BlackHole) passes it through at unity like talkback — the
+    // record-monitor gain/pan/mute belong to a record-armed track, not the reference feed.
+    const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
+    const bool unityPassthrough = talkbackToMonitor || listenSource;
     const size_t neededSamples = static_cast<size_t>(frameCount) * 2;
     const size_t availableSamples = std::min(neededSamples, inputMonitorBuffer_.size());
     for (size_t index = 0; index + 1 < availableSamples; index += 2) {
-        const auto [monitoredLeft, monitoredRight] = talkbackToMonitor
+        const auto [monitoredLeft, monitoredRight] = unityPassthrough
             ? std::pair<float, float>{inputMonitorBuffer_[index], inputMonitorBuffer_[index + 1]}
             : (recordMonitorMuted_
             ? std::pair<float, float>{0.0f, 0.0f}

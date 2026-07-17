@@ -590,7 +590,12 @@ public:
         refreshInputMonitorForCurrentProject();
     }
 
-    void setMonitorListenSource(bool active) { dspEngine_.setMonitorListenSource(active); }
+    void setMonitorListenSource(bool active) {
+        dspEngine_.setMonitorListenSource(active);
+        // Open (or close) the physical input queue now, so selecting BlackHole starts
+        // capturing immediately instead of waiting for a record-arm or talkback.
+        refreshInputMonitorForCurrentProject();
+    }
     void setInsertTailOnStopSeconds(double seconds) { dspEngine_.setInsertTailOnStopSeconds(seconds); }
 
     void setPhysicalInputAccessAllowed(bool allowed) {
@@ -803,7 +808,8 @@ private:
             return false;
         }
         const auto dspStatus = dspEngine_.statusSnapshot();
-        if (!prewarm && !dspStatus.lowLatencyRecordMonitoringActive && !settings_.monitorStationTalkback) {
+        if (!prewarm && !dspStatus.lowLatencyRecordMonitoringActive &&
+            !dspStatus.listenSourceActive && !settings_.monitorStationTalkback) {
             return false;
         }
 
@@ -855,7 +861,8 @@ private:
         }
         const auto dspStatus = dspEngine_.statusSnapshot();
         if (settings_.physicalInputAccessAllowed &&
-            (dspStatus.lowLatencyRecordMonitoringActive || settings_.monitorStationTalkback)) {
+            (dspStatus.lowLatencyRecordMonitoringActive || dspStatus.listenSourceActive ||
+             settings_.monitorStationTalkback)) {
             startInputMonitorIfNeeded();
         } else {
             stopInputMonitor();

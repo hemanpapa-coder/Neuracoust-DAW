@@ -168,7 +168,13 @@ private:
 public:
     /// Monitor the computer's input source (e.g. BlackHole) through the monitor bus,
     /// instead of only the DAW master. Enables input capture so the source is heard.
-    void setMonitorListenSource(bool active) { listenSourceActive_.store(active, std::memory_order_relaxed); }
+    /// Re-runs the monitor policy so inputMonitorCaptureActive_ picks up the change now,
+    /// not on the next unrelated policy update.
+    void setMonitorListenSource(bool active) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        listenSourceActive_.store(active, std::memory_order_relaxed);
+        updateProjectMonitorPolicyLocked();
+    }
     /// Insert tail on stop: <0 always on, 0 cut, >0 ring out N seconds.
     void setInsertTailOnStopSeconds(double seconds) {
         insertTailOnStopSeconds_.store(seconds, std::memory_order_relaxed);

@@ -311,6 +311,11 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     settings.remoteDspServer = buildRemoteDspSettings(engine);
     settings.outputDeviceId = engine->outputDeviceId;
     settings.inputDeviceId = engine->inputDeviceId;
+    // Allow the engine to open a physical input when an input feature actually needs it
+    // (record-arm monitoring, talkback, or listening to a source like BlackHole). The
+    // engine's own gates decide WHEN to open the queue, so plain playback never does —
+    // and the macOS microphone prompt only appears when the user engages one of those.
+    settings.physicalInputAccessAllowed = true;
     return settings;
 }
 
