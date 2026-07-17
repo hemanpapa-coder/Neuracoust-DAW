@@ -24,8 +24,8 @@ namespace neuracoust::daw {
 
 namespace {
 
-constexpr const char* kPersistentVst3InventoryFileName = "vst3_inventory_v10.tsv";
-constexpr const char* kPersistentVst3InventoryHeader = "Neuracoust DAW VST3 Inventory v10";
+constexpr const char* kPersistentVst3InventoryFileName = "vst3_inventory_v12.tsv";
+constexpr const char* kPersistentVst3InventoryHeader = "Neuracoust DAW VST3 Inventory v12";
 
 void appendVst3Root(std::vector<std::filesystem::path>& roots,
                     std::set<std::string>& seen,
@@ -153,7 +153,9 @@ void removeLegacyPersistentScanCaches(const std::filesystem::path& activePath) {
         directory / "vst3_inventory_v6.tsv",
         directory / "vst3_inventory_v7.tsv",
         directory / "vst3_inventory_v8.tsv",
-        directory / "vst3_inventory_v9.tsv"
+        directory / "vst3_inventory_v9.tsv",
+        directory / "vst3_inventory_v10.tsv",
+        directory / "vst3_inventory_v11.tsv"
     };
     std::error_code error;
     for (const auto& legacy : legacyFiles) {
@@ -808,6 +810,10 @@ std::string inferPluginBrand(const std::string& name, const std::string& vendor)
     if (containsAny(combined, {"mastering the mix", "animate", "bassroom", "fuser", "mixroom"})) {
         return "Mastering The Mix";
     }
+    if (containsAny(combined, {"native instruments", "kontakt", "reaktor", "massive",
+                               "battery", "fm8", "absynth", "monark", "guitar rig"})) {
+        return "Native Instruments";
+    }
     return vendor.empty() ? "Unknown" : vendor;
 }
 
@@ -913,6 +919,12 @@ std::string inferPluginCategory(const std::string& name, const std::vector<Vst3C
     }
     if (containsAny(combined, {"noise", "denoise", "de-noise", "declick", "dereverb", "restoration", "clarity"})) {
         return "Restoration";
+    }
+    // Kontakt and friends reach here with NO readable class metadata and no generic
+    // keyword in the name; falling to Utility would hide them from the instrument
+    // picker entirely.
+    if (pluginNameLooksLikeKnownInstrument(combined)) {
+        return "Instrument";
     }
     return "Utility";
 }
@@ -1358,6 +1370,18 @@ std::optional<std::vector<Vst3PluginDescriptor>>& vst3ScanCache() {
 }
 
 } // namespace
+
+bool pluginNameLooksLikeKnownInstrument(const std::string& text) {
+    const auto lowered = lowerCopy(text);
+    return containsAny(lowered, {"kontakt", "serum", "vital", "omnisphere", "keyscape",
+                                 "trilian", "stylus rmx", "pigments", "analog lab",
+                                 "massive", "battery", "fm8", "absynth", "reaktor",
+                                 "monark", "falcon", "avenger", "spire", "sylenth",
+                                 "nexus", "diva", "repro", "hive", "zebra", "dune",
+                                 "phase plant", "sampler", "arcade", "addictive keys",
+                                 "addictive drums", "superior drummer", "ezdrummer",
+                                 "ezkeys", "ezbass"});
+}
 
 std::vector<Vst3PluginDescriptor> scanVst3PluginBundles(Vst3ScanMode mode) {
     std::lock_guard<std::mutex> lock(vst3ScanCacheMutex());

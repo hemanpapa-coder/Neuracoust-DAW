@@ -429,16 +429,9 @@ std::string inferPluginCandidateCategory(const std::string& name) {
     if (containsAny(text, {"fabfilter twin", "fabfilter one"})) {
         return "Instrument";
     }
-    // Well-known synths/samplers whose names carry no generic keyword. The instrument
-    // picker (slot target) shows ONLY this category, so a miss here means the plug-in
-    // cannot be loaded as an instrument at all — err on the side of listing.
-    if (containsAny(text, {"kontakt", "serum", "vital", "omnisphere", "keyscape", "trilian",
-                           "stylus rmx", "pigments", "analog lab", "massive", "battery",
-                           "fm8", "absynth", "reaktor", "monark", "falcon", "avenger",
-                           "spire", "sylenth", "nexus", "diva", "repro", "hive", "zebra",
-                           "dune", "phase plant", "sampler", "arcade", "addictive keys",
-                           "addictive drums", "superior drummer", "ezdrummer", "ezkeys",
-                           "ezbass"})) {
+    // Well-known synths/samplers whose names carry no generic keyword (Kontakt,
+    // Serum, …) — shared with the VST3 scan's categorizer in Vst3HostFoundation.
+    if (pluginNameLooksLikeKnownInstrument(text)) {
         return "Instrument";
     }
     if (containsAny(text, {"noise reduction", "restoration", "spectral", "denoise", "de-noise", "de noise", "de-noiser", "rx ", "clarity", "ns1", "x-noise", "x noise", "x hum", "x-hum", "x click", "x-click", "x crackle", "x-crackle", "debreath", "de-breath", "x-fdbk"})) {

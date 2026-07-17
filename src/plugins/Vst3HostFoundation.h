@@ -50,6 +50,12 @@ enum class Vst3ScanMode {
     Refresh
 };
 
+/// Well-known synths/samplers whose names carry no generic instrument keyword
+/// (Kontakt, Serum, Omnisphere, …). The instrument picker lists ONLY the
+/// Instrument category, so every categorizer must consult this before falling
+/// back — a miss means the plug-in cannot be loaded as an instrument at all.
+bool pluginNameLooksLikeKnownInstrument(const std::string& text);
+
 std::vector<Vst3PluginDescriptor> scanVst3PluginBundles(Vst3ScanMode mode = Vst3ScanMode::UseCache);
 void clearVst3PluginScanCache();
 // A cheap signature of the installed .vst3 bundles (paths + sizes, no probing) — for

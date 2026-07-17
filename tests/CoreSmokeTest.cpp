@@ -4310,7 +4310,7 @@ int main() {
         std::ifstream cache(vst3CachePath, std::ios::binary);
         std::string header;
         std::getline(cache, header);
-        assert(header == "Neuracoust DAW VST3 Inventory v10");
+        assert(header == "Neuracoust DAW VST3 Inventory v12");
     }
     const auto customVst3Matches = std::count_if(vst3Plugins.begin(), vst3Plugins.end(), [&](const neuracoust::daw::Vst3PluginDescriptor& plugin) {
         return plugin.bundlePath == customVst3.string();
