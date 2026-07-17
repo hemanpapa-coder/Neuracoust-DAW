@@ -792,12 +792,15 @@ int nc_plugin_rescan(NCEngine* engine);
 /// True if the installed .vst3 set changed since the last scan (browser auto-rescans on open).
 bool nc_plugin_locations_changed(NCEngine* engine);
 
-/// Empty strings mean "no constraint". Returns the number of matches.
+/// Empty strings mean "no constraint". `excludeCategory` drops candidates OF that
+/// category — "Instrument" while browsing for an FX insert, where picking an
+/// instrument would only be rejected. Returns the number of matches.
 int nc_plugin_apply_filter(NCEngine* engine,
                            const char* text,
                            const char* brand,
                            const char* category,
-                           const char* format);
+                           const char* format,
+                           const char* excludeCategory);
 
 int nc_plugin_count(NCEngine* engine);
 void nc_plugin_name(NCEngine* engine, int index, char* out, size_t outLen);

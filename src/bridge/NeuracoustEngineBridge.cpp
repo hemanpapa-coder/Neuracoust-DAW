@@ -3528,7 +3528,8 @@ int nc_plugin_apply_filter(NCEngine* engine,
                            const char* text,
                            const char* brand,
                            const char* category,
-                           const char* format) {
+                           const char* format,
+                           const char* excludeCategory) {
     if (engine == nullptr) return 0;
 
     neuracoust::daw::PluginCandidateFilterCriteria criteria;
@@ -3536,6 +3537,7 @@ int nc_plugin_apply_filter(NCEngine* engine,
     criteria.brand = brand != nullptr ? brand : "";
     criteria.category = category != nullptr ? category : "";
     criteria.format = format != nullptr ? format : "";
+    criteria.excludeCategory = excludeCategory != nullptr ? excludeCategory : "";
     criteria.requireExisting = true;
 
     engine->filteredPlugins = neuracoust::daw::filterPluginCandidates(engine->plugins, criteria);

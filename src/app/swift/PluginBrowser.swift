@@ -48,7 +48,13 @@ struct PluginBrowser: View {
                 .foregroundStyle(Theme.Palette.textBright)
 
             facetGroup("Format", engine.formats, selection: $engine.pluginFormat)
-            facetGroup("Category", engine.categories, selection: $engine.pluginCategory)
+            // An FX-insert target can't take instruments (the pick is rejected), so the
+            // list excludes them — offering the Instrument facet would show an empty list.
+            facetGroup("Category",
+                       engine.browseTargetAcceptsInstruments
+                           ? engine.categories
+                           : engine.categories.filter { $0.name != "Instrument" },
+                       selection: $engine.pluginCategory)
             facetGroup("Brand", engine.brands, selection: $engine.pluginBrand)
 
             Spacer()

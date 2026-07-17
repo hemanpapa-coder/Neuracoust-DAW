@@ -143,8 +143,28 @@ int main(void) {
                nc_plugin_facet_count(engine, NC_FACET_CATEGORY),
                nc_plugin_facet_count(engine, NC_FACET_FORMAT));
 
+        // The FX-insert browser excludes instruments (picking one is rejected anyway).
+        const int instruments = nc_plugin_apply_filter(engine, "", "", "Instrument", "VST3", "");
+        const int withoutInstruments = nc_plugin_apply_filter(engine, "", "", "", "VST3", "Instrument");
+        const int everything = nc_plugin_apply_filter(engine, "", "", "", "VST3", "");
+        if (withoutInstruments + instruments != everything) {
+            fprintf(stderr, "FAIL: exclude filter dropped %d, expected the %d instruments\n",
+                    everything - withoutInstruments, instruments);
+            failures++;
+        }
+        nc_plugin_apply_filter(engine, "", "", "", "VST3", "Instrument");
+        for (int i = 0; i < withoutInstruments; ++i) {
+            char cat[128] = {0};
+            nc_plugin_category(engine, i, cat, sizeof cat);
+            if (strcmp(cat, "Instrument") == 0) {
+                fprintf(stderr, "FAIL: an Instrument survived the exclude filter\n");
+                failures++;
+                break;
+            }
+        }
+
         // Narrow to one VST3 so the insert we add is one the engine can host.
-        const int matches = nc_plugin_apply_filter(engine, "", "", "", "VST3");
+        const int matches = nc_plugin_apply_filter(engine, "", "", "", "VST3", "");
         printf("VST3 matches: %d\n", matches);
         if (matches <= 0) {
             fprintf(stderr, "FAIL: no VST3 plug-ins after filtering\n");

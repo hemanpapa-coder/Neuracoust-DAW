@@ -33,6 +33,10 @@ struct PluginCandidateFilterCriteria {
     std::string format;
     std::string scope;
     bool requireExisting = true;
+    /// Drop candidates OF this category — e.g. "Instrument" while browsing for an
+    /// FX insert, where picking an instrument would only be rejected anyway.
+    /// Declared LAST: callers aggregate-initialize this struct positionally.
+    std::string excludeCategory;
 };
 
 bool pluginCandidateMatchesFilter(const PluginCandidate& candidate, const std::string& filter);

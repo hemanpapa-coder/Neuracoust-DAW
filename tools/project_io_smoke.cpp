@@ -961,7 +961,7 @@ int main() {
 
             // FabFilter One is a synth; without an instrument a region is silent by design.
             nc_plugin_scan(engine);
-            const int instruments = nc_plugin_apply_filter(engine, "", "", "Instrument", "VST3");
+            const int instruments = nc_plugin_apply_filter(engine, "", "", "Instrument", "VST3", "");
             if (instruments <= 0) {
                 printf("(no instrument plug-ins installed — skipping the MIDI sound check)\n");
             } else {
@@ -1142,7 +1142,7 @@ int main() {
             // Micro at its own defaults is a 4166 Hz low-pass. The fixture tone is a
             // 440 Hz sine, so it should survive; a plug-in that never got its
             // parameters would flatten it.
-            const int filters = nc_plugin_apply_filter(engine, "FabFilter Micro", "", "", "VST3");
+            const int filters = nc_plugin_apply_filter(engine, "FabFilter Micro", "", "", "VST3", "");
             if (filters <= 0) {
                 printf("(FabFilter Micro not installed — skipping the master insert check)\n");
             } else {

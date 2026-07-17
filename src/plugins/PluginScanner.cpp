@@ -707,6 +707,9 @@ bool pluginCandidateMatchesCriteria(const PluginCandidate& candidate,
     if (!criteria.category.empty() && candidate.category != criteria.category) {
         return false;
     }
+    if (!criteria.excludeCategory.empty() && candidate.category == criteria.excludeCategory) {
+        return false;
+    }
     if (!criteria.format.empty() && candidate.format != criteria.format) {
         return false;
     }
