@@ -1521,6 +1521,11 @@ bool splitClip(ProjectDocument& project, const std::string& clipId, double split
     right.startSeconds = splitSeconds;
     right.sourceOffsetSeconds += splitSeconds - clip->startSeconds;
     right.durationSeconds = originalEnd - splitSeconds;
+    // Spot metadata: offset the right half's original position by the same distance,
+    // so spotting both halves back re-forms the un-split layout.
+    if (clip->originalStartSeconds >= 0.0) {
+        right.originalStartSeconds = clip->originalStartSeconds + (splitSeconds - clip->startSeconds);
+    }
 
     clip->durationSeconds = splitSeconds - clip->startSeconds;
     clampClipFades(*clip);
@@ -3729,6 +3734,7 @@ std::string appendAudioClipAt(ProjectDocument& project,
     populateClipSourceMetadata(clip);
     clip.colorHex = automaticClipColorForTrack(project, findTrack(project, trackName));
     clip.startSeconds = startSeconds;
+    clip.originalStartSeconds = startSeconds;   // spot: where the import landed
     clip.durationSeconds = durationSeconds;
     clip.sourceOffsetSeconds = 0.0;
     clip.gainDb = 0.0f;

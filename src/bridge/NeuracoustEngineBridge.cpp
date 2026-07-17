@@ -2208,6 +2208,41 @@ int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, d
     return applyClipEdit(engine, moved > 0) ? moved : 0;
 }
 
+double nc_clip_original_start_seconds(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return -1.0;
+    const auto* clip = findClipById(engine, clipId);
+    return clip != nullptr ? clip->originalStartSeconds : -1.0;
+}
+
+int nc_clip_spot_to_original_many(NCEngine* engine, const char* const* clipIds, int count) {
+    const auto clips = resolveClips(engine, clipIds, count);
+    if (clips.empty()) {
+        return 0;
+    }
+    // Each clip goes to ITS OWN original position — not a common delta — so a
+    // scattered selection re-forms the originally imported layout.
+    std::vector<std::pair<std::string, double>> targets;
+    targets.reserve(clips.size());
+    for (const auto* clip : clips) {
+        if (clip->originalStartSeconds >= 0.0 &&
+            std::abs(clip->originalStartSeconds - clip->startSeconds) > 1.0e-9) {
+            targets.emplace_back(clip->id, clip->originalStartSeconds);
+        }
+    }
+    int moved = 0;
+    for (const auto& [id, start] : targets) {
+        if (neuracoust::daw::moveClip(engine->project, id, start)) {
+            ++moved;
+        }
+    }
+    if (!applyClipEdit(engine, moved > 0)) {
+        return 0;
+    }
+    // A discrete action, unlike a drag: record its own single undo step.
+    engine->recordStep("Spot to original");
+    return moved;
+}
+
 namespace {
 
 constexpr const char* kVolumeParameterId = "track.volume";

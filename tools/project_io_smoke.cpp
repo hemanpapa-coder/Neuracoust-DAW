@@ -891,6 +891,68 @@ int main() {
             check(!nc_marker_delete(engine, 20.0, 0.2), "nothing to delete out at 20 s");
         }
 
+        // --- 스팟: the original time stamp survives edits and the file ------------
+        {
+            nc_project_new(engine);
+            check(nc_audio_import(engine, 0, wavPath, 1.0, error, sizeof(error)), "import at 1 s for spot");
+            char clipId[128] = {0};
+            nc_clip_id(engine, 0, clipId, sizeof(clipId));
+            check(std::abs(nc_clip_original_start_seconds(engine, clipId) - 1.0) < 0.01,
+                  "import records where the clip landed");
+
+            check(nc_clip_move(engine, clipId, 5.0), "move the clip to 5 s");
+            check(std::abs(nc_clip_original_start_seconds(engine, clipId) - 1.0) < 0.01,
+                  "moving does not touch the original");
+
+            check(nc_clip_split(engine, clipId, 5.5), "split the moved clip");
+            check(nc_clip_count(engine) == 2, "two halves");
+            char leftId[128] = {0};
+            char rightId[128] = {0};
+            for (int i = 0; i < 2; ++i) {
+                if (std::abs(nc_clip_start_seconds(engine, i) - 5.5) < 0.01) {
+                    nc_clip_id(engine, i, rightId, sizeof(rightId));
+                } else {
+                    nc_clip_id(engine, i, leftId, sizeof(leftId));
+                }
+            }
+            check(leftId[0] != 0 && rightId[0] != 0, "found both halves");
+            check(std::abs(nc_clip_original_start_seconds(engine, rightId) - 1.5) < 0.01,
+                  "the right half's original is offset by the split distance");
+
+            // Spotting the selection re-forms the imported layout in ONE undo step.
+            const int depthBeforeSpot = nc_history_undo_depth(engine);
+            const char* selection[2] = {leftId, rightId};
+            check(nc_clip_spot_to_original_many(engine, selection, 2) == 2, "both halves spotted");
+            check(nc_history_undo_depth(engine) == depthBeforeSpot + 1, "spot recorded one step");
+            bool leftAtOne = false;
+            bool rightAtHalfPast = false;
+            for (int i = 0; i < 2; ++i) {
+                if (std::abs(nc_clip_start_seconds(engine, i) - 1.0) < 0.01) leftAtOne = true;
+                if (std::abs(nc_clip_start_seconds(engine, i) - 1.5) < 0.01) rightAtHalfPast = true;
+            }
+            check(leftAtOne && rightAtHalfPast, "the halves sit at their original positions");
+            check(nc_clip_spot_to_original_many(engine, selection, 2) == 0,
+                  "already in place: spot moves nothing and records nothing");
+
+            // The original must ride through the save file AND the playlist rebuild
+            // (clips are reconstructed from placements on open).
+            check(nc_clip_move(engine, leftId, 7.0), "move again before saving");
+            char spotProject[256] = "/tmp/neuracoust-io-smoke/Spot.ndaw";
+            check(nc_project_save_as(engine, spotProject, error, sizeof(error)), "save the spot project");
+            check(nc_project_open(engine, spotProject, false, error, sizeof(error)), "reopen it");
+            check(nc_clip_count(engine) == 2, "both clips came back");
+            bool originalSurvived = false;
+            for (int i = 0; i < 2; ++i) {
+                char reopenedId[128] = {0};
+                nc_clip_id(engine, i, reopenedId, sizeof(reopenedId));
+                if (std::abs(nc_clip_start_seconds(engine, i) - 7.0) < 0.01 &&
+                    std::abs(nc_clip_original_start_seconds(engine, reopenedId) - 1.0) < 0.01) {
+                    originalSurvived = true;
+                }
+            }
+            check(originalSurvived, "the original position survived save/reopen");
+        }
+
         // --- a MIDI note must reach the instrument and make a sound ---------------
         {
             nc_project_new(engine);

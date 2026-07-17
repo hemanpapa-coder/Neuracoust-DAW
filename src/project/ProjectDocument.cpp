@@ -1510,6 +1510,7 @@ void rebuildProjectEditModelFromClips(ProjectDocument& project) {
         placement.id = clip.id;
         placement.clipDefinitionId = definitionId;
         placement.startSeconds = clip.startSeconds;
+        placement.originalStartSeconds = clip.originalStartSeconds;
         placement.layer = 0;
         placement.gainDb = clip.gainDb;
         placement.fadeInSeconds = clip.fadeInSeconds;
@@ -1639,6 +1640,7 @@ void mergeOrphanClipsIntoActivePlaylists(ProjectDocument& project) {
         placement.id = clip.id;
         placement.clipDefinitionId = definitionId;
         placement.startSeconds = clip.startSeconds;
+        placement.originalStartSeconds = clip.originalStartSeconds;
         placement.layer = 0;
         placement.gainDb = clip.gainDb;
         placement.fadeInSeconds = clip.fadeInSeconds;
@@ -1718,6 +1720,7 @@ bool rebuildProjectClipsFromActivePlaylists(ProjectDocument& project) {
             clip.sourceGrooveFeel = definition->sourceGrooveFeel;
             clip.sourceGrooveSwingAmount = definition->sourceGrooveSwingAmount;
             clip.startSeconds = placement.startSeconds;
+            clip.originalStartSeconds = placement.originalStartSeconds;
             clip.durationSeconds = definition->durationSeconds;
             clip.sourceOffsetSeconds = definition->sourceOffsetSeconds;
             clip.gainDb = placement.gainDb;
@@ -2086,6 +2089,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"fadeOutSeconds\":" << clip.fadeOutSeconds
             << ",\"fadeInCurve\":\"" << escapeJsonString(normalizedFadeCurve(clip.fadeInCurve))
             << "\",\"fadeOutCurve\":\"" << escapeJsonString(normalizedFadeCurve(clip.fadeOutCurve)) << "\""
+            << ",\"originalStartSeconds\":" << clip.originalStartSeconds
             << ",\"muted\":" << (clip.muted ? "true" : "false")
             << ",\"polarityInverted\":" << (clip.polarityInverted ? "true" : "false")
             << ",\"locked\":" << (clip.locked ? "true" : "false") << "}";
@@ -2167,6 +2171,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             out << "{\"id\":\"" << escapeJsonString(placement.id)
                 << "\",\"clipDefinitionId\":\"" << escapeJsonString(placement.clipDefinitionId)
                 << "\",\"startSeconds\":" << placement.startSeconds
+                << ",\"originalStartSeconds\":" << placement.originalStartSeconds
                 << ",\"layer\":" << placement.layer
                 << ",\"gainDb\":" << placement.gainDb
                 << ",\"fadeInSeconds\":" << placement.fadeInSeconds
@@ -2801,6 +2806,8 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         clip.pendingTimeStretchToProject = boolAfterKey(body, "pendingTimeStretchToProject", false);
         clip.colorHex = trim(stringAfterKey(body, "colorHex"));
         clip.startSeconds = finiteRange(numberAfterKey(body, "startSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
+        // -1 = original position unknown (projects saved before the field existed).
+        clip.originalStartSeconds = finiteRange(numberAfterKey(body, "originalStartSeconds", -1.0), -1.0, -1.0, 24.0 * 60.0 * 60.0);
         clip.durationSeconds = finiteRange(numberAfterKey(body, "durationSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
         clip.sourceOffsetSeconds = finiteRange(numberAfterKey(body, "sourceOffsetSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
         clip.gainDb = finiteRange(static_cast<float>(numberAfterKey(body, "gainDb", 0.0)), 0.0f, -60.0f, 24.0f);
@@ -2953,6 +2960,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
             placement.id = uniqueIdForImport(trim(stringAfterKey(placementBody, "id")), usedPlacementIds);
             placement.clipDefinitionId = trim(stringAfterKey(placementBody, "clipDefinitionId"));
             placement.startSeconds = finiteRange(numberAfterKey(placementBody, "startSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
+            placement.originalStartSeconds = finiteRange(numberAfterKey(placementBody, "originalStartSeconds", -1.0), -1.0, -1.0, 24.0 * 60.0 * 60.0);
             placement.layer = finiteIntRange(numberAfterKey(placementBody, "layer", 0.0), 0, 0, 1024);
             placement.gainDb = finiteRange(static_cast<float>(numberAfterKey(placementBody, "gainDb", 0.0)), 0.0f, -60.0f, 24.0f);
             placement.fadeInSeconds = finiteRange(numberAfterKey(placementBody, "fadeInSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);

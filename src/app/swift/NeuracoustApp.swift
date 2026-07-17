@@ -424,6 +424,8 @@ private struct EditView: View {
                     },
                     onSetClipFadeInCurve: { engine.setClipFadeInCurve($0, $1) },
                     onSetClipFadeOutCurve: { engine.setClipFadeOutCurve($0, $1) },
+                    onClipOriginalStart: { engine.clipOriginalStart($0) },
+                    onSpotClips: { engine.spotClipsToOriginal($0) },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
                     onMoveAutomationPoint: { engine.moveAutomationPoint(laneIndex: $0, pointIndex: $1, timeSeconds: $2, value: $3) },
                     onDeleteAutomationPoint: { engine.deleteAutomationPoint(laneIndex: $0, pointIndex: $1) },

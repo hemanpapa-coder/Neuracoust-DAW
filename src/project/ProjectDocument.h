@@ -159,6 +159,11 @@ struct PlaylistClipPlacementState {
     std::string tempoSyncPolicy = "project-tempo";
     bool pendingTimeStretchToProject = false;
     std::string legacyClipId;
+    /// The clip's original timeline position (see ClipState.originalStartSeconds).
+    /// Carried here too because the playlist model is the render source of truth
+    /// and clips are rebuilt from placements. Declared LAST: aggregate
+    /// initializers index fields by position.
+    double originalStartSeconds = -1.0;
 };
 
 struct TrackPlaylistState {

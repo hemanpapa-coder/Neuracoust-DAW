@@ -2604,6 +2604,23 @@ final class EngineController: ObservableObject {
         return pointers.withUnsafeMutableBufferPointer { body($0.baseAddress!, Int32(ids.count)) }
     }
 
+    /// 스팟: where the clip FIRST landed on the timeline (import) — the Pro-Tools
+    /// original time stamp. -1 = unknown (projects saved before the field existed).
+    func clipOriginalStart(_ id: String) -> Double {
+        guard let handle else { return -1 }
+        return nc_clip_original_start_seconds(handle, id)
+    }
+
+    /// 스팟: move each clip back to its own original position. One undo step,
+    /// recorded by the bridge (a discrete action, unlike a drag).
+    func spotClipsToOriginal(_ ids: [String]) {
+        guard let handle else { return }
+        guard let moved = withClipIds(ids, { nc_clip_spot_to_original_many(handle, $0, $1) }),
+              moved > 0 else { return }
+        reloadClips()
+        refreshHistory()
+    }
+
     /// Ids the last batch edit created — the clips the user should now be holding.
     private func selectBatchResult() {
         guard let handle else { return }

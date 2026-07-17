@@ -136,6 +136,12 @@ struct ClipState {
     bool locked = false;
     std::string fadeInCurve = "equal_power";
     std::string fadeOutCurve = "equal_power";
+    /// Where this clip FIRST landed on the timeline (import), the Pro-Tools
+    /// "original time stamp". Moves and trims never touch it; splitting offsets
+    /// the right half so spotting both re-forms the original layout.
+    /// < 0 = unknown (clips from projects saved before the field existed).
+    /// Declared LAST: aggregate initializers index fields by position.
+    double originalStartSeconds = -1.0;
 };
 
 struct MarkerState {

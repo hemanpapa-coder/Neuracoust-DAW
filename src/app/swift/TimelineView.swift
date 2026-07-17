@@ -189,6 +189,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))?
     var onSetClipFadeInCurve: ((String, String) -> Void)?
     var onSetClipFadeOutCurve: ((String, String) -> Void)?
+    var onClipOriginalStart: ((String) -> Double)?       // 스팟: 원래 위치 (-1 = 미기록)
+    var onSpotClips: (([String]) -> Void)?               // 스팟: 각 클립을 자기 원래 위치로
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
     var onMoveAutomationPoint: ((Int, Int, Double, Float) -> Void)?  // (lane, point, time, value)
     var onDeleteAutomationPoint: ((Int, Int) -> Void)?   // (lane, point)
@@ -1767,13 +1769,36 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private final class ClipCurveRef: NSObject { let clipId: String; let curve: String
         init(_ clipId: String, _ curve: String) { self.clipId = clipId; self.curve = curve } }
+    private final class SpotMenuRef: NSObject { let clipIds: [String]
+        init(_ clipIds: [String]) { self.clipIds = clipIds } }
 
-    /// Right-click a clip → pick its fade-in / fade-out curve shape.
+    /// Right-click a clip → spot back to its original position, fade curves.
     private func showClipFadeMenu(_ clip: TimelineModel.Clip, event: NSEvent) {
-        let opts = onFadeCurveOptions?() ?? []
-        guard !opts.isEmpty else { return }
-        let current = onClipCurrentFades?(clip.id)
         let menu = NSMenu()
+        // 스팟: the Pro-Tools original time stamp — where the clip first landed
+        // (import). Clicking inside a multi-selection spots the whole selection,
+        // each clip to its own original, like Delete and drag do.
+        let spotTargets = (clip.selected && selectionCount > 1)
+            ? model.clips.filter(\.selected).map(\.id) : [clip.id]
+        let original = onClipOriginalStart?(clip.id) ?? -1
+        let title = spotTargets.count > 1
+            ? "원래 위치로 스팟 (\(spotTargets.count)개)"
+            : (original >= 0 ? "원래 위치로 스팟 (\(spotTimeLabel(original)))" : "원래 위치로 스팟")
+        let spot = NSMenuItem(title: title, action: #selector(spotClipsMenu(_:)), keyEquivalent: "")
+        spot.target = self
+        spot.representedObject = SpotMenuRef(spotTargets)
+        // A single clip from an old project has no stored original; a selection may
+        // still contain clips that do, so it stays clickable.
+        if spotTargets.count == 1 && original < 0 { spot.action = nil }
+        menu.addItem(spot)
+
+        let opts = onFadeCurveOptions?() ?? []
+        if opts.isEmpty {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
+        menu.addItem(.separator())
+        let current = onClipCurrentFades?(clip.id)
         func submenu(_ title: String, sel: Selector, selected: String?) {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             let sub = NSMenu()
@@ -1790,6 +1815,19 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         submenu("페이드 아웃 커브", sel: #selector(setFadeOutCurveMenu(_:)), selected: current?.outCurve)
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
+    @objc private func spotClipsMenu(_ s: NSMenuItem) {
+        guard let r = s.representedObject as? SpotMenuRef else { return }
+        onSpotClips?(r.clipIds)
+    }
+
+    private func spotTimeLabel(_ seconds: Double) -> String {
+        let total = max(0, seconds)
+        let m = Int(total) / 60
+        let sec = Int(total) % 60
+        let ms = Int((total - Double(Int(total))) * 1000)
+        return ms == 0 ? String(format: "%d:%02d", m, sec) : String(format: "%d:%02d.%03d", m, sec, ms)
+    }
+
     @objc private func setFadeInCurveMenu(_ s: NSMenuItem) {
         guard let r = s.representedObject as? ClipCurveRef else { return }
         onSetClipFadeInCurve?(r.clipId, r.curve)
@@ -2383,6 +2421,8 @@ struct TimelineView: NSViewRepresentable {
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))? = nil
     var onSetClipFadeInCurve: ((String, String) -> Void)? = nil
     var onSetClipFadeOutCurve: ((String, String) -> Void)? = nil
+    var onClipOriginalStart: ((String) -> Double)? = nil
+    var onSpotClips: (([String]) -> Void)? = nil
     let onAddAutomationPoint: (Int, Double, Float) -> Void
     let onMoveAutomationPoint: (Int, Int, Double, Float) -> Void
     let onDeleteAutomationPoint: (Int, Int) -> Void
@@ -2478,6 +2518,8 @@ struct TimelineView: NSViewRepresentable {
         view.onReorderTrack = onReorderTrack
         view.onFadeCurveOptions = onFadeCurveOptions
         view.onClipCurrentFades = onClipCurrentFades
+        view.onClipOriginalStart = onClipOriginalStart
+        view.onSpotClips = onSpotClips
         view.onSetClipFadeInCurve = onSetClipFadeInCurve
         view.onSetClipFadeOutCurve = onSetClipFadeOutCurve
         view.onAddAutomationPoint = onAddAutomationPoint

@@ -511,6 +511,15 @@ void nc_result_id(NCEngine* engine, int index, char* out, size_t outLen);
 /// zero the whole thing is held back so their spacing survives the drag.
 int nc_clip_move_many(NCEngine* engine, const char* const* clipIds, int count, double deltaSeconds);
 
+/// Where the clip FIRST landed on the timeline (import), the Pro-Tools "original
+/// time stamp". Moves/trims never change it; a split offsets the right half.
+/// Returns -1 when unknown (clips from projects saved before the field existed).
+double nc_clip_original_start_seconds(NCEngine* engine, const char* clipId);
+/// Spot: move each clip back to ITS OWN original position (no common delta), so a
+/// scattered selection re-forms the imported layout. Clips without a stored
+/// original stay put. Returns how many moved; records ONE undo step.
+int nc_clip_spot_to_original_many(NCEngine* engine, const char* const* clipIds, int count);
+
 int nc_clip_delete_many(NCEngine* engine, const char* const* clipIds, int count);
 int nc_clip_split_many(NCEngine* engine, const char* const* clipIds, int count, double seconds);
 /// Places the copies one selection-width to the right, so they do not overlap.
