@@ -3063,7 +3063,13 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
         // there. Smooth the depth first so burst jitter does not reach the ratio (pitch waver).
         listenSmoothedDepth_ += 0.02 * (depthFrames - listenSmoothedDepth_);
         const double err = (listenSmoothedDepth_ - targetFrames) / targetFrames;
-        listenResampleRatio_ = std::clamp(1.0 + 0.02 * err, 0.94, 1.06);
+        const double targetRatio = std::clamp(1.0 + 0.02 * err, 0.94, 1.06);
+        // Slew-limit the ratio so it can never jump: a restart (e.g. toggling core isolation)
+        // re-primes the FIFO, and the depth transient would otherwise swing the ratio audibly
+        // for an instant. Capping the change to ~1 cent/s makes every pitch move a slow,
+        // inaudible glide; steady-state tracking of the tiny clock offset is unaffected.
+        const double maxStep = 5.0e-6;
+        listenResampleRatio_ += std::clamp(targetRatio - listenResampleRatio_, -maxStep, maxStep);
         for (int64_t f = 0; f < frameCount; ++f) {
             const int64_t i0 = static_cast<int64_t>(listenReadPosFrames_);
             const int64_t i1 = i0 + 1;
