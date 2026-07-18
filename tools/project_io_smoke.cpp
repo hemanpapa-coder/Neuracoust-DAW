@@ -953,6 +953,38 @@ int main() {
             check(originalSurvived, "the original position survived save/reopen");
         }
 
+        // --- MIDI recording: a played note is captured into a region --------------
+        {
+            nc_project_new(engine);
+            const int recTrack = nc_track_add_instrument(engine);
+            check(recTrack >= 0, "added an instrument track to record onto");
+            check(!nc_midi_record_active(engine), "not recording yet");
+            check(nc_midi_record_begin(engine, recTrack, 1.0), "begin a take at 1 s");
+            check(nc_midi_record_active(engine), "recording is active");
+            // Play middle C from 1.5 s to 2.5 s (120 bpm → 1.0 s at 1.5 s is beat 1.0, off at beat 3.0).
+            NCMidiLiveEvent noteOn { 0x90, 60, 100 };
+            NCMidiLiveEvent noteOff { 0x80, 60, 0 };
+            nc_midi_record_feed(engine, &noteOn, 1, 1.5);
+            nc_midi_record_feed(engine, &noteOff, 1, 2.5);
+            char recRegion[128] = {0};
+            check(nc_midi_record_commit(engine, recRegion, sizeof recRegion), "commit the take");
+            check(recRegion[0] != 0, "got a region id");
+            check(!nc_midi_record_active(engine), "recording stopped after commit");
+            check(nc_midi_region_count(engine) == 1, "one recorded region");
+            check(std::abs(nc_midi_region_start_seconds(engine, 0) - 1.0) < 0.01, "region starts at 1 s");
+            check(nc_midi_note_count(engine, recRegion) == 1, "one recorded note");
+            check(nc_midi_note_pitch(engine, recRegion, 0) == 60, "it is middle C");
+            // Note-on at 1.5 s = beat 1.0 from the region's 1 s start (120 bpm → 2 beats/s).
+            check(std::abs(nc_midi_note_start_beats(engine, recRegion, 0) - 1.0) < 0.05, "note starts at beat 1");
+            check(std::abs(nc_midi_note_duration_beats(engine, recRegion, 0) - 2.0) < 0.05, "note is 2 beats long");
+            check(nc_midi_note_velocity(engine, recRegion, 0) == 100, "velocity captured");
+            // A commit with no notes yields nothing.
+            check(nc_midi_record_begin(engine, recTrack, 0.0), "begin an empty take");
+            char emptyRegion[128] = {0};
+            check(!nc_midi_record_commit(engine, emptyRegion, sizeof emptyRegion), "empty take records nothing");
+            printf("MIDI recording OK\n");
+        }
+
         // --- a MIDI note must reach the instrument and make a sound ---------------
         {
             nc_project_new(engine);

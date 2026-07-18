@@ -1337,16 +1337,39 @@ final class EngineController: ObservableObject {
         transportWallClockStart = CACurrentMediaTime()
     }
 
-    /// This does **not** capture audio. `nc_engine_set_recording` switches the
-    /// monitor path for record-armed tracks — the engine has no input capture and
-    /// never writes a take to disk. Nothing here should suggest otherwise.
+    /// Record. For a record-armed instrument/MIDI track this now captures the live keyboard
+    /// into a MIDI region: pressing Record rolls the transport and opens a take at the
+    /// playhead; pressing it again (or Stop) commits the take. Audio input capture to disk is
+    /// still unbuilt, so an armed AUDIO track only flips the monitor path.
     func toggleRecording() {
         guard let handle else { return }
         recording.toggle()
         nc_engine_set_recording(handle, recording)
-        lastError = recording
-            ? "입력 모니터 경로만 전환합니다. 이 엔진은 아직 녹음을 디스크에 기록하지 않습니다."
-            : nil
+        if recording {
+            // Begin a MIDI take on the first armed instrument/MIDI track (or the selected one)
+            // and roll the transport so the playhead advances under the recorded notes.
+            let target = tracks.first { $0.recordArmed && ($0.kind == .instrument || $0.kind == .midi) }
+                ?? tracks.first { $0.id == selectedTrackId && ($0.kind == .instrument || $0.kind == .midi) }
+            if let target {
+                if !transportRunning { setTransport(running: true) }
+                nc_midi_record_begin(handle, Int32(target.id), playheadSeconds)
+                lastError = "\(target.name)에 MIDI 녹음 중…"
+            } else {
+                lastError = "MIDI 녹음하려면 악기/MIDI 트랙을 레코드-암 하세요. (오디오 입력 녹음은 미구현)"
+            }
+        } else {
+            commitMidiRecording()
+        }
+    }
+
+    /// Finish a MIDI take (on stop or record-off) and drop the recorded region on its track.
+    private func commitMidiRecording() {
+        guard let handle, nc_midi_record_active(handle) else { return }
+        let regionId = readString { nc_midi_record_commit(handle, $0, $1) }
+        reloadMidiRegions()
+        reloadTracks()
+        refreshHistory()
+        lastError = regionId.isEmpty ? nil : "MIDI 녹음 완료."
     }
 
     func toggleLoop() {
@@ -1374,6 +1397,12 @@ final class EngineController: ObservableObject {
 
     private func setTransport(running: Bool) {
         guard let handle else { return }
+        // Stopping the transport ends any MIDI take (space/stop, not just the record button).
+        if !running, recording {
+            recording = false
+            nc_engine_set_recording(handle, false)
+            commitMidiRecording()
+        }
         if running, !transportRunning { playStartSeconds = playheadSeconds }   // remember for stop
         nc_engine_set_transport_running(handle, running)
         transportRunning = running
@@ -4641,6 +4670,11 @@ final class EngineController: ObservableObject {
         var events = [NCMidiLiveEvent](repeating: NCMidiLiveEvent(), count: 128)
         let count = Int(nc_midi_pump_live_input(handle, &events, Int32(events.count)))
         guard count > 0 else { return }
+        // Recording: the same batch, stamped at the current playhead, is accumulated into the
+        // take — independent of the monitor path, so what you hear never affects the capture.
+        if nc_midi_record_active(handle) {
+            nc_midi_record_feed(handle, &events, Int32(count), playheadSeconds)
+        }
         // Mirror the engine's routing rule: armed / input-monitoring tracks hear the
         // keyboard, plus the selected track (the live-MIDI target). Only instrument
         // editors (insertIndex < 0) receive the stream, so audio tracks filter out there.

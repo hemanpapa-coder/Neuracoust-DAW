@@ -1075,6 +1075,18 @@ typedef struct NCMidiLiveEvent {
 /// also copies up to maxEvents of the drained batch into outEvents. Returns how many were
 /// written; pass NULL/0 to just pump.
 int nc_midi_pump_live_input(NCEngine* engine, NCMidiLiveEvent* outEvents, int maxEvents);
+/// MIDI recording. Begin a take on a track at the transport position, feed it the pumped
+/// keyboard events each tick (the same batch nc_midi_pump_live_input returns, stamped at the
+/// current playhead), and commit on stop to create a region with the recorded notes. The
+/// recording path is independent of what the monitor station is listening to.
+bool nc_midi_record_begin(NCEngine* engine, int trackIndex, double startSeconds);
+bool nc_midi_record_active(NCEngine* engine);
+void nc_midi_record_feed(NCEngine* engine, const NCMidiLiveEvent* events, int count,
+                         double playheadSeconds);
+/// Finish the take: closes still-held notes, creates the region + notes (one undo step), and
+/// returns the new region id (empty if nothing was recorded).
+bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outRegionIdLen);
+
 /// Route the keyboard to the selected instrument track even when it is not record-armed
 /// (Logic/Live convention). Pass the track index, or -1 to clear. Transient, no undo.
 void nc_set_live_midi_target(NCEngine* engine, int trackIndex);

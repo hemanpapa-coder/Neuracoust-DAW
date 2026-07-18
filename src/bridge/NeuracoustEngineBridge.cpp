@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -105,6 +106,22 @@ struct NCEngine {
     /// Logic/Live convention. Transient (not project state, no undo), set from the UI on
     /// selection; the live-MIDI pump queues to this track in addition to armed ones.
     std::string liveMidiTargetTrack;
+
+    /// Live MIDI recording take: while the transport records, the pumped keyboard events are
+    /// accumulated here (note-ons paired with note-offs) and committed to a region on stop.
+    /// Timing is per-feed (playhead at the tick), which is fine for a keyboard part.
+    struct MidiRecordTake {
+        bool active = false;
+        std::string trackName;
+        double startSeconds = 0.0;
+        double tempoBpm = 120.0;
+        double lastPlayheadSeconds = 0.0;
+        struct Held { double startBeat = 0.0; int velocity = 0; bool on = false; };
+        std::array<Held, 128> held {};
+        struct Note { int pitch; double startBeat; double durBeat; int velocity; };
+        std::vector<Note> notes;
+    };
+    MidiRecordTake midiRecordTake;
 
     /// Reverse audio ring from an open instrument editor: the editor's own instance
     /// renders GUI keyboard clicks (and the forwarded live MIDI), publishes into the
@@ -5557,6 +5574,92 @@ void nc_track_instrument_editor_closed(NCEngine* engine, int index) {
     if (track == nullptr || engine->instrumentEditorMonitor.trackName == track->name) {
         engine->stopInstrumentEditorMonitor();
     }
+}
+
+// ---------------------------------------------------------------------------
+// MIDI recording — accumulate the live keyboard into a region while the transport records
+// ---------------------------------------------------------------------------
+
+bool nc_midi_record_begin(NCEngine* engine, int trackIndex, double startSeconds) {
+    auto* track = trackAt(engine, trackIndex);
+    if (engine == nullptr || track == nullptr) {
+        return false;
+    }
+    engine->midiRecordTake = {};
+    engine->midiRecordTake.active = true;
+    engine->midiRecordTake.trackName = track->name;
+    engine->midiRecordTake.startSeconds = std::max(0.0, startSeconds);
+    engine->midiRecordTake.tempoBpm = engine->project.tempoBpm > 0.0 ? engine->project.tempoBpm : 120.0;
+    engine->midiRecordTake.lastPlayheadSeconds = std::max(0.0, startSeconds);
+    return true;
+}
+
+bool nc_midi_record_active(NCEngine* engine) {
+    return engine != nullptr && engine->midiRecordTake.active;
+}
+
+// Feed the events drained this tick (the same raw batch nc_midi_pump_live_input returns),
+// stamped at the current playhead. Note-ons are held until their matching note-off closes them.
+void nc_midi_record_feed(NCEngine* engine, const NCMidiLiveEvent* events, int count,
+                         double playheadSeconds) {
+    if (engine == nullptr || !engine->midiRecordTake.active || events == nullptr || count <= 0) {
+        return;
+    }
+    auto& take = engine->midiRecordTake;
+    take.lastPlayheadSeconds = std::max(take.startSeconds, playheadSeconds);
+    const double beatsPerSecond = take.tempoBpm / 60.0;
+    const double beat = std::max(0.0, take.lastPlayheadSeconds - take.startSeconds) * beatsPerSecond;
+    for (int i = 0; i < count; ++i) {
+        const unsigned char statusByte = events[i].status & 0xF0u;
+        const int pitch = events[i].data1 & 0x7F;
+        const bool noteOn = statusByte == 0x90u && (events[i].data2 & 0x7F) > 0;
+        const bool noteOff = statusByte == 0x80u || (statusByte == 0x90u && (events[i].data2 & 0x7F) == 0);
+        if (noteOn) {
+            take.held[static_cast<size_t>(pitch)] = { beat, events[i].data2 & 0x7F, true };
+        } else if (noteOff && take.held[static_cast<size_t>(pitch)].on) {
+            auto& h = take.held[static_cast<size_t>(pitch)];
+            take.notes.push_back({ pitch, h.startBeat, std::max(0.01, beat - h.startBeat), h.velocity });
+            h.on = false;
+        }
+    }
+}
+
+// Finish the take: close any still-held notes at the last playhead, create the region and its
+// notes, and return the new region id (empty if nothing was recorded).
+bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outLen) {
+    copyText(outRegionId, outLen, "");
+    if (engine == nullptr || !engine->midiRecordTake.active) {
+        return false;
+    }
+    auto& take = engine->midiRecordTake;
+    take.active = false;
+    const double beatsPerSecond = take.tempoBpm / 60.0;
+    const double endBeat = std::max(0.0, take.lastPlayheadSeconds - take.startSeconds) * beatsPerSecond;
+    for (size_t pitch = 0; pitch < take.held.size(); ++pitch) {
+        auto& h = take.held[pitch];
+        if (h.on) {
+            take.notes.push_back({ static_cast<int>(pitch), h.startBeat,
+                                   std::max(0.01, endBeat - h.startBeat), h.velocity });
+            h.on = false;
+        }
+    }
+    if (take.notes.empty()) {
+        return false;
+    }
+    const double durationSeconds = std::max(0.25, take.lastPlayheadSeconds - take.startSeconds);
+    const std::string regionId = neuracoust::daw::addMidiRegion(engine->project, take.trackName,
+                                                                take.startSeconds, durationSeconds);
+    if (regionId.empty()) {
+        return false;
+    }
+    for (const auto& note : take.notes) {
+        neuracoust::daw::addMidiNote(engine->project, regionId, note.pitch,
+                                     note.startBeat, note.durBeat, note.velocity);
+    }
+    applyMidiEdit(engine, true, "Record MIDI");
+    copyText(outRegionId, outLen, regionId);
+    take.notes.clear();
+    return true;
 }
 
 // The selected instrument track hears the keyboard without being record-armed (Logic/Live
