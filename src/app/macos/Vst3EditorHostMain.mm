@@ -247,6 +247,45 @@ public:
             queue->addPoint(0, controller->getParamNormalized(info.id), pointIndex);
         }
     }
+    // Like addControllerSnapshot(automatableOnly=true) but pushes ONLY parameters whose
+    // value changed since last block (tracked in `lastValues`). The instrument path calls
+    // this every 2 ms block; re-pushing an unchanged automatable value at sampleOffset 0
+    // every block gates some synths' amp/level after the attack (Korg TRITON cut a held
+    // note short). The first block still pushes the whole set (empty map = all changed),
+    // so the processor is initialised to the GUI state; after that only a GUI knob move
+    // pushes. Live MIDI-CC params come in separately via mappedParameterValues and are
+    // unaffected.
+    void addControllerSnapshotDelta(Steinberg::Vst::IEditController* controller,
+                                    std::map<uint32_t, double>& lastValues) {
+        if (controller == nullptr) {
+            return;
+        }
+        const int32_t count = std::min<int32_t>(128, std::max<int32_t>(0, controller->getParameterCount()));
+        for (int32_t parameterIndex = 0; parameterIndex < count; ++parameterIndex) {
+            Steinberg::Vst::ParameterInfo info {};
+            if (controller->getParameterInfo(parameterIndex, info) != Steinberg::kResultOk ||
+                (info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0) {
+                continue;
+            }
+            if ((info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) == 0) {
+                continue;
+            }
+            const double value = controller->getParamNormalized(info.id);
+            const uint32_t id = static_cast<uint32_t>(info.id);
+            auto it = lastValues.find(id);
+            if (it != lastValues.end() && std::fabs(it->second - value) < 1.0e-6) {
+                continue;   // unchanged since last block — don't disturb the running voice
+            }
+            lastValues[id] = value;
+            Steinberg::int32 queueIndex = 0;
+            auto* queue = addParameterData(info.id, queueIndex);
+            if (queue == nullptr) {
+                continue;
+            }
+            Steinberg::int32 pointIndex = 0;
+            queue->addPoint(0, value, pointIndex);
+        }
+    }
     std::vector<std::pair<uint32_t, double>> latestValues() {
         std::vector<std::pair<uint32_t, double>> values;
         values.reserve(queues_.size());
@@ -2797,11 +2836,27 @@ public:
             const double elapsed = (instrumentPumpLastSeconds_ > 0.0)
                 ? std::max(0.0, now - instrumentPumpLastSeconds_) : 0.0;
             instrumentPumpLastSeconds_ = now;
-            instrumentPumpSampleDebt_ = std::min(instrumentPumpSampleDebt_ + elapsed * instrumentSampleRate_,
-                                                 static_cast<double>(blk) * 3.0);
-            if (instrumentPumpSampleDebt_ >= blk) {
+            instrumentPumpSampleDebt_ += elapsed * instrumentSampleRate_;
+            // This pump shares the editor host's MAIN dispatch queue with the plug-in's GUI
+            // redraw (the Korg TRITON editor is heavy). The OLD code emitted exactly one block
+            // per real block period, so the monitor ring rode empty and a redraw burst that
+            // delayed the timer instantly starved it — a held note dropped to silence while the
+            // key still showed down. Instead, keep a ~20 ms CUSHION of audio queued AHEAD of
+            // real-time: the reliable off-main bridge pump (NeuracoustEngineBridge, a plain
+            // std::thread) drains that cushion through a stall so the note keeps sounding. A
+            // while-loop refills after a stall; maxPerFire bounds the catch-up burst so the
+            // plug-in's internal time can't lurch far forward at once.
+            const double cushionSamples = instrumentSampleRate_ * 0.040;   // ~40 ms queued ahead
+            const double maxDebtSamples = instrumentSampleRate_ * 0.120;   // cap a long stall's catch-up
+            const int    maxPerFire     = 12;
+            if (instrumentPumpSampleDebt_ > maxDebtSamples) {
+                instrumentPumpSampleDebt_ = maxDebtSamples;
+            }
+            int emitted = 0;
+            while (instrumentPumpSampleDebt_ > -cushionSamples && emitted < maxPerFire) {
                 instrumentPumpSampleDebt_ -= blk;
                 processInstrumentBlock(blk);
+                ++emitted;
             }
         }
 
@@ -3282,7 +3337,7 @@ public:
             std::vector<std::pair<uint32_t, double>> mappedParameterValues;
             drainLiveMidiInto(inputEvents, mappedParameterValues);
             EditorParameterChanges parameterChanges;
-            parameterChanges.addControllerSnapshot(controller_, /*automatableOnly=*/true);
+            parameterChanges.addControllerSnapshotDelta(controller_, instrumentPushedParamValues_);
             // The snapshot only covers the first 128 parameters; a wheel/bend parameter
             // mapped via IMidiMapping usually lives outside that range, so add it
             // explicitly (appended points win over the snapshot's).
@@ -3848,6 +3903,11 @@ public:
         double instrumentPumpSampleDebt_ = 0.0;
         double instrumentPumpLastSeconds_ = 0.0;
         int64_t instrumentProcessedSamples_ = 0;
+        // Last automatable-parameter values pushed to the instrument processor, keyed by
+        // param id — lets processInstrumentBlock push only changed values each block
+        // instead of re-pushing the whole snapshot (which cut held notes short). Lives for
+        // the host process, which hosts exactly one plug-in instance.
+        std::map<uint32_t, double> instrumentPushedParamValues_;
         std::vector<float> instrumentPublishBlock_;
         std::vector<float> meterInputLeft_;
         std::vector<float> meterInputRight_;
@@ -3920,6 +3980,8 @@ int main(int argc, const char* argv[]) {
             const bool probeMode = hasArgument(argc, argv, "--probe");
             const bool inspectParametersMode = hasArgument(argc, argv, "--inspect-parameters");
             const bool meterOverlayEnabled = hasArgument(argc, argv, "--meter-overlay");
+            const std::string pulseParamText = argumentValue(argc, argv, "--pulse-param");
+            const uint32_t pulseParamId = pulseParamText.empty() ? 0u : static_cast<uint32_t>(std::strtoul(pulseParamText.c_str(), nullptr, 10));
             // Instrument slot: the DAW forwards live MIDI over stdin ("MIDI <status> <d1> <d2>")
             // so this editor's own instance animates its keyboard/wheels. With --monitor-shm
             // the rendered audio is published BACK to the DAW's monitor (GUI clicks become
@@ -4110,6 +4172,11 @@ int main(int argc, const char* argv[]) {
                 __block Vst3EditorSession* sessionForMeters = session.get();
                 __block Vst3EditorSession* sessionForParameterPolling = session.get();
                 session->initializeParameterPolling();
+                if (pulseParamId != 0u) {
+                    session->setHostParameterValue(pulseParamId, 1.0);
+                    session->setHostParameterValue(pulseParamId, 0.0);
+                    std::cout << "PULSED_PARAM " << pulseParamId << std::endl;
+                }
                 session->startAudioBridge();
                 session->startInstrumentPump();
                 NSTimer* parameterPollTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 30.0)

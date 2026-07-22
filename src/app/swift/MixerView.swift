@@ -72,10 +72,15 @@ private struct InsertSlotChipView: View {
                     else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
                 }
                 Divider()
+                Menu("DSP 실행 모드") {
+                    dspModeButton("Native · 인프로세스", "native", checked: badge == "NAT")
+                    dspModeButton("Internal DSP · 격리 코어", "internal", checked: badge == "INT")
+                }
+                Divider()
                 if !isMaster {
                     Menu("슬롯으로 이동") {
-                        ForEach(0..<5, id: \.self) { target in
-                            Button("슬롯 \(["A","B","C","D","E"][target])") {
+                        ForEach(0..<ChannelStrip.mixerSlotCount, id: \.self) { target in
+                            Button("슬롯 \(ChannelStrip.slotLetter(target))") {
                                 engine.moveInsert(track: ownerId, from: slot, to: target)
                             }
                             .disabled(target == slot)
@@ -140,6 +145,17 @@ private struct InsertSlotChipView: View {
         }
     }
 
+    /// Native/Internal DSP mode row, checkmarked to the slot's effective badge. Master and track
+    /// inserts each have their own setter; both rebuild the chain through a declick.
+    @ViewBuilder private func dspModeButton(_ label: String, _ mode: String, checked: Bool) -> some View {
+        Button {
+            if isMaster { engine.setMasterInsertDspMode(slot: slot, mode: mode) }
+            else { engine.setInsertDspMode(track: ownerId, slot: slot, mode: mode) }
+        } label: {
+            if checked { Label(label, systemImage: "checkmark") } else { Text(label) }
+        }
+    }
+
     /// Distinct non-empty values for a key, sorted — the submenu headings.
     private func groupKeys(_ list: [EngineController.PluginCandidate],
                            _ key: (EngineController.PluginCandidate) -> String) -> [String] {
@@ -163,7 +179,9 @@ struct MixerView: View {
             toolbar
             routingBanner
 
-            ScrollView(.horizontal) {
+            // Both axes: with 10 insert + 10 send slots a strip is taller than the pane, so it
+            // must scroll vertically too (the 표시 chips can also hide inserts/sends to shorten it).
+            ScrollView([.horizontal, .vertical]) {
                 HStack(alignment: .top, spacing: Theme.Space.md) {
                     ForEach(columns, id: \.id) { column in
                         column.view
@@ -175,8 +193,6 @@ struct MixerView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             .scrollIndicators(.visible)
-
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.Palette.surface)
@@ -367,6 +383,14 @@ struct ChannelStrip: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var editors: PluginEditorHost
 
+    /// How many insert / send slots each strip pre-allocates (the engine ceiling is higher).
+    static let mixerSlotCount = 10
+    /// Slot label A, B, … J (26-safe).
+    static func slotLetter(_ index: Int) -> String {
+        guard index >= 0 && index < 26 else { return "\(index + 1)" }
+        return String(UnicodeScalar(65 + index)!)
+    }
+
     @State private var renaming = false
     @State private var draftName = ""
     @State private var reorderDX: CGFloat = 0
@@ -426,14 +450,16 @@ struct ChannelStrip: View {
                     instrumentSlotSection
                 }
                 if showInserts && track.kind.showsInserts { insertSection }
-                // Master has no sends; its auto fade-out takes that upper slot so the fader
-                // drops down and lines up with the channel faders instead of floating high
-                // over an empty gap.
+                // Master has no sends. Reserve the EXACT sends-region height by rendering a HIDDEN,
+                // non-interactive sends block (the master's send list is empty → the same 10 blank
+                // slots a channel reserves), then draw the auto fade-out in that reserved space via
+                // an overlay. This makes the master's pan / buttons / fader / meter land on exactly
+                // the same rows as the channels' — no magic-number padding that drifts out of sync.
                 if track.kind == .master {
-                    autoFadeSection
-                    // The master has no sends; pad to the sends' height so its pan / buttons
-                    // / fader drop to the same rows as the channels'.
-                    Color.clear.frame(height: 51)
+                    sendSection
+                        .hidden()
+                        .allowsHitTesting(false)
+                        .overlay(alignment: .top) { autoFadeSection }
                 } else if showSends && track.kind.showsSends {
                     sendSection
                 }
@@ -456,6 +482,7 @@ struct ChannelStrip: View {
 
             nameplate
             channelStats
+            if engine.showChannelDelayComp { channelDelayComp }
 
             // Output routing pinned to the very bottom of the strip. A divider + top gap
             // separates it from the stats block above (they were reading as overlapped),
@@ -637,10 +664,10 @@ struct ChannelStrip: View {
 
     private var insertSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("인서트 A–E")
+            Text("인서트 A–J")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
-            ForEach(0..<5, id: \.self) { slot in
+            ForEach(0..<ChannelStrip.mixerSlotCount, id: \.self) { slot in
                 // The master chain is the project's, not the Master track's.
                 let isMaster = track.kind == .master
                 let ownerId = isMaster ? EngineController.masterInsertTargetId : track.id
@@ -669,11 +696,11 @@ struct ChannelStrip: View {
     /// the SendSlotRow (bus + level fader + pre/post), Pro Tools style.
     private var sendSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("센드 A–E")
+            Text("센드 A–J")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFaint)
 
-            ForEach(0..<5, id: \.self) { slot in
+            ForEach(0..<ChannelStrip.mixerSlotCount, id: \.self) { slot in
                 if slot < track.sends.count {
                     let send = track.sends[slot]
                     SendSlotRow(bus: send.bus, gainDb: send.gainDb, preFader: send.preFader,
@@ -1130,6 +1157,25 @@ struct ChannelStrip: View {
             .padding(.vertical, Theme.Space.sm)
             .frame(maxWidth: .infinity)
             .background(Theme.Palette.stripFooter)
+            .contextMenu {
+                Button {
+                    engine.setShowChannelDelayComp(!engine.showChannelDelayComp)
+                } label: {
+                    if engine.showChannelDelayComp { Label("채널 지연 보정(PDC) 표시", systemImage: "checkmark") }
+                    else { Text("채널 지연 보정(PDC) 표시") }
+                }
+            }
+    }
+
+    /// Per-strip plugin-delay-compensation readout (samples + ms), shown when the mixer PDC toggle is on.
+    private var channelDelayComp: some View {
+        let smp = track.delayCompSamples
+        let ms = engine.sampleRate > 0 ? Double(smp) / engine.sampleRate * 1000.0 : 0
+        return Text(smp > 0 ? String(format: "PDC %.1fms", ms) : "PDC 0")
+            .font(Theme.Font.mono(7))
+            .foregroundStyle(smp > 0 ? Theme.Palette.accent : Theme.Palette.textFainter)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 2)
     }
 
     /// Overload thresholds in dBFS.

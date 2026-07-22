@@ -53,21 +53,50 @@ struct ChannelColumn: View {
     }
     private var columnWidth: CGFloat { stripWidth + 12 }
 
+    /// The aux/bus tracks the inspected track feeds — shown under it so the channel column reflects
+    /// where its sends actually go, not just the strip in isolation.
+    private var sendTargets: [EngineController.Track] {
+        guard let track = engine.inspectedTrack else { return [] }
+        let busNames = Set(track.sends.map(\.bus))
+        guard !busNames.isEmpty else { return [] }
+        return engine.tracks.filter { busNames.contains($0.name) && ($0.kind == .aux || $0.kind == .bus) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             PanelColumnHeader(title: "CHANNEL") { engine.showChannelColumn = false }
 
             if let track = engine.inspectedTrack {
                 ScrollView(.vertical, showsIndicators: false) {
-                    ChannelStrip(track: track,
-                                 isChild: false,
-                                 showIO: true,
-                                 showInserts: true,
-                                 showSends: true,
-                                 showMemo: false,
-                                 fixedWidth: stripWidth)
-                        .padding(.vertical, Theme.Space.md)
-                        .frame(maxWidth: .infinity)
+                    VStack(spacing: Theme.Space.md) {
+                        ChannelStrip(track: track,
+                                     isChild: false,
+                                     showIO: true,
+                                     showInserts: true,
+                                     showSends: true,
+                                     showMemo: false,
+                                     fixedWidth: stripWidth)
+                            .frame(maxWidth: .infinity)
+
+                        let targets = sendTargets
+                        if !targets.isEmpty {
+                            Text("SENDS →")
+                                .font(Theme.Font.mono(7, .bold)).tracking(0.8)
+                                .foregroundStyle(Theme.Palette.teal)
+                                .frame(maxWidth: .infinity)
+                            ForEach(targets) { aux in
+                                ChannelStrip(track: aux,
+                                             isChild: false,
+                                             showIO: true,
+                                             showInserts: true,
+                                             showSends: true,
+                                             showMemo: false,
+                                             fixedWidth: stripWidth)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                    .padding(.vertical, Theme.Space.md)
                 }
             } else {
                 Spacer()
@@ -106,6 +135,7 @@ struct TrackInspector: View {
                         meterRow(track)
                         panRow(track)
                         routingSection(track)
+                        signalGeneratorSection(track)
                     }
                     .padding(Theme.Space.lg)
                 }
@@ -423,6 +453,86 @@ struct TrackInspector: View {
                             current: track.outputBus.isEmpty ? "Master" : track.outputBus,
                             options: engine.outputBusOptions(track.id)) { engine.setTrackOutputBus(track.id, $0) }
             }
+        }
+    }
+
+    // Built-in test signal generator as a track source. Add it to an empty track, enable it, and it
+    // voices the track — band-limited sine/square/triangle/saw, white/pink noise, or a log/lin sweep.
+    @ViewBuilder
+    private func signalGeneratorSection(_ track: EngineController.Track) -> some View {
+        let st = engine.testSignalState(track: track.id)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: "waveform.path").font(.system(size: 8, weight: .semibold)).foregroundStyle(Theme.Palette.textMuted)
+                Text("신호 발생기").font(Theme.Font.ui(10, .semibold)).foregroundStyle(Theme.Palette.textSecondary)
+                Spacer(minLength: 0)
+                if st.present {
+                    Button { engine.removeTestSignalGenerator(track: track.id) } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Palette.textFaint)
+                    }.buttonStyle(.plain)
+                }
+            }
+            if !st.present {
+                Button { engine.addTestSignalGenerator(track: track.id) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus").font(.system(size: 8, weight: .bold))
+                        Text("추가").font(Theme.Font.ui(9.5, .medium))
+                    }
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+                }.buttonStyle(.plain)
+            } else {
+                HStack(spacing: Theme.Space.sm) {
+                    Toggle("", isOn: Binding(get: { st.enabled }, set: { engine.setTestSignalEnabled(track: track.id, $0) }))
+                        .labelsHidden().toggleStyle(.switch).scaleEffect(0.65).frame(width: 30)
+                    Menu {
+                        ForEach(Array(EngineController.TestSignalState.waveformNames.enumerated()), id: \.offset) { i, name in
+                            Button { engine.setTestSignalWaveform(track: track.id, i) } label: {
+                                if i == st.waveform { Label(name, systemImage: "checkmark") } else { Text(name) }
+                            }
+                        }
+                    } label: {
+                        Text(EngineController.TestSignalState.waveformNames[min(max(st.waveform, 0), 6)])
+                            .font(Theme.Font.ui(9.5, .medium)).foregroundStyle(Theme.Palette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.menuStyle(.borderlessButton)
+                }
+                if st.waveform < 4 {   // tonal only; noise/sweep ignore a single frequency
+                    signalSliderRow(label: "주파수",
+                                    value: st.frequencyHz >= 1000 ? String(format: "%.2f kHz", st.frequencyHz / 1000)
+                                                                  : String(format: "%.0f Hz", st.frequencyHz)) {
+                        Slider(value: Binding(
+                            get: { log(max(20.0, st.frequencyHz) / 20.0) / log(1000.0) },
+                            set: { engine.setTestSignalFrequency(track: track.id, 20.0 * pow(1000.0, $0)) }), in: 0...1)
+                    }
+                }
+                signalSliderRow(label: "레벨", value: String(format: "%.1f dB", st.levelDb)) {
+                    Slider(value: Binding(get: { st.levelDb }, set: { engine.setTestSignalLevel(track: track.id, $0) }), in: -60...0)
+                }
+                HStack(spacing: Theme.Space.sm) {
+                    Picker("", selection: Binding(get: { st.channel }, set: { engine.setTestSignalChannel(track: track.id, $0) })) {
+                        ForEach(0..<3, id: \.self) { i in Text(EngineController.TestSignalState.channelNames[i]).tag(i) }
+                    }.pickerStyle(.segmented).labelsHidden()
+                    Button { engine.setTestSignalPolarity(track: track.id, !st.polarity) } label: {
+                        Text("Ø").font(Theme.Font.ui(11, .bold))
+                            .foregroundStyle(st.polarity ? Theme.Palette.accent : Theme.Palette.textFaint)
+                            .frame(width: 20)
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func signalSliderRow<S: View>(label: String, value: String,
+                                          @ViewBuilder slider: () -> S) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack {
+                Text(label).font(Theme.Font.ui(8.5)).foregroundStyle(Theme.Palette.textFaint)
+                Spacer()
+                Text(value).font(Theme.Font.mono(8)).foregroundStyle(Theme.Palette.textSecondary)
+            }
+            slider().controlSize(.mini)
         }
     }
 

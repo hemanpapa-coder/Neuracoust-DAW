@@ -10,21 +10,52 @@ struct MonitorDock: View {
     @State var modelPicker: ModelPickerContext?
     @State private var showSpeakerComparison = false
 
+    /// Dashboard panels the user can show/hide. The core monitor controls (input / level / output)
+    /// are always visible; the DSP and analysis panels are optional, toggled from the header chips
+    /// — persisted so the layout sticks. Hidden set stored as a comma-joined list of raw values.
+    enum DockPanel: String, CaseIterable, Identifiable {
+        case reference, meter, modules, dspSource, listenRoom, remoteCore
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .reference: return "레퍼런스"
+            case .meter: return "미터·스펙트럼"
+            case .modules: return "DSP 모듈"
+            case .dspSource: return "DSP 소스"
+            case .listenRoom: return "리슨룸"
+            case .remoteCore: return "원격 코어"
+            }
+        }
+    }
+    @AppStorage("nc.monitorHiddenPanels") private var hiddenPanelsRaw = ""
+    private var hiddenPanels: Set<String> {
+        Set(hiddenPanelsRaw.split(separator: ",").map(String.init))
+    }
+    private func togglePanel(_ panel: DockPanel) {
+        var hidden = hiddenPanels
+        if hidden.contains(panel.rawValue) { hidden.remove(panel.rawValue) } else { hidden.insert(panel.rawValue) }
+        hiddenPanelsRaw = hidden.sorted().joined(separator: ",")
+    }
+    private func shows(_ panel: DockPanel) -> Bool { !hiddenPanels.contains(panel.rawValue) }
+
     var body: some View {
         VStack(spacing: 0) {
+            // Edit / Mix tabs live in the transport toolbar row (alongside the panel-toggle and
+            // help chips), not here — the dock's column is reserved for the monitor station.
             header
+            panelChips
 
             ScrollView {
                 VStack(spacing: Theme.Space.xl) {
                     inputSection
                     levelAndModes
                     outputMode
-                    referenceMonitoring
-                    meterCard
-                    moduleList
-                    dspSource
-                    listenRoom
-                    remoteCore
+                    if shows(.reference) { referenceMonitoring }
+                    if shows(.meter) { meterCard }
+                    if shows(.modules) { moduleList }
+                    if shows(.dspSource) { dspSource }
+                    if shows(.listenRoom) { listenRoom }
+                    if shows(.remoteCore) { remoteCore }
                 }
                 .padding(Theme.Space.xxl)
             }
@@ -35,7 +66,7 @@ struct MonitorDock: View {
             ModelPickerSheet(context: ctx) { modelPicker = nil }
         }
         .sheet(isPresented: $showSpeakerComparison) {
-            SpeakerComparisonView()
+            SpeakerComparisonView(engine: engine)
         }
     }
 
@@ -65,6 +96,31 @@ struct MonitorDock: View {
         .background(Theme.Gradient.monitorHeader)
     }
 
+    /// The dashboard: chips that show/hide each optional panel (the core monitor controls stay).
+    private var panelChips: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 4)], spacing: 4) {
+            ForEach(DockPanel.allCases) { panel in
+                let on = shows(panel)
+                Button { togglePanel(panel) } label: {
+                    Text(panel.title)
+                        .font(Theme.Font.mono(7.5))
+                        .foregroundStyle(on ? Theme.Palette.textBright : Theme.Palette.textFaint)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .frame(maxWidth: .infinity)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                            .fill(on ? Theme.Palette.purple.opacity(0.28) : Theme.Palette.button))
+                }
+                .buttonStyle(.plain)
+                .help("\(panel.title) 패널 \(on ? "숨기기" : "표시")")
+            }
+        }
+        .padding(.horizontal, Theme.Space.xxl)
+        .padding(.vertical, 5)
+        .background(Theme.Palette.panel)
+    }
+
     private var routingDescription: String {
         guard let set = engine.activeSpeakerSet else { return "Master → Monitor" }
         // "None" is the modelled/virtual path (out the main L/R), not a dead output —
@@ -80,10 +136,11 @@ struct MonitorDock: View {
             VStack(spacing: Theme.Space.md) {
                 RotaryKnob(
                     value: engine.monitorVolumeDb,
-                    range: -60...6,
-                    resetValue: -6,
+                    range: -60...(-12),          // capped at -12 dB so speaker-sim EQ boosts keep D/A headroom
+                    resetValue: -12,
                     onChange: { engine.setMonitorVolume($0) }
                 )
+                .contextMenu { shortcutMenu(.volDown); shortcutMenu(.volUp) }
                 Text("MONITOR dB")
                     .font(Theme.Font.mono(6.5))
                     .tracking(0.6)
@@ -96,16 +153,73 @@ struct MonitorDock: View {
                 let listen = engine.monitorListen
                 HStack(spacing: Theme.Space.sm) {
                     dimButton(listen.stereoTitle, listen.stereoActive, Theme.Palette.accent) { engine.cycleStereo() }
+                        .contextMenu { shortcutMenu(.stereo) }
                     dimButton(listen.monoTitle, listen.monoActive, Theme.Palette.accent) { engine.cycleMono() }
+                        .contextMenu { shortcutMenu(.mono) }
                     dimButton("M/S", listen.midSide, Theme.Palette.accent) { engine.toggleMidSide() }
+                        .contextMenu { shortcutMenu(.midSide) }
                     dimButton(listen.phaseTitle, listen.phaseActive, Theme.Palette.purple) { engine.cyclePhase() }
                 }
                 HStack(spacing: Theme.Space.sm) {
-                    dimButton("Mute", engine.monitorMute, Theme.Palette.orange) { engine.toggleMonitorMute() }
                     dimButton("Dim", engine.monitorDim, Theme.Palette.orange) { engine.toggleDim() }
-                    TalkbackButton()
+                        .contextMenu { dimAmountMenu; Divider(); shortcutMenu(.dim) }
+                    dimButton("Mute", engine.monitorMute, Theme.Palette.orange) { engine.toggleMonitorMute() }
+                        .contextMenu { shortcutMenu(.mute) }
+                    TalkbackButton()   // right-click (mode + talkback mic) handled in the NSView
+                }
+                monitorShortcutToggle
+            }
+        }
+    }
+
+    /// Master switch for the runtime-only number-row monitor shortcuts, with a reset. Right-click
+    /// any monitor button to change which key drives it.
+    private var monitorShortcutToggle: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Toggle(isOn: Binding(get: { engine.monitorShortcutsEnabled },
+                                 set: { engine.setMonitorShortcutsEnabled($0) })) {
+                Text("키패드 단축키").font(Theme.Font.ui(8.5, .medium))
+            }
+            .toggleStyle(.switch).scaleEffect(0.7).fixedSize()
+            .help("켜면 숫자 키패드(텐키)가 모니터를 제어합니다. 상단 숫자열은 그대로 유지됩니다. 각 버튼 우클릭으로 키 변경. DAW 구동 중에만 동작.")
+            Spacer()
+            Button("기본값") { engine.resetMonitorShortcutsToDefault() }
+                .font(Theme.Font.ui(8))
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Dim-amount picker for the Dim button's right-click menu.
+    @ViewBuilder
+    private var dimAmountMenu: some View {
+        Menu("디밍 레벨 — \(Int(engine.monitorDimDb)) dB") {
+            ForEach(EngineController.monitorDimDbOptions, id: \.self) { db in
+                Button {
+                    engine.setMonitorDimDb(db)
+                } label: {
+                    if Int(engine.monitorDimDb) == Int(db) { Label("\(Int(db)) dB", systemImage: "checkmark") }
+                    else { Text("\(Int(db)) dB") }
                 }
             }
+        }
+    }
+
+    /// Right-click reassignment submenu for one monitor action.
+    @ViewBuilder
+    private func shortcutMenu(_ action: EngineController.MonitorShortcutAction) -> some View {
+        let current = engine.monitorShortcutKey(action)
+        Menu("\(action.label) 단축키 — \(current.map(EngineController.monitorShortcutKeyLabel) ?? "없음")") {
+            ForEach(EngineController.monitorShortcutAssignableKeys, id: \.code) { key in
+                Button {
+                    engine.setMonitorShortcutKey(action, key.code)
+                } label: {
+                    if current == key.code { Label(key.label, systemImage: "checkmark") } else { Text(key.label) }
+                }
+            }
+            Divider()
+            Button("없음") { engine.setMonitorShortcutKey(action, nil) }
         }
     }
 
@@ -135,27 +249,25 @@ struct MonitorDock: View {
 
     private var outputMode: some View {
         VStack(spacing: Theme.Space.lg) {
+            // Speaker vs headphone is the modeller choice, and it is always one or the other — the
+            // inactive tab dims. (Plugging headphones into the interface while in speaker mode is
+            // just physical output routing; it applies no headphone DSP and is unrelated to this.)
             HStack(spacing: Theme.Space.sm) {
-                let exclusive = engine.monitorOutputExclusive
                 outputTab("🔊 스피커", active: engine.outputMode == .speaker) {
                     engine.outputMode = .speaker
                 }
-                .opacity(exclusive && engine.outputMode != .speaker ? 0.45 : 1)
+                .opacity(engine.outputMode == .speaker ? 1 : 0.45)
                 .contextMenu { speakerMenu }
                 outputTab("🎧 헤드폰", active: engine.outputMode == .headphone) {
                     engine.outputMode = .headphone
                 }
-                .opacity(exclusive && engine.outputMode != .headphone ? 0.45 : 1)
+                .opacity(engine.outputMode == .headphone ? 1 : 0.45)
                 .contextMenu { headphoneMenu }
             }
 
-            // Whether speaker and headphone are mutually exclusive, and the physical
-            // model of whichever output is active.
+            // The physical model of whichever output is active (right-click a tab to set it).
             HStack(spacing: Theme.Space.sm) {
-                Toggle("", isOn: Binding(get: { engine.monitorOutputExclusive },
-                                         set: { engine.setMonitorOutputExclusive($0) }))
-                    .labelsHidden().toggleStyle(.switch).scaleEffect(0.7).frame(width: 34)
-                Text("스피커/헤드폰 배타")
+                Text("실물 모델")
                     .font(Theme.Font.ui(9, .medium))
                     .foregroundStyle(Theme.Palette.textSecondary)
                 Spacer()
@@ -165,11 +277,6 @@ struct MonitorDock: View {
                     .lineLimit(1)
             }
 
-            // A/B/C virtual-speaker monitoring is shared across both outputs: the same
-            // modelled speaker (A/니어필드, B/미드필드, C/라지필드) is auditioned either
-            // over the physical speakers or over headphones. The Monitor DSP chain applies
-            // Speaker Simulation on the monitor bus regardless of the output, so the A/B/C
-            // choice is heard on headphones too — with crossfeed/headphone correction on top.
             speakerSets
             if engine.outputMode == .headphone {
                 headphonePanel
@@ -188,12 +295,73 @@ struct MonitorDock: View {
     /// submenus of ~200 items do not render on macOS, so this replaces them.
     @ViewBuilder
     private func modelMenu(_ title: String, catalog: [String], selected: String,
+                           measured: Set<String> = [],
                            onPick: @escaping (String) -> Void) -> some View {
         Button("\(title)…") {
             modelPicker = ModelPickerContext(title: title, catalog: catalog,
-                                             selected: selected, onPick: onPick)
+                                             selected: selected, measured: measured, onPick: onPick)
         }
     }
+
+    /// Audio-interface D/A picker group, shared by both output tabs. Two purposes:
+    /// (1) name the physical interface (flat environment), (2) render it AS another model (A→B).
+    /// Purpose 2 is catalog-only until raw measured profiles exist, so it shows its own honest
+    /// status instead of pretending to colour the sound.
+    @ViewBuilder
+    private var audioInterfaceMenuGroup: some View {
+        modelMenu("실물 오디오 인터페이스", catalog: engine.audioInterfaceModelCatalog,
+                  selected: engine.physicalAudioInterfaceModel,
+                  measured: engine.audioInterfaceMeasured) { engine.setPhysicalAudioInterfaceModel($0) }
+        Menu("오디오 인터페이스 모델링") {
+            Button {
+                engine.setPhysicalAudioInterfaceTargetModel("")
+            } label: {
+                if engine.physicalAudioInterfaceTargetModel.isEmpty { Label("사용 안 함(원본 그대로)", systemImage: "checkmark") }
+                else { Text("사용 안 함(원본 그대로)") }
+            }
+            modelMenu("대상 모델", catalog: engine.audioInterfaceModelCatalog,
+                      selected: engine.physicalAudioInterfaceTargetModel,
+                      measured: engine.audioInterfaceMeasured) { engine.setPhysicalAudioInterfaceTargetModel($0) }
+            Divider()
+            if engine.audioInterfaceTransformActive {
+                Text("FR 변환 활성 (실측 프로필)").font(.caption)
+            } else {
+                Text("카탈로그 전용 — 오디오 변환 없음").font(.caption).foregroundStyle(.secondary)
+                Text("실측 원시 프로필 확보 시 활성화").font(.caption2).foregroundStyle(.secondary)
+            }
+            Divider()
+            // Optional 2단계: nonlinear harmonic character (waveshaper). The long tooltip explains it.
+            Button {
+                engine.setMonitorInterfaceModeling(!engine.monitorInterfaceModelingEnabled)
+            } label: {
+                if engine.monitorInterfaceModelingEnabled { Label("고조파 모델링 (웨이브셰이퍼)", systemImage: "checkmark") }
+                else { Text("고조파 모델링 (웨이브셰이퍼)") }
+            }
+            .help(Self.waveshaperHelp)
+        }
+        // Interface loopback measurement (level meter, auto multi-level, THD curve) lives in the
+        // "모니터 EQ · 응답" window's output-interface card — no duplicate menu here.
+    }
+
+    /// Long help for the harmonic (waveshaper) modeling option — kept verbatim per request.
+    static let waveshaperHelp = """
+    고조파 모델링 (웨이브셰이퍼)
+
+    웨이브셰이퍼는 입력 샘플값을 전달 함수(곡선) f(x)에 통과시켜 출력을 만드는 비선형 DSP입니다. \
+    이 곡선이 완벽한 직선(y=x)이면 소리가 안 바뀌고, 살짝 휘면 고조파(하모닉)와 왜곡이 생깁니다. \
+    진공관·테이프·아날로그 회로 특유의 "따뜻한" 색깔이 바로 이 비선형 전달 곡선에서 나옵니다.
+
+    • 1단계 EQ = 주파수별 크기만 바꿈 → 선형, 고조파 없음.
+    • 2단계 웨이브셰이퍼(이 옵션) = 파형 모양 자체를 휘어 비선형 → H2·H3… 고조파를 만듦.
+
+    이 옵션은 성적서의 레벨별 H2–H7 실측치에 맞춰 체비쇼프(Chebyshev) 다항식 전달 곡선을 설계해, \
+    모델링하는 인터페이스가 실제로 내는 고조파를 그대로 재현합니다. 대상(모델링) 인터페이스가 있으면 \
+    그쪽, 없으면 실물 인터페이스의 실측 고조파를 씁니다.
+
+    주의: 커즈와일 UNiTE-2처럼 깨끗한 인터페이스는 고조파가 −67~−117 dBc로 가청 한계 아래라 \
+    사실상 안 들립니다. 이 기능은 고조파가 큰 컬러드/빈티지 인터페이스를 측정했을 때 진가를 발휘합니다. \
+    실측 데이터가 없으면 아무것도 하지 않습니다(계수 0 = 완전 통과, null test 통과).
+    """
 
     /// The 스피커 tab's right-click menu: physical output device plus the real speaker
     /// model the user monitors on (not the A/B/C simulator).
@@ -201,18 +369,18 @@ struct MonitorDock: View {
     private var speakerMenu: some View {
         deviceMenu
         Divider()
-        modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
-                  selected: engine.physicalSpeakerModel) { engine.setPhysicalSpeakerModel($0) }
-        // A passive speaker is driven by an external power amp + cable; an active monitor has
-        // the amp built in, so those pickers only appear for a passive model.
-        if engine.physicalSpeakerIsPassive {
-            modelMenu("파워앰프 모델", catalog: engine.powerAmpModelCatalog,
-                      selected: engine.physicalPowerAmpModel) { engine.setPhysicalPowerAmpModel($0) }
-            modelMenu("스피커 케이블 모델", catalog: engine.speakerCableModelCatalog,
-                      selected: engine.physicalSpeakerCableModel) { engine.setPhysicalSpeakerCableModel($0) }
-        } else if !engine.physicalSpeakerModel.isEmpty {
-            Text("액티브 스피커 — 앰프/케이블 불필요").font(.caption).foregroundStyle(.secondary)
+        // Physical output: the interface D/A, then the real speaker the user monitors on. The
+        // power amp / speaker cable / AC power / connector live on the MODELING (A/B/C) side —
+        // per-slot on each 모델링 스피커 set — not here, to keep the physical picker uncluttered.
+        audioInterfaceMenuGroup
+        // "모델 없음" clears the physical speaker model (no modelling / raw output).
+        Button { engine.setPhysicalSpeakerModel("") } label: {
+            if engine.physicalSpeakerModel.isEmpty { Label("모델 없음", systemImage: "checkmark") }
+            else { Text("모델 없음") }
         }
+        modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
+                  selected: engine.physicalSpeakerModel,
+                  measured: Set(engine.virtualMonitorTargets)) { engine.setPhysicalSpeakerModel($0) }
         Divider()
         // Speakers wired backwards: swap L/R in the monitor path.
         Button {
@@ -227,8 +395,15 @@ struct MonitorDock: View {
     private var headphoneMenu: some View {
         deviceMenu
         Divider()
+        // "모델 없음" clears the physical headphone model (no correction / raw output).
+        Button { engine.setPhysicalHeadphoneModel("") } label: {
+            if engine.physicalHeadphoneModel.isEmpty { Label("모델 없음", systemImage: "checkmark") }
+            else { Text("모델 없음") }
+        }
         modelMenu("실물 헤드폰 모델", catalog: engine.headphoneModelCatalog,
-                  selected: engine.physicalHeadphoneModel) { engine.setPhysicalHeadphoneModel($0) }
+                  selected: engine.physicalHeadphoneModel,
+                  measured: Set(engine.headphoneMonitorTargets)) { engine.setPhysicalHeadphoneModel($0) }
+        audioInterfaceMenuGroup
     }
 
     /// Right-click device picker. "시스템 기본" leaves the id empty, which is a valid
@@ -333,7 +508,7 @@ struct MonitorDock: View {
             Button {
                 showSpeakerComparison = true
             } label: {
-                Label("스피커 응답 비교", systemImage: "chart.xyaxis.line")
+                Label("모니터 EQ · 응답", systemImage: "chart.xyaxis.line")
                     .font(Theme.Font.ui(9.5, .semibold))
                     .foregroundStyle(Theme.Palette.purpleLight)
                     .frame(maxWidth: .infinity)
@@ -346,7 +521,22 @@ struct MonitorDock: View {
                     )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("스피커 응답 비교")
+            .accessibilityLabel("모니터 EQ · 응답")
+
+            // Linear-phase FIR toggle out here (not just inside the EQ window) — it's a mix/master
+            // decision (exact phase vs added latency), so keep it one click away with its latency.
+            HStack(spacing: 6) {
+                Text("선형위상 EQ").font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
+                Spacer(minLength: 0)
+                if engine.monitorEqLinearPhase, engine.monitorEqLatencyMs > 0 {
+                    Text(String(format: "지연 %.0f ms", engine.monitorEqLatencyMs))
+                        .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.amber)
+                }
+                Toggle("", isOn: Binding(get: { engine.monitorEqLinearPhase },
+                                         set: { engine.setMonitorEqLinearPhase($0) }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+            }
+            .help("FIR 선형위상 — 전대역 정확 매칭(저역 급경사·고역 딥 포함), 대신 지연 추가. 믹스/마스터용.")
         }
     }
 
@@ -354,9 +544,32 @@ struct MonitorDock: View {
     /// physical output pair (which bypasses the model), plus the room-EQ toggle.
     @ViewBuilder
     private func speakerSetMenu(_ set: EngineController.SpeakerSet) -> some View {
+        let bare = set.displayModel
+        let isHeadphone = engine.headphoneModelHasCurve(bare)
+        let modelled = set.output == "None"
         Text("\(set.letter) · \(set.name)")
+        // Number-row shortcut for selecting this set (A/B/C).
+        shortcutMenu(set.id == 1 ? .setB : set.id == 2 ? .setC : .setA)
+        Divider()
+        // A slot models a virtual SPEAKER always; in HEADPHONE mode it may instead model a
+        // headphone (mutually exclusive — picking one replaces the other). The headphone option
+        // is hidden in speaker mode, where it makes no sense.
         modelMenu("스피커 모델", catalog: engine.speakerModelCatalog,
-                  selected: set.output == "None" ? set.displayModel : "") { engine.setSpeakerModel(set.id, $0) }
+                  selected: (modelled && !isHeadphone) ? bare : "",
+                  measured: Set(engine.virtualMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
+        if engine.outputMode == .headphone {
+            modelMenu("헤드폰 모델", catalog: engine.headphoneModelCatalog,
+                      selected: (modelled && isHeadphone) ? bare : "",
+                      measured: Set(engine.headphoneMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
+        }
+        // A passive modeled speaker is driven by a power amp + cable, like a physical passive one —
+        // their name-heuristic tone colours this slot's simulation (until measured).
+        if modelled && !isHeadphone && set.modelIsPassive {
+            modelMenu("실물 파워앰프 모델", catalog: engine.powerAmpModelCatalog,
+                      selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
+            modelMenu("실물 스피커 케이블 모델", catalog: engine.speakerCableModelCatalog,
+                      selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
+        }
         // Physical output is a raw passthrough that bypasses the modelled path, so it is
         // only offered when Speaker Simulation is off (photo-2 context).
         if !engine.speakerSimulationActive {
@@ -431,17 +644,74 @@ struct MonitorDock: View {
                 dimButton("Master", !engine.monitorListenSource, Theme.Palette.accent) {
                     engine.selectMonitorInput(blackHole: false)
                 }
-                dimButton("BlackHole", engine.monitorListenSource, Theme.Palette.teal) {
+                .contextMenu { shortcutMenu(.sourceMaster) }
+                // "Other apps" = Core Audio process tap (replaced the BlackHole loopback). Captures
+                // every other app's output directly — no BlackHole, no device, no mic permission.
+                // Reference-hold: left-click arms + A/Bs master↔reference (apps stay muted the whole
+                // time, so nothing leaks); right-click → 레퍼런스 종료 unmutes the apps.
+                dimButton("다른 앱", engine.monitorListenSource, Theme.Palette.teal) {
                     engine.selectMonitorInput(blackHole: true)
                 }
+                .overlay(alignment: .topTrailing) {
+                    // Armed but auditioning the master: the apps are still muted (held), so mark it.
+                    if engine.referenceArmed && !engine.monitorListenSource {
+                        Text("홀드")
+                            .font(Theme.Font.ui(7, .bold))
+                            .foregroundStyle(Theme.Palette.teal)
+                            .padding(.horizontal, 3).padding(.vertical, 1)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.Palette.teal.opacity(0.18)))
+                            .padding(3)
+                    }
+                }
+                .contextMenu {
+                    if engine.referenceArmed {
+                        Button("레퍼런스 종료 (다른 앱 소리 복구)") { engine.exitReference() }
+                        Divider()
+                    }
+                    shortcutMenu(.sourceBlackHole)
+                }
+                .help("다른 앱(브라우저·유튜브 등) 소리를 프로세스 탭으로 모니터에 가져옵니다. 켜면 그 앱들은 계속 음소거되어 컴퓨터로 새지 않고(홀드), 좌클릭으로 마스터↔다른 앱을 A/B 합니다. 우클릭 → 레퍼런스 종료로 원래대로. BlackHole 불필요.")
             }
-            if engine.monitorListenSource && !engine.hasBlackHoleInput {
-                Text("BlackHole 입력을 찾지 못했습니다. 설치/장치 확인 필요.")
-                    .font(Theme.Font.mono(7))
-                    .foregroundStyle(Theme.Palette.orange)
+            // Global keypad capture: drive the monitor station from the numeric keypad even when
+            // another app is frontmost. (An "interface exclusive/hog" toggle used to sit here too,
+            // but macOS hog mode does not actually block other apps from the device — verified — so
+            // it was removed rather than mislead.)
+            HStack(spacing: Theme.Space.sm) {
+                dimButton("키패드 독점", engine.keypadCaptureEnabled, Theme.Palette.teal) {
+                    engine.setKeypadCapture(!engine.keypadCaptureEnabled)
+                }
+                .help("켜면 다른 앱이 앞에 있어도 숫자 키패드로 모니터 볼륨(+/−)·Dim(0)·Mute(.)·Talk(Enter, 누르는 동안)·스피커 A/B/C(1/2/3) 등을 제어합니다. 바인딩은 키패드 단축키 설정을 따릅니다. 손쉬운 사용 권한 필요.")
+                Spacer(minLength: 0)
             }
         }
         .onAppear { engine.refreshInputDevices() }
+    }
+
+    /// Right-click menu on the BlackHole source button: pick which internal input device to
+    /// capture (BlackHole 2ch/16ch, or any input). Defaults to BlackHole 2ch when first enabled.
+    @ViewBuilder
+    private var blackHoleSourceMenu: some View {
+        Menu("입력 장치") {
+            if engine.inputDevices.isEmpty {
+                Text("입력 장치 없음").font(.caption)
+            } else {
+                ForEach(engine.inputDevices) { dev in
+                    Button {
+                        engine.selectMonitorInputDevice(dev.id)
+                    } label: {
+                        if engine.monitorListenSource && engine.currentInputDeviceId == dev.id {
+                            Label(dev.name, systemImage: "checkmark")
+                        } else {
+                            Text(dev.name)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("장치 새로고침") { engine.refreshInputDevices() }
+        }
+        Divider()
+        shortcutMenu(.sourceBlackHole)
     }
 
     private var referenceMonitoring: some View {
@@ -486,13 +756,33 @@ struct MonitorDock: View {
                      gradient: LinearGradient(colors: [Theme.Palette.green, Color(hex: 0x6fa6d0)],
                                               startPoint: .leading, endPoint: .trailing))
 
+            // Render-deadline misses = potential dropouts (playback keeps rolling but glitches).
+            // 0 = clean. A rising count means this buffer/OS load is not safe for recording. The ↺
+            // clears the tally once you have addressed the cause and want to watch it fresh.
+            HStack {
+                Text("드롭아웃 (레이트)")
+                    .font(Theme.Font.ui(9))
+                    .foregroundStyle(Theme.Palette.textLabel)
+                Spacer()
+                Text(engine.dropoutCount == 0 ? "0 · 안전" : "\(engine.dropoutCount)회")
+                    .font(Theme.Font.mono(9, .medium))
+                    .foregroundStyle(engine.dropoutCount == 0 ? Theme.Palette.green
+                                   : engine.dropoutCount < 5 ? Theme.Palette.amber : Theme.Palette.red)
+                if engine.dropoutCount > 0 {
+                    Button { engine.resetDropoutCount() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textFaint)
+                    .help("드롭아웃 카운트 리셋")
+                }
+            }
+
             StatRow(label: "위상 상관", value: String(format: "%+.2f", engine.phaseCorrelation))
             PhaseCorrelationDotMeter(correlation: engine.phaseCorrelation)
 
             delayCompensationRow
-
-            StatRow(label: "Low / Mid / High", value: bandLabel)
-            StatRow(label: "L / R Peak", value: peakLabel)
 
             VStack(alignment: .leading, spacing: Theme.Space.sm) {
                 Text("SPECTRUM")
@@ -559,20 +849,6 @@ struct MonitorDock: View {
                 set: { engine.setDelayCompensation($0) }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.mini)
         }
-    }
-
-    private var bandLabel: String {
-        String(format: "%.0f · %.0f · %.0f",
-               meterFraction(engine.spectrumLow) * 100,
-               meterFraction(engine.spectrumMid) * 100,
-               meterFraction(engine.spectrumHigh) * 100)
-    }
-
-    private var peakLabel: String {
-        func db(_ peak: Float) -> String {
-            peak <= 0.00001 ? "-∞" : String(format: "%.1f", peakToDb(peak))
-        }
-        return "\(db(engine.outputPeakLeft)) / \(db(engine.outputPeakRight))"
     }
 
     // MARK: Module list
@@ -892,6 +1168,11 @@ struct MonitorDock: View {
             // IP, or 검색 to broadcast-probe the LAN.
             RemoteHostField()
 
+            // The discovered node's own hardware — shown once 검색 (or a refresh) gets a reply.
+            if let specs = engine.remoteNodeSpecs {
+                remoteNodeSpecsView(specs)
+            }
+
             Divider().overlay(Theme.Palette.divider)
 
             // Internal DSP core allocation. Isolation keeps a floor of 4.
@@ -916,18 +1197,28 @@ struct MonitorDock: View {
             }
 
             // The external DSP Manager's core reserve. Settable here or in the manager
-            // itself; a connected node's own report wins over this hint.
+            // itself; a connected node's own report wins over this hint. The switch is the
+            // "use this node" master — off gates the node out of the core plan entirely.
             HStack {
+                Toggle("", isOn: Binding(
+                    get: { engine.externalDspEnabled },
+                    set: { engine.setExternalDspEnabled($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .frame(width: 34)
                 VStack(alignment: .leading, spacing: 0) {
                     Text("외부 DSP 코어")
                         .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(Theme.Palette.textSecondary)
-                    Text("DSP 매니저 예약")
+                    Text(engine.externalDspEnabled ? "DSP 매니저 예약" : "사용 안 함")
                         .font(Theme.Font.mono(7))
                         .foregroundStyle(Theme.Palette.textFaint)
                 }
                 Spacer()
                 externalCoreStepper
+                    .opacity(engine.externalDspEnabled ? 1 : 0.35)
+                    .disabled(!engine.externalDspEnabled)
             }
         }
         .padding(Theme.Space.xl)
@@ -935,6 +1226,43 @@ struct MonitorDock: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(Theme.Palette.background)
         )
+    }
+
+    // The discovered node's hardware, laid out as label/value rows. Only meaningful fields show —
+    // an Apple-Silicon node reports 0 MHz (no fixed clock), so the clock is folded into the CPU line
+    // only when non-zero.
+    private func remoteNodeSpecsView(_ specs: EngineController.RemoteNodeSpecs) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !specs.model.isEmpty { specRow("노드", specs.model) }
+            if !specs.cpuModel.isEmpty && specs.cpuModel != "unknown" {
+                specRow("CPU", specs.cpuMhz > 0
+                        ? String(format: "%@ · %.2f GHz", specs.cpuModel, specs.cpuMhz / 1000.0)
+                        : specs.cpuModel)
+            }
+            if specs.coreCount > 0 { specRow("코어", "\(specs.coreCount)") }
+            if specs.memoryMb > 0 {
+                specRow("메모리", String(format: "%.0f GB", Double(specs.memoryMb) / 1024.0))
+            }
+        }
+        .padding(Theme.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.card)
+                .fill(Theme.Palette.surface)
+        )
+    }
+
+    private func specRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            Text(label)
+                .font(Theme.Font.ui(8, .medium))
+                .foregroundStyle(Theme.Palette.textFaint)
+                .frame(width: 34, alignment: .leading)
+            Text(value)
+                .font(Theme.Font.mono(8))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -995,45 +1323,89 @@ private struct RemoteHostField: View {
     }
 }
 
-/// The monitor Talkback key: momentary while held (and it pulls Dim in with it),
-/// double-click to latch it on, click a latched button to release. A console talkback
-/// key, not a plain toggle. SwiftUI press gestures do not fire reliably for a static
-/// press inside the dock's ScrollView, so the whole control is a self-drawing NSView
+/// The monitor Talkback key: momentary while held (and it pulls Dim in with it), double-click to
+/// latch it on, a click on a latched key releases it — one console-style behavior, not a mode.
+/// Right-click picks the talkback mic (interface input). SwiftUI press gestures do not fire reliably
+/// for a static press inside the dock's ScrollView, so the whole control is a self-drawing NSView
 /// that reads mouseDown/mouseUp (and clickCount) directly.
 private struct TalkbackButton: View {
     @EnvironmentObject private var engine: EngineController
 
     var body: some View {
-        TalkbackKeyRepresentable(isOn: engine.monitorTalkback) { engine.setTalkbackEngaged($0) }
+        TalkbackKeyRepresentable(isOn: engine.monitorTalkback,
+                                 mics: engine.inputDevices.map { (id: $0.id, name: $0.name) },
+                                 selectedMicId: engine.talkbackMicId,
+                                 talkbackRoute: engine.talkbackRoute,
+                                 talkbackChannel: engine.talkbackChannel,
+                                 channelCount: engine.talkbackChannelCount,
+                                 channelActivity: { engine.talkbackChannelActivity($0) },
+                                 onEngaged: { engine.setTalkbackEngaged($0) },
+                                 onSelectMic: { engine.setTalkbackMic($0) },
+                                 onSelectRoute: { engine.setTalkbackRoute($0) },
+                                 onSelectChannel: { engine.setTalkbackChannel($0) },
+                                 onRefreshMics: { engine.refreshInputDevices() })
             .frame(maxWidth: .infinity)
             .frame(height: 26)
+            .onAppear { engine.refreshInputDevices() }
     }
 }
 
 private struct TalkbackKeyRepresentable: NSViewRepresentable {
     let isOn: Bool
+    let mics: [(id: String, name: String)]
+    let selectedMicId: String
+    let talkbackRoute: String
+    let talkbackChannel: Int
+    let channelCount: Int
+    let channelActivity: (Int) -> Float
     let onEngaged: (Bool) -> Void
+    let onSelectMic: (String) -> Void
+    let onSelectRoute: (String) -> Void
+    let onSelectChannel: (Int) -> Void
+    let onRefreshMics: () -> Void
     func makeNSView(context: Context) -> TalkbackKeyView {
         let view = TalkbackKeyView()
-        view.onEngaged = onEngaged
-        view.isOn = isOn
+        apply(to: view)
         return view
     }
-    func updateNSView(_ view: TalkbackKeyView, context: Context) {
+    func updateNSView(_ view: TalkbackKeyView, context: Context) { apply(to: view) }
+    private func apply(to view: TalkbackKeyView) {
         view.onEngaged = onEngaged
+        view.onSelectMic = onSelectMic
+        view.onSelectRoute = onSelectRoute
+        view.onSelectChannel = onSelectChannel
+        view.onRefreshMics = onRefreshMics
+        view.mics = mics
+        view.selectedMicId = selectedMicId
+        view.talkbackRoute = talkbackRoute
+        view.talkbackChannel = talkbackChannel
+        view.channelCount = channelCount
+        view.channelActivity = channelActivity
         view.isOn = isOn
     }
 }
 
-/// Draws the "Talk" key and runs the press/hold/latch logic. Momentary while held;
-/// double-click latches on; a click on a latched key releases it. `suppress` swallows
-/// the rest of a click sequence after an unlatch so a double-click used to release
-/// cannot immediately re-engage.
+/// Draws the "Talk" key and runs the press logic for the current mode. `momentary`: live only
+/// while held. `latch`: double-click engages, a click releases. Right-click picks the mode.
+/// `suppress` swallows the rest of a click sequence after an unlatch so a double-click used to
+/// release cannot immediately re-engage.
 final class TalkbackKeyView: NSView {
     var onEngaged: ((Bool) -> Void)?
+    var onSelectMic: ((String) -> Void)?
+    var onSelectRoute: ((String) -> Void)?
+    var onSelectChannel: ((Int) -> Void)?
+    var onRefreshMics: (() -> Void)?
+    var mics: [(id: String, name: String)] = []
+    var selectedMicId: String = ""
+    var talkbackRoute: String = "listen_room"
+    var talkbackChannel: Int = 1
+    var channelCount: Int = 1
+    var channelActivity: ((Int) -> Float)?
     var isOn = false { didSet { if isOn != oldValue { needsDisplay = true } } }
     private var latched = false
     private var suppress = false
+    private var downTimestamp: TimeInterval = 0
+    private let tapSeconds: TimeInterval = 0.30
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -1068,26 +1440,94 @@ final class TalkbackKeyView: NSView {
                   withAttributes: attrs)
     }
 
+    // Console talkback key: a quick CLICK latches it on (click again = off); a HOLD is momentary
+    // (talk while held) — the same tap/hold behavior as the keypad Talk shortcut.
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 1 { suppress = false }   // a fresh gesture begins
         if latched {
             latched = false
-            onEngaged?(false)
-            suppress = true                              // ignore the rest of this sequence
+            onEngaged?(false)                            // a click on a latched key turns it off
+            suppress = true                              // ignore this whole press
             return
         }
-        if suppress { return }
-        onEngaged?(true)                                // momentary engage
+        suppress = false
+        downTimestamp = event.timestamp
+        onEngaged?(true)                                 // engage; mouseUp decides click(latch) vs hold(release)
     }
 
     override func mouseUp(with event: NSEvent) {
-        if suppress { return }
-        if event.clickCount >= 2 {
-            latched = true
-            onEngaged?(true)                            // stays on
+        if suppress { suppress = false; return }
+        if event.timestamp - downTimestamp < tapSeconds {
+            latched = true                               // quick click → latch on (stays engaged)
         } else {
-            onEngaged?(false)                           // momentary release
+            onEngaged?(false)                            // hold → release
         }
+    }
+
+    /// Right-click: pick the talkback mic (interface input channel).
+    override func rightMouseDown(with event: NSEvent) {
+        onRefreshMics?()
+        let menu = NSMenu()
+        let header = NSMenuItem(title: "톡백 마이크", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        if mics.isEmpty {
+            let none = NSMenuItem(title: "  입력 장치 없음", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        } else {
+            for mic in mics {
+                let item = NSMenuItem(title: "  " + mic.name, action: #selector(selectMic(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = mic.id
+                item.state = (mic.id == selectedMicId) ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        // Talkback mic channel. A talkback mic is one input channel (e.g. ch2 when ch1 is the
+        // singer's mic). A ● marks channels with a live signal right now — so on a multi-input
+        // interface the talkback mic is easy to spot. Activity only reads while the input is
+        // flowing (Talk engaged or input monitoring on); idle channels show ○.
+        menu.addItem(.separator())
+        let chHeader = NSMenuItem(title: "톡백 채널 (마이크 입력)", action: nil, keyEquivalent: "")
+        chHeader.isEnabled = false
+        menu.addItem(chHeader)
+        let chCount = max(1, channelCount)
+        for ch in 1...chCount {
+            let live = (channelActivity?(ch) ?? 0) > 0.003   // ~ -50 dBFS
+            let dot = live ? "● " : "○ "
+            let item = NSMenuItem(title: "  " + dot + "입력 \(ch)" + (live ? "  (라이브)" : ""),
+                                  action: #selector(selectChannel(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = ch
+            item.state = (ch == talkbackChannel) ? .on : .off
+            menu.addItem(item)
+        }
+
+        // Talkback destination. Listen-room-only keeps the engineer's monitor dry (no
+        // feedback on speakers); the mic rides over the programme to the remote listeners.
+        menu.addItem(.separator())
+        let routeHeader = NSMenuItem(title: "톡백 대상", action: nil, keyEquivalent: "")
+        routeHeader.isEnabled = false
+        menu.addItem(routeHeader)
+        for route in [(id: "listen_room", name: "리슨룸 (원격 청취자)"),
+                      (id: "monitor_bus", name: "모니터 (내 스피커)"),
+                      (id: "all", name: "둘 다")] {
+            let item = NSMenuItem(title: "  " + route.name, action: #selector(selectRoute(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = route.id
+            item.state = (route.id == talkbackRoute) ? .on : .off
+            menu.addItem(item)
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    @objc private func selectMic(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { onSelectMic?(id) }
+    }
+    @objc private func selectRoute(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { onSelectRoute?(id) }
+    }
+    @objc private func selectChannel(_ sender: NSMenuItem) {
+        onSelectChannel?(sender.tag)
     }
 }
 
@@ -1097,6 +1537,9 @@ struct ModelPickerContext: Identifiable {
     let title: String
     let catalog: [String]
     let selected: String
+    // Models with a measured response curve (they drive the EQ); the rest fall back to the name
+    // heuristic. Empty for catalogs where the distinction doesn't apply (amps, cables, headphones).
+    var measured: Set<String> = []
     let onPick: (String) -> Void
 }
 
@@ -1133,10 +1576,18 @@ struct ModelPickerSheet: View {
                                 context.onPick(model)
                                 dismiss()
                             } label: {
-                                HStack {
+                                HStack(spacing: 6) {
                                     Text(model)
                                         .font(Theme.Font.ui(11))
                                         .foregroundStyle(Theme.Palette.text)
+                                    if !context.measured.isEmpty {
+                                        let has = context.measured.contains(model)
+                                        Text(has ? "측정" : "측정 없음")
+                                            .font(Theme.Font.mono(7, .bold))
+                                            .foregroundStyle(has ? Theme.Palette.green : Theme.Palette.textFaint)
+                                            .padding(.horizontal, 5).padding(.vertical, 2)
+                                            .background((has ? Theme.Palette.green : Theme.Palette.textFaint).opacity(0.13), in: Capsule())
+                                    }
                                     Spacer()
                                     if model == context.selected {
                                         Image(systemName: "checkmark")

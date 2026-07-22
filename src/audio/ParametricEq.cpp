@@ -8,6 +8,97 @@ namespace neuracoust::daw {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
+
+// Solve a 3x3 linear system by Gaussian elimination with partial pivoting. Returns false if
+// singular.
+bool solve3x3(double A[3][3], const double b[3], double x[3]) {
+    double m[3][4];
+    for (int r = 0; r < 3; ++r) { for (int c = 0; c < 3; ++c) m[r][c] = A[r][c]; m[r][3] = b[r]; }
+    for (int col = 0; col < 3; ++col) {
+        int piv = col;
+        for (int r = col + 1; r < 3; ++r) if (std::abs(m[r][col]) > std::abs(m[piv][col])) piv = r;
+        if (std::abs(m[piv][col]) < 1e-18) return false;
+        for (int c = 0; c < 4; ++c) std::swap(m[col][c], m[piv][c]);
+        for (int r = 0; r < 3; ++r) {
+            if (r == col) continue;
+            const double f = m[r][col] / m[col][col];
+            for (int c = 0; c < 4; ++c) m[r][c] -= f * m[col][c];
+        }
+    }
+    for (int r = 0; r < 3; ++r) x[r] = m[r][3] / m[r][r];
+    return true;
+}
+
+// Matched-Z peaking (bell) biquad after Vicanek, "Matched Second Order Digital Filters" (2016).
+// The RBJ cookbook peak cramps near Nyquist — its magnitude droops/rings versus the analog
+// prototype, which is what made the fitted monitor EQ spike in the top octave. Here the poles are
+// matched to the analog resonance and the numerator is fitted so the digital |H|² tracks the
+// analog bell all the way to Nyquist. Returns false (caller falls back to RBJ) if the recovery is
+// ill-conditioned. bOut/aOut are the biquad coefficients with a0 == 1.
+bool designMatchedPeaking(double w0, double Q, double gainDb, double bOut[3], double aOut[3]) {
+    const double G = std::pow(10.0, gainDb / 20.0);   // linear gain at the peak
+    if (std::abs(gainDb) < 1e-6) { bOut[0] = 1; bOut[1] = 0; bOut[2] = 0; aOut[0] = 1; aOut[1] = 0; aOut[2] = 0; return true; }
+    // RBJ is already accurate below ~0.16·Nyquist and the matched-Z numerator recovery is
+    // ill-conditioned there (near-DC double pole), so only take over up top where RBJ cramps.
+    if (w0 < 0.5) return false;
+    const double qp = 1.0 / (2.0 * std::max(0.05, Q));
+    const double a2 = std::exp(-2.0 * qp * w0);
+    double a1;
+    if (qp <= 1.0) a1 = -2.0 * std::exp(-qp * w0) * std::cos(w0 * std::sqrt(1.0 - qp * qp));
+    else           a1 = -2.0 * std::exp(-qp * w0) * std::cosh(w0 * std::sqrt(qp * qp - 1.0));
+
+    // Least-squares fit N(φ) = c0 + c1 φ + c2 φ² (φ = sin²(ω/2)) to the analog target
+    // |H_a(jω)|²·|D(e^jω)|² across ω ∈ [0, π].
+    const int M = 96;
+    double S[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+    double T[3] = {0, 0, 0};
+    for (int i = 0; i < M; ++i) {
+        const double w = kPi * static_cast<double>(i) / (M - 1);
+        const double sh = std::sin(w / 2.0);
+        const double phi = sh * sh;
+        const double d = (w0 * w0 - w * w);
+        const double numA = d * d + std::pow(G * w0 * w / std::max(0.05, Q), 2.0);
+        const double denA = d * d + std::pow(w0 * w / std::max(0.05, Q), 2.0);
+        const double Ha2 = denA > 1e-30 ? numA / denA : G * G;
+        const double dr = 1.0 + a1 * std::cos(w) + a2 * std::cos(2.0 * w);
+        const double di = -(a1 * std::sin(w) + a2 * std::sin(2.0 * w));
+        const double D2 = dr * dr + di * di;
+        const double Nt = Ha2 * D2;
+        const double basis[3] = {1.0, phi, phi * phi};
+        for (int r = 0; r < 3; ++r) { for (int c = 0; c < 3; ++c) S[r][c] += basis[r] * basis[c]; T[r] += basis[r] * Nt; }
+    }
+    double c[3];
+    if (!solve3x3(S, T, c)) return false;
+    // Recover b0,b1,b2 from c0=(b0+b1+b2)², c1=-4(b0b1+4b0b2+b1b2), c2=16 b0 b2.
+    if (c[0] <= 0.0) return false;
+    const double W = std::sqrt(c[0]);         // b0+b1+b2
+    const double p = c[2] / 16.0;             // b0·b2
+    const double K = -c[1] / 4.0 - 4.0 * p;   // b1·(b0+b2)
+    const double sDisc = W * W - 4.0 * K;
+    if (sDisc < 0.0) return false;
+    const double s = 0.5 * (W + std::sqrt(sDisc));   // b0+b2
+    const double bDisc = s * s - 4.0 * p;
+    if (bDisc < 0.0) return false;
+    const double root = std::sqrt(bDisc);
+    const double b0 = 0.5 * (s + root);
+    const double b2 = 0.5 * (s - root);
+    const double b1 = W - s;
+    if (!std::isfinite(b0) || !std::isfinite(b1) || !std::isfinite(b2)) return false;
+    bOut[0] = b0; bOut[1] = b1; bOut[2] = b2;
+    aOut[0] = 1.0; aOut[1] = a1; aOut[2] = a2;
+    // Post-verify against the two anchors: ~0 dB at DC and ~gainDb at the centre. If the recovery
+    // drifted (a bad sign choice or conditioning), reject so the caller keeps the safe RBJ design.
+    auto magDb = [&](double w) {
+        const double br = b0 + b1 * std::cos(w) + b2 * std::cos(2.0 * w);
+        const double bi = -(b1 * std::sin(w) + b2 * std::sin(2.0 * w));
+        const double ar = 1.0 + a1 * std::cos(w) + a2 * std::cos(2.0 * w);
+        const double ai = -(a1 * std::sin(w) + a2 * std::sin(2.0 * w));
+        const double denom = ar * ar + ai * ai;
+        return 20.0 * std::log10(std::sqrt(std::max(1e-18, (br * br + bi * bi) / std::max(1e-18, denom))));
+    };
+    if (std::abs(magDb(0.0)) > 1.0 || std::abs(magDb(w0) - gainDb) > 2.0) return false;
+    return true;
+}
 }
 
 // RBJ Audio EQ Cookbook coefficients, normalized so a0 == 1. Double precision throughout.
@@ -25,10 +116,19 @@ ParametricEq::Biquad ParametricEq::design(const EqBandSpec& band, double sampleR
 
     double b0 = 1.0, b1 = 0.0, b2 = 0.0, a0 = 1.0, a1 = 0.0, a2 = 0.0;
     switch (band.type) {
-    case EqBandType::Peaking:
+    case EqBandType::Peaking: {
+        // Matched-Z peaking keeps the magnitude accurate to Nyquist (no RBJ cramping). Fall back
+        // to the RBJ cookbook if the coefficient recovery is ill-conditioned.
+        double bm[3], am[3];
+        if (designMatchedPeaking(w0, q, band.gainDb, bm, am)) {
+            bq.b0 = bm[0]; bq.b1 = bm[1]; bq.b2 = bm[2];
+            bq.a1 = am[1]; bq.a2 = am[2];
+            return bq;
+        }
         b0 = 1.0 + alpha * A;   b1 = -2.0 * cosw0;      b2 = 1.0 - alpha * A;
         a0 = 1.0 + alpha / A;   a1 = -2.0 * cosw0;      a2 = 1.0 - alpha / A;
         break;
+    }
     case EqBandType::LowShelf: {
         const double s = 2.0 * std::sqrt(A) * alpha;
         b0 =      A * ((A + 1.0) - (A - 1.0) * cosw0 + s);

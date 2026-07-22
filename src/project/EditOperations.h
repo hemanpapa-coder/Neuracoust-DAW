@@ -89,6 +89,12 @@ bool glueClipRange(ProjectDocument& project,
                    double rangeStartSeconds,
                    double rangeEndSeconds,
                    std::vector<std::string>& gluedClipIds);
+// Glue ONLY the clips in `clipIds` to each other (abutting, same-source). Neighbours outside the
+// set are never absorbed — unlike glueClipRange, which catches any clip whose boundary lands in
+// the range. This is what a selection-based Heal/Glue must use.
+bool glueSelectedClips(ProjectDocument& project,
+                       const std::vector<std::string>& clipIds,
+                       std::vector<std::string>& gluedClipIds);
 bool duplicateClip(ProjectDocument& project, const std::string& clipId, double newStartSeconds, std::string& newClipId);
 bool duplicateClipToTrack(ProjectDocument& project,
                           const std::string& clipId,
@@ -103,7 +109,14 @@ bool shuffleDuplicateClip(ProjectDocument& project,
 bool pasteClip(ProjectDocument& project, const ClipState& sourceClip, double newStartSeconds, std::string& newClipId);
 bool deleteClip(ProjectDocument& project, const std::string& clipId);
 bool clearClipRange(ProjectDocument& project, double rangeStartSeconds, double rangeEndSeconds);
+// Clear a time range on ONE track only (split/trim its clips out of [start,end]) — a recorded punch
+// overwrites the tape underneath it so the old and new clips do not double, analog-tape style.
+bool clearTrackClipRange(ProjectDocument& project, const std::string& trackName,
+                         double rangeStartSeconds, double rangeEndSeconds);
 bool shuffleDeleteClipRange(ProjectDocument& project, double rangeStartSeconds, double rangeEndSeconds);
+// Shuffle-delete specific clips, rippling ONLY each clip's own track left (per-track ripple, the
+// Pro Tools default) — not every track like the range version (which is "Ripple All").
+bool shuffleDeleteClips(ProjectDocument& project, const std::vector<std::string>& clipIds);
 bool separateClipRange(ProjectDocument& project,
                        double rangeStartSeconds,
                        double rangeEndSeconds,
@@ -162,6 +175,10 @@ bool adjustClipGainInRange(ProjectDocument& project,
                            std::vector<std::string>& changedClipIds);
 bool setClipRegionName(ProjectDocument& project, const std::string& clipId, const std::string& regionName);
 bool setClipFades(ProjectDocument& project, const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
+bool setClipFadeCurvature(ProjectDocument& project,
+                          const std::string& clipId,
+                          double fadeInCurvature,
+                          double fadeOutCurvature);
 bool setClipFadeCurves(ProjectDocument& project,
                        const std::string& clipId,
                        const std::string& fadeInCurve,
@@ -173,6 +190,10 @@ bool applyFadeOrCrossfadeToClipRange(ProjectDocument& project,
                                      std::vector<std::string>& changedClipIds);
 bool setClipColor(ProjectDocument& project, const std::string& clipId, const std::string& colorHex);
 bool setClipMuted(ProjectDocument& project, const std::string& clipId, bool muted);
+bool setClipReversed(ProjectDocument& project, const std::string& clipId, bool reversed);
+bool toggleClipMuted(ProjectDocument& project, const std::string& clipId);
+bool toggleClipReversed(ProjectDocument& project, const std::string& clipId);
+bool toggleClipPolarityInverted(ProjectDocument& project, const std::string& clipId);
 bool setClipMutedInRange(ProjectDocument& project,
                          double rangeStartSeconds,
                          double rangeEndSeconds,

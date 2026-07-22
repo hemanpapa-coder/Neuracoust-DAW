@@ -29,6 +29,14 @@ struct MonitorDspModule {
     std::vector<TrackInsertSlot> speakerInsertsA;
     std::vector<TrackInsertSlot> speakerInsertsB;
     std::vector<TrackInsertSlot> speakerInsertsC;
+    // Passive modeled speaker's power amp + cable (name heuristic tone), per A/B/C slot.
+    // Kept LAST so positional aggregate initializers (defaultMonitorDspModules) are undisturbed.
+    std::string powerAmpA;
+    std::string powerAmpB;
+    std::string powerAmpC;
+    std::string speakerCableA;
+    std::string speakerCableB;
+    std::string speakerCableC;
 };
 
 std::vector<MonitorDspModule> defaultMonitorDspModules();

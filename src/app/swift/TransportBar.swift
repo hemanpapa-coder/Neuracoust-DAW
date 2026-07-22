@@ -26,6 +26,19 @@ struct TitleBar: View {
             HStack {
                 Spacer()
                 HStack(spacing: Theme.Space.md) {
+                    // Collapse to the compact monitor-station shell (the engine keeps running).
+                    Button { engine.collapseToMonitor() } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "rectangle.compress.vertical")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("모니터만").font(Theme.Font.ui(9.5, .semibold))
+                        }
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .padding(.horizontal, 7).frame(height: 18)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Palette.button))
+                    }
+                    .buttonStyle(.plain)
+                    .help("모니터 스테이션만 남기고 DAW를 접습니다 (엔진·재생은 유지)")
                     Circle()
                         .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
                         .frame(width: 6, height: 6)
@@ -100,25 +113,51 @@ struct TransportBar: View {
     @EnvironmentObject private var engine: EngineController
     @State private var editingPod: String?
     @State private var podDraft = ""
+    @State private var barWidth: CGFloat = 0
+
+    /// Below this the bar is too narrow to hold the position/time displays cleanly — hide them
+    /// outright (the user asked for them to disappear, not shrink into "00…" / "S:FF…").
+    private var showDisplays: Bool { barWidth == 0 || barWidth >= 1000 }
 
     var body: some View {
         HStack(spacing: Theme.Space.lg) {
             transportButtons
             separator
             toggles
-            separator
-            displays
-            tempoPods
+            if showDisplays {
+                separator
+                // Displays + tempo on top, the thin meter row tucked underneath — so the meters cost
+                // vertical space, not the ~310 px of width they used to take on the right.
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: Theme.Space.lg) {
+                        displays
+                        tempoPods
+                    }
+                    thinMeters
+                }
+            }
             Spacer(minLength: Theme.Space.xl)
-            inputMeters
-            masterMeter
-            panelToggles
-            viewTabs
-            helpChip
+            // Right toolbar cluster: the panel-toggle + help chips on top, the Edit/Mix tabs
+            // directly underneath them — above the monitor station, never in the dock's column.
+            // Clips off with the rest of the toolbar when the window narrows (the dock stays put).
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: Theme.Space.lg) {
+                    panelToggles
+                    helpChip
+                }
+                ViewTabsControl()
+            }
         }
         .padding(.horizontal, Theme.Space.xxl)
-        .frame(height: 52)
+        .frame(height: 64)
         .frame(maxWidth: .infinity)
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { barWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { barWidth = geo.size.width }
+            }
+        )
         .background(Theme.Gradient.transport)
     }
 
@@ -263,11 +302,110 @@ struct TransportBar: View {
 
     private var toggles: some View {
         HStack(spacing: Theme.Space.sm) {
-            toggle("Loop", isOn: engine.loopEnabled, tint: Theme.Palette.green) { engine.toggleLoop() }
-            toggle("Click", isOn: engine.clickEnabled, tint: Theme.Palette.amber) { engine.toggleClick() }
+            toggle("Loop", isOn: engine.loopEnabled, tint: Theme.Palette.green,
+                   icon: "repeat") { engine.toggleLoop() }
+            toggle("Click", isOn: engine.clickEnabled, tint: Theme.Palette.amber,
+                   icon: "metronome") { engine.toggleClick() }
+                // Right-click: click resolution + record count-in (Pro Tools / Cubase style).
+                // Flat buttons with checkmarks — a Picker/submenu inside a macOS context menu
+                // renders the arrow but never opens its contents.
+                .contextMenu {
+                    Text("장르 그루브 (강약)")
+                    ForEach(EngineController.metronomeGenreCategories, id: \.self) { category in
+                        Text("· \(category)")
+                        ForEach(EngineController.metronomeGenres.filter { $0.category == category }, id: \.id) { genre in
+                            Button { engine.setMetronomeGenre(genre.id) } label: {
+                                Text(engine.metronomeGenre == genre.id ? "✓ \(genre.title)" : "    \(genre.title)")
+                            }
+                        }
+                    }
+                    Divider()
+                    Text("분할 (클릭 해상도)")
+                    subdivisionButton("자동", "auto")
+                    subdivisionButton("♩ 4분", "quarter")
+                    subdivisionButton("♪ 8분", "eighth")
+                    subdivisionButton("♬ 16분", "sixteenth")
+                    Divider()
+                    Button { engine.setMetronomeAccentFirst(!engine.metronomeAccentFirst) } label: {
+                        Text(engine.metronomeAccentFirst ? "✓ 첫 박 악센트" : "    첫 박 악센트")
+                    }
+                    Divider()
+                    Text("사운드")
+                    soundButton("비프", "beep")
+                    soundButton("우드블록", "wood")
+                    soundButton("림", "rim")
+                    soundButton("카우벨", "cowbell")
+                    Divider()
+                    Text("볼륨")
+                    gainButton("50%", 0.5)
+                    gainButton("75%", 0.75)
+                    gainButton("100%", 1.0)
+                    gainButton("150%", 1.5)
+                    gainButton("200%", 2.0)
+                    Divider()
+                    Text("스윙")
+                    grooveButton("없음 (스트레이트)", "straight")
+                    grooveButton("셔플", "shuffle")
+                    grooveButton("트리플렛", "triplet")
+                    // Swing amount as a percentage (50% = straight, ~66% ≈ triplet). Picking one
+                    // sets the shuffle feel too, so it always works even from straight.
+                    Text("셔플 스윙 양")
+                    swingButton("52%", 0.52)
+                    swingButton("56%", 0.56)
+                    swingButton("60%", 0.60)
+                    swingButton("64%", 0.64)
+                    swingButton("68%", 0.68)
+                    Divider()
+                    Text("카운트인 (녹음 프리카운트)")
+                    countInButton("없음", 0)
+                    countInButton("1마디", 1)
+                    countInButton("2마디", 2)
+                }
             // Shuffle / Slip / Spot / Grid are a separate group (edit modes), so a divider.
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 18)
             editModePicker
+        }
+        // Never let the transport row's crowding squeeze the metronome out of view.
+        .fixedSize()
+    }
+
+    // A text checkmark, not Label(systemImage:) — the SF Symbol replays its scale-in transition
+    // every time the menu re-renders (which the ~30 Hz engine publishes trigger), so the check
+    // visibly pulses. Plain text renders identically each pass and stays still.
+    private func subdivisionButton(_ label: String, _ value: String) -> some View {
+        Button { engine.setMetronomeSubdivision(value) } label: {
+            Text(engine.metronomeSubdivision == value ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    private func countInButton(_ label: String, _ value: Int) -> some View {
+        Button { engine.setCountInBars(value) } label: {
+            Text(engine.countInBars == value ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    private func soundButton(_ label: String, _ value: String) -> some View {
+        Button { engine.setMetronomeSound(value) } label: {
+            Text(engine.metronomeSound == value ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    private func gainButton(_ label: String, _ value: Double) -> some View {
+        Button { engine.setMetronomeGain(value) } label: {
+            Text(abs(engine.metronomeGain - value) < 0.001 ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    private func grooveButton(_ label: String, _ value: String) -> some View {
+        Button { engine.setGroove(feel: value) } label: {
+            Text(engine.grooveFeel == value ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    private func swingButton(_ label: String, _ value: Double) -> some View {
+        let active = engine.grooveFeel == "shuffle" && abs(engine.grooveSwingAmount - value) < 0.01
+        return Button { engine.setGroove(feel: "shuffle", swingAmount: value) } label: {
+            Text(active ? "✓ \(label)" : "    \(label)")
         }
     }
 
@@ -302,10 +440,16 @@ struct TransportBar: View {
     private func toggle(_ title: String,
                         isOn: Bool,
                         tint: Color,
+                        icon: String? = nil,
                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(Theme.Font.ui(9, .medium))
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon).font(.system(size: 10, weight: .medium))
+                }
+                Text(title)
+                    .font(Theme.Font.ui(9, .medium))
+            }
                 .foregroundStyle(isOn ? tint : Theme.Palette.textFaint)
                 .padding(.horizontal, 9)
                 .frame(height: 24)
@@ -340,6 +484,10 @@ struct TransportBar: View {
                 caption("HH:MM:SS:FF · 25fps")
             }
         }
+        // Never let the clock digits truncate to "00:0…" when the window is tight — the flexible
+        // spacers/meters around them yield first, and the hScrollWhenNarrow wrapper scrolls if even
+        // that is not enough.
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var divider: some View {
@@ -349,6 +497,7 @@ struct TransportBar: View {
     private func numeric(_ text: String) -> some View {
         Text(text)
             .font(Theme.Font.mono(20, .semibold))
+            .monospacedDigit()   // fixed-width digits so the display never reflows (no left/right shake during playback)
             .foregroundStyle(Theme.Palette.accent)
     }
 
@@ -418,6 +567,41 @@ struct TransportBar: View {
             RoundedRectangle(cornerRadius: Theme.Radius.display)
                 .fill(Theme.Palette.ruler)
         )
+    }
+
+    /// One thin row holding all the meters — audio/MIDI input + master L/R + the dB read — so they can
+    /// tuck UNDER the transport displays instead of eating ~310 px of bar width to their right. Frees
+    /// that width for the tabs, so narrowing the window no longer pushes them off (user's idea).
+    private var thinMeters: some View {
+        HStack(spacing: Theme.Space.md) {
+            compactMeter("오디오 입력", meterFraction(engine.inputPeak), Theme.Palette.green)
+            compactMeter("미디 입력", Double(engine.midiActivity), Theme.Palette.purple)
+            compactMeter("L", meterFraction(engine.outputPeakLeft), Theme.Palette.yellow)
+            compactMeter("R", meterFraction(engine.outputPeakRight), Theme.Palette.yellow)
+            Text(dbLabel)
+                .font(Theme.Font.mono(8, .semibold))
+                .foregroundStyle(Theme.Palette.yellow)
+                .frame(width: 30, alignment: .trailing)
+        }
+    }
+
+    private func compactMeter(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(Theme.Font.mono(7))
+                .foregroundStyle(Theme.Palette.textFaint)
+                .fixedSize()   // grow to fit the full label — there is horizontal room now
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(Theme.Palette.recess)
+                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(tint)
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: geo.size.width * max(0, min(1, fraction)))
+                        }
+                }
+            }
+            .frame(width: 54, height: 5)
+        }
     }
 
     /// Incoming audio-interface input and live MIDI-input activity, beside the master out.
@@ -545,7 +729,15 @@ struct TransportBar: View {
         .help(engine.helpMode ? engine.tr("help.mode_off") : engine.tr("help.mode_on"))
     }
 
-    private var viewTabs: some View {
+}
+
+/// Edit / Mix view switcher. Lives in the transport bar normally, but rides at the TOP of the monitor
+/// dock when the dock is shown — the dock is always on-screen (never clipped by narrowing), so the tabs
+/// stay reachable at any window width. Falls back to the transport bar only when the dock is hidden.
+struct ViewTabsControl: View {
+    @EnvironmentObject private var engine: EngineController
+
+    var body: some View {
         HStack(spacing: 2) {
             ForEach(EngineController.ViewTab.allCases) { tab in
                 Button {

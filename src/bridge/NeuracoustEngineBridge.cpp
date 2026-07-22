@@ -3,8 +3,12 @@
 #include "ai/AiAssistant.h"
 #include "audio/ParametricEq.h"
 #include "audio/MonitorCorrection.h"
+#include "audio/OutputChainModeling.h"
 #include "audio/SweepMeasurement.h"
 #include "audio/SpeakerProfiles.h"
+#include "audio/HeadphoneProfiles.h"
+#include "audio/AudioInterfaceCatalog.h"
+#include "audio/AudioInterfaceProfiles.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
@@ -12,6 +16,8 @@
 #include "audio/OfflineBounce.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
+#include "audio/PitchEditor.h"
+#include "audio/TimePitchProcessor.h"
 #include "audio/WavFile.h"
 #include "plugins/InsertDspPolicy.h"
 #include "plugins/MonitorDspModules.h"
@@ -94,6 +100,17 @@ struct NCEngine {
     std::vector<float> lastGoniometerSamples;
     /// Monitor the computer's input source instead of the DAW master. Default: master.
     bool monitorListenSource = false;
+    bool monitorReferenceArmed = false;
+    /// A tap-input track's capture pass is running (begin→finish/discard) → keep the tap alive so it
+    /// can be captured. Separate from the AUDIBLE punch monitor (engine tapInputMonitorActive_).
+    bool tapCaptureActive = false;
+    /// A tap-input track's Input-Monitor toggle is on → run the tap AND hear it (heard always).
+    bool tapInputHold = false;
+    /// Audio recording-to-disk (V1): the take's start position and target track, captured at
+    /// record-start so the clip can be placed when recording stops.
+    bool recordingAudio = false;
+    double recordStartSeconds = 0.0;
+    std::string recordTargetTrackName;
     /// Insert tail on stop: <0 always on (default), 0 cut, >0 ring out N seconds.
     double insertTailOnStopSeconds = -1.0;
 
@@ -113,13 +130,13 @@ struct NCEngine {
     struct MidiRecordTake {
         bool active = false;
         std::string trackName;
+        std::string regionId;   // the live region, created at begin so input draws in real time
         double startSeconds = 0.0;
         double tempoBpm = 120.0;
         double lastPlayheadSeconds = 0.0;
         struct Held { double startBeat = 0.0; int velocity = 0; bool on = false; };
         std::array<Held, 128> held {};
-        struct Note { int pitch; double startBeat; double durBeat; int velocity; };
-        std::vector<Note> notes;
+        int noteCount = 0;      // notes committed into the region so far (0 = empty take)
     };
     MidiRecordTake midiRecordTake;
 
@@ -155,7 +172,39 @@ struct NCEngine {
     std::string pluginScanSignature;                              // .vst3 inventory at last scan
     neuracoust::daw::ResponseCurve measuredCurveL;                // room measurement, per channel
     neuracoust::daw::ResponseCurve measuredCurveR;
+    // Melodyne-mode pitch edit: notes detected for the clip most recently opened in the editor, with
+    // the user's per-note offsets. Detect populates it; the editor sets offsets; apply consumes it.
+    std::vector<neuracoust::daw::DetectedNote> pitchEditNotes;
+    std::string pitchEditClipId;
+
+    // Live loopback measurement of a physical audio interface (②d): the DAC→ADC path measured
+    // by an ESS sweep, keyed by interface model name. When present it OVERRIDES the offline
+    // baked profile — real measurement beats the HTML test-report bake. Persisted per-model to
+    // ~/.neuracoust/measured_interfaces so a one-time measurement applies across projects.
+    struct MeasuredInterfaceProfile {
+        neuracoust::daw::ResponseCurve curve;   // midband-normalized FR (deviation from flat)
+        std::vector<double> harmonics;          // [c2..c7] linear amplitude ratios
+        double thdPercent = 0.0;
+        // Multi-level (A단계): THD vs return level (dBFS, THD%), the level-dependence of the device.
+        std::vector<std::pair<double, double>> thdVsLevel;
+    };
+    std::map<std::string, MeasuredInterfaceProfile> measuredInterfaces;
+    int measureOutputChannel = 1;   // 1-based physical DAC channel for interface loopback measurement
+    int measureInputChannel = 1;    // 1-based physical ADC channel the loopback is patched into
+    double measureSweepAmplitude = 0.5;   // per-sweep drive level (auto-scaled for multi-level)
+    // Accumulator for a multi-level auto run: one finished sweep's profile per drive level.
+    struct LevelPoint { double dbfs; MeasuredInterfaceProfile prof; };
+    std::vector<LevelPoint> pendingLevels;
+    // A just-finished measurement held for review before the user commits it (save + apply), so a
+    // clipped or too-low capture is not silently written over a good profile.
+    MeasuredInterfaceProfile pendingInterfaceProfile;
+    std::string pendingInterfaceName;
+    bool pendingInterfaceValid = false;
+    float pendingInterfacePeak = 0.0f;   // sweep peak, 0..1 (for the clip verdict)
     neuracoust::daw::PluginCandidateFilterOptions facets;
+    bool monitorEqLinearPhase = false;   // FIR (linear-phase) monitor EQ vs the biquad fit
+    int  monitorEqFirTaps = 4096;        // FIR length: resolution vs latency (numTaps/2 samples)
+    bool monitorEqHeadphoneOeTarget = false;  // reference a headphone model to the Harman OE target
 
     /// Peaks keyed by source path. Decoding a WAV is not cheap and the timeline
     /// asks for the same file on every redraw.
@@ -219,6 +268,14 @@ struct NCEngine {
         }
     }
 
+    // Reconcile through a monitor declick: for structural changes (add track/bus/send, send
+    // pre-post) whose mixer-graph rebuild would otherwise click. Fades to silence, swaps, fades in.
+    void reconcileProjectDeclicked() {
+        engine.beginGraphChangeDeclick();
+        reconcileProject();
+        engine.endGraphChangeDeclick();
+    }
+
     MonitorDspModule* speakerSimulation() {
         for (auto& module : project.monitorModules) {
             if (module.id == "speaker-simulation") {
@@ -243,10 +300,38 @@ struct NCEngine {
                                          project.monitorVolumeDb,
                                          project.monitorStationDimDb,
                                          project.monitorStationTalkbackRoute);
+        engine.setTalkbackInputChannel(std::max(1, project.monitorStationTalkbackChannel));
     }
 
     void pushModules() {
         engine.setMonitorDspModules(project.monitorModules, monitorDspEnabled);
+    }
+
+    // 2단계 nonlinear interface modeling: when enabled, feed the modeled interface's measured H2–H7
+    // to the waveshaper (modeling target's if set, else the output-stage interface's). Off → bypass.
+    // Prefer a live loopback measurement over the offline baked profile for this interface.
+    neuracoust::daw::ResponseCurve interfaceCurveFor(const std::string& name) const {
+        if (name.empty()) return {};
+        const auto it = measuredInterfaces.find(name);
+        if (it != measuredInterfaces.end() && !it->second.curve.empty()) return it->second.curve;
+        return neuracoust::daw::audioInterfaceProfileCurve(name);
+    }
+    std::vector<double> interfaceHarmonicsFor(const std::string& name) const {
+        if (name.empty()) return {};
+        const auto it = measuredInterfaces.find(name);
+        if (it != measuredInterfaces.end() && !it->second.harmonics.empty()) return it->second.harmonics;
+        return neuracoust::daw::audioInterfaceHarmonics(name);
+    }
+
+    void pushInterfaceModeler() {
+        std::vector<double> harmonics;
+        if (project.monitorInterfaceModelingEnabled) {
+            if (!project.physicalAudioInterfaceTargetModel.empty())
+                harmonics = interfaceHarmonicsFor(project.physicalAudioInterfaceTargetModel);
+            if (harmonics.empty() && !project.physicalAudioInterfaceModel.empty())
+                harmonics = interfaceHarmonicsFor(project.physicalAudioInterfaceModel);
+        }
+        engine.updateInterfaceModeler(harmonics, 1.0);
     }
 
     neuracoust::daw::ListenRoomSettings listenSettings() const {
@@ -269,11 +354,14 @@ struct NCEngine {
     }
 };
 
+namespace { void loadMeasuredInterfaces(NCEngine* engine); }  // defined with the measurement code below
+
 NCEngine* nc_engine_create(void) {
     NCEngine* engine = new NCEngine();
     if (engine->project.monitorModules.empty()) {
         engine->project.monitorModules = neuracoust::daw::defaultMonitorDspModules();
     }
+    loadMeasuredInterfaces(engine);   // a one-time loopback measurement applies across projects
     engine->history.reset(engine->project);
     return engine;
 }
@@ -297,6 +385,9 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     // of the hardcoded "studio.local" default.
     settings.host = engine->project.remoteDspHost.empty()
                         ? std::string("studio.local") : engine->project.remoteDspHost;
+    // The "use this node" master switch. When off, makeRemoteDspCorePlan gates the node out of the
+    // monitor/DAW/plugin core plan (settings.enabled already drives those flags).
+    settings.enabled = engine->project.externalDspEnabled;
     settings.nodes.clear();
     return settings;
 }
@@ -310,6 +401,13 @@ AudioEngineSettings buildEngineSettings(NCEngine* engine) {
     settings.timeSignatureDenominator = engine->project.timeSignatureDenominator;
     settings.transportRunning = false;
     settings.metronomeEnabled = false;
+    settings.grooveFeel = engine->project.grooveFeel;
+    settings.grooveSwingAmount = engine->project.grooveSwingAmount;
+    settings.metronomeSubdivision = engine->project.metronomeSubdivision;
+    settings.metronomeGain = engine->project.metronomeGain;
+    settings.metronomeSound = engine->project.metronomeSound;
+    settings.metronomeAccentFirst = engine->project.metronomeAccentFirst;
+    settings.metronomeAccentPattern = engine->project.metronomeAccentPattern;
     settings.monitorDspEnabled = engine->monitorDspEnabled;
     settings.delayCompensationEnabled = engine->delayCompensationEnabled;
     settings.monitorDspPathMode = engine->monitorDspPathMode;
@@ -477,6 +575,146 @@ void nc_engine_set_recording(NCEngine* engine, bool active) {
     }
 }
 
+// The sentinel inputBus value that routes a track's recording from the reference process tap
+// ("다른 앱") instead of a physical input pair. Kept in sync with the Swift input menu.
+static const char* kReferenceTapInputBus = "다른 앱";
+
+// 0-based index of the first device channel a "Input N-M" bus name refers to (N-1). 0 if none.
+static int firstInputChannelIndex(const std::string& busName) {
+    for (size_t i = 0; i < busName.size(); ++i) {
+        if (std::isdigit(static_cast<unsigned char>(busName[i])) != 0) {
+            size_t j = i;
+            while (j < busName.size() && std::isdigit(static_cast<unsigned char>(busName[j])) != 0) ++j;
+            const int n = std::stoi(busName.substr(i, j - i));
+            return std::max(0, n - 1);
+        }
+    }
+    return 0;
+}
+
+// Begin capturing the record-armed track's input to disk. Source is the reference tap when the
+// track's input is the "다른 앱" sentinel, else the physical channel pair its bus names.
+bool nc_engine_begin_audio_record(NCEngine* engine) {
+    if (engine == nullptr || engine->recordingAudio) return false;
+    const std::string trackName = neuracoust::daw::recordingTargetTrackName(engine->project);
+    if (trackName.empty()) return false;
+    auto it = std::find_if(engine->project.tracks.begin(), engine->project.tracks.end(),
+                           [&](const neuracoust::daw::TrackState& t) { return t.name == trackName; });
+    if (it == engine->project.tracks.end()) return false;
+
+    int source = 1, offset = 0, channels = 2;
+    if (it->inputBus == kReferenceTapInputBus) {
+        source = 2; offset = 0; channels = 2;
+        // Keep the tap alive during the capture pass so it can be recorded (apps muted). It is NOT
+        // made audible here — the punch (nc_monitor_set_tap_input_monitor) decides when you hear it.
+        engine->tapCaptureActive = true;
+        engine->engine.setMonitorReferenceArmed(true);
+    } else {
+        source = 1;
+        channels = std::max(1, neuracoust::daw::inputChannelCountForBusName(it->inputBus));
+        offset = firstInputChannelIndex(it->inputBus);
+    }
+    engine->recordStartSeconds = std::max(0.0, engine->engine.status().playbackSeconds);
+    engine->recordTargetTrackName = trackName;
+    engine->recordingAudio = true;
+    engine->engine.beginInputRecording(source, offset, channels);
+    // NOTE: transportRecordingActive is deliberately NOT set here. It marks an ACTIVE PUNCH (set by
+    // nc_engine_set_recording on the Record button), which silences the armed track's tape under the
+    // pass. Background capture must leave the tape audible, so it stays off until a punch-in.
+    return true;
+}
+
+// Stop capturing, save the WAV, and drop an audio clip at the record-start position.
+// Stop capturing and save the whole-pass WAV, returning its path. Add one clip per punch region
+// afterward with nc_engine_add_take_clip. (Split so a single pass can leave multiple clips.)
+bool nc_engine_finish_audio_record(NCEngine* engine, char* outPath, size_t pathLen,
+                                   char* outError, size_t errLen) {
+    if (engine == nullptr || !engine->recordingAudio) return false;
+    engine->recordingAudio = false;
+    engine->engine.setTransportRecordingActive(false);
+    engine->tapCaptureActive = false;
+    engine->engine.setTapInputMonitor(false);
+    engine->engine.setMonitorReferenceArmed(engine->monitorReferenceArmed);   // release tap unless the button holds it
+
+    std::string pathError;
+    std::string path = neuracoust::daw::nextProjectRecordingPath(engine->projectPath, pathError);
+    if (path.empty()) {
+        // Untitled project: land the take in a temp recordings folder so recording still works.
+        std::error_code ec;
+        const auto dir = std::filesystem::temp_directory_path() / "Neuracoust Recordings";
+        std::filesystem::create_directories(dir, ec);
+        for (int i = 0; i < 100000; ++i) {
+            const auto cand = dir / ("Neuracoust DAW Recording " + std::to_string(i) + ".wav");
+            if (!std::filesystem::exists(cand)) { path = cand.string(); break; }
+        }
+    }
+    if (path.empty()) { copyText(outError, errLen, "녹음 파일 경로를 만들 수 없습니다."); return false; }
+
+    std::string saveError; double durationSeconds = 0.0; int channels = 0;
+    if (!engine->engine.endInputRecording(path, 24, saveError, durationSeconds, channels)) {
+        copyText(outError, errLen, saveError.empty() ? "녹음된 오디오가 없습니다." : saveError);
+        return false;
+    }
+    copyText(outPath, pathLen, path);
+    return true;
+}
+
+// Add one clip from a finished take WAV: the clip sits at clipStartSeconds and references the file
+// from sourceOffsetSeconds, so extending it reveals the pre/post-roll captured in the background.
+bool nc_engine_add_take_clip(NCEngine* engine, const char* path, double clipStartSeconds,
+                             double sourceOffsetSeconds, double durationSeconds,
+                             char* outClipId, size_t outLen, char* outError, size_t errLen) {
+    if (engine == nullptr || path == nullptr || *path == '\0') { copyText(outError, errLen, "no take"); return false; }
+    const double dur = std::max(0.05, durationSeconds);
+    const double clipStart = std::max(0.0, clipStartSeconds);
+    // Overdub like analog tape: cut the target track's existing clips out of the punch range first,
+    // so the new take replaces the tape underneath rather than doubling with it on playback.
+    neuracoust::daw::clearTrackClipRange(engine->project, engine->recordTargetTrackName, clipStart, clipStart + dur);
+    std::string clipId = neuracoust::daw::appendAudioClipAt(engine->project, engine->recordTargetTrackName,
+                                                            std::string(path), clipStart, dur);
+    if (clipId.empty()) { copyText(outError, errLen, "클립 생성 실패"); return false; }
+    for (auto& c : engine->project.clips) {
+        if (c.id == clipId) { c.sourceOffsetSeconds = std::max(0.0, sourceOffsetSeconds); break; }
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Record audio");
+    copyText(outClipId, outLen, clipId);
+    return true;
+}
+
+bool nc_engine_audio_recording_active(NCEngine* engine) {
+    return engine != nullptr && engine->recordingAudio;
+}
+
+// Drop an uncommitted background pass (played over an armed track but never pressed Record).
+void nc_engine_discard_audio_record(NCEngine* engine) {
+    if (engine == nullptr || !engine->recordingAudio) return;
+    engine->recordingAudio = false;
+    engine->engine.setTransportRecordingActive(false);
+    engine->tapCaptureActive = false;
+    engine->engine.setTapInputMonitor(false);
+    engine->engine.setMonitorReferenceArmed(engine->monitorReferenceArmed);   // release tap unless the button holds it
+    engine->engine.cancelInputRecording();
+}
+
+// Live take metering for the timeline's growing waveform while recording.
+double nc_recording_live_seconds(NCEngine* engine) {
+    return engine == nullptr ? 0.0 : engine->engine.recordingLiveSeconds();
+}
+int nc_recording_live_peak_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : engine->engine.recordingLivePeakCount();
+}
+int nc_recording_live_peaks_since(NCEngine* engine, int fromBucket, float* outLR, int maxBuckets) {
+    return engine == nullptr ? 0 : engine->engine.recordingLivePeaksSince(fromBucket, outLR, maxBuckets);
+}
+int nc_recording_channels(NCEngine* engine) {
+    return engine == nullptr ? 2 : engine->engine.recordingChannels();
+}
+int nc_recording_peak_samples(NCEngine* engine) {
+    return engine == nullptr ? 512 : engine->engine.recordingPeakSamples();
+}
+
 void nc_engine_seek(NCEngine* engine, double seconds) {
     if (engine != nullptr) {
         engine->engine.seek(std::max(0.0, seconds));
@@ -501,7 +739,91 @@ void nc_engine_set_metronome_enabled(NCEngine* engine, bool enabled) {
                                        engine->project.grooveFeel,
                                        engine->project.grooveSwingAmount,
                                        engine->project.timeSignatureMap,
-                                       engine->project.metronomeSubdivision);
+                                       engine->project.metronomeSubdivision,
+                                       engine->project.metronomeGain,
+                                       engine->project.metronomeSound,
+                                       engine->project.metronomeAccentFirst);
+}
+
+// All of these store a project field; nc_engine_set_metronome_enabled re-applies them, so the
+// Swift side calls one then re-asserts the enabled state to make the change audible immediately.
+
+// The click resolution: "auto" (beat, accenting the bar), "quarter", "eighth", "sixteenth".
+void nc_engine_set_metronome_subdivision(NCEngine* engine, const char* subdivision) {
+    if (engine == nullptr || subdivision == nullptr) {
+        return;
+    }
+    engine->project.metronomeSubdivision = subdivision;
+}
+
+// Click level (0..2 linear over the built-in click).
+void nc_engine_set_metronome_gain(NCEngine* engine, float gain) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->project.metronomeGain = std::max(0.0, std::min(2.0, static_cast<double>(gain)));
+}
+
+// Click timbre: "beep" / "wood" / "rim" / "cowbell".
+void nc_engine_set_metronome_sound(NCEngine* engine, const char* sound) {
+    if (engine == nullptr || sound == nullptr) {
+        return;
+    }
+    engine->project.metronomeSound = sound;
+}
+
+// Groove feel ("straight" / "shuffle" / "triplet") + swing amount (0.5..0.9 meaningful).
+void nc_engine_set_groove(NCEngine* engine, const char* feel, float swingAmount) {
+    if (engine == nullptr || feel == nullptr) {
+        return;
+    }
+    engine->project.grooveFeel = feel;
+    engine->project.grooveSwingAmount = std::max(0.0, std::min(1.0, static_cast<double>(swingAmount)));
+}
+
+// Whether the bar's first beat is accented (off = an even, flat click).
+void nc_engine_set_metronome_accent_first(NCEngine* engine, bool accent) {
+    if (engine == nullptr) {
+        return;
+    }
+    engine->project.metronomeAccentFirst = accent;
+}
+
+// A genre groove's accent pattern: per-step gains (0..1) over one bar at the click subdivision.
+// Pass count 0 (or gains null) to clear it and return to the default bar/beat hierarchy. Applied
+// live via setMetronomeAccentPattern (no restart), and stored so an engine start keeps it.
+void nc_engine_set_metronome_pattern(NCEngine* engine, const float* gains, int count) {
+    if (engine == nullptr) {
+        return;
+    }
+    std::vector<float> pattern;
+    if (gains != nullptr && count > 0) {
+        pattern.assign(gains, gains + count);
+    }
+    engine->project.metronomeAccentPattern = pattern;
+    engine->engine.setMetronomeAccentPattern(pattern);
+}
+
+// The selected genre preset's id (the UI catalog label). Stored so the picker reloads with a project.
+void nc_engine_set_metronome_genre(NCEngine* engine, const char* genre) {
+    if (engine == nullptr || genre == nullptr) {
+        return;
+    }
+    engine->project.metronomeGenre = genre;
+}
+
+// Getters so the UI can reload metronome settings from an opened project.
+float nc_metronome_gain(NCEngine* engine) {
+    return engine != nullptr ? static_cast<float>(engine->project.metronomeGain) : 1.0f;
+}
+void nc_metronome_sound(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.metronomeSound : std::string{"beep"});
+}
+bool nc_metronome_accent_first(NCEngine* engine) {
+    return engine != nullptr ? engine->project.metronomeAccentFirst : true;
+}
+void nc_metronome_genre(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.metronomeGenre : std::string{"straight"});
 }
 
 void nc_engine_set_test_tone_enabled(NCEngine* engine, bool enabled) {
@@ -808,6 +1130,30 @@ void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring)
     engine->recordStep("Input monitoring");
 }
 
+// Apply one flag to several tracks in a single undo step (Pro Tools: a mute/solo/arm on a track
+// that is part of the selection hits the whole selection). flag: 0=mute 1=solo 2=armed 3=inputMon.
+// No add/remove happens, so the resolved pointers stay valid across the loop.
+bool nc_track_set_flag_many(NCEngine* engine, const int* indices, int count, int flag, bool value) {
+    if (engine == nullptr || indices == nullptr || count <= 0) return false;
+    bool any = false;
+    for (int i = 0; i < count; ++i) {
+        auto* track = trackAt(engine, indices[i]);
+        if (track == nullptr) continue;
+        switch (flag) {
+            case 0: neuracoust::daw::setTrackMuted(engine->project, track->name, value); break;
+            case 1: neuracoust::daw::setTrackSolo(engine->project, track->name, value); break;
+            case 2: neuracoust::daw::setTrackRecordArmed(engine->project, track->name, value); break;
+            case 3: neuracoust::daw::setTrackInputMonitoring(engine->project, track->name, value); break;
+            default: return false;
+        }
+        pushTrackRealtimeState(engine, *track);
+        any = true;
+    }
+    if (!any) return false;
+    engine->recordStep(flag == 0 ? "Mute" : flag == 1 ? "Solo" : flag == 2 ? "Record arm" : "Input monitoring");
+    return true;
+}
+
 namespace {
 
 /// A fresh track changes the render graph and the lane list; adopt it fully.
@@ -815,7 +1161,7 @@ int adoptNewTrack(NCEngine* engine, const std::string& trackName, const char* st
     if (trackName.empty()) {
         return -1;
     }
-    engine->reconcileProject();
+    engine->reconcileProjectDeclicked();   // adding a track/bus rebuilds the mixer graph → declick
     engine->recordStep(stepName);
     for (size_t index = 0; index < engine->project.tracks.size(); ++index) {
         if (engine->project.tracks[index].name == trackName) {
@@ -852,6 +1198,29 @@ bool nc_track_delete(NCEngine* engine, int index, bool removeClips) {
     neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
     engine->reconcileProject();
     engine->recordStep("Delete track");
+    return true;
+}
+
+// Delete several tracks in one undo step (Pro Tools: select many, one Delete removes them all).
+// Track ids are indices, and deleting shifts them — so resolve every index to its stable name
+// FIRST, then delete by name. Rebuild/reconcile/record just once.
+bool nc_track_delete_many(NCEngine* engine, const int* indices, int count, bool removeClips) {
+    if (engine == nullptr || indices == nullptr || count <= 0) return false;
+    std::vector<std::string> names;
+    names.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const auto* track = trackAt(engine, indices[i]);
+        if (track != nullptr) names.push_back(track->name);
+    }
+    if (names.empty()) return false;
+    bool any = false;
+    for (const auto& name : names) {
+        if (neuracoust::daw::deleteTrack(engine->project, name, removeClips, removeClips)) any = true;
+    }
+    if (!any) return false;
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep(names.size() > 1 ? "Delete tracks" : "Delete track");
     return true;
 }
 
@@ -1297,7 +1666,7 @@ bool nc_track_add_send(NCEngine* engine, int index, const char* busName) {
     send.enabled = true;
     if (!neuracoust::daw::addTrackSendSlot(engine->project, track->name, send)) return false;
     engine->recordStep("Add send");
-    engine->reconcileProject();
+    engine->reconcileProjectDeclicked();
     return true;
 }
 
@@ -1341,7 +1710,7 @@ void nc_track_set_send_pre_fader(NCEngine* engine, int index, int slot, bool pre
     send.preFader = pre;
     if (!neuracoust::daw::setTrackSendSlot(engine->project, track->name, static_cast<size_t>(slot), send)) return;
     engine->recordStep(pre ? "Send pre-fader" : "Send post-fader");
-    engine->reconcileProject();
+    engine->reconcileProjectDeclicked();
 }
 
 void nc_track_remove_send(NCEngine* engine, int index, int slot) {
@@ -1410,7 +1779,11 @@ bool nc_history_undo(NCEngine* engine) {
     if (!engine->history.undo(engine->project, error)) {
         return false;
     }
+    // Undo rebuilds the whole graph — declick it (fade → swap → fade) like the edit ops, or the
+    // rebuild clicks during playback.
+    engine->engine.beginGraphChangeDeclick();
     applyRestoredProject(engine);
+    engine->engine.endGraphChangeDeclick();
     return true;
 }
 
@@ -1422,7 +1795,9 @@ bool nc_history_redo(NCEngine* engine) {
     if (!engine->history.redo(engine->project, error)) {
         return false;
     }
+    engine->engine.beginGraphChangeDeclick();
     applyRestoredProject(engine);
+    engine->engine.endGraphChangeDeclick();
     return true;
 }
 
@@ -1596,78 +1971,83 @@ bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t 
     return true;
 }
 
-int nc_project_consolidate_media(NCEngine* engine, char* error, size_t errorLen) {
-    if (engine == nullptr) {
-        copyText(error, errorLen, "no engine");
-        return -1;
-    }
-    if (engine->projectPath.empty()) {
-        copyText(error, errorLen, "save the project before consolidating media");
-        return -1;
-    }
-
-    const std::filesystem::path audioDir =
-        neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+namespace {
+// Copy every media source that lives OUTSIDE this project's Audio Files folder into it, rewrite the
+// references, and re-save. Operates on a given project+path so it serves both the live document
+// (consolidate) and a throwaway value-copy (save-a-copy). Audio AND video travel — both reference
+// mediaSources. Returns the number of files copied (0 = already self-contained), -1 on error.
+int consolidateProjectMedia(neuracoust::daw::ProjectDocument& project, const std::string& projectPath,
+                            std::string& error) {
+    if (projectPath.empty()) { error = "save the project before consolidating media"; return -1; }
+    const std::filesystem::path audioDir = neuracoust::daw::projectAudioFilesDirectory(projectPath);
     std::error_code ec;
     std::filesystem::create_directories(audioDir, ec);
-    if (ec) {
-        copyText(error, errorLen, std::string("could not create the Audio Files folder: ") + ec.message());
-        return -1;
-    }
+    if (ec) { error = std::string("could not create the Audio Files folder: ") + ec.message(); return -1; }
     const auto canonicalAudioDir = std::filesystem::weakly_canonical(audioDir, ec);
 
-    // Copy each external source once and remember the remap, so several clips that share
-    // one source all follow it to the same copy. A copy that fails leaves the original
-    // reference untouched rather than orphaning the clip.
     std::map<std::string, std::string> remap;
     int copied = 0;
     auto consolidatePath = [&](std::string& path) {
-        if (path.empty()) {
-            return;
-        }
+        if (path.empty()) return;
         const auto existing = remap.find(path);
-        if (existing != remap.end()) {
-            path = existing->second;
-            return;
-        }
+        if (existing != remap.end()) { path = existing->second; return; }
         std::error_code fileEc;
         const std::filesystem::path src(path);
-        if (!std::filesystem::is_regular_file(src, fileEc)) {
-            return;
-        }
-        // Already inside this project's Audio Files folder → leave it where it lies.
-        if (std::filesystem::weakly_canonical(src.parent_path(), fileEc) == canonicalAudioDir) {
-            return;
-        }
+        if (!std::filesystem::is_regular_file(src, fileEc)) return;
+        if (std::filesystem::weakly_canonical(src.parent_path(), fileEc) == canonicalAudioDir) return;  // already inside
         std::filesystem::path dest = audioDir / src.filename();
         for (int suffix = 1; std::filesystem::exists(dest, fileEc); ++suffix) {
             dest = audioDir / (src.stem().string() + "-" + std::to_string(suffix) + src.extension().string());
         }
         std::filesystem::copy_file(src, dest, std::filesystem::copy_options::none, fileEc);
-        if (fileEc) {
-            return;
-        }
+        if (fileEc) return;
         remap[path] = dest.string();
         path = dest.string();
         ++copied;
     };
-
-    // mediaSources is the render source of truth for paths; clips carry a denormalised
-    // copy for the edit/display model. Rewrite both so the picture and the sound agree.
-    for (auto& source : engine->project.mediaSources) {
-        consolidatePath(source.path);
-    }
-    for (auto& clip : engine->project.clips) {
-        consolidatePath(clip.sourcePath);
-    }
+    for (auto& source : project.mediaSources) consolidatePath(source.path);
+    for (auto& clip : project.clips) consolidatePath(clip.sourcePath);
 
     if (copied > 0) {
-        engine->reconcileProject();
         std::string saveError;
-        neuracoust::daw::saveProjectFileWithBackup(engine->project, engine->projectPath, saveError);
+        neuracoust::daw::saveProjectFileWithBackup(project, projectPath, saveError);
     }
-    copyText(error, errorLen, "");
+    error.clear();
     return copied;
+}
+}  // namespace
+
+int nc_project_consolidate_media(NCEngine* engine, char* error, size_t errorLen) {
+    if (engine == nullptr) { copyText(error, errorLen, "no engine"); return -1; }
+    if (engine->projectPath.empty()) {
+        copyText(error, errorLen, "save the project before consolidating media");
+        return -1;
+    }
+    std::string e;
+    const int copied = consolidateProjectMedia(engine->project, engine->projectPath, e);
+    if (copied > 0) engine->reconcileProject();   // paths changed on the live render source
+    copyText(error, errorLen, e);
+    return copied;
+}
+
+// Save a fully self-contained COPY to `path` (collecting external media into its Audio Files) while
+// leaving the working session untouched — a value copy of the project is saved, so the live
+// document's paths, path binding, and dirty state never change.
+int nc_project_save_copy(NCEngine* engine, const char* path, char* error, size_t errorLen) {
+    if (engine == nullptr || path == nullptr || *path == '\0') {
+        copyText(error, errorLen, "no project path");
+        return -1;
+    }
+    neuracoust::daw::ProjectDocument copy = engine->project;   // value copy — session is untouched
+    std::string saveError;
+    if (!neuracoust::daw::saveProjectFileWithBackup(copy, std::filesystem::path(path), saveError)) {
+        copyText(error, errorLen, saveError.empty() ? "could not save the copy" : saveError);
+        return -1;
+    }
+    std::string e;
+    const int copied = consolidateProjectMedia(copy, path, e);   // pulls external media into the copy + re-saves
+    copyText(error, errorLen, e);
+    return copied < 0 ? 0 : copied;
 }
 
 bool nc_audio_import_supported(const char* path) {
@@ -1822,21 +2202,529 @@ bool applyClipEdit(NCEngine* engine, bool changed) {
 
 } // namespace
 
+// Defined below (same anonymous namespace) — forward-declared so the lightweight-drag helpers here
+// can use them.
+namespace {
+std::vector<const neuracoust::daw::ClipState*> resolveClips(NCEngine* engine, const char* const* clipIds, int count);
+double earliestStart(const std::vector<const neuracoust::daw::ClipState*>& clips);
+}
+
 bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds) {
     if (engine == nullptr || clipId == nullptr) return false;
     return applyClipEdit(engine, neuracoust::daw::moveClip(engine->project, clipId,
                                                            std::max(0.0, newStartSeconds)));
 }
 
+// Lightweight clip move for a LIVE DRAG: update the model + slide the clip in the render plan IN
+// PLACE. No rebuild, no reconcile — so the music never stops/gaps while dragging (the per-frame full
+// reconcile was the cause). commit once on drop via nc_project_reconcile.
+bool nc_clip_update_start(NCEngine* engine, const char* clipId, double startSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    if (!neuracoust::daw::moveClip(engine->project, clipId, std::max(0.0, startSeconds))) return false;
+    for (const auto& c : engine->project.clips) {
+        if (c.id == clipId) { engine->engine.updateClipStart(clipId, c.startSeconds); break; }
+    }
+    return true;
+}
+
+int nc_clip_update_start_many(NCEngine* engine, const char* const* clipIds, int count, double deltaSeconds) {
+    const auto clips = resolveClips(engine, clipIds, count);
+    if (clips.empty() || !std::isfinite(deltaSeconds)) return 0;
+    const double delta = std::max(deltaSeconds, -earliestStart(clips));
+    std::vector<std::pair<std::string, double>> targets;
+    targets.reserve(clips.size());
+    for (const auto* clip : clips) targets.emplace_back(clip->id, clip->startSeconds + delta);
+    int moved = 0;
+    for (const auto& target : targets) {
+        if (neuracoust::daw::moveClip(engine->project, target.first, target.second)) {
+            for (const auto& c : engine->project.clips) {
+                if (c.id == target.first) { engine->engine.updateClipStart(target.first, c.startSeconds); break; }
+            }
+            ++moved;
+        }
+    }
+    return moved;
+}
+
+// Canonicalize the project after a lightweight drag: rebuild the playlist from clips and reconcile
+// once (on drop). Seamless — updateProject preserves the continuous-playback buffers (resetForEdit).
+void nc_project_reconcile(NCEngine* engine) {
+    if (engine == nullptr) return;
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+}
+
 bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds) {
     if (engine == nullptr || clipId == nullptr) return false;
-    return applyClipEdit(engine, neuracoust::daw::trimClipStart(engine->project, clipId,
-                                                                std::max(0.0, newStartSeconds)));
+    // Extending a trim reveals fresh source audio mid-playback → declick the reconcile (a shortening
+    // trim just gets a harmless brief dip).
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::trimClipStart(engine->project, clipId,
+                                                                              std::max(0.0, newStartSeconds)));
+    engine->engine.endGraphChangeDeclick();
+    return changed;
 }
 
 bool nc_clip_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds) {
     if (engine == nullptr || clipId == nullptr) return false;
-    return applyClipEdit(engine, neuracoust::daw::trimClipEnd(engine->project, clipId, newEndSeconds));
+    // Clamp the end to the source file — a clip can't be dragged out past the file's audio (doing so
+    // played trailing silence). Max end = start + (file length − where in the file the clip begins).
+    for (const auto& clip : engine->project.clips) {
+        if (clip.id != clipId) continue;
+        const auto cached = engine->waveformCache.find(clip.sourcePath);
+        if (cached != engine->waveformCache.end() && cached->second.durationSeconds > 0.0) {
+            const double maxEnd = clip.startSeconds + (cached->second.durationSeconds - clip.sourceOffsetSeconds);
+            if (newEndSeconds > maxEnd) newEndSeconds = maxEnd;
+        }
+        break;
+    }
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::trimClipEnd(engine->project, clipId, newEndSeconds));
+    engine->engine.endGraphChangeDeclick();
+    return changed;
+}
+
+// LIVE-DRAG trim (start/end): update the model + patch the clip's bounds in the render plan IN PLACE.
+// No rebuild, no reconcile, no declick — the music keeps playing while the clip is stretched. commit
+// once on drop via nc_project_reconcile (same as the lightweight move). Mirrors nc_clip_update_start.
+bool nc_clip_update_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    if (!neuracoust::daw::trimClipStart(engine->project, clipId, std::max(0.0, newStartSeconds))) return false;
+    for (const auto& c : engine->project.clips) {
+        if (c.id == clipId) {
+            engine->engine.updateClipBounds(clipId, c.startSeconds, c.durationSeconds, c.sourceOffsetSeconds);
+            break;
+        }
+    }
+    return true;
+}
+
+bool nc_clip_update_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    // Same source-length clamp as nc_clip_trim_end — a clip cannot be dragged past the file's audio.
+    for (const auto& clip : engine->project.clips) {
+        if (clip.id != clipId) continue;
+        const auto cached = engine->waveformCache.find(clip.sourcePath);
+        if (cached != engine->waveformCache.end() && cached->second.durationSeconds > 0.0) {
+            const double maxEnd = clip.startSeconds + (cached->second.durationSeconds - clip.sourceOffsetSeconds);
+            if (newEndSeconds > maxEnd) newEndSeconds = maxEnd;
+        }
+        break;
+    }
+    if (!neuracoust::daw::trimClipEnd(engine->project, clipId, newEndSeconds)) return false;
+    for (const auto& c : engine->project.clips) {
+        if (c.id == clipId) {
+            engine->engine.updateClipBounds(clipId, c.startSeconds, c.durationSeconds, c.sourceOffsetSeconds);
+            break;
+        }
+    }
+    return true;
+}
+
+// Offline time-stretch + pitch-shift PRINT (Serato Time & Pitch phase vocoder). Renders the clip's
+// played window to a new WAV in the project's Audio Files folder and repoints the clip at it — offset
+// 0, duration scaled by timeRatio, fades scaled to match. timeRatio (0.125..8) changes length,
+// semitones (±24) change pitch, independently. Anchors (normalized [0,1], matched source→dest) drive
+// a piecewise time remap when present; empty anchors = a uniform stretch.
+static bool applyClipTimeTransform(NCEngine* engine, const char* clipId,
+                                   double timeRatio, double semitones,
+                                   const std::vector<double>& srcAnchors,
+                                   const std::vector<double>& destAnchors,
+                                   bool formantPreserve,
+                                   char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    neuracoust::daw::ClipState* clip = nullptr;
+    for (auto& c : engine->project.clips) { if (c.id == clipId) { clip = &c; break; } }
+    if (clip == nullptr) { copyText(error, errorLen, "clip not found"); return false; }
+
+    const double ratio = std::clamp(timeRatio, 0.125, 8.0);
+    const double semis = std::clamp(semitones, -24.0, 24.0);
+    if (srcAnchors.empty() && std::abs(ratio - 1.0) < 1e-6 && std::abs(semis) < 1e-6) return true;   // no-op
+
+    neuracoust::daw::WavAudioData src;
+    std::string e;
+    if (!neuracoust::daw::readPcmWavFile(clip->sourcePath, src, e)) {
+        copyText(error, errorLen, "could not read clip audio: " + e); return false;
+    }
+    if (src.channels < 1 || src.sampleRate <= 0.0) { copyText(error, errorLen, "unsupported clip audio"); return false; }
+
+    // Extract the clip's played window (sourceOffset .. +duration) at the source rate.
+    const int64_t total = static_cast<int64_t>(src.interleavedSamples.size()) / src.channels;
+    const int64_t startFrame = std::max<int64_t>(0, std::llround(clip->sourceOffsetSeconds * src.sampleRate));
+    int64_t winFrames = std::llround(clip->durationSeconds * src.sampleRate);
+    if (winFrames <= 0) winFrames = std::max<int64_t>(1, total - startFrame);
+    std::vector<float> window(static_cast<size_t>(winFrames) * src.channels, 0.0f);
+    for (int64_t i = 0; i < winFrames; ++i) {
+        const int64_t s = startFrame + i;
+        if (s < 0 || s >= total) continue;
+        for (int ch = 0; ch < src.channels; ++ch)
+            window[static_cast<size_t>(i * src.channels + ch)] =
+                src.interleavedSamples[static_cast<size_t>(s * src.channels + ch)];
+    }
+
+    neuracoust::daw::TimePitchParams p;
+    p.timeRatio = ratio;
+    p.semitones = semis;
+    // Formant preservation only matters when the pitch actually changes; the wrapper no-ops otherwise.
+    std::vector<float> rendered = (formantPreserve && std::abs(semis) > 1e-6)
+        ? neuracoust::daw::processTimeMapFormantPreserving(window, src.channels, p, src.sampleRate, srcAnchors, destAnchors)
+        : neuracoust::daw::processTimeMapInterleaved(window, src.channels, p, srcAnchors, destAnchors);
+    if (rendered.empty()) { copyText(error, errorLen, "time/pitch produced no audio"); return false; }
+
+    // Write to the project's Audio Files folder (a temp folder when the project is unsaved).
+    std::error_code ec;
+    const std::filesystem::path dir = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::filesystem::create_directories(dir, ec);
+    const std::string stem = std::filesystem::path(clip->sourcePath).stem().string();
+    char suffix[80];
+    std::snprintf(suffix, sizeof suffix, "_tp%dr%dst", static_cast<int>(std::lround(ratio * 1000)),
+                  static_cast<int>(std::lround(semis * 100)));
+    const std::filesystem::path outPath = dir / (stem + suffix + "_" + clip->id + ".wav");
+
+    neuracoust::daw::WavAudioData outData;
+    outData.channels = src.channels;
+    outData.sampleRate = src.sampleRate;
+    outData.interleavedSamples = std::move(rendered);
+    if (!neuracoust::daw::writePcm24WavFileAtomically(outPath, outData, e)) {
+        copyText(error, errorLen, "could not write rendered clip: " + e); return false;
+    }
+
+    clip->sourcePath = outPath.string();
+    clip->sourceOffsetSeconds = 0.0;
+    clip->durationSeconds *= ratio;
+    clip->fadeInSeconds *= ratio;
+    clip->fadeOutSeconds *= ratio;
+    clip->sourceSampleRate = src.sampleRate;
+    clip->sourceChannels = src.channels;
+    clip->timeScale = 1.0;
+    clip->sourceFileUid.clear();
+    engine->waveformCache.erase(outPath.string());
+
+    const bool changed = applyClipEdit(engine, true);
+    if (changed) engine->recordStep("Apply time/pitch");
+    return changed;
+}
+
+bool nc_clip_apply_time_pitch(NCEngine* engine, const char* clipId,
+                              double timeRatio, double semitones, int formantPreserve,
+                              char* error, size_t errorLen) {
+    return applyClipTimeTransform(engine, clipId, timeRatio, semitones, {}, {}, formantPreserve != 0, error, errorLen);
+}
+
+// Piecewise time remap (Serato anchor time map): sourceAnchors/destAnchors are matched normalized
+// [0,1] positions across the clip; each segment stretches independently to its dest span, at the
+// global pitch. anchorCount 0 = a uniform stretch (same as nc_clip_apply_time_pitch).
+bool nc_clip_apply_time_map(NCEngine* engine, const char* clipId, double timeRatio, double semitones,
+                            const double* sourceAnchors, const double* destAnchors, int anchorCount,
+                            int formantPreserve, char* error, size_t errorLen) {
+    std::vector<double> src, dst;
+    if (sourceAnchors != nullptr && destAnchors != nullptr && anchorCount > 0) {
+        src.assign(sourceAnchors, sourceAnchors + anchorCount);
+        dst.assign(destAnchors, destAnchors + anchorCount);
+    }
+    return applyClipTimeTransform(engine, clipId, timeRatio, semitones, src, dst, formantPreserve != 0, error, errorLen);
+}
+
+namespace {
+// Read a clip's played window (sourceOffset .. +duration) as interleaved float + its rate/channels.
+neuracoust::daw::ClipState* readClipWindow(NCEngine* engine, const char* clipId,
+                                           std::vector<float>& window, int& channels, double& rate,
+                                           std::string& err) {
+    neuracoust::daw::ClipState* clip = nullptr;
+    for (auto& c : engine->project.clips) if (c.id == clipId) { clip = &c; break; }
+    if (clip == nullptr) { err = "clip not found"; return nullptr; }
+    neuracoust::daw::WavAudioData src;
+    if (!neuracoust::daw::readPcmWavFile(clip->sourcePath, src, err)) return nullptr;
+    if (src.channels < 1 || src.sampleRate <= 0.0) { err = "unsupported clip audio"; return nullptr; }
+    const int64_t total = static_cast<int64_t>(src.interleavedSamples.size()) / src.channels;
+    const int64_t startF = std::max<int64_t>(0, std::llround(clip->sourceOffsetSeconds * src.sampleRate));
+    int64_t nF = std::llround(clip->durationSeconds * src.sampleRate);
+    if (nF <= 0) nF = std::max<int64_t>(1, total - startF);
+    window.assign(static_cast<size_t>(nF) * src.channels, 0.0f);
+    for (int64_t i = 0; i < nF; ++i) {
+        const int64_t s = startF + i;
+        if (s < 0 || s >= total) continue;
+        for (int c = 0; c < src.channels; ++c)
+            window[static_cast<size_t>(i * src.channels + c)] = src.interleavedSamples[static_cast<size_t>(s * src.channels + c)];
+    }
+    channels = src.channels;
+    rate = src.sampleRate;
+    return clip;
+}
+}  // namespace
+
+// --- Melodyne-mode pitch editing -----------------------------------------------------------------
+// Detect the notes in a clip's window (YIN + segmentation), cache them on the engine, and return the
+// count. Getters expose each note; nc_clip_note_set_offset records a per-note edit; apply renders.
+int nc_clip_detect_notes(NCEngine* engine, const char* clipId, int mode) {
+    if (engine == nullptr || clipId == nullptr) return 0;
+    std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
+    if (readClipWindow(engine, clipId, window, channels, rate, err) == nullptr) return 0;
+    const auto detectionMode = mode == 2 ? neuracoust::daw::DetectionMode::Percussive
+                             : mode == 1 ? neuracoust::daw::DetectionMode::Polyphonic
+                                         : neuracoust::daw::DetectionMode::Melodic;
+    engine->pitchEditNotes = neuracoust::daw::detectNotesForMode(window, channels, rate, detectionMode);
+    engine->pitchEditClipId = clipId;
+    return static_cast<int>(engine->pitchEditNotes.size());
+}
+int nc_clip_note_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->pitchEditNotes.size()) : 0;
+}
+static const neuracoust::daw::DetectedNote* noteAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return nullptr;
+    return &engine->pitchEditNotes[static_cast<size_t>(index)];
+}
+double nc_clip_note_start_seconds(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->startSeconds : 0.0; }
+double nc_clip_note_duration_seconds(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->durationSeconds : 0.0; }
+double nc_clip_note_detected_midi(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->detectedMidi : 0.0; }
+double nc_clip_note_offset_semitones(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->pitchOffsetSemitones : 0.0; }
+double nc_clip_note_confidence(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->confidence : 0.0; }
+void nc_clip_note_set_offset(NCEngine* engine, int index, double semitones) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return;
+    engine->pitchEditNotes[static_cast<size_t>(index)].pitchOffsetSemitones = std::clamp(semitones, -24.0, 24.0);
+}
+
+// Render the cached per-note offsets into a new WAV and repoint the clip (length preserved, so start/
+// duration are unchanged — only the source is swapped). No-op if nothing was moved.
+bool nc_clip_apply_note_edits(NCEngine* engine, const char* clipId, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    if (engine->pitchEditClipId != clipId || engine->pitchEditNotes.empty()) {
+        copyText(error, errorLen, "no detected notes for this clip"); return false;
+    }
+    bool anyEdit = false;
+    for (const auto& n : engine->pitchEditNotes) if (std::abs(n.pitchOffsetSemitones) >= 0.01) { anyEdit = true; break; }
+    if (!anyEdit) return true;   // nothing to do
+
+    std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
+    neuracoust::daw::ClipState* clip = readClipWindow(engine, clipId, window, channels, rate, err);
+    if (clip == nullptr) { copyText(error, errorLen, "read clip audio: " + err); return false; }
+
+    std::vector<float> rendered = neuracoust::daw::renderNoteEdits(window, channels, rate, engine->pitchEditNotes);
+    if (rendered.empty()) { copyText(error, errorLen, "pitch edit produced no audio"); return false; }
+
+    std::error_code ec;
+    const std::filesystem::path dir = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::filesystem::create_directories(dir, ec);
+    const std::string stem = std::filesystem::path(clip->sourcePath).stem().string();
+    const std::filesystem::path outPath = dir / (stem + "_pitch_" + clip->id + ".wav");
+
+    neuracoust::daw::WavAudioData outData;
+    outData.channels = channels;
+    outData.sampleRate = rate;
+    outData.interleavedSamples = std::move(rendered);
+    if (!neuracoust::daw::writePcm24WavFileAtomically(outPath, outData, err)) {
+        copyText(error, errorLen, "write pitch-edited clip: " + err); return false;
+    }
+    clip->sourcePath = outPath.string();
+    clip->sourceOffsetSeconds = 0.0;   // the rendered window IS the clip
+    clip->sourceSampleRate = rate;
+    clip->sourceChannels = channels;
+    clip->sourceFileUid.clear();
+    engine->waveformCache.erase(outPath.string());
+
+    const bool changed = applyClipEdit(engine, true);
+    if (changed) engine->recordStep("Apply pitch edit");
+    return changed;
+}
+
+// Write a clip's played window to `outPath` AS-IS (no processing). Used to feed the stem separator a
+// clip-aligned file for polyphonic detection (separate → detect each part).
+bool nc_clip_export_raw_window(NCEngine* engine, const char* clipId, const char* outPath,
+                               char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr || outPath == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
+    if (readClipWindow(engine, clipId, window, channels, rate, err) == nullptr) {
+        copyText(error, errorLen, "read clip audio: " + err); return false;
+    }
+    neuracoust::daw::WavAudioData out;
+    out.channels = channels; out.sampleRate = rate; out.interleavedSamples = std::move(window);
+    if (!neuracoust::daw::writePcm24WavFileAtomically(std::filesystem::path(outPath), out, err)) {
+        copyText(error, errorLen, "write file: " + err); return false;
+    }
+    return true;
+}
+
+// Repoint a clip at an externally-processed WAV of its played window (same length): copy the file into
+// the project's Audio Files folder, swap the clip's source to it (offset 0, duration/fades unchanged),
+// record one undo step. The offline-print counterpart to nc_clip_export_raw_window, used by the denoiser.
+bool nc_clip_repoint_to_window_wav(NCEngine* engine, const char* clipId, const char* wavPath,
+                                   const char* label, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr || wavPath == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    neuracoust::daw::ClipState* clip = nullptr;
+    for (auto& c : engine->project.clips) { if (c.id == clipId) { clip = &c; break; } }
+    if (clip == nullptr) { copyText(error, errorLen, "clip not found"); return false; }
+
+    // Load the produced WAV so we can both validate it and stamp the clip's source format.
+    neuracoust::daw::WavAudioData src;
+    std::string err;
+    if (!neuracoust::daw::readPcmWavFile(std::string(wavPath), src, err)) {
+        copyText(error, errorLen, "read processed audio: " + err); return false;
+    }
+    if (src.channels < 1 || src.sampleRate <= 0) { copyText(error, errorLen, "unsupported processed audio"); return false; }
+
+    std::error_code ec;
+    const std::filesystem::path dir = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::filesystem::create_directories(dir, ec);
+    const std::string stem = std::filesystem::path(clip->sourcePath).stem().string();
+    const std::filesystem::path outPath = dir / (stem + "_dn_" + clip->id + ".wav");
+    // Re-write into Audio Files (rather than move) so the source can live anywhere (a temp dir).
+    if (!neuracoust::daw::writePcm24WavFileAtomically(outPath, src, err)) {
+        copyText(error, errorLen, "store processed clip: " + err); return false;
+    }
+
+    clip->sourcePath = outPath.string();
+    clip->sourceOffsetSeconds = 0.0;   // the processed window IS the clip
+    clip->sourceSampleRate = src.sampleRate;
+    clip->sourceChannels = src.channels;
+    clip->sourceFileUid.clear();
+    engine->waveformCache.erase(outPath.string());
+
+    const bool changed = applyClipEdit(engine, true);
+    if (changed) engine->recordStep(label != nullptr && *label ? label : "Denoise clip");
+    return changed;
+}
+
+// Polyphonic detection is built by separating the clip (Demucs) then detecting each part. These let
+// Swift orchestrate that: reset the note cache, then append the notes found in each stem file. Notes
+// accumulate and are sorted by time, so the editor shows every part's pitch at once (true polyphony).
+void nc_detect_notes_reset(NCEngine* engine) {
+    if (engine != nullptr) engine->pitchEditNotes.clear();
+}
+int nc_detect_notes_add_from_file(NCEngine* engine, const char* wavPath, int mode) {
+    if (engine == nullptr || wavPath == nullptr) return 0;
+    neuracoust::daw::WavAudioData src;
+    std::string err;
+    if (!neuracoust::daw::readPcmWavFile(std::string(wavPath), src, err)) return 0;
+    if (src.channels < 1 || src.sampleRate <= 0.0) return 0;
+    const auto detectionMode = mode == 2 ? neuracoust::daw::DetectionMode::Percussive
+                             : mode == 1 ? neuracoust::daw::DetectionMode::Polyphonic
+                                         : neuracoust::daw::DetectionMode::Melodic;
+    const auto found = neuracoust::daw::detectNotesForMode(src.interleavedSamples, src.channels, src.sampleRate, detectionMode);
+    engine->pitchEditNotes.insert(engine->pitchEditNotes.end(), found.begin(), found.end());
+    std::sort(engine->pitchEditNotes.begin(), engine->pitchEditNotes.end(),
+              [](const neuracoust::daw::DetectedNote& a, const neuracoust::daw::DetectedNote& b) { return a.startSeconds < b.startSeconds; });
+    return static_cast<int>(found.size());
+}
+// Bind the accumulated notes to a clip so apply/export know their target.
+void nc_detect_notes_bind_clip(NCEngine* engine, const char* clipId) {
+    if (engine != nullptr && clipId != nullptr) engine->pitchEditClipId = clipId;
+}
+
+// Segment an externally-produced pitch track (e.g. from the CREPE neural detector helper) into notes
+// and cache them. times/hzs are per-frame; hz 0 = unvoiced. Runs the same Viterbi cleanup + segmenter
+// as the built-in YIN path, so downstream editing/apply is identical.
+int nc_segment_pitch_track(NCEngine* engine, const double* times, const double* hzs,
+                           const double* confs, int count) {
+    if (engine == nullptr || times == nullptr || hzs == nullptr || count <= 0) return 0;
+    std::vector<neuracoust::daw::PitchFrame> track;
+    track.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        neuracoust::daw::PitchFrame f;
+        f.timeSeconds = times[i];
+        f.frequencyHz = hzs[i];
+        f.confidence = confs != nullptr ? confs[i] : 0.9;
+        track.push_back(f);
+    }
+    track = neuracoust::daw::smoothPitchTrack(track);
+    engine->pitchEditNotes = neuracoust::daw::segmentNotes(track);
+    return static_cast<int>(engine->pitchEditNotes.size());
+}
+
+// --- Export the processed result to a standalone WAV (the clip/project is NOT modified) -----------
+// Renders the current Melodyne per-note edits to `outPath`. The user picks the path (a save panel);
+// this just writes the file so they can keep or reuse it outside the project.
+bool nc_clip_export_note_edits(NCEngine* engine, const char* clipId, const char* outPath,
+                               char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr || outPath == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    if (engine->pitchEditClipId != clipId || engine->pitchEditNotes.empty()) {
+        copyText(error, errorLen, "no detected notes for this clip"); return false;
+    }
+    std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
+    if (readClipWindow(engine, clipId, window, channels, rate, err) == nullptr) {
+        copyText(error, errorLen, "read clip audio: " + err); return false;
+    }
+    std::vector<float> rendered = neuracoust::daw::renderNoteEdits(window, channels, rate, engine->pitchEditNotes);
+    if (rendered.empty()) { copyText(error, errorLen, "pitch edit produced no audio"); return false; }
+    neuracoust::daw::WavAudioData out;
+    out.channels = channels; out.sampleRate = rate; out.interleavedSamples = std::move(rendered);
+    if (!neuracoust::daw::writePcm24WavFileAtomically(std::filesystem::path(outPath), out, err)) {
+        copyText(error, errorLen, "write file: " + err); return false;
+    }
+    return true;
+}
+
+// Renders the Serato-mode anchor time-remap (+ global ratio/pitch) to `outPath`. Clip untouched.
+bool nc_clip_export_time_map(NCEngine* engine, const char* clipId, double timeRatio, double semitones,
+                             const double* sourceAnchors, const double* destAnchors, int anchorCount,
+                             const char* outPath, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr || outPath == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
+    if (readClipWindow(engine, clipId, window, channels, rate, err) == nullptr) {
+        copyText(error, errorLen, "read clip audio: " + err); return false;
+    }
+    std::vector<double> src, dst;
+    if (sourceAnchors != nullptr && destAnchors != nullptr && anchorCount > 0) {
+        src.assign(sourceAnchors, sourceAnchors + anchorCount);
+        dst.assign(destAnchors, destAnchors + anchorCount);
+    }
+    neuracoust::daw::TimePitchParams p;
+    p.timeRatio = std::clamp(timeRatio, 0.125, 8.0);
+    p.semitones = std::clamp(semitones, -24.0, 24.0);
+    std::vector<float> rendered = neuracoust::daw::processTimeMapInterleaved(window, channels, p, src, dst);
+    if (rendered.empty()) { copyText(error, errorLen, "time map produced no audio"); return false; }
+    neuracoust::daw::WavAudioData out;
+    out.channels = channels; out.sampleRate = rate; out.interleavedSamples = std::move(rendered);
+    if (!neuracoust::daw::writePcm24WavFileAtomically(std::filesystem::path(outPath), out, err)) {
+        copyText(error, errorLen, "write file: " + err); return false;
+    }
+    return true;
+}
+
+// LIVE-DRAG roll: move the shared boundary of two abutting clips together — trim the left clip's end
+// and the right clip's start to ONE clamped boundary so they never gap or overlap. In-place render
+// patch, no rebuild (seamless during playback); commit once on drop via nc_project_reconcile.
+bool nc_clip_roll_boundary(NCEngine* engine, const char* leftId, const char* rightId, double boundarySeconds) {
+    if (engine == nullptr || leftId == nullptr || rightId == nullptr) return false;
+    const neuracoust::daw::ClipState* left = nullptr;
+    const neuracoust::daw::ClipState* right = nullptr;
+    for (const auto& c : engine->project.clips) {
+        if (c.id == leftId) left = &c;
+        else if (c.id == rightId) right = &c;
+    }
+    if (left == nullptr || right == nullptr) return false;
+
+    // Valid range for the boundary so neither clip inverts or runs past its source file.
+    double lo = std::max(left->startSeconds, right->startSeconds - right->sourceOffsetSeconds);
+    double hi = right->startSeconds + right->durationSeconds;  // right can't lose all length
+    const auto lcached = engine->waveformCache.find(left->sourcePath);
+    if (lcached != engine->waveformCache.end() && lcached->second.durationSeconds > 0.0) {
+        hi = std::min(hi, left->startSeconds + (lcached->second.durationSeconds - left->sourceOffsetSeconds));
+    }
+    if (hi < lo) return false;
+    const double b = std::max(lo, std::min(hi, boundarySeconds));
+
+    bool changed = false;
+    if (neuracoust::daw::trimClipEnd(engine->project, leftId, b)) changed = true;
+    if (neuracoust::daw::trimClipStart(engine->project, rightId, b)) changed = true;
+    if (!changed) return false;
+    for (const auto& c : engine->project.clips) {
+        if (c.id == leftId || c.id == rightId) {
+            engine->engine.updateClipBounds(c.id, c.startSeconds, c.durationSeconds, c.sourceOffsetSeconds);
+        }
+    }
+    return true;
 }
 
 bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds) {
@@ -1855,6 +2743,23 @@ int nc_clip_glue_range(NCEngine* engine, double startSeconds, double endSeconds)
     if (engine == nullptr) return 0;
     std::vector<std::string> glued;
     if (!neuracoust::daw::glueClipRange(engine->project, startSeconds, endSeconds, glued) || glued.empty()) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Heal clips");
+    return static_cast<int>(glued.size());
+}
+
+int nc_clip_glue_selection(NCEngine* engine, const char* const* clipIds, int count) {
+    if (engine == nullptr || clipIds == nullptr || count <= 0) return 0;
+    std::vector<std::string> ids;
+    ids.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (clipIds[i] != nullptr) ids.emplace_back(clipIds[i]);
+    }
+    std::vector<std::string> glued;
+    if (!neuracoust::daw::glueSelectedClips(engine->project, ids, glued) || glued.empty()) {
         return 0;
     }
     neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
@@ -1883,6 +2788,21 @@ int nc_clip_shuffle_delete_range(NCEngine* engine, double startSeconds, double e
     engine->reconcileProject();
     engine->recordStep("Shuffle delete");
     return 1;
+}
+
+namespace { std::vector<std::string> resolveClipIds(NCEngine* engine, const char* const* clipIds, int count); }  // defined below
+
+// Shuffle-delete the given clips, rippling only each clip's own track (Pro Tools default), not all.
+int nc_clip_shuffle_delete_many(NCEngine* engine, const char* const* clipIds, int count) {
+    if (engine == nullptr) return 0;
+    const auto ids = resolveClipIds(engine, clipIds, count);
+    if (!neuracoust::daw::shuffleDeleteClips(engine->project, ids)) {
+        return 0;
+    }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep(ids.size() <= 1 ? "Shuffle delete" : "Shuffle delete " + std::to_string(ids.size()) + " clips");
+    return static_cast<int>(ids.size());
 }
 
 bool nc_track_clear_instrument(NCEngine* engine, int trackIndex) {
@@ -1950,9 +2870,71 @@ float nc_clip_gain_db(NCEngine* engine, int index) {
     return clip != nullptr ? clip->gainDb : 0.0f;
 }
 
+// Non-destructive processing state, for the timeline to reflect it in the waveform (dimmed when
+// muted, mirrored when reversed, flipped when polarity-inverted).
+bool nc_clip_muted(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr && clip->muted;
+}
+bool nc_clip_reversed(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr && clip->reversed;
+}
+bool nc_clip_polarity(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip != nullptr && clip->polarityInverted;
+}
+
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb) {
     if (engine == nullptr || clipId == nullptr) return false;
-    return applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
+    // Committing clip gain reconciles the render plan; declick so the baked-gain swap doesn't click
+    // (the drag itself uses the live preview path, which never reconciles).
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::setClipGainDb(engine->project, clipId, gainDb));
+    engine->engine.endGraphChangeDeclick();
+    return changed;
+}
+
+// Non-destructive clip processing (Logic/Cubase style): the renderer honours these flags directly,
+// so nothing writes a new file and every one undoes cleanly. Each is a discrete step.
+bool nc_clip_toggle_reversed(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::toggleClipReversed(engine->project, clipId));
+    engine->engine.endGraphChangeDeclick();
+    if (changed) engine->recordStep("Reverse clip");
+    return changed;
+}
+
+bool nc_clip_toggle_muted(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::toggleClipMuted(engine->project, clipId));
+    engine->engine.endGraphChangeDeclick();
+    if (changed) engine->recordStep("Mute clip");
+    return changed;
+}
+
+bool nc_clip_toggle_polarity(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    engine->engine.beginGraphChangeDeclick();
+    const bool changed = applyClipEdit(engine, neuracoust::daw::toggleClipPolarityInverted(engine->project, clipId));
+    engine->engine.endGraphChangeDeclick();
+    if (changed) engine->recordStep("Invert clip polarity");
+    return changed;
+}
+
+// Normalize: scan the clip's source WAV for its peak and bake a clip gain that brings it to
+// targetPeakDb (a hair under 0 dBFS). Non-destructive — it only sets the clip's gain.
+bool nc_clip_normalize(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    std::string message;
+    engine->engine.beginGraphChangeDeclick();
+    const bool ok = neuracoust::daw::normalizeClipGainToPeak(engine->project, clipId, -0.3f, message);
+    const bool changed = applyClipEdit(engine, ok);
+    engine->engine.endGraphChangeDeclick();
+    if (changed) engine->recordStep("Normalize clip");
+    return changed;
 }
 
 // Continuous: sets the field only, no graph rebuild — so dragging clip gain stays
@@ -1992,6 +2974,105 @@ bool nc_clip_apply_crossfades(NCEngine* engine, const char* clipId) {
     return applyClipEdit(engine, neuracoust::daw::applyAutomaticClipCrossfades(engine->project, clipId));
 }
 
+// Consolidate (Pro Tools ⌥⇧3): render the selected clips on each of their tracks — clip gain, fades
+// and crossfades baked, at unity track/master with no inserts — into ONE new WAV per track, and
+// replace them with a single clip. Works for overlapping/crossfaded clips that glue can't join.
+bool nc_clip_consolidate(NCEngine* engine, const char* const* clipIds, int count,
+                         char* outError, size_t errLen) {
+    if (engine == nullptr) { copyText(outError, errLen, "no engine"); return false; }
+    const auto ids = resolveClipIds(engine, clipIds, count);
+    if (ids.empty()) { copyText(outError, errLen, "선택된 클립이 없습니다."); return false; }
+
+    auto findClipLocal = [&](const std::string& id) -> const neuracoust::daw::ClipState* {
+        for (const auto& c : engine->project.clips) { if (c.id == id) return &c; }
+        return nullptr;
+    };
+    auto clipEndLocal = [](const neuracoust::daw::ClipState& c) { return c.startSeconds + c.durationSeconds; };
+
+    // Group the selected clips by track — each track's group becomes one consolidated file.
+    std::map<std::string, std::vector<std::string>> byTrack;
+    for (const auto& id : ids) {
+        const auto* c = findClipLocal(id);
+        if (c != nullptr && !c->locked) byTrack[c->trackName].push_back(id);
+    }
+    if (byTrack.empty()) { copyText(outError, errLen, "합칠 클립이 없습니다."); return false; }
+
+    auto makeWavPath = [&]() -> std::string {
+        std::string err;
+        std::string p = neuracoust::daw::nextProjectRecordingPath(engine->projectPath, err);
+        if (!p.empty()) return p;
+        std::error_code ec;
+        const auto dir = std::filesystem::temp_directory_path() / "Neuracoust Recordings";
+        std::filesystem::create_directories(dir, ec);
+        for (int i = 0; i < 100000; ++i) {
+            const auto cand = dir / ("Neuracoust Consolidated " + std::to_string(i) + ".wav");
+            if (!std::filesystem::exists(cand)) return cand.string();
+        }
+        return {};
+    };
+
+    int consolidated = 0;
+    for (auto& entry : byTrack) {
+        const std::string& trackName = entry.first;
+        const auto& trackClipIds = entry.second;
+        double minStart = std::numeric_limits<double>::max();
+        double maxEnd = 0.0;
+        for (const auto& id : trackClipIds) {
+            const auto* c = findClipLocal(id);
+            if (c == nullptr) continue;
+            minStart = std::min(minStart, c->startSeconds);
+            maxEnd = std::max(maxEnd, clipEndLocal(*c));
+        }
+        if (!(maxEnd > minStart)) continue;
+
+        // Temp project: only these clips, target track + master at unity with no processing, so the
+        // print is exactly the clip-level audio (gain + fades + crossfades) — Pro Tools clip level.
+        neuracoust::daw::ProjectDocument temp = engine->project;
+        std::set<std::string> keep(trackClipIds.begin(), trackClipIds.end());
+        temp.clips.erase(std::remove_if(temp.clips.begin(), temp.clips.end(),
+            [&](const neuracoust::daw::ClipState& c) { return keep.find(c.id) == keep.end(); }),
+            temp.clips.end());
+        for (auto& t : temp.tracks) {
+            if (t.name == trackName) {
+                t.volumeDb = 0.0f; t.pan = 0.0f; t.inserts.clear(); t.sends.clear();
+                t.outputBus = "Master"; t.muted = false; t.solo = false;
+                t.recordArmed = false; t.inputMonitoring = false; t.volumeAutomation.clear();
+            } else if (t.name == "Master") {
+                t.volumeDb = 0.0f; t.pan = 0.0f; t.inserts.clear(); t.volumeAutomation.clear();
+            }
+        }
+        temp.masterInserts.clear();
+        temp.monitorModules.clear();
+        temp.autoFadeOutSeconds = 0.0;
+        temp.editSelectionEnabled = true;
+        temp.editSelectionStartSeconds = minStart;
+        temp.editSelectionEndSeconds = maxEnd;
+        neuracoust::daw::normalizeProjectRouting(temp);
+        neuracoust::daw::rebuildProjectEditModelFromClips(temp);
+
+        const std::string wav = makeWavPath();
+        if (wav.empty()) { copyText(outError, errLen, "통합 파일 경로를 만들 수 없습니다."); continue; }
+        neuracoust::daw::BounceOptions opt;
+        opt.rangeMode = neuracoust::daw::BounceRangeMode::EditSelection;
+        const auto result = neuracoust::daw::bounceProjectToWav(temp, wav, opt);
+        if (!result.ok) {
+            copyText(outError, errLen, result.message.empty() ? "통합 렌더 실패" : result.message);
+            continue;
+        }
+
+        for (const auto& id : trackClipIds) neuracoust::daw::deleteClip(engine->project, id);
+        const std::string newId = neuracoust::daw::appendAudioClipAt(engine->project, trackName, wav,
+                                                                     minStart, maxEnd - minStart);
+        if (!newId.empty()) ++consolidated;
+    }
+
+    if (consolidated == 0) { copyText(outError, errLen, "통합할 수 없습니다."); return false; }
+    neuracoust::daw::rebuildProjectEditModelFromClips(engine->project);
+    engine->reconcileProject();
+    engine->recordStep("Consolidate");
+    return true;
+}
+
 bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
                              const char* inCurve, const char* outCurve) {
     if (engine == nullptr || clipId == nullptr) return false;
@@ -2010,6 +3091,21 @@ void nc_clip_fade_in_curve(NCEngine* engine, int index, char* out, size_t outLen
 }
 void nc_clip_fade_out_curve(NCEngine* engine, int index, char* out, size_t outLen) {
     clipFadeCurve(engine, index, false, out, outLen);
+}
+
+double nc_clip_fade_in_curvature(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip == nullptr ? 0.0 : clip->fadeInCurvature;
+}
+double nc_clip_fade_out_curvature(NCEngine* engine, int index) {
+    const auto* clip = clipAt(engine, index);
+    return clip == nullptr ? 0.0 : clip->fadeOutCurvature;
+}
+bool nc_clip_set_fade_curvature(NCEngine* engine, const char* clipId,
+                                double inCurvature, double outCurvature) {
+    if (engine == nullptr || clipId == nullptr) return false;
+    return applyClipEdit(engine, neuracoust::daw::setClipFadeCurvature(
+        engine->project, clipId, inCurvature, outCurvature));
 }
 
 namespace {
@@ -2581,6 +3677,113 @@ bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* not
                          "Delete note");
 }
 
+// --- Controller (CC) lanes -------------------------------------------------
+// Reads are filtered to one controller number so the UI paints exactly one lane at a time.
+
+int nc_midi_cc_count(NCEngine* engine, const char* regionId, int controller) {
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr) return 0;
+    int count = 0;
+    for (const auto& event : region->controllerEvents) {
+        if (event.controller == controller) ++count;
+    }
+    return count;
+}
+
+bool nc_midi_cc_get(NCEngine* engine, const char* regionId, int controller, int index,
+                    char* outId, size_t idLen, double* outBeat, int* outValue) {
+    copyText(outId, idLen, "");
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr || index < 0) return false;
+    int match = 0;
+    for (const auto& event : region->controllerEvents) {
+        if (event.controller != controller) continue;
+        if (match == index) {
+            copyText(outId, idLen, event.id);
+            if (outBeat != nullptr) *outBeat = event.beat;
+            if (outValue != nullptr) *outValue = event.value;
+            return true;
+        }
+        ++match;
+    }
+    return false;
+}
+
+bool nc_midi_cc_add(NCEngine* engine, const char* regionId, int controller, double beat, int value,
+                    char* outId, size_t idLen) {
+    copyText(outId, idLen, "");
+    if (engine == nullptr || regionId == nullptr) return false;
+    const std::string id = neuracoust::daw::addMidiControllerEvent(engine->project, regionId,
+                                                                   beat, controller, value);
+    if (id.empty()) return false;
+    applyMidiEdit(engine, true, "Add controller");
+    copyText(outId, idLen, id);
+    return true;
+}
+
+bool nc_midi_cc_move(NCEngine* engine, const char* regionId, const char* eventId, double beat, int value) {
+    if (engine == nullptr || regionId == nullptr || eventId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::moveMidiControllerEvent(engine->project, regionId,
+                                                                  eventId, beat, value),
+                         nullptr);
+}
+
+bool nc_midi_cc_delete(NCEngine* engine, const char* regionId, const char* eventId) {
+    if (engine == nullptr || regionId == nullptr || eventId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::deleteMidiControllerEvent(engine->project, regionId, eventId),
+                         "Delete controller");
+}
+
+// --- Pitch-bend lane -------------------------------------------------------
+
+int nc_midi_pb_count(NCEngine* engine, const char* regionId) {
+    const auto* region = midiRegionById(engine, regionId);
+    return region != nullptr ? static_cast<int>(region->pitchBendEvents.size()) : 0;
+}
+
+bool nc_midi_pb_get(NCEngine* engine, const char* regionId, int index,
+                    char* outId, size_t idLen, double* outBeat, int* outValue) {
+    copyText(outId, idLen, "");
+    const auto* region = midiRegionById(engine, regionId);
+    if (region == nullptr || index < 0 ||
+        static_cast<size_t>(index) >= region->pitchBendEvents.size()) {
+        return false;
+    }
+    const auto& event = region->pitchBendEvents[static_cast<size_t>(index)];
+    copyText(outId, idLen, event.id);
+    if (outBeat != nullptr) *outBeat = event.beat;
+    if (outValue != nullptr) *outValue = event.value;
+    return true;
+}
+
+bool nc_midi_pb_add(NCEngine* engine, const char* regionId, double beat, int value,
+                    char* outId, size_t idLen) {
+    copyText(outId, idLen, "");
+    if (engine == nullptr || regionId == nullptr) return false;
+    const std::string id = neuracoust::daw::addMidiPitchBendEvent(engine->project, regionId, beat, value);
+    if (id.empty()) return false;
+    applyMidiEdit(engine, true, "Add pitch bend");
+    copyText(outId, idLen, id);
+    return true;
+}
+
+bool nc_midi_pb_move(NCEngine* engine, const char* regionId, const char* eventId, double beat, int value) {
+    if (engine == nullptr || regionId == nullptr || eventId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::moveMidiPitchBendEvent(engine->project, regionId,
+                                                                 eventId, beat, value),
+                         nullptr);
+}
+
+bool nc_midi_pb_delete(NCEngine* engine, const char* regionId, const char* eventId) {
+    if (engine == nullptr || regionId == nullptr || eventId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::deleteMidiPitchBendEvent(engine->project, regionId, eventId),
+                         "Delete pitch bend");
+}
+
 int nc_marker_count(NCEngine* engine) {
     return engine == nullptr ? 0 : static_cast<int>(engine->project.markers.size());
 }
@@ -2696,6 +3899,95 @@ bool nc_chord_delete(NCEngine* engine, double timeSeconds, double tol) {
     if (!neuracoust::daw::deleteNearestChordEvent(engine->project, timeSeconds, tol)) return false;
     engine->recordStep("Delete chord");
     return true;
+}
+
+// --- Song-form / arrangement sections (per-project; kept in project.songSections) ---
+namespace {
+void sortSongSections(std::vector<neuracoust::daw::ChordEventState>& s) {
+    std::sort(s.begin(), s.end(), [](const neuracoust::daw::ChordEventState& a, const neuracoust::daw::ChordEventState& b) {
+        return a.timeSeconds < b.timeSeconds;
+    });
+}
+}
+int nc_song_section_count(NCEngine* engine) {
+    return engine == nullptr ? 0 : static_cast<int>(engine->project.songSections.size());
+}
+double nc_song_section_time(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.songSections.size()) return 0.0;
+    return engine->project.songSections[static_cast<size_t>(index)].timeSeconds;
+}
+void nc_song_section_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    if (engine == nullptr || index < 0 || static_cast<size_t>(index) >= engine->project.songSections.size()) {
+        copyText(out, outLen, std::string{});
+        return;
+    }
+    copyText(out, outLen, engine->project.songSections[static_cast<size_t>(index)].name);
+}
+bool nc_song_section_add(NCEngine* engine, double timeSeconds, const char* name) {
+    if (engine == nullptr) return false;
+    auto& sections = engine->project.songSections;
+    sections.erase(std::remove_if(sections.begin(), sections.end(),
+        [&](const neuracoust::daw::ChordEventState& s) { return std::abs(s.timeSeconds - timeSeconds) < 0.05; }), sections.end());
+    neuracoust::daw::ChordEventState section;
+    section.id = "section-" + std::to_string(static_cast<long long>(timeSeconds * 1000.0)) + "-" + std::to_string(sections.size());
+    section.name = (name != nullptr && *name != '\0') ? name : "Section";
+    section.timeSeconds = std::max(0.0, timeSeconds);
+    sections.push_back(section);
+    sortSongSections(sections);
+    engine->recordStep("Add song section");
+    return true;
+}
+bool nc_song_section_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds) {
+    if (engine == nullptr) return false;
+    auto& sections = engine->project.songSections;
+    for (auto& s : sections) {
+        if (std::abs(s.timeSeconds - fromSeconds) <= tol) {
+            s.timeSeconds = std::max(0.0, toSeconds);
+            sortSongSections(sections);
+            engine->recordStep("Move song section");
+            return true;
+        }
+    }
+    return false;
+}
+bool nc_song_section_delete(NCEngine* engine, double timeSeconds, double tol) {
+    if (engine == nullptr) return false;
+    auto& sections = engine->project.songSections;
+    const size_t before = sections.size();
+    sections.erase(std::remove_if(sections.begin(), sections.end(),
+        [&](const neuracoust::daw::ChordEventState& s) { return std::abs(s.timeSeconds - timeSeconds) <= tol; }), sections.end());
+    if (sections.size() == before) return false;
+    engine->recordStep("Delete song section");
+    return true;
+}
+
+// Pro Tools range edit on the conductor lanes: delete every conductor event (marker, chord, lyric,
+// song section, tempo, meter) whose time falls inside [start, end], in ONE undo step. The tempo and
+// meter maps keep their t=0 anchor. Returns the number removed. Key events are app-side (Swift).
+int nc_conductor_clear_range(NCEngine* engine, double start, double end) {
+    if (engine == nullptr || !(end > start)) return 0;
+    auto& p = engine->project;
+    const double lo = start, hi = end;
+    auto inRange = [lo, hi](double t) { return t >= lo - 1e-6 && t <= hi + 1e-6; };
+    auto clearVec = [&](auto& vec, bool keepAnchor) -> int {
+        const size_t before = vec.size();
+        vec.erase(std::remove_if(vec.begin(), vec.end(), [&](const auto& e) {
+            if (keepAnchor && e.timeSeconds <= 1e-6) return false;   // never drop the t=0 anchor
+            return inRange(e.timeSeconds);
+        }), vec.end());
+        return static_cast<int>(before - vec.size());
+    };
+    int removed = 0;
+    removed += clearVec(p.markers, false);
+    removed += clearVec(p.chordEvents, false);
+    removed += clearVec(p.lyricEvents, false);
+    removed += clearVec(p.songSections, false);
+    removed += clearVec(p.tempoMap, true);
+    removed += clearVec(p.timeSignatureMap, true);
+    if (removed == 0) return 0;
+    engine->reconcileProject();   // tempo/meter edits reshape the musical timeline
+    engine->recordStep("Clear conductor range");
+    return removed;
 }
 
 int nc_lyric_count(NCEngine* engine) {
@@ -3306,13 +4598,27 @@ bool nc_apply_monitor_template(NCEngine* engine, const char* serialized) {
     p.monitorStationTalkback = tmpl.monitorStationTalkback;
     p.monitorStationDimDb = tmpl.monitorStationDimDb;
     p.monitorStationTalkbackRoute = tmpl.monitorStationTalkbackRoute;
+    p.monitorStationTalkbackChannel = tmpl.monitorStationTalkbackChannel;
     p.monitorInputTrimDb = tmpl.monitorInputTrimDb;
     p.monitorVolumeDb = tmpl.monitorVolumeDb;
+    // Physical monitoring-chain models are part of the saved monitor station — restore them too, or
+    // the "전체 설정 저장" template drops them (the audio-interface MODELING target model in
+    // particular had no other carrier, so the picker came back empty).
+    p.physicalSpeakerModel = tmpl.physicalSpeakerModel;
+    p.physicalHeadphoneModel = tmpl.physicalHeadphoneModel;
+    p.physicalPowerAmpModel = tmpl.physicalPowerAmpModel;
+    p.physicalSpeakerCableModel = tmpl.physicalSpeakerCableModel;
+    p.physicalPowerCableModel = tmpl.physicalPowerCableModel;
+    p.physicalConnectorModel = tmpl.physicalConnectorModel;
+    p.physicalAudioInterfaceModel = tmpl.physicalAudioInterfaceModel;
+    p.physicalAudioInterfaceTargetModel = tmpl.physicalAudioInterfaceTargetModel;
+    p.monitorInterfaceModelingEnabled = tmpl.monitorInterfaceModelingEnabled;
     if (!tmpl.monitorModules.empty()) {
         p.monitorModules = tmpl.monitorModules;
     }
     p.monitorEqBands = tmpl.monitorEqBands;
     engine->reconcileProject();
+    engine->pushInterfaceModeler();   // re-apply the restored interface modeling to the live monitor path
     return true;
 }
 
@@ -3339,13 +4645,13 @@ bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBoun
 
 namespace {
 
-/// Peaks are cached at a fixed sample resolution, not a fixed bucket count, so a long
-/// clip does not smear: 256 samples per peak is ~5 ms, finer than a pixel at any
-/// zoom the timeline reaches. The view decimates these to columns at draw time. A
-/// ceiling keeps a very long file from allocating without bound — past it the samples
-/// per peak grows instead.
-constexpr int64_t kWaveformSamplesPerPeak = 256;
-constexpr int64_t kWaveformMaxPeaks = 2'000'000;  // ~3 hours at 256 samples/peak, 48 kHz
+/// Peaks are cached at a fixed sample resolution, not a fixed bucket count, so a long clip does
+/// not smear. 32 samples per peak is ~0.7 ms at 48 kHz — fine enough that the waveform stays
+/// detailed even when you zoom to a few dozen samples per pixel (256 was ~5 ms and went blocky
+/// on deep zooms). The view decimates these to columns at draw time. The ceiling keeps a very
+/// long file from allocating without bound — past it the samples per peak grows instead.
+constexpr int64_t kWaveformSamplesPerPeak = 32;
+constexpr int64_t kWaveformMaxPeaks = 4'000'000;  // ~44 min at 32 samples/peak, 48 kHz (then coarsens)
 
 const NCEngine::WaveformPeaks* ensureWaveformPeaks(NCEngine* engine, const std::string& key) {
     auto cached = engine->waveformCache.find(key);
@@ -3981,6 +5287,186 @@ bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot) {
     return true;
 }
 
+// --- Built-in test signal generator (a track SOURCE) --------------------------------------------
+// Stored as a recognized "Signal Generator" insert so it rides the normal insert persistence / undo /
+// reconcile; the renderer's synthesizeSourceGeneratorFallback voices it with the high-accuracy
+// TestSignalGenerator whenever the track is otherwise silent. The six normalized params are the
+// storage; these setters/getters speak in real units and use the inverse of the renderer's mappings.
+namespace {
+constexpr uint32_t kGenOnOff = 0, kGenWave = 1, kGenFreq = 2, kGenLevel = 3, kGenRoute = 4, kGenPhase = 5;
+
+bool insertIsTestSignalGenerator(const neuracoust::daw::TrackInsertSlot& s) {
+    std::string n = s.pluginName;
+    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+    return n.find("signal generator") != std::string::npos || n.find("emo-generator") != std::string::npos;
+}
+
+int findTestSignalGeneratorSlot(const neuracoust::daw::TrackState& track) {
+    for (size_t i = 0; i < track.inserts.size(); ++i) {
+        if (insertIsTestSignalGenerator(track.inserts[i])) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+double genParamValue(const neuracoust::daw::TrackInsertSlot& s, uint32_t id, double fallback) {
+    for (const auto& p : s.parameters) {
+        if (p.parameterId == id) return std::clamp(static_cast<double>(p.normalizedValue), 0.0, 1.0);
+    }
+    return fallback;
+}
+
+void setGenParamValue(neuracoust::daw::TrackInsertSlot& s, uint32_t id, const char* name, double norm) {
+    const double v = std::clamp(norm, 0.0, 1.0);
+    for (auto& p : s.parameters) {
+        if (p.parameterId == id) { p.normalizedValue = static_cast<float>(v); return; }
+    }
+    s.parameters.push_back({id, name, static_cast<float>(v)});
+}
+
+// Real-unit ⇄ normalized, matching synthesizeSourceGeneratorFallback exactly.
+double freqNormFromHz(double hz) { return std::clamp(std::log(std::clamp(hz, 20.0, 20000.0) / 20.0) / std::log(1000.0), 0.0, 1.0); }
+double hzFromFreqNorm(double norm) { return std::clamp(20.0 * std::pow(1000.0, norm), 20.0, 20000.0); }
+double levelNormFromDb(double db) { return std::clamp((db + 60.0) / 60.0, 0.0, 1.0); }
+double dbFromLevelNorm(double norm) { return -60.0 + norm * 60.0; }
+
+// Apply a param change on the generator insert and reconcile so the render picks it up. `record`
+// makes it one undo step (discrete edits); continuous edits (freq/level sliders) pass false.
+bool mutateGenerator(NCEngine* engine, int trackIndex,
+                     const std::function<void(neuracoust::daw::TrackInsertSlot&)>& fn,
+                     const char* step) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    if (slot < 0) return false;
+    fn(track->inserts[static_cast<size_t>(slot)]);
+    engine->reconcileProject();
+    if (step != nullptr) engine->recordStep(step);
+    return true;
+}
+}  // namespace
+
+bool nc_track_add_test_signal_generator(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    if (findTestSignalGeneratorSlot(*track) >= 0) return true;   // one per track
+
+    const std::string trackName = track->name;
+    size_t slot = track->inserts.size();
+    for (size_t i = 0; i < track->inserts.size(); ++i) {
+        const auto& e = track->inserts[i];
+        if (!e.enabled || e.pluginName.empty() || e.pluginName == "No Insert") { slot = i; break; }
+    }
+    if (slot >= track->inserts.size() && !neuracoust::daw::addTrackInsertSlot(engine->project, trackName)) {
+        return false;
+    }
+    neuracoust::daw::TrackInsertSlot gen;
+    gen.pluginName = "Signal Generator";
+    gen.pluginFormat = "Builtin";
+    gen.enabled = true;
+    gen.dspAvailable = true;
+    gen.dspExecutionMode = "native";
+    gen.parameters = {
+        {kGenOnOff, "On Off", 1.0f},
+        {kGenWave, "Waveform", 0.0f},              // Sine
+        {kGenFreq, "Frequency", static_cast<float>(freqNormFromHz(1000.0))},
+        {kGenLevel, "Level", static_cast<float>(levelNormFromDb(-6.0))},
+        {kGenRoute, "Channel", 0.5f},              // Stereo
+        {kGenPhase, "Polarity", 0.0f},
+    };
+    if (!neuracoust::daw::setTrackInsertSlot(engine->project, trackName, slot, gen)) return false;
+    engine->reconcileProjectDeclicked();
+    engine->recordStep("Add signal generator");
+    return true;
+}
+
+bool nc_track_remove_test_signal_generator(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    if (slot < 0) return false;
+    if (!neuracoust::daw::removeTrackInsertSlot(engine->project, track->name, static_cast<size_t>(slot))) {
+        return false;
+    }
+    engine->reconcileProjectDeclicked();
+    engine->recordStep("Remove signal generator");
+    return true;
+}
+
+// -1 = no generator on this track, else its insert slot index.
+int nc_track_test_signal_generator_slot(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    return track != nullptr ? findTestSignalGeneratorSlot(*track) : -1;
+}
+
+void nc_track_test_signal_set_enabled(NCEngine* engine, int trackIndex, bool enabled) {
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenOnOff, "On Off", enabled ? 1.0 : 0.0); },
+                    enabled ? "Signal generator on" : "Signal generator off");
+}
+void nc_track_test_signal_set_waveform(NCEngine* engine, int trackIndex, int waveform) {
+    const int w = std::max(0, std::min(6, waveform));
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenWave, "Waveform", w / 6.0); }, "Signal waveform");
+}
+void nc_track_test_signal_set_frequency_hz(NCEngine* engine, int trackIndex, double hz) {
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenFreq, "Frequency", freqNormFromHz(hz)); }, nullptr);
+}
+void nc_track_test_signal_set_level_db(NCEngine* engine, int trackIndex, double db) {
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenLevel, "Level", levelNormFromDb(db)); }, nullptr);
+}
+void nc_track_test_signal_set_channel(NCEngine* engine, int trackIndex, int channel) {
+    const double norm = channel <= 0 ? 0.0 : (channel >= 2 ? 1.0 : 0.5);   // 0=L, 1=Stereo, 2=R
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenRoute, "Channel", norm); }, "Signal channel");
+}
+void nc_track_test_signal_set_polarity(NCEngine* engine, int trackIndex, bool inverted) {
+    mutateGenerator(engine, trackIndex,
+                    [&](auto& s) { setGenParamValue(s, kGenPhase, "Polarity", inverted ? 1.0 : 0.0); }, "Signal polarity");
+}
+
+bool nc_track_test_signal_enabled(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    return slot >= 0 && genParamValue(track->inserts[static_cast<size_t>(slot)], kGenOnOff, 1.0) >= 0.5;
+}
+int nc_track_test_signal_waveform(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return 0;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    if (slot < 0) return 0;
+    return std::max(0, std::min(6, static_cast<int>(std::lround(
+        genParamValue(track->inserts[static_cast<size_t>(slot)], kGenWave, 0.0) * 6.0))));
+}
+double nc_track_test_signal_frequency_hz(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return 1000.0;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    return slot < 0 ? 1000.0 : hzFromFreqNorm(genParamValue(track->inserts[static_cast<size_t>(slot)], kGenFreq, 0.5));
+}
+double nc_track_test_signal_level_db(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return -6.0;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    return slot < 0 ? -6.0 : dbFromLevelNorm(genParamValue(track->inserts[static_cast<size_t>(slot)], kGenLevel, 0.9));
+}
+int nc_track_test_signal_channel(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return 1;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    if (slot < 0) return 1;
+    const double r = genParamValue(track->inserts[static_cast<size_t>(slot)], kGenRoute, 0.5);
+    return r < 0.25 ? 0 : (r > 0.75 ? 2 : 1);
+}
+bool nc_track_test_signal_polarity(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) return false;
+    const int slot = findTestSignalGeneratorSlot(*track);
+    return slot >= 0 && genParamValue(track->inserts[static_cast<size_t>(slot)], kGenPhase, 0.0) >= 0.5;
+}
+
 // Copy a filled insert (with its parameters) to another slot on the same or a different
 // track — Option-drag in the mixer. dstSlot < 0 appends at the end of the destination.
 bool nc_track_copy_insert(NCEngine* engine, int srcTrackIndex, int srcSlot,
@@ -4094,6 +5580,54 @@ void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char
     copyText(out, outLen,
              neuracoust::daw::effectiveInsertDspModeBadge(track->inserts[static_cast<size_t>(slot)],
                                                           engine->project));
+}
+
+namespace {
+// Only `native` (in-process, on the audio thread) and `internal` (out-of-process on the isolated
+// performance core, via the sandbox bridge) are user-selectable per channel. remote_internal /
+// external need a matching Neuracoust module on a Remote Core and are assigned automatically, not
+// from this menu. Works for both TrackInsertSlot and InsertState (both carry dspExecutionMode).
+template <typename InsertT>
+bool applyUserInsertDspMode(InsertT& insert, const char* mode) {
+    if (mode == nullptr) {
+        return false;
+    }
+    const std::string m = mode;
+    if (m != "native" && m != "internal") {
+        return false;
+    }
+    if (insert.dspExecutionMode == m) {
+        return false;
+    }
+    insert.dspExecutionMode = m;
+    return true;
+}
+} // namespace
+
+bool nc_track_insert_set_dsp_mode(NCEngine* engine, int trackIndex, int slot, const char* mode) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        return false;
+    }
+    if (!applyUserInsertDspMode(track->inserts[static_cast<size_t>(slot)], mode)) {
+        return false;
+    }
+    engine->reconcileProjectDeclicked();   // moving on/off the isolated core rebuilds the chain
+    engine->recordStep(std::string("Insert DSP mode: ") + mode);
+    return true;
+}
+
+bool nc_master_insert_set_dsp_mode(NCEngine* engine, int slot, const char* mode) {
+    auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr) {
+        return false;
+    }
+    if (!applyUserInsertDspMode(*insert, mode)) {
+        return false;
+    }
+    engine->reconcileProjectDeclicked();
+    engine->recordStep(std::string("Master insert DSP mode: ") + mode);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -4217,6 +5751,12 @@ double nc_delay_compensation_ms(NCEngine* engine) {
 int nc_delay_compensation_samples(NCEngine* engine) {
     return engine == nullptr ? 0 : engine->engine.status().delayCompensationSamples;
 }
+// PDC applied to one track/bus (by strip index), in samples. Shows a reverb aux's return latency etc.
+int nc_track_delay_compensation_samples(NCEngine* engine, int index) {
+    auto* track = trackAt(engine, index);
+    if (track == nullptr) return 0;
+    return engine->engine.routeDelayCompensationSamplesFor(track->name);
+}
 
 bool nc_dsp_core_isolation(NCEngine* engine) {
     return engine != nullptr && engine->project.appleSiliconCoreIsolationEnabled;
@@ -4227,10 +5767,7 @@ void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled) {
         return;
     }
     engine->project.appleSiliconCoreIsolationEnabled = enabled;
-    // The old UI keeps a floor of 4 cores whenever isolation is on.
-    if (enabled && engine->project.requestedDspCoreCount < 4) {
-        engine->project.requestedDspCoreCount = 4;
-    }
+    // No 4-core floor on enable — the user can reserve as few as 1 (kept 1–16 elsewhere).
     engine->recordStep(enabled ? "Enable core isolation" : "Disable core isolation");
     restartEngineForSettings(engine);
 }
@@ -4241,10 +5778,8 @@ int nc_dsp_core_count(NCEngine* engine) {
 
 void nc_dsp_set_core_count(NCEngine* engine, int count) {
     if (engine == nullptr) return;
-    int clamped = std::max(1, std::min(16, count));
-    if (engine->project.appleSiliconCoreIsolationEnabled) {
-        clamped = std::max(4, clamped);
-    }
+    // 1–16, no isolation floor — the user asked to be able to reserve fewer than 4 cores.
+    const int clamped = std::max(1, std::min(16, count));
     if (clamped == engine->project.requestedDspCoreCount) {
         return;
     }
@@ -4429,6 +5964,44 @@ void nc_dsp_set_external_core_count(NCEngine* engine, int count) {
                                          buildRemoteDspSettings(engine));
 }
 
+int nc_dsp_external_enabled(NCEngine* engine) {
+    return (engine != nullptr && engine->project.externalDspEnabled) ? 1 : 0;
+}
+
+void nc_dsp_set_external_enabled(NCEngine* engine, int enabled) {
+    if (engine == nullptr) return;
+    const bool next = enabled != 0;
+    if (next == engine->project.externalDspEnabled) return;
+    engine->project.externalDspEnabled = next;
+    engine->recordStep(next ? "Enable external DSP node" : "Disable external DSP node");
+    // settings.enabled gates makeRemoteDspCorePlan, so re-apply the monitor path to take effect live.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+}
+
+int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out) {
+    if (out == nullptr) return 0;
+    std::memset(out, 0, sizeof(*out));
+    if (engine == nullptr) return 0;
+    const auto settings = buildRemoteDspSettings(engine);
+    const auto info = neuracoust::daw::queryRemoteDspServerInfo(settings);
+    if (!info.reachable) return 0;
+    const auto setField = [](char* dst, size_t cap, const std::string& s) {
+        if (cap == 0) return;
+        const size_t n = std::min(cap - 1, s.size());
+        std::memcpy(dst, s.data(), n);
+        dst[n] = '\0';
+    };
+    out->reachable = 1;
+    out->roundTripMs = info.roundTripMs;
+    setField(out->host, sizeof(out->host), settings.host);
+    setField(out->model, sizeof(out->model), info.model);
+    setField(out->cpuModel, sizeof(out->cpuModel), info.cpuModel.empty() ? std::string("unknown") : info.cpuModel);
+    out->cpuMhz = info.cpuMhz;
+    out->memoryMb = static_cast<int>(info.memoryMb);
+    out->coreCount = static_cast<int>(info.coreCount);
+    return 1;
+}
+
 void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->project.remoteDspHost : std::string{});
 }
@@ -4471,7 +6044,7 @@ void nc_monitor_set_volume_db(NCEngine* engine, float db) {
     if (engine == nullptr) {
         return;
     }
-    engine->project.monitorVolumeDb = std::max(-60.0f, std::min(6.0f, db));
+    engine->project.monitorVolumeDb = std::max(-60.0f, std::min(-12.0f, db));   // -12 dB max: speaker-sim headroom
     engine->pushStationControls();
 }
 
@@ -4508,16 +6081,75 @@ void nc_monitor_set_dim(NCEngine* engine, bool on) {
     engine->project.monitorStationDim = on;
     engine->pushStationControls();
 }
+// How far Dim pulls the monitor down, in dB (negative). Applied live.
+float nc_monitor_dim_db(NCEngine* engine) {
+    return engine != nullptr ? engine->project.monitorStationDimDb : -20.0f;
+}
+void nc_monitor_set_dim_db(NCEngine* engine, float db) {
+    if (engine == nullptr) return;
+    if (db > 0.0f) db = -db;                 // dim is an attenuation
+    if (db < -80.0f) db = -80.0f;
+    if (engine->project.monitorStationDimDb == db) return;
+    engine->project.monitorStationDimDb = db;
+    engine->pushStationControls();
+}
 
 // Master (false, default) vs the computer's input source (true) for the monitor bus.
 bool nc_monitor_listen_source(NCEngine* engine) {
     return engine != nullptr && engine->monitorListenSource;
 }
 
+static void applyReferenceTapRun(NCEngine* engine);   // defined below
+
 void nc_monitor_set_listen_source(NCEngine* engine, bool on) {
     if (engine == nullptr) return;
     engine->monitorListenSource = on;
     engine->engine.setMonitorListenSource(on);
+    // Re-run the reference-tap policy after the listen source changes. On the FIRST "다른 앱" press
+    // right after launch, arming started the tap while the listen source was still off and the
+    // process-tap / aggregate device isn't fully up yet — so the first press was silent until a
+    // master↔다른앱 toggle re-applied this. Re-confirming the tap here makes the first press work.
+    applyReferenceTapRun(engine);
+}
+
+// Reference-hold: while armed the process tap runs and the tapped apps are muted at their own
+// output, so A/B-ing between the master and the reference never leaks their sound out of the
+// computer. Disarming (on == false) also clears the listening state.
+bool nc_monitor_reference_armed(NCEngine* engine) {
+    return engine != nullptr && engine->monitorReferenceArmed;
+}
+
+// The tap runs (apps muted) if EITHER the "다른 앱" button armed it OR a tap-input track is capturing
+// — so turning one off never stops the tap the other still needs.
+static void applyReferenceTapRun(NCEngine* engine) {
+    engine->engine.setMonitorReferenceArmed(
+        engine->monitorReferenceArmed || engine->tapCaptureActive || engine->tapInputHold);
+}
+
+void nc_monitor_set_reference_armed(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->monitorReferenceArmed = on;
+    if (!on) {
+        engine->monitorListenSource = false;
+        engine->engine.setMonitorListenSource(false);   // leave A/B listening explicitly
+    }
+    applyReferenceTapRun(engine);
+}
+
+// AUDIBLE tap input-monitor: heard on the master only while punched in (Record active), auto-input
+// style — on plain playback you hear the recorded tape, not the live tap. Does NOT run the tap.
+void nc_monitor_set_tap_input_monitor(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->engine.setTapInputMonitor(on);
+}
+
+// A tap-input track's Input-Monitor toggle is on/off: run the tap and hear it continuously (Input
+// mode, as opposed to the auto-input punch above). ORs into the tap-run so the apps stay muted.
+void nc_monitor_set_tap_input_hold(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    engine->tapInputHold = on;
+    engine->engine.setTapInputHold(on);
+    applyReferenceTapRun(engine);
 }
 
 double nc_insert_tail_on_stop_seconds(NCEngine* engine) {
@@ -4534,6 +6166,44 @@ void nc_monitor_set_talkback(NCEngine* engine, bool on) {
     if (engine == nullptr) return;
     engine->project.monitorStationTalkback = on;
     engine->pushStationControls();
+}
+
+// Talkback destination: "monitor_bus" (engineer's speakers), "listen_room" (remote
+// listeners only, dry local monitor — the default), or "all" (both).
+void nc_monitor_talkback_route(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.monitorStationTalkbackRoute : std::string{});
+}
+
+void nc_monitor_set_talkback_route(NCEngine* engine, const char* route) {
+    if (engine == nullptr || route == nullptr) return;
+    std::string value = route;
+    if (value != "monitor_bus" && value != "listen_room" && value != "all") {
+        value = "listen_room";
+    }
+    engine->project.monitorStationTalkbackRoute = value;
+    engine->pushStationControls();
+}
+
+// Talkback mic input channel (1-based): which physical input the talkback mic is on. A talkback
+// mic is mono; the engine captures just this channel and centers it, so a talkback mic on ch2
+// (ch1 = singer) is heard clean on both speakers/listeners and does not pull the singer in.
+int nc_monitor_talkback_channel(NCEngine* engine) {
+    return engine != nullptr ? std::max(1, engine->project.monitorStationTalkbackChannel) : 1;
+}
+void nc_monitor_set_talkback_channel(NCEngine* engine, int oneBased) {
+    if (engine == nullptr) return;
+    engine->project.monitorStationTalkbackChannel = std::max(1, oneBased);
+    engine->engine.setTalkbackInputChannel(engine->project.monitorStationTalkbackChannel);
+}
+
+// Number of physical input channels on the talkback device (native width), for the channel picker.
+int nc_talkback_channel_count(NCEngine* engine) {
+    return engine != nullptr ? std::max(1, engine->engine.selectedInputChannelCount()) : 1;
+}
+// Live decayed peak (0..1) of a physical input channel — lets the picker show which mics are live.
+// Reads 0 when the input queue is idle (no monitoring/talkback/measurement running).
+float nc_talkback_channel_activity(NCEngine* engine, int oneBased) {
+    return engine != nullptr ? engine->engine.inputChannelActivity(std::max(1, oneBased)) : 0.0f;
 }
 
 void nc_monitor_listen_mode(NCEngine* engine, char* out, size_t outLen) {
@@ -4718,6 +6388,12 @@ std::string* speakerOutputFieldForSlot(MonitorDspModule& m, int slot) {
 bool* speakerRoomEqFieldForSlot(MonitorDspModule& m, int slot) {
     return slot == 1 ? &m.speakerRoomEqB : slot == 2 ? &m.speakerRoomEqC : &m.speakerRoomEqA;
 }
+std::string* speakerAmpFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.powerAmpB : slot == 2 ? &m.powerAmpC : &m.powerAmpA;
+}
+std::string* speakerCableFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.speakerCableB : slot == 2 ? &m.speakerCableC : &m.speakerCableA;
+}
 
 // The physical monitor output routes, ported verbatim from the old UI's
 // monitorPhysicalOutputRoutes(). "None" means the modelled/virtual path; the rest send
@@ -4740,20 +6416,20 @@ const std::vector<std::string>& speakerModelCatalog() {
         "Flat",
         "Yamaha NS-10 (NF)", "Yamaha NS-10M (NF)", "Yamaha NS-10M Pro (NF)", "Yamaha NS-10M Studio (NF)", "Yamaha HS3 (NF)", "Yamaha HS4 (NF)", "Yamaha HS5 (NF)", "Yamaha HS7 (NF)", "Yamaha HS8 (NF)", "Yamaha MSP3A (NF)", "Yamaha MSP5 Studio (NF)", "Yamaha MSP7 Studio (NF)",
         "Auratone 5C Sound Cube (NF)", "Avantone Pro MixCube Active (NF)", "Avantone Pro MixCube Passive (NF)", "Avantone Pro CLA-10 Passive (NF)", "Avantone Pro CLA-10 Active (NF)", "Avantone Pro CLA-10A (NF)", "Avantone Pro CLA-10A Limited Edition (NF)", "Avantone Pro Gauss 7 (NF)",
-        "Genelec 8010A (NF)", "Genelec 8020D (NF)", "Genelec 8030C (NF)", "Genelec 8040B (NF)", "Genelec 8050B (NF)", "Genelec 8320A (NF)", "Genelec 8330A (NF)", "Genelec 8331A (NF)", "Genelec 8341A (MF)", "Genelec 8351B (MF)", "Genelec 8361A (MF)", "Genelec S360A (MF)", "Genelec 1030A (NF)", "Genelec 1031A (MF)", "Genelec 1032A (MF)", "Genelec 1037C (LF)", "Genelec 1038C (LF)",
+        "Genelec 8010A (NF)", "Genelec 8020D (NF)", "Genelec 8030C (NF)", "Genelec 8040B (NF)", "Genelec 8050B (NF)", "Genelec 8320A (NF)", "Genelec 8330A (NF)", "Genelec 8331A (NF)", "Genelec 8341A (MF)", "Genelec 8351B (MF)", "Genelec 8361A (MF)", "Genelec S360A (MF)", "Genelec 1030A (NF)", "Genelec 1031A (MF)", "Genelec 1032A (MF)", "Genelec 1037C (LF)", "Genelec 1038C (LF)", "Genelec M040 (NF)",
         "Neumann KH 80 DSP (NF)", "Neumann KH 120 II (NF)", "Neumann KH 150 (NF)", "Neumann KH 310 (MF)", "Neumann KH 420 (MF)",
-        "ADAM T5V (NF)", "ADAM T7V (NF)", "ADAM T8V (NF)", "ADAM A3X (NF)", "ADAM A4V (NF)", "ADAM A44H (NF)", "ADAM A5X (NF)", "ADAM A7V (NF)", "ADAM A7X (NF)", "ADAM A77H (MF)", "ADAM A8H (MF)", "ADAM S2V (NF)", "ADAM S3V (MF)", "ADAM S3H (MF)", "ADAM S5V (LF)", "ADAM S5H (LF)", "ADAM S6X (LF)",
+        "ADAM D3V (NF)", "ADAM T5V (NF)", "ADAM T7V (NF)", "ADAM T8V (NF)", "ADAM A3X (NF)", "ADAM A4V (NF)", "ADAM A44H (NF)", "ADAM A5X (NF)", "ADAM A7V (NF)", "ADAM A7X (NF)", "ADAM A77H (MF)", "ADAM A8H (MF)", "ADAM S2V (NF)", "ADAM S3V (MF)", "ADAM S3H (MF)", "ADAM S5V (LF)", "ADAM S5H (LF)", "ADAM S6X (LF)",
         "Focal Alpha 50 Evo (NF)", "Focal Alpha 65 Evo (NF)", "Focal Alpha Twin Evo (MF)", "Focal Shape 40 (NF)", "Focal Shape 50 (NF)", "Focal Shape 65 (NF)", "Focal Solo6 Be (NF)", "Focal Solo6 ST6 (NF)", "Focal Twin6 Be (MF)", "Focal Twin6 ST6 (MF)", "Focal Trio6 Be (MF)", "Focal Trio6 ST6 (MF)", "Focal Trio11 Be (MF)", "Focal SM9 (MF)", "Focal Grande Utopia EM (LF)",
         "Dynaudio BM5A (NF)", "Dynaudio BM6A (NF)", "Dynaudio BM15A (MF)", "Dynaudio LYD 5 (NF)", "Dynaudio LYD 7 (NF)", "Dynaudio LYD 8 (NF)", "Dynaudio LYD 48 (MF)", "Dynaudio Core 5 (NF)", "Dynaudio Core 7 (NF)", "Dynaudio Core 47 (MF)", "Dynaudio Core 59 (MF)", "Dynaudio M3VE (LF)",
         "KRK 9000B (NF)", "KRK Rokit 5 G4 (NF)", "KRK Rokit 7 G4 (NF)", "KRK Rokit 8 G4 (NF)", "KRK V4 (NF)", "KRK V6 (NF)", "KRK V8 (NF)", "KRK Expose E8B (MF)",
         "JBL 305P MkII (NF)", "JBL 306P MkII (NF)", "JBL 308P MkII (NF)", "JBL 705P (NF)", "JBL 708P (MF)", "JBL 4312 (MF)", "JBL 4329P (MF)", "JBL LSR6328P (MF)", "JBL M2 (LF)",
-        "Mackie HR624 (NF)", "Mackie HR824 (NF)", "PreSonus Eris E5 (NF)", "PreSonus Eris E8 (NF)", "Kali LP-6 (NF)", "Kali LP-8 (NF)", "Kali IN-5 (NF)", "Kali IN-8 (MF)",
+        "Mackie HR624 (NF)", "Mackie HR824 (NF)", "PreSonus Eris E5 (NF)", "PreSonus Eris E5 XT (NF)", "PreSonus Eris E8 (NF)", "Kali LP-6 (NF)", "Kali LP-6v2 (NF)", "Kali LP-8 (NF)", "Kali IN-5 (NF)", "Kali IN-8 (MF)", "Kali LP-UNF (NF)", "Kali SM-5 (NF)",
         "EVE Audio SC205 (NF)", "EVE Audio SC207 (NF)", "EVE Audio SC307 (MF)", "HEDD Type 05 MK2 (NF)", "HEDD Type 07 MK2 (NF)", "HEDD Type 20 MK2 (MF)", "HEDD Type 30 MK2 (MF)",
         "Amphion One12 (NF)", "Amphion One15 (NF)", "Amphion One18 (NF)", "Amphion One25A (MF)", "Amphion Two15 (MF)", "Amphion Two18 (MF)",
         "ATC SCM12 Pro (NF)", "ATC SCM20ASL Pro (NF)", "ATC SCM25A Pro (MF)", "ATC SCM25A (MF)", "ATC SCM45A Pro (MF)", "ATC SCM45A (MF)", "ATC SCM50ASL Pro (MF)", "ATC SCM50A (MF)", "ATC SCM100ASL Pro (LF)", "ATC SCM100A (LF)", "ATC SCM150ASL Pro (LF)",
         "PMC Result6 (NF)", "PMC twotwo.5 (NF)", "PMC twotwo.6 (NF)", "PMC twotwo.8 (MF)", "PMC 6 (NF)", "PMC 6-2 (MF)", "PMC 8-2 (MF)", "PMC IB1S-AIII (MF)", "PMC MB2S XBD (LF)", "PMC BB6 XBD (LF)",
         "Barefoot Footprint01 (MF)", "Barefoot Footprint02 (MF)", "Barefoot Footprint03 (NF)", "Barefoot MicroMain26 (MF)", "Barefoot MicroMain27 (MF)", "Barefoot MicroMain45 (MF)", "Barefoot MiniMain12 (LF)", "Barefoot MasterStack12 (LF)",
-        "Quested S7R (NF)", "Quested V2108 (MF)", "Quested VH3208 (LF)", "Ocean Way HR5 (MF)", "Ocean Way HR4 (MF)", "Ocean Way HR3 (LF)", "Ocean Way HR2 (LF)", "Augspurger Duo 8 (MF)", "Augspurger Duo 12 (LF)", "Augspurger Duo 15 (LF)", "Meyer Sound Amie (MF)", "Meyer Sound Bluehorn (LF)",
+        "Quested S7R (NF)", "Quested V2108 (MF)", "Quested VH3208 (LF)", "Ocean Way HR5 (MF)", "Ocean Way HR4 (MF)", "Ocean Way HR3 (LF)", "Ocean Way HR2 (LF)", "Augspurger Duo 8 (MF)", "Augspurger Duo 12 (LF)", "Augspurger Duo 15 (LF)", "Meyer Sound HD-1 (NF)", "Meyer Sound Amie (MF)", "Meyer Sound Bluehorn (LF)",
         "Kii THREE (MF)", "Dutch & Dutch 8c (MF)", "GGNTKT M1 (MF)", "PSI Audio A17-M (NF)", "PSI Audio A21-M (MF)", "PSI Audio A25-M (MF)", "Manger P1 (MF)", "Unity Audio The Rock MkII (NF)", "Unity Audio Boulder MkIII (MF)",
         "Klein + Hummel O 300 (MF)", "Tannoy Gold 5 (NF)", "Tannoy Gold 8 (NF)", "Tannoy Reveal 502 (NF)", "Tannoy Reveal 802 (NF)", "Tannoy System 600 (NF)", "Tannoy System 800 (MF)", "Tannoy Profile 638 Black Ash Plus (MF)", "Westlake BBSM-10 (MF)", "Westlake BBSM-15 (LF)",
         "Laptop", "Phone Speaker", "Small Bluetooth Speaker", "TV Speaker", "Car Stereo", "Club PA",
@@ -4778,15 +6454,19 @@ namespace {
 // Physical headphone models the user might monitor on, for the 헤드폰 model picker.
 const std::vector<std::string>& headphoneModelCatalog() {
     static const std::vector<std::string> models = {
-        "Flat",
-        "Sennheiser HD 600", "Sennheiser HD 650", "Sennheiser HD 660S", "Sennheiser HD 800S", "Sennheiser HD 25", "Sennheiser HD 280 Pro",
-        "Beyerdynamic DT 770 Pro", "Beyerdynamic DT 880 Pro", "Beyerdynamic DT 990 Pro", "Beyerdynamic DT 1990 Pro",
-        "AKG K240 Studio", "AKG K271 MkII", "AKG K371", "AKG K702", "AKG K712 Pro",
-        "Audio-Technica ATH-M50x", "Audio-Technica ATH-M40x", "Audio-Technica ATH-R70x",
-        "Sony MDR-7506", "Sony MDR-CD900ST", "Sony MDR-M1ST",
-        "Focal Clear Pro", "Focal Listen Pro", "Audeze LCD-X", "Audeze MM-500", "HIFIMAN Sundara", "HIFIMAN Arya",
-        "Shure SRH840A", "Shure SRH1540", "Grado SR325x", "Neumann NDH 20", "Neumann NDH 30", "Slate VSX",
-        "Apple AirPods Pro", "Apple AirPods Max", "Bose QC", "Sony WH-1000XM5", "Earbuds (generic)",
+        "Sennheiser HD 600", "Sennheiser HD 650", "Sennheiser HD 800S", "Sennheiser HD 25", "Sennheiser HD 280 Pro",
+        "Sennheiser HD 560S", "Sennheiser HD 660 S", "Sennheiser HD 660S2", "Sennheiser HD 620S", "Sennheiser HD 800", "Sennheiser HD 820",
+        "Beyerdynamic DT 770 Pro", "Beyerdynamic DT 880 Pro", "Beyerdynamic DT 990 Pro", "Beyerdynamic DT 1990 Pro", "Beyerdynamic DT 700 Pro X", "Beyerdynamic DT 900 Pro X",
+        "AKG K240 Studio", "AKG K271 MkII", "AKG K361", "AKG K371", "AKG K701", "AKG K702", "AKG K712 Pro",
+        "Audio-Technica ATH-M20x", "Audio-Technica ATH-M40x", "Audio-Technica ATH-M50x", "Audio-Technica ATH-M60x", "Audio-Technica ATH-M70x", "Audio-Technica ATH-R70x",
+        "Sony MDR-7506", "Sony MDR-CD900ST", "Sony MDR-MV1",
+        "Focal Listen Pro", "Focal Clear", "Focal Clear Mg", "Focal Utopia",
+        "Audeze LCD-2 Classic", "Audeze LCD-X", "Audeze LCD-XC", "Audeze MM-100", "Audeze MM-500",
+        "HIFIMAN Sundara", "HIFIMAN Ananda", "HIFIMAN Edition XS", "HIFIMAN HE400se",
+        "Shure SRH440", "Shure SRH840A", "Shure SRH1540", "Shure SRH1840",
+        "Austrian Audio Hi-X60", "Dan Clark Audio E3", "Dan Clark Audio Stealth", "Fostex TH900mk2",
+        "Grado SR325x", "Neumann NDH 20", "Neumann NDH 30",
+        "Apple AirPods Max", "Sony WH-1000XM5",
     };
     return models;
 }
@@ -4824,24 +6504,35 @@ void nc_monitor_set_physical_headphone_model(NCEngine* engine, const char* model
 namespace {
 // Power amplifiers driving a passive speaker. "None" is the default (unset).
 const std::vector<std::string>& powerAmpModelCatalog() {
-    static const std::vector<std::string> models = {
-        "None",
-        "Crown D-75A", "Crown D-45", "Crown XLS 1002", "Crown XLS 1502", "Crown XLS 2502", "Crown DC-300A", "Crown Macro-Tech MA-5000i",
-        "Bryston 4B³", "Bryston 2.5B³", "Benchmark AHB2", "Hafler P3000", "Hafler P7000",
-        "Yamaha P2500S", "Yamaha P3500S", "Yamaha PC2001N", "QSC GX5", "QSC RMX 850a",
-        "ATI AT6002", "Rotel RB-1590", "NAD C 268", "Adcom GFA-555", "Hypex NC252MP", "Purifi 1ET400A",
-        "Parasound A21+", "McIntosh MC152", "Marantz PM8006", "generic power amp",
-    };
+    static const std::vector<std::string> models = [] {
+        std::vector<std::string> out;
+        for (const auto& spec : neuracoust::daw::powerAmpCatalogSpecs()) out.emplace_back(spec.name);
+        return out;
+    }();
     return models;
 }
 // Speaker cable between a power amp and a passive speaker.
 const std::vector<std::string>& speakerCableModelCatalog() {
+    static const std::vector<std::string> models = [] {
+        std::vector<std::string> out;
+        for (const auto& spec : neuracoust::daw::speakerCableCatalogSpecs()) out.emplace_back(spec.name);
+        return out;
+    }();
+    return models;
+}
+const std::vector<std::string>& powerCableModelCatalog() {
     static const std::vector<std::string> models = {
-        "None",
-        "Canare 2S9F", "Canare 4S8", "Canare 4S11", "Canare 4S12F",
-        "Mogami 3082", "Mogami 3103", "Belden 5000UE", "Belden 5T00UP", "Belden 9497",
-        "Gotham SPK 2x2.5", "Sommer Cable Meridian SP240", "Van Damme Blue Series 2x2.5",
-        "Monster Cable XP", "Kimber Kable 8TC", "AudioQuest Rocket 33", "generic 2.5mm² speaker cable",
+        "None", "Standard IEC C13 18 AWG", "Standard IEC C13 14 AWG",
+        "Shielded IEC C13 14 AWG", "Neutrik powerCON TRUE1 TOP lead",
+        "Furutech IEC power cord", "Oyaide IEC power cord",
+    };
+    return models;
+}
+const std::vector<std::string>& connectorModelCatalog() {
+    static const std::vector<std::string> models = {
+        "None", "IEC 60320 C13/C14", "IEC 60320 C19/C20", "Neutrik powerCON TRUE1 TOP",
+        "Neutrik speakON NL4", "5-way binding post", "1/4 inch TS speaker plug",
+        "Furutech IEC connector", "Oyaide IEC connector",
     };
     return models;
 }
@@ -4903,6 +6594,16 @@ void nc_speaker_cable_model_name(int index, char* out, size_t outLen) {
     const auto& c = speakerCableModelCatalog();
     copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
 }
+int nc_power_cable_model_count() { return static_cast<int>(powerCableModelCatalog().size()); }
+void nc_power_cable_model_name(int index, char* out, size_t outLen) {
+    const auto& c = powerCableModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+int nc_connector_model_count() { return static_cast<int>(connectorModelCatalog().size()); }
+void nc_connector_model_name(int index, char* out, size_t outLen) {
+    const auto& c = connectorModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
 
 int nc_measurement_mic_model_count() { return static_cast<int>(measurementMicCatalog().size()); }
 void nc_measurement_mic_model_name(int index, char* out, size_t outLen) {
@@ -4942,6 +6643,73 @@ void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* m
     if (engine->project.physicalSpeakerCableModel == model) return;
     engine->project.physicalSpeakerCableModel = model;
     engine->recordStep("Set speaker cable");
+}
+void nc_monitor_physical_power_cable_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalPowerCableModel : std::string{});
+}
+void nc_monitor_set_physical_power_cable_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr || engine->project.physicalPowerCableModel == model) return;
+    engine->project.physicalPowerCableModel = model;
+    engine->recordStep("Set power cable");
+}
+void nc_monitor_physical_connector_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalConnectorModel : std::string{});
+}
+void nc_monitor_set_physical_connector_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr || engine->project.physicalConnectorModel == model) return;
+    engine->project.physicalConnectorModel = model;
+    engine->recordStep("Set connector");
+}
+
+// Audio-interface D/A output-stage model — catalog + measurement status only (no audio effect yet).
+int nc_audio_interface_model_count() { return static_cast<int>(neuracoust::daw::audioInterfaceModelCatalog().size()); }
+void nc_audio_interface_model_name(int index, char* out, size_t outLen) {
+    const auto& c = neuracoust::daw::audioInterfaceModelCatalog();
+    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < c.size()) ? c[static_cast<size_t>(index)] : std::string{});
+}
+bool nc_audio_interface_model_measured(const char* name) {
+    return name != nullptr && neuracoust::daw::audioInterfaceModelMeasured(name);
+}
+void nc_monitor_physical_audio_interface_model(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalAudioInterfaceModel : std::string{});
+}
+void nc_monitor_set_physical_audio_interface_model(NCEngine* engine, const char* model) {
+    if (engine == nullptr || model == nullptr) return;
+    if (engine->project.physicalAudioInterfaceModel == model) return;
+    engine->project.physicalAudioInterfaceModel = model;
+    engine->pushInterfaceModeler();
+    engine->recordStep("Set audio interface output-stage model");
+}
+void nc_monitor_physical_audio_interface_target(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.physicalAudioInterfaceTargetModel : std::string{});
+}
+void nc_monitor_set_physical_audio_interface_target(NCEngine* engine, const char* model) {
+    if (engine == nullptr) return;
+    const std::string next = model != nullptr ? model : "";
+    if (engine->project.physicalAudioInterfaceTargetModel == next) return;
+    engine->project.physicalAudioInterfaceTargetModel = next;
+    engine->pushInterfaceModeler();
+    engine->recordStep("Set audio interface simulate-as target");
+}
+// Optional 2단계 harmonic modeling toggle.
+bool nc_monitor_interface_modeling_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->project.monitorInterfaceModelingEnabled;
+}
+void nc_monitor_set_interface_modeling_enabled(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->project.monitorInterfaceModelingEnabled == enabled) return;
+    engine->project.monitorInterfaceModelingEnabled = enabled;
+    engine->pushInterfaceModeler();
+    engine->recordStep(enabled ? "Enable interface harmonic modeling" : "Disable interface harmonic modeling");
+}
+// Whether the A->B "render as another interface" transform actually touches audio. TRUE when the
+// modeling TARGET has a measured FR profile — its coloration is then applied (+) on top of the
+// output-stage compensation. Summary specs / the "measured" badge never qualify (that would be
+// fabricated DSP, forbidden by claude_handoff.md #2/#5); only a bundled measured curve does.
+bool nc_audio_interface_transform_active(NCEngine* engine) {
+    if (engine == nullptr) return false;
+    // Live measurement OR baked profile on the target both make the A→B transform real.
+    return !engine->project.physicalAudioInterfaceTargetModel.empty()
+        && !engine->interfaceCurveFor(engine->project.physicalAudioInterfaceTargetModel).empty();
 }
 
 // --- Monitor parametric EQ (0–64 bands, added on demand; monitor path only) ---
@@ -5054,8 +6822,88 @@ bool nc_measure_start(NCEngine* engine, int channel) {
     const auto p = measurementSweepParams(engine->engine.status().sampleRate);
     auto sweep = neuracoust::daw::generateLogSweep(p);
     sweep.resize(sweep.size() + static_cast<size_t>(p.sampleRate * 0.7), 0.0f);  // room-decay tail
+    engine->engine.setMeasurementChannels(-1, 0);   // room: emit via the monitor route, capture ch 1
     engine->engine.startMeasurement(channel == 1 ? 1 : 0, std::move(sweep));
     return true;
+}
+
+// Interface loopback: pin the sweep to the chosen physical DAC channel and capture the chosen ADC
+// channel (both 1-based in the UI), so DigiGrid out 3 → in 3 works without moving the monitor.
+bool nc_measure_interface_start(NCEngine* engine) {
+    if (engine == nullptr) return false;
+    auto p = measurementSweepParams(engine->engine.status().sampleRate);
+    p.amplitude = std::max(0.001, std::min(0.99, engine->measureSweepAmplitude));   // auto-scaled level
+    auto sweep = neuracoust::daw::generateLogSweep(p);
+    sweep.resize(sweep.size() + static_cast<size_t>(p.sampleRate * 0.3), 0.0f);   // short settle tail
+    engine->engine.setMeasurementChannels(std::max(1, engine->measureOutputChannel) - 1,
+                                          std::max(1, engine->measureInputChannel) - 1);
+    engine->engine.startMeasurement(0, std::move(sweep));   // sweep on the bus' ch 0 → redirected to measOut
+    return true;
+}
+
+void nc_measure_set_sweep_amplitude(NCEngine* engine, double amplitude) {
+    if (engine != nullptr) engine->measureSweepAmplitude = std::max(0.001, std::min(0.99, amplitude));
+}
+
+// Multi-level auto run (A단계): reset the accumulator, record each finished sweep at its return
+// level, and read back the THD-vs-level table for the display.
+void nc_measure_interface_reset_levels(NCEngine* engine) {
+    if (engine != nullptr) engine->pendingLevels.clear();
+}
+void nc_measure_interface_record_level(NCEngine* engine, double returnDbfs) {
+    if (engine == nullptr || !engine->pendingInterfaceValid) return;
+    engine->pendingLevels.push_back({returnDbfs, engine->pendingInterfaceProfile});
+}
+int nc_measure_interface_level_count(NCEngine* engine) {
+    if (engine == nullptr) return 0;
+    if (!engine->pendingLevels.empty()) return static_cast<int>(engine->pendingLevels.size());
+    const auto it = engine->measuredInterfaces.find(engine->project.physicalAudioInterfaceModel);
+    return it != engine->measuredInterfaces.end() ? static_cast<int>(it->second.thdVsLevel.size()) : 0;
+}
+double nc_measure_interface_level_dbfs(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0) return 0.0;
+    if (index < static_cast<int>(engine->pendingLevels.size())) return engine->pendingLevels[static_cast<size_t>(index)].dbfs;
+    const auto it = engine->measuredInterfaces.find(engine->project.physicalAudioInterfaceModel);
+    if (it != engine->measuredInterfaces.end() && index < static_cast<int>(it->second.thdVsLevel.size()))
+        return it->second.thdVsLevel[static_cast<size_t>(index)].first;
+    return 0.0;
+}
+double nc_measure_interface_level_thd(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0) return 0.0;
+    if (index < static_cast<int>(engine->pendingLevels.size())) return engine->pendingLevels[static_cast<size_t>(index)].prof.thdPercent;
+    const auto it = engine->measuredInterfaces.find(engine->project.physicalAudioInterfaceModel);
+    if (it != engine->measuredInterfaces.end() && index < static_cast<int>(it->second.thdVsLevel.size()))
+        return it->second.thdVsLevel[static_cast<size_t>(index)].second;
+    return 0.0;
+}
+
+// Live gain-setup meter: force the chosen input channel to capture and report its peak so the
+// user can set loopback gain (avoid ADC clipping) before running the sweep.
+void nc_measure_level_check(NCEngine* engine, bool on) {
+    if (engine == nullptr) return;
+    if (on) {
+        engine->engine.setMeasurementChannels(std::max(1, engine->measureOutputChannel) - 1,
+                                              std::max(1, engine->measureInputChannel) - 1);
+    }
+    engine->engine.setMeasurementLevelCheck(on);
+}
+float nc_measure_input_level(NCEngine* engine) {   // linear peak, 0..1
+    return engine != nullptr ? engine->engine.measurementInputPeak() : 0.0f;
+}
+
+void nc_measure_set_output_channel(NCEngine* engine, int oneBased) {
+    if (engine != nullptr) engine->measureOutputChannel = std::max(1, oneBased);
+}
+void nc_measure_set_input_channel(NCEngine* engine, int oneBased) {
+    if (engine != nullptr) engine->measureInputChannel = std::max(1, oneBased);
+}
+int nc_measure_output_channel(NCEngine* engine) { return engine != nullptr ? engine->measureOutputChannel : 1; }
+int nc_measure_input_channel(NCEngine* engine) { return engine != nullptr ? engine->measureInputChannel : 1; }
+int nc_measure_output_channel_count(NCEngine* engine) {
+    return engine != nullptr ? std::max(2, engine->engine.status().outputChannels) : 2;
+}
+int nc_measure_input_channel_count(NCEngine* engine) {
+    return engine != nullptr ? std::max(1, engine->engine.selectedInputChannelCount()) : 1;
 }
 
 bool nc_measure_active(NCEngine* engine) { return engine != nullptr && engine->engine.measurementActive(); }
@@ -5100,6 +6948,250 @@ void nc_measure_curve_response(NCEngine* engine, int channel, double* out, int c
     }
 }
 
+// --- Audio-interface loopback measurement (②d) --------------------------------------------
+// Patch the interface's DAC output back to its ADC input, sweep, and one ESS capture gives BOTH
+// the D/A frequency response (→ FIR compensation) and the harmonic coefficients (→ waveshaper).
+// Real measurement overrides the offline baked profile; persisted per-model so it lasts.
+namespace {
+
+std::filesystem::path measuredInterfaceDir() {
+    const char* home = std::getenv("HOME");
+    return std::filesystem::path(home ? home : ".") / ".neuracoust" / "measured_interfaces";
+}
+
+// A model name maps to a filesystem-safe stem (keep it readable, replace path-hostile chars).
+std::string interfaceFileStem(const std::string& name) {
+    std::string s;
+    s.reserve(name.size());
+    for (char c : name) {
+        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') ? c : '_';
+    }
+    return s.empty() ? "interface" : s;
+}
+
+// Self-contained JSON bits — the file-local parse helpers in ProjectDocument.cpp are not
+// visible here, and the schema we read is the flat one we write just below.
+std::string ifaceJsonEscape(const std::string& s) {
+    std::string o;
+    for (char c : s) { if (c == '"' || c == '\\') o += '\\'; o += c; }
+    return o;
+}
+std::string ifaceJsonString(const std::string& text, const std::string& key) {
+    const auto k = text.find("\"" + key + "\"");
+    if (k == std::string::npos) return {};
+    const auto q1 = text.find('"', text.find(':', k));
+    if (q1 == std::string::npos) return {};
+    const auto q2 = text.find('"', q1 + 1);
+    return q2 == std::string::npos ? std::string{} : text.substr(q1 + 1, q2 - q1 - 1);
+}
+double ifaceJsonNumber(const std::string& text, const std::string& key, double def) {
+    const auto k = text.find("\"" + key + "\"");
+    if (k == std::string::npos) return def;
+    const auto colon = text.find(':', k);
+    if (colon == std::string::npos) return def;
+    try { return std::stod(text.substr(colon + 1)); } catch (...) { return def; }
+}
+
+void saveMeasuredInterface(const std::string& name, const NCEngine::MeasuredInterfaceProfile& prof) {
+    std::error_code ec;
+    std::filesystem::create_directories(measuredInterfaceDir(), ec);
+    std::ofstream f(measuredInterfaceDir() / (interfaceFileStem(name) + ".json"));
+    if (!f) return;
+    f << "{\n  \"name\": \"" << ifaceJsonEscape(name) << "\",\n";
+    f << "  \"thdPercent\": " << prof.thdPercent << ",\n";
+    f << "  \"harmonics\": [";
+    for (size_t i = 0; i < prof.harmonics.size(); ++i) f << (i ? ", " : "") << prof.harmonics[i];
+    f << "],\n  \"thdVsLevel\": [";
+    for (size_t i = 0; i < prof.thdVsLevel.size(); ++i)
+        f << (i ? ", " : "") << "[" << prof.thdVsLevel[i].first << ", " << prof.thdVsLevel[i].second << "]";
+    f << "],\n  \"curve\": [";
+    for (size_t i = 0; i < prof.curve.size(); ++i)
+        f << (i ? ", " : "") << "[" << prof.curve[i].first << ", " << prof.curve[i].second << "]";
+    f << "]\n}\n";
+}
+
+void loadMeasuredInterfaces(NCEngine* engine) {
+    std::error_code ec;
+    const auto dir = measuredInterfaceDir();
+    if (!std::filesystem::exists(dir, ec)) return;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec || entry.path().extension() != ".json") continue;
+        std::ifstream f(entry.path());
+        if (!f) continue;
+        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        const std::string name = ifaceJsonString(text, "name");
+        if (name.empty()) continue;
+        NCEngine::MeasuredInterfaceProfile prof;
+        prof.thdPercent = ifaceJsonNumber(text, "thdPercent", 0.0);
+        // harmonics: the first flat array in the file
+        if (const auto hpos = text.find("\"harmonics\""); hpos != std::string::npos) {
+            const auto lb = text.find('[', hpos), rb = text.find(']', lb);
+            if (lb != std::string::npos && rb != std::string::npos && rb > lb) {
+                std::stringstream ss(text.substr(lb + 1, rb - lb - 1));
+                std::string tok;
+                while (std::getline(ss, tok, ',')) { try { prof.harmonics.push_back(std::stod(tok)); } catch (...) {} }
+            }
+        }
+        // Parse an "key": [[a, b], …] array-of-pairs by matching the outer brackets.
+        auto parsePairs = [&text](const std::string& key) {
+            std::vector<std::pair<double, double>> out;
+            const auto kpos = text.find("\"" + key + "\"");
+            if (kpos == std::string::npos) return out;
+            const auto outerOpen = text.find('[', kpos);
+            if (outerOpen == std::string::npos) return out;
+            std::size_t outerClose = std::string::npos, depth = 0;
+            for (std::size_t i = outerOpen; i < text.size(); ++i) {
+                if (text[i] == '[') ++depth;
+                else if (text[i] == ']') { if (--depth == 0) { outerClose = i; break; } }
+            }
+            std::size_t inner = text.find('[', outerOpen + 1);
+            while (inner != std::string::npos && inner < outerClose) {
+                const auto close = text.find(']', inner);
+                if (close == std::string::npos || close > outerClose) break;
+                const std::string pair = text.substr(inner + 1, close - inner - 1);
+                const auto comma = pair.find(',');
+                if (comma != std::string::npos) {
+                    try { out.push_back({std::stod(pair.substr(0, comma)), std::stod(pair.substr(comma + 1))}); }
+                    catch (...) {}
+                }
+                inner = text.find('[', close + 1);
+            }
+            return out;
+        };
+        prof.curve = parsePairs("curve");
+        prof.thdVsLevel = parsePairs("thdVsLevel");
+        if (!prof.harmonics.empty() || !prof.curve.empty()) engine->measuredInterfaces[name] = std::move(prof);
+    }
+}
+
+} // namespace
+
+bool nc_measure_interface_finish(NCEngine* engine) {
+    if (engine == nullptr) return false;
+    const std::string name = engine->project.physicalAudioInterfaceModel;
+    if (name.empty()) return false;   // nothing to attribute the measurement to
+    const auto capture = engine->engine.takeMeasurementCapture();
+    const auto p = measurementSweepParams(engine->engine.status().sampleRate);
+    if (capture.size() < static_cast<size_t>(p.sampleRate * 0.5)) return false;
+
+    // FR curve (midband-normalized deviation from flat), same as the room path.
+    const auto ir = neuracoust::daw::deconvolveSweep(capture, p);
+    const int pts = 200;
+    const auto mags = neuracoust::daw::impulseResponseMagnitudeDb(ir, p.sampleRate, pts, 20.0, 20000.0);
+    neuracoust::daw::ResponseCurve curve;
+    const double lo = 20.0, hi = 20000.0, ratio = std::log(hi / lo);
+    for (int i = 0; i < pts; ++i) {
+        curve.push_back({lo * std::exp(ratio * (pts > 1 ? static_cast<double>(i) / (pts - 1) : 0.0)),
+                         static_cast<double>(mags[static_cast<size_t>(i)])});
+    }
+    curve = neuracoust::daw::normalizeCurveMidband(curve);
+
+    // Harmonics from the SAME capture — the Farina separation.
+    const auto harm = neuracoust::daw::separateHarmonics(capture, p, 7);
+
+    NCEngine::MeasuredInterfaceProfile prof;
+    prof.curve = std::move(curve);
+    if (harm.valid) { prof.harmonics = harm.coefficients; prof.thdPercent = harm.thdPercent; }
+
+    // Hold as PENDING for the user to review (quality verdict) and confirm — do NOT save/apply yet,
+    // so a clipped or too-low capture cannot silently overwrite a good profile.
+    engine->pendingInterfaceProfile = std::move(prof);
+    engine->pendingInterfaceName = name;
+    engine->pendingInterfacePeak = engine->engine.measurementSweepPeak();
+    engine->pendingInterfaceValid = true;
+    return true;
+}
+
+// Review data for the pending measurement (for the quality verdict).
+bool nc_measure_interface_pending(NCEngine* engine) { return engine != nullptr && engine->pendingInterfaceValid; }
+double nc_measure_interface_pending_thd(NCEngine* engine) {
+    return engine != nullptr && engine->pendingInterfaceValid ? engine->pendingInterfaceProfile.thdPercent : 0.0;
+}
+float nc_measure_interface_pending_peak(NCEngine* engine) {   // sweep peak, 0..1 (>=~0.99 = clipped)
+    return engine != nullptr ? engine->pendingInterfacePeak : 0.0f;
+}
+void nc_measure_interface_pending_name(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->pendingInterfaceName : std::string{});
+}
+
+// User accepted the measurement: commit it (store + persist + apply). A multi-level run builds the
+// profile from its accumulator — FR + harmonics from the loudest clean level (best SNR), plus the
+// full THD-vs-level table; a single-shot run uses the pending profile as-is.
+void nc_measure_interface_commit(NCEngine* engine) {
+    if (engine == nullptr) return;
+    NCEngine::MeasuredInterfaceProfile profile;
+    std::string name = engine->pendingInterfaceName;
+    if (!engine->pendingLevels.empty()) {
+        // Representative = loudest level that did not clip (dbfs < -0.5); fallback to the loudest.
+        int rep = 0;
+        double bestDb = -1e9;
+        for (int i = 0; i < static_cast<int>(engine->pendingLevels.size()); ++i) {
+            const double d = engine->pendingLevels[static_cast<size_t>(i)].dbfs;
+            if (d < -0.5 && d > bestDb) { bestDb = d; rep = i; }
+        }
+        profile = engine->pendingLevels[static_cast<size_t>(rep)].prof;
+        profile.thdVsLevel.clear();
+        for (const auto& lp : engine->pendingLevels) profile.thdVsLevel.push_back({lp.dbfs, lp.prof.thdPercent});
+    } else if (engine->pendingInterfaceValid) {
+        profile = engine->pendingInterfaceProfile;
+    } else {
+        return;
+    }
+    if (name.empty()) name = engine->project.physicalAudioInterfaceModel;
+    if (name.empty()) return;
+    engine->measuredInterfaces[name] = profile;
+    saveMeasuredInterface(name, profile);
+    engine->pendingInterfaceValid = false;
+    engine->pendingLevels.clear();
+    engine->pushInterfaceModeler();  // EQ re-sync (interface FR) is driven from Swift via nc_monitor_eq_sync
+}
+
+void nc_measure_interface_discard(NCEngine* engine) {
+    if (engine != nullptr) { engine->pendingInterfaceValid = false; engine->pendingLevels.clear(); }
+}
+
+bool nc_measure_interface_has_profile(NCEngine* engine, const char* name) {
+    if (engine == nullptr || name == nullptr) return false;
+    const auto it = engine->measuredInterfaces.find(name);
+    return it != engine->measuredInterfaces.end() && (!it->second.curve.empty() || !it->second.harmonics.empty());
+}
+
+double nc_measure_interface_thd(NCEngine* engine, const char* name) {
+    if (engine == nullptr || name == nullptr) return 0.0;
+    const auto it = engine->measuredInterfaces.find(name);
+    return it != engine->measuredInterfaces.end() ? it->second.thdPercent : 0.0;
+}
+
+void nc_measure_interface_harmonics(NCEngine* engine, const char* name, double* out, int count) {
+    for (int i = 0; i < count; ++i) out[i] = 0.0;
+    if (engine == nullptr || name == nullptr || out == nullptr) return;
+    const auto it = engine->measuredInterfaces.find(name);
+    if (it == engine->measuredInterfaces.end()) return;
+    const auto& h = it->second.harmonics;
+    for (int i = 0; i < count && i < static_cast<int>(h.size()); ++i) out[i] = h[i];
+}
+
+void nc_measure_interface_curve_response(NCEngine* engine, const char* name, double* out, int count,
+                                         double minHz, double maxHz) {
+    for (int i = 0; i < count; ++i) out[i] = 0.0;
+    if (engine == nullptr || name == nullptr || out == nullptr || count <= 0) return;
+    const auto it = engine->measuredInterfaces.find(name);
+    if (it == engine->measuredInterfaces.end() || it->second.curve.empty()) return;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz), ratio = std::log(hi / lo);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
+        out[i] = neuracoust::daw::interpolateCurveDb(it->second.curve, f);
+    }
+}
+
+void nc_measure_interface_clear(NCEngine* engine, const char* name) {
+    if (engine == nullptr || name == nullptr) return;
+    engine->measuredInterfaces.erase(name);
+    std::error_code ec;
+    std::filesystem::remove(measuredInterfaceDir() / (interfaceFileStem(name) + ".json"), ec);
+    engine->pushInterfaceModeler();  // EQ re-sync (interface FR) is driven from Swift via nc_monitor_eq_sync
+}
+
 int nc_virtual_monitor_count(NCEngine*) {
     return static_cast<int>(virtualMonitorNames().size());
 }
@@ -5108,6 +7200,52 @@ void nc_virtual_monitor_name(NCEngine*, int index, char* out, size_t outLen) {
     const auto& names = virtualMonitorNames();
     if (index < 0 || static_cast<size_t>(index) >= names.size()) { copyText(out, outLen, ""); return; }
     copyText(out, outLen, names[static_cast<size_t>(index)]);
+}
+
+// Headphone models that carry a measured curve (the headphone equivalent of virtual monitors).
+namespace {
+std::vector<std::string>& headphoneProfileNames() {
+    static std::vector<std::string> names = neuracoust::daw::headphoneProfilesWithCurve();
+    return names;
+}
+}
+int nc_headphone_profile_count(NCEngine*) {
+    return static_cast<int>(headphoneProfileNames().size());
+}
+void nc_headphone_profile_name(NCEngine*, int index, char* out, size_t outLen) {
+    const auto& names = headphoneProfileNames();
+    if (index < 0 || static_cast<size_t>(index) >= names.size()) { copyText(out, outLen, ""); return; }
+    copyText(out, outLen, names[static_cast<size_t>(index)]);
+}
+// A headphone model's measured curve sampled on a log grid (for the UI overlay). False if unmeasured.
+bool nc_headphone_profile_response(NCEngine*, const char* name, double* outMagsDb, int count,
+                                   double minHz, double maxHz) {
+    if (outMagsDb == nullptr || count <= 0) return false;
+    for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
+    if (name == nullptr) return false;
+    const auto curve = neuracoust::daw::headphoneProfileCurve(name);
+    if (curve.empty()) return false;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::pow(hi / lo, count > 1 ? static_cast<double>(i) / (count - 1) : 0.0);
+        outMagsDb[i] = neuracoust::daw::interpolateCurveDb(curve, f);
+    }
+    return true;
+}
+// The measured D/A FR of an audio-interface model (for the response window overlay).
+bool nc_audio_interface_profile_response(NCEngine*, const char* name, double* outMagsDb, int count,
+                                         double minHz, double maxHz) {
+    if (outMagsDb == nullptr || count <= 0) return false;
+    for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
+    if (name == nullptr) return false;
+    const auto curve = neuracoust::daw::audioInterfaceProfileCurve(name);
+    if (curve.empty()) return false;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::pow(hi / lo, count > 1 ? static_cast<double>(i) / (count - 1) : 0.0);
+        outMagsDb[i] = neuracoust::daw::interpolateCurveDb(curve, f);
+    }
+    return true;
 }
 
 namespace {
@@ -5143,7 +7281,7 @@ bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogNa
     if (curve.empty()) return false;
     // The dataset curve is already midband-normalized, i.e. the speaker's deviation from flat —
     // impose it directly to take on its character. 48 bands; boost limited more than cut.
-    const auto bands = neuracoust::daw::fitCurveToEqBands(curve, 48, 20.0, 20000.0, 9.0, 15.0);
+    const auto bands = neuracoust::daw::fitCurveToEqBands(curve, 64, 20.0, 20000.0, 9.0, 15.0);
     loadEqBandsIntoMonitorEq(engine, bands, std::string("Virtual monitor: ") + catalogName);
     return true;
 }
@@ -5159,29 +7297,232 @@ bool nc_monitor_eq_apply_room_correction(NCEngine* engine, int channel) {
     for (const auto& [f, db] : measured) {
         correction.push_back({f, neuracoust::daw::harmanTargetDb(f) - db});
     }
-    const auto bands = neuracoust::daw::fitCurveToEqBands(correction, 48, 20.0, 20000.0, 9.0, 12.0);
+    const auto bands = neuracoust::daw::fitCurveToEqBands(correction, 64, 20.0, 20000.0, 9.0, 12.0);
     loadEqBandsIntoMonitorEq(engine, bands, channel == 1 ? "Room correction (R)" : "Room correction (L)");
     return true;
 }
 
-// Log-spaced magnitude response (dB) across [minHz, maxHz] for the UI curve.
+// The single monitor EQ, rebuilt from the active monitoring context (the "one EQ, values swap"
+// design): impose the selected speaker/headphone MODEL's measured curve, plus the room-tuning
+// correction when one was measured, as one fitted 48-band set. Empty model + no room = flat.
+// Records NO history — it is derived state, re-run on every context change, not a user edit.
+namespace {
+// Heuristic (name-based) tone for a passive speaker's power amp and cable — the same honest
+// approximation the speaker sim uses, applied only until a real measurement exists. Deliberately
+// small and physically motivated: modern solid-state amps and decent cables are essentially flat.
+std::string lowerOf(const std::string& s) {
+    std::string o; for (char c : s) o += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return o;
+}
+neuracoust::daw::ResponseCurve powerAmpToneCurve(const std::string& name) {
+    return neuracoust::daw::powerAmpCatalogToneCurve(name);
+}
+neuracoust::daw::ResponseCurve speakerCableToneCurve(const std::string& name) {
+    return neuracoust::daw::speakerCableCatalogToneCurve(name);
+}
+}  // namespace
+
+// Whether the passive speaker's amp / cable heuristic actually colours the sound (non-flat).
+bool nc_power_amp_tone_active(NCEngine* engine) {
+    if (engine == nullptr || engine->project.physicalSpeakerModel.empty() ||
+        !speakerModelIsPassive(engine->project.physicalSpeakerModel)) return false;
+    return !powerAmpToneCurve(engine->project.physicalPowerAmpModel).empty();
+}
+bool nc_speaker_cable_tone_active(NCEngine* engine) {
+    if (engine == nullptr || engine->project.physicalSpeakerModel.empty() ||
+        !speakerModelIsPassive(engine->project.physicalSpeakerModel)) return false;
+    return !speakerCableToneCurve(engine->project.physicalSpeakerCableModel).empty();
+}
+
+void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* correctionHeadphone, bool applyRoom) {
+    if (engine == nullptr) return;
+    // Two terms into the one EQ:
+    //  • slotModel — the active A/B/C target to SIMULATE (+): a speaker profile, or a headphone
+    //    profile (referenced to the OE target when enabled). This is what you want to hear.
+    //  • correctionHeadphone — the PHYSICAL headphone you are wearing, CORRECTED toward neutral (−),
+    //    so it reproduces the target instead of colouring it. Empty in speaker mode.
+    neuracoust::daw::ResponseCurve slot;
+    bool slotIsHeadphone = false;
+    if (slotModel != nullptr && slotModel[0] != '\0') {
+        slot = neuracoust::daw::speakerProfileCurve(slotModel);
+        if (slot.empty()) { slot = neuracoust::daw::headphoneProfileCurve(slotModel); slotIsHeadphone = !slot.empty(); }
+    }
+    if (slotIsHeadphone && engine->monitorEqHeadphoneOeTarget) {
+        for (auto& [f, db] : slot) db -= neuracoust::daw::harmanHeadphoneOeTargetDb(f);
+    }
+    neuracoust::daw::ResponseCurve correction;
+    if (correctionHeadphone != nullptr && correctionHeadphone[0] != '\0') {
+        correction = neuracoust::daw::headphoneProfileCurve(correctionHeadphone);
+    }
+    const bool oe = engine->monitorEqHeadphoneOeTarget;
+    // The physical output-stage interface's measured D/A FR is COMPENSATED (−) so monitoring is
+    // flattened for that converter — the real-measurement half of the interface modeler.
+    neuracoust::daw::ResponseCurve interfaceFr;
+    if (!engine->project.physicalAudioInterfaceModel.empty()) {
+        interfaceFr = engine->interfaceCurveFor(engine->project.physicalAudioInterfaceModel);
+    }
+    // A→B modeling: after flattening your own interface (−), COLOR the output with the target
+    // interface's measured FR (+) so it sounds like you're monitoring through that converter.
+    neuracoust::daw::ResponseCurve interfaceTargetFr;
+    if (!engine->project.physicalAudioInterfaceTargetModel.empty()) {
+        interfaceTargetFr = engine->interfaceCurveFor(engine->project.physicalAudioInterfaceTargetModel);
+    }
+    // Room correction for the single stereo EQ. Uses the L/R AVERAGE when both channels are measured
+    // (Codex #4) — a single EQ can't correct the two channels independently, so applying L's curve to
+    // both was wrong for an asymmetric room; the average is the least-wrong shared correction. True
+    // per-channel room correction needs a per-channel EQ (structural, not built).
+    neuracoust::daw::ResponseCurve room;
+    if (applyRoom) {
+        room = neuracoust::daw::roomCorrectionCurve(engine->measuredCurveL, engine->measuredCurveR);
+    }
+    // Passive speaker → its power amp and cable colour the output too (name heuristic, honest,
+    // until measured). Only when the physical speaker is passive; active monitors have no amp/cable.
+    neuracoust::daw::ResponseCurve ampCurve, cableCurve;
+    if (!engine->project.physicalSpeakerModel.empty() &&
+        speakerModelIsPassive(engine->project.physicalSpeakerModel)) {
+        ampCurve = powerAmpToneCurve(engine->project.physicalPowerAmpModel);
+        cableCurve = speakerCableToneCurve(engine->project.physicalSpeakerCableModel);
+    }
+    // The MODELING speaker (active A/B/C slot): if the modeled speaker is passive, its own amp and
+    // cable colour the simulation too — the same per-slot heuristic as the physical chain.
+    neuracoust::daw::ResponseCurve slotAmpCurve, slotCableCurve;
+    if (slotModel != nullptr && *slotModel != '\0' && speakerModelIsPassive(slotModel)) {
+        if (MonitorDspModule* sim = engine->speakerSimulation()) {
+            const int as = std::max(0, std::min(2, sim->activeTargetSlot));
+            slotAmpCurve = powerAmpToneCurve(*speakerAmpFieldForSlot(*sim, as));
+            slotCableCurve = speakerCableToneCurve(*speakerCableFieldForSlot(*sim, as));
+        }
+    }
+    // Combine slot (+) + physical-headphone correction (target − worn) + room on a shared log grid.
+    neuracoust::daw::ResponseCurve combined;
+    if (!slot.empty() || !correction.empty() || !room.empty() || !interfaceFr.empty() ||
+        !interfaceTargetFr.empty() || !ampCurve.empty() || !cableCurve.empty() ||
+        !slotAmpCurve.empty() || !slotCableCurve.empty()) {
+        const int points = 96;
+        for (int i = 0; i < points; ++i) {
+            const double f = 20.0 * std::pow(1000.0, static_cast<double>(i) / (points - 1));
+            double db = 0.0;
+            if (!slot.empty()) db += neuracoust::daw::interpolateCurveDb(slot, f);
+            if (!correction.empty()) db += (oe ? neuracoust::daw::harmanHeadphoneOeTargetDb(f) : 0.0)
+                                          - neuracoust::daw::interpolateCurveDb(correction, f);
+            if (!room.empty()) db += neuracoust::daw::interpolateCurveDb(room, f);
+            if (!interfaceFr.empty()) db -= neuracoust::daw::interpolateCurveDb(interfaceFr, f);         // flatten own D/A
+            if (!interfaceTargetFr.empty()) db += neuracoust::daw::interpolateCurveDb(interfaceTargetFr, f); // colour as target
+            if (!ampCurve.empty()) db += neuracoust::daw::interpolateCurveDb(ampCurve, f);              // power amp voicing
+            if (!cableCurve.empty()) db += neuracoust::daw::interpolateCurveDb(cableCurve, f);          // cable HF loss
+            if (!slotAmpCurve.empty()) db += neuracoust::daw::interpolateCurveDb(slotAmpCurve, f);      // modeled speaker's amp
+            if (!slotCableCurve.empty()) db += neuracoust::daw::interpolateCurveDb(slotCableCurve, f);  // modeled speaker's cable
+            combined.push_back({f, db});
+        }
+    }
+
+    // Perceptual level match (not peak normalization). A monitor SIMULATION shapes tone; ON vs OFF
+    // must sit at the same PERCEIVED level or the modelled path reads as quieter and "darker". The
+    // old code shifted the whole curve down by its PEAK, so a +6 dB presence bump dropped everything
+    // else by 6 dB — the exact dark/dull A-B mismatch. Instead pivot around the 300 Hz–3 kHz mean
+    // (where loudness lives): the midband sits at 0 dB, presence/air bumps stay as real boosts (fair
+    // A-B), and the residual boost is caught by the safety soft-clip AFTER the monitor EQ
+    // (monitorSafetySoftClip in the render), NOT by pre-darkening the tone here.
+    if (!combined.empty()) {
+        combined = neuracoust::daw::normalizeCurveMidband(combined);
+    }
+
+    if (engine->monitorEqLinearPhase) {
+        // Linear-phase path: design a FIR that matches the target across the whole band (steep
+        // bass rolloff + treble dips included), and clear the biquad so only one runs.
+        engine->project.monitorEqBands.clear();
+        engine->engine.updateMonitorEq(engine->project.monitorEqBands);
+        engine->engine.updateMonitorFir(combined, engine->monitorEqFirTaps);
+        return;
+    }
+
+    // Biquad path: clear any FIR and fit the target to 64 peaking bands. The fit must run at the
+    // engine's ACTUAL sample rate — the biquad magnitude warps near the top octave, so a curve fit at
+    // a fixed 48 kHz but rendered at 44.1/88.2/96 kHz drifts in the treble (Codex #2).
+    engine->engine.updateMonitorFir({}, 0);
+    engine->project.monitorEqBands.clear();
+    if (!combined.empty()) {
+        const double fitRate = engine->engine.status().sampleRate > 1000.0
+            ? engine->engine.status().sampleRate : engine->project.sampleRate;
+        const auto bands = neuracoust::daw::fitCurveToEqBands(combined, 64, 20.0, 20000.0, 9.0, 15.0, 1.0 / 6.0, fitRate);
+        for (const auto& b : bands) {
+            neuracoust::daw::MonitorEqBandState state;
+            state.enabled = b.enabled;
+            switch (b.type) {
+                case neuracoust::daw::EqBandType::LowShelf: state.type = "low_shelf"; break;
+                case neuracoust::daw::EqBandType::HighShelf: state.type = "high_shelf"; break;
+                case neuracoust::daw::EqBandType::HighPass: state.type = "high_pass"; break;
+                case neuracoust::daw::EqBandType::LowPass: state.type = "low_pass"; break;
+                case neuracoust::daw::EqBandType::Notch: state.type = "notch"; break;
+                default: state.type = "peaking"; break;
+            }
+            state.frequencyHz = b.frequencyHz;
+            state.gainDb = b.gainDb;
+            state.q = b.q;
+            engine->project.monitorEqBands.push_back(state);
+        }
+    }
+    engine->engine.updateMonitorEq(engine->project.monitorEqBands);
+}
+
+// Log-spaced magnitude response (dB) across [minHz, maxHz] for the UI curve. Reflects whatever
+// monitor EQ is actually live — the linear-phase FIR when active, otherwise the biquad chain.
 void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz) {
     if (outMagsDb == nullptr || count <= 0) return;
     for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
     if (engine == nullptr) return;
-    neuracoust::daw::ParametricEq eq;
-    std::vector<neuracoust::daw::EqBandSpec> specs;
-    auto typeFrom = [](const std::string& s) {
-        if (s == "low_shelf") return neuracoust::daw::EqBandType::LowShelf;
-        if (s == "high_shelf") return neuracoust::daw::EqBandType::HighShelf;
-        if (s == "high_pass") return neuracoust::daw::EqBandType::HighPass;
-        if (s == "low_pass") return neuracoust::daw::EqBandType::LowPass;
-        if (s == "notch") return neuracoust::daw::EqBandType::Notch;
-        return neuracoust::daw::EqBandType::Peaking;
-    };
-    for (const auto& b : engine->project.monitorEqBands) {
-        specs.push_back({b.enabled, typeFrom(b.type), b.frequencyHz, b.gainDb, b.q});
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
+    const double ratio = std::log(hi / lo);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
+        outMagsDb[i] = engine->engine.monitorEqMagnitudeDb(f);
     }
+}
+
+// Linear-phase (FIR) monitor EQ toggle. Re-derives the current context through the chosen path.
+bool nc_monitor_eq_linear_phase(NCEngine* engine) {
+    return engine != nullptr && engine->monitorEqLinearPhase;
+}
+void nc_monitor_eq_set_linear_phase(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->monitorEqLinearPhase == enabled) return;
+    engine->monitorEqLinearPhase = enabled;
+    // The caller re-runs nc_monitor_eq_sync (via reloadMonitorState) to rebuild through the new path.
+}
+bool nc_monitor_eq_headphone_oe_target(NCEngine* engine) {
+    return engine != nullptr && engine->monitorEqHeadphoneOeTarget;
+}
+void nc_monitor_eq_set_headphone_oe_target(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->monitorEqHeadphoneOeTarget == enabled) return;
+    engine->monitorEqHeadphoneOeTarget = enabled;
+    // The caller re-runs nc_monitor_eq_sync (via reloadMonitorState) to rebuild with/without the target.
+}
+// Latency (ms) the active monitor FIR adds; 0 on the biquad path.
+double nc_monitor_eq_latency_ms(NCEngine* engine) {
+    if (engine == nullptr) return 0.0;
+    const double sr = std::max(1.0, engine->engine.status().sampleRate);
+    return 1000.0 * static_cast<double>(engine->engine.monitorFirLatencySamples()) / sr;
+}
+// The room-tuning correction (Harman target − measured), fitted to bands and sampled on the
+// same log grid as nc_monitor_eq_response — i.e. exactly what room correction WOULD impose,
+// shown without touching the live EQ. All zeros until a room measurement exists (channel 0=L,
+// 1=R). Returns true when a measurement was available, false when the curve is flat/unmeasured.
+bool nc_monitor_room_correction_response(NCEngine* engine, int channel,
+                                         double* outMagsDb, int count, double minHz, double maxHz) {
+    if (outMagsDb == nullptr || count <= 0) return false;
+    for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
+    if (engine == nullptr) return false;
+    const auto& measured = (channel == 1) ? engine->measuredCurveR : engine->measuredCurveL;
+    if (measured.empty()) return false;
+    neuracoust::daw::ResponseCurve correction;
+    correction.reserve(measured.size());
+    for (const auto& [f, db] : measured) {
+        correction.push_back({f, neuracoust::daw::harmanTargetDb(f) - db});
+    }
+    const auto bands = neuracoust::daw::fitCurveToEqBands(correction, 64, 20.0, 20000.0, 9.0, 12.0);
+    std::vector<neuracoust::daw::EqBandSpec> specs;
+    specs.reserve(bands.size());
+    for (const auto& b : bands) specs.push_back({b.enabled, b.type, b.frequencyHz, b.gainDb, b.q});
+    neuracoust::daw::ParametricEq eq;
     eq.configure(48000.0, specs);
     const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
     const double ratio = std::log(hi / lo);
@@ -5189,6 +7530,7 @@ void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, doub
         const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
         outMagsDb[i] = eq.magnitudeDb(f);
     }
+    return true;
 }
 bool nc_monitor_output_exclusive(NCEngine* engine) {
     return engine != nullptr && engine->project.monitorSpeakerHeadphoneExclusive;
@@ -5319,6 +7661,36 @@ void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route
         *speakerRoomEqFieldForSlot(*module, slot) = false;
     }
     engine->recordStep("Set speaker output");
+    engine->pushModules();
+}
+
+// Per-slot power amp / cable for a passive modeled speaker (heuristic tone; applied in eq_sync).
+void nc_monitor_speaker_amp(NCEngine* engine, int slot, char* out, size_t outLen) {
+    MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    copyText(out, outLen, (module != nullptr && slot >= 0 && slot <= 2) ? *speakerAmpFieldForSlot(*module, slot) : std::string{});
+}
+void nc_monitor_speaker_cable(NCEngine* engine, int slot, char* out, size_t outLen) {
+    MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    copyText(out, outLen, (module != nullptr && slot >= 0 && slot <= 2) ? *speakerCableFieldForSlot(*module, slot) : std::string{});
+}
+void nc_monitor_set_speaker_amp(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    std::string* field = speakerAmpFieldForSlot(*module, slot);
+    if (*field == model) return;
+    *field = model;
+    engine->recordStep("Set speaker amp");
+    engine->pushModules();   // Swift re-runs nc_monitor_eq_sync to fold in the amp tone
+}
+void nc_monitor_set_speaker_cable(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    std::string* field = speakerCableFieldForSlot(*module, slot);
+    if (*field == model) return;
+    *field = model;
+    engine->recordStep("Set speaker cable");
     engine->pushModules();
 }
 
@@ -5586,11 +7958,21 @@ bool nc_midi_record_begin(NCEngine* engine, int trackIndex, double startSeconds)
         return false;
     }
     engine->midiRecordTake = {};
-    engine->midiRecordTake.active = true;
-    engine->midiRecordTake.trackName = track->name;
-    engine->midiRecordTake.startSeconds = std::max(0.0, startSeconds);
-    engine->midiRecordTake.tempoBpm = engine->project.tempoBpm > 0.0 ? engine->project.tempoBpm : 120.0;
-    engine->midiRecordTake.lastPlayheadSeconds = std::max(0.0, startSeconds);
+    auto& take = engine->midiRecordTake;
+    take.active = true;
+    take.trackName = track->name;
+    take.startSeconds = std::max(0.0, startSeconds);
+    take.tempoBpm = engine->project.tempoBpm > 0.0 ? engine->project.tempoBpm : 120.0;
+    take.lastPlayheadSeconds = take.startSeconds;
+    // Create the region up front (model-only, no reconcile/history) so the timeline draws it
+    // the instant recording starts; notes land in it live as they are played. The single
+    // history step is recorded at commit, so undo returns to the pre-recording state.
+    take.regionId = neuracoust::daw::addMidiRegion(engine->project, take.trackName,
+                                                   take.startSeconds, 0.25, "Recording");
+    if (take.regionId.empty()) {
+        take.active = false;
+        return false;
+    }
     return true;
 }
 
@@ -5618,10 +8000,18 @@ void nc_midi_record_feed(NCEngine* engine, const NCMidiLiveEvent* events, int co
             take.held[static_cast<size_t>(pitch)] = { beat, events[i].data2 & 0x7F, true };
         } else if (noteOff && take.held[static_cast<size_t>(pitch)].on) {
             auto& h = take.held[static_cast<size_t>(pitch)];
-            take.notes.push_back({ pitch, h.startBeat, std::max(0.01, beat - h.startBeat), h.velocity });
+            // Add the completed note to the region immediately (model-only, no reconcile) so it
+            // draws as the key is released. Playback still monitors live through the instrument;
+            // the notes enter the render plan only at commit, so there is no double-trigger.
+            neuracoust::daw::addMidiNote(engine->project, take.regionId, pitch,
+                                         h.startBeat, std::max(0.01, beat - h.startBeat), h.velocity);
+            ++take.noteCount;
             h.on = false;
         }
     }
+    // Grow the region to the playhead so the clip visibly extends while recording.
+    neuracoust::daw::resizeMidiRegion(engine->project, take.regionId,
+                                      std::max(0.25, take.lastPlayheadSeconds - take.startSeconds));
 }
 
 // Finish the take: close any still-held notes at the last playhead, create the region and its
@@ -5635,30 +8025,29 @@ bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outLen) {
     take.active = false;
     const double beatsPerSecond = take.tempoBpm / 60.0;
     const double endBeat = std::max(0.0, take.lastPlayheadSeconds - take.startSeconds) * beatsPerSecond;
+    // Close any keys still held at stop, landing them in the live region like the rest.
     for (size_t pitch = 0; pitch < take.held.size(); ++pitch) {
         auto& h = take.held[pitch];
         if (h.on) {
-            take.notes.push_back({ static_cast<int>(pitch), h.startBeat,
-                                   std::max(0.01, endBeat - h.startBeat), h.velocity });
+            neuracoust::daw::addMidiNote(engine->project, take.regionId, static_cast<int>(pitch),
+                                         h.startBeat, std::max(0.01, endBeat - h.startBeat), h.velocity);
+            ++take.noteCount;
             h.on = false;
         }
     }
-    if (take.notes.empty()) {
+    if (take.noteCount == 0) {
+        // Nothing was played: drop the placeholder region and reconcile it out of the picture.
+        neuracoust::daw::deleteMidiRegion(engine->project, take.regionId);
+        engine->reconcileProject();
+        take.regionId.clear();
         return false;
     }
-    const double durationSeconds = std::max(0.25, take.lastPlayheadSeconds - take.startSeconds);
-    const std::string regionId = neuracoust::daw::addMidiRegion(engine->project, take.trackName,
-                                                                take.startSeconds, durationSeconds);
-    if (regionId.empty()) {
-        return false;
-    }
-    for (const auto& note : take.notes) {
-        neuracoust::daw::addMidiNote(engine->project, regionId, note.pitch,
-                                     note.startBeat, note.durBeat, note.velocity);
-    }
+    neuracoust::daw::resizeMidiRegion(engine->project, take.regionId,
+                                      std::max(0.25, take.lastPlayheadSeconds - take.startSeconds));
+    // One reconcile brings the take into the render plan, one history step for the whole take.
     applyMidiEdit(engine, true, "Record MIDI");
-    copyText(outRegionId, outLen, regionId);
-    take.notes.clear();
+    copyText(outRegionId, outLen, take.regionId);
+    take.regionId.clear();
     return true;
 }
 

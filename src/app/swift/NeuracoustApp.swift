@@ -30,6 +30,7 @@ struct NeuracoustApp: App {
     @StateObject private var ai: AiAssistantController
 
     init() {
+        Diagnostics.shared.start()   // open the session log + capture stderr before anything else
         let engine = EngineController()
         let listen = ListenRoomController(engine: engine)
         engine.listenRoom = listen
@@ -47,6 +48,8 @@ struct NeuracoustApp: App {
                 .environmentObject(ai)
                 .task {
                     appDelegate.engine = engine
+                    // Auto-launch (login item) opens straight into the compact monitor station.
+                    if engine.launchInMonitorMode { engine.compactMonitorMode = true }
                     engine.start()
                 }
                 .onDisappear {
@@ -85,6 +88,8 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("s", modifiers: .command)
                 Button("다른 이름으로 저장…") { engine.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                // Self-contained copy (collects external media), working document stays on the original.
+                Button("복사본으로 저장 (미디어 수집)…") { engine.saveProjectCopy() }
             }
             CommandGroup(after: .saveItem) {
                 Divider()
@@ -132,6 +137,13 @@ struct NeuracoustApp: App {
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)
             }
+            CommandMenu("클립") {
+                // Consolidate the selection into one audio file (Pro Tools ⌥⇧3). Number-key shortcut,
+                // so the Korean-IME character-remap issue does not apply.
+                Button("통합 (Consolidate)") { engine.consolidateSelection() }
+                    .keyboardShortcut("3", modifiers: [.option, .shift])
+                    .disabled(engine.selectedClipIds.isEmpty)
+            }
             CommandMenu("AI") {
                 // ⌥⌘A — ⇧⌘I now belongs to Import Audio (Pro Tools).
                 Button(ai.open ? "AI 어시스턴트 닫기" : "AI 어시스턴트 열기") { ai.toggle() }
@@ -151,6 +163,19 @@ struct RootView: View {
     @EnvironmentObject private var ai: AiAssistantController
 
     var body: some View {
+        ZStack {
+            if engine.compactMonitorMode {
+                MonitorStationShell()
+            } else {
+                fullDawView
+            }
+        }
+        // Resize the window to fit the active mode (compact monitor vs full DAW), remembering the
+        // DAW frame so expanding restores it. The engine keeps running across the switch.
+        .background(WindowConfigurator(compact: engine.compactMonitorMode))
+    }
+
+    private var fullDawView: some View {
         VStack(spacing: 0) {
             TitleBar()
             TransportBar()
@@ -163,12 +188,18 @@ struct RootView: View {
                     case .mix: MixerView()
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The edit/mix area yields first as the window narrows (it may clip to nothing); the
+                // monitor dock has priority so it is NEVER covered — it is the station the whole app is
+                // built around. Turn the dock off to hide it; narrowing must not eat it.
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(0)
+                .clipped()
 
                 if engine.showMonitorDock {
                     Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
                     MonitorDock()
                         .frame(width: Theme.monitorDockWidth)
+                        .layoutPriority(1)
                 }
             }
         }
@@ -209,6 +240,21 @@ struct RootView: View {
         }
         .overlay(alignment: .bottom) {
             BounceStatus()
+        }
+        .overlay(alignment: .top) {
+            if let p = engine.stemSeparationProgress {
+                HStack(spacing: Theme.Space.md) {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                    Text(engine.stemSeparationStatus).font(Theme.Font.ui(11, .medium))
+                        .foregroundStyle(Theme.Palette.text)
+                    ProgressView(value: p).frame(width: 120)
+                }
+                .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.md)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.panel))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.panel).stroke(Theme.Palette.divider, lineWidth: 1))
+                .padding(.top, Theme.Space.lg)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         .sheet(isPresented: Binding(
             get: { engine.spotTargetClipId != nil },
@@ -370,32 +416,43 @@ private struct EditView: View {
     @EnvironmentObject private var engine: EngineController
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Nuendo-style side columns sit at the far left (like the mixer), so the edit
-            // window's left margin matches it — the edit-tool rail moved in front of the
-            // timeline where it belongs.
-            if engine.showChannelColumn {
-                ChannelColumn()
-                Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
-            }
-            if engine.showInspector {
-                TrackInspector()
-                Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
-            }
+        // Flatten the parent's size proposal to a CONCRETE value and pin the content to it
+        // (`.frame(width:height:)`, not `maxWidth/maxHeight: .infinity`). The timeline is an
+        // AppKit NSView; given only a size RANGE it re-negotiates its height with SwiftUI every
+        // layout pass and the whole track area trembles (Edit tab only; a Mix round-trip rebuilds
+        // it and it settles). A definite size ends the negotiation. No conditional content here —
+        // that (the width-based panel hiding) is what flickered before.
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                // Nuendo-style side columns sit at the far left (like the mixer), so the edit
+                // window's left margin matches it — the edit-tool rail moved in front of the
+                // timeline where it belongs.
+                if engine.showChannelColumn {
+                    ChannelColumn()
+                    Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
+                }
+                if engine.showInspector {
+                    TrackInspector()
+                    Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
+                }
 
-            VStack(spacing: 0) {
-                toolbar
+                VStack(spacing: 0) {
+                    toolbar
 
                 GlobalTracksBar()
 
                 TimelineView(
                     model: engine.timelineModel,
                     playheadSeconds: engine.playheadSeconds,
+                    isTransportRunning: engine.transportRunning || engine.recording,
                     waveforms: engine.waveforms,
+                    recordingClips: engine.recordingClips,
+                    recordingChannels: engine.recordingChannels,
                     onSeek: { engine.seek($0) },
                     onZoom: { engine.setViewport(start: $0, duration: $1) },
                     onSelect: { engine.selectClip($0) },
                     onSetRange: { engine.setLoopRange(start: $0, end: $1) },
+                    onSetRangeLane: { engine.editRangeLane = $0 },
                     onSelectRegion: { engine.selectRegion($0) },
                     onOpenRegion: { engine.editingRegionId = $0 },
                     onMoveRegion: { engine.moveMidiRegion($0, laneIndex: $1, startSeconds: $2) },
@@ -424,6 +481,20 @@ private struct EditView: View {
                     },
                     onSetClipFadeInCurve: { engine.setClipFadeInCurve($0, $1) },
                     onSetClipFadeOutCurve: { engine.setClipFadeOutCurve($0, $1) },
+                    onReverseClip: { engine.reverseClip($0) },
+                    onNormalizeClip: { engine.normalizeClip($0) },
+                    onToggleClipMute: { engine.toggleClipMute($0) },
+                    onToggleClipPolarity: { engine.toggleClipPolarity($0) },
+                    onApplyClipTimePitch: { engine.applyClipTimePitch($0, timeRatio: $1, semitones: $2) },
+                    onDenoiseClip: { engine.denoiseClip($0) },
+                    onSeparateStems: { engine.separateClipStems($0) },
+                    onOpenPitchEditor: { engine.openPitchEditor($0) },
+                    onSetCrossfadeLength: { engine.setCrossfadeLength($0, $1, to: $2) },
+                    onSetFadeCurvature: { engine.setClipFadeCurvature($0, fadeIn: $1, $2) },
+                    auditionRoll: { engine.auditionRollSeconds },
+                    onSetAuditionRoll: { engine.auditionRollSeconds = $0 },
+                    onAuditionRegion: { engine.auditionRegion(from: $0, to: $1, loop: $2) },
+                    onStopAudition: { engine.stopAudition() },
                     onClipOriginalStart: { engine.clipOriginalStart($0) },
                     onSpotClips: { engine.spotClipsToOriginal($0) },
                     onAddAutomationPoint: { engine.addAutomationPoint(laneIndex: $0, timeSeconds: $1, value: $2) },
@@ -431,15 +502,16 @@ private struct EditView: View {
                     onDeleteAutomationPoint: { engine.deleteAutomationPoint(laneIndex: $0, pointIndex: $1) },
                     onToggleSelect: { engine.toggleClipSelection($0) },
                     onSelectMany: { engine.selectClips($0) },
-                    onMoveClip: { engine.moveClip($0, to: $1) },
+                    onMoveClip: { engine.previewMoveClip($0, to: $1) },
                     onDropCopy: { engine.dropClipCopy($0, laneIndex: $1, startSeconds: $2) },
                     onDropCopyToNewTrack: { engine.dropClipCopyToNewTrack($0, startSeconds: $1) },
                     onSplitClip: { engine.splitClipAt($0, seconds: $1) },
                     editTool: engine.editTool.rawValue,
                     onBeginCopySelection: { engine.beginCopySelection(anchorId: $0) },
-                    onMoveSelection: { engine.moveSelection(by: $0) },
+                    onMoveSelection: { engine.previewMoveSelection(by: $0) },
                     onTrimStart: { engine.trimClipStart($0, to: $1) },
                     onTrimEnd: { engine.trimClipEnd($0, to: $1) },
+                    onRollBoundary: { engine.rollBoundary($0, $1, to: $2) },
                     onSetFades: { engine.setClipFades($0, fadeIn: $1, fadeOut: $2) },
                     onSetGain: { engine.setClipGain($0, $1) },
                     onCommitGain: { engine.commitClipGain($0) },
@@ -473,7 +545,10 @@ private struct EditView: View {
                 )
 
                 PianoRollPanel()
+                PitchEditorPanel()
             }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
     }
 
@@ -522,6 +597,9 @@ private struct EditView: View {
                 Button("구간 잘라내기") { engine.cutRange() }
                 Button("구간 지우기") { engine.clearRange() }
                 Button("구간 분리") { engine.separateRange() }
+                Divider()
+                Button("구간의 컨덕터 지우기 (마커·코드·송폼…)") { engine.clearConductorInRange() }
+                    .disabled(!engine.rangeHasConductor)
             }
 
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16)

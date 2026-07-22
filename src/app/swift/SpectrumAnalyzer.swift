@@ -13,6 +13,8 @@ struct SpectrumAnalyzerView: View {
     private static let minHz: Double = 20
     private static let maxHz: Double = 20_000
 
+    @State private var hoverX: CGFloat?
+
     var body: some View {
         ZStack {
             if MetalSpectrumView.isAvailable {
@@ -21,7 +23,51 @@ struct SpectrumAnalyzerView: View {
                 canvasSpectrum
             }
             axisOverlay
+            hoverOverlay
         }
+        // Hover anywhere over the plot to read the frequency at the cursor (log-mapped axis).
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location): hoverX = location.x
+            case .ended: hoverX = nil
+            }
+        }
+    }
+
+    /// A cursor line + the frequency (and nearest note) at the mouse x, over either renderer.
+    @ViewBuilder private var hoverOverlay: some View {
+        if let hoverX {
+            Canvas { context, size in
+                let axisHeight: CGFloat = compact ? 10 : 14
+                let plotHeight = max(2, size.height - axisHeight)
+                let x = min(max(0, hoverX), size.width)
+                var line = Path()
+                line.move(to: CGPoint(x: x, y: 0))
+                line.addLine(to: CGPoint(x: x, y: plotHeight))
+                context.stroke(line, with: .color(.white.opacity(0.45)), lineWidth: 1)
+
+                let logMin = log10(Self.minHz), logMax = log10(Self.maxHz)
+                let frac = Double(x / max(1, size.width))
+                let hz = pow(10, logMin + frac * (logMax - logMin))
+                let hzText = hz >= 1000 ? String(format: "%.2f kHz", hz / 1000) : String(format: "%.0f Hz", hz)
+                let label = "\(hzText)  \(Self.noteName(hz))"
+                let textX = min(max(30, x), size.width - 30)
+                context.draw(Text(label)
+                    .font(.system(size: compact ? 8 : 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white),
+                             at: CGPoint(x: textX, y: 9))
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// Nearest equal-tempered note name (A4 = 440 Hz), e.g. "A4", "C♯3".
+    private static func noteName(_ hz: Double) -> String {
+        guard hz > 0 else { return "" }
+        let names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
+        let midi = Int((69.0 + 12.0 * log2(hz / 440.0)).rounded())
+        guard midi >= 0 && midi < 128 else { return "" }
+        return names[((midi % 12) + 12) % 12] + String(midi / 12 - 1)
     }
 
     /// Frequency ticks + labels along the bottom (a few in compact, the full decade set

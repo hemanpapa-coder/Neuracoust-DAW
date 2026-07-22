@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -31,6 +32,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <processthreadsapi.h>
+#include <windows.h>
 #else
 #include <arpa/inet.h>
 #include <dlfcn.h>
@@ -38,6 +40,9 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
 #endif
 
 namespace {
@@ -452,6 +457,101 @@ std::string hostName() {
     }
 #endif
     return "neuracoust-remote-core";
+}
+
+// Real hardware identity of this node, so the DAW's Remote Core panel can show what it is streaming
+// to (CPU / clock / RAM). core_count is reported separately via std::thread::hardware_concurrency.
+std::string systemCpuModel() {
+#if defined(__APPLE__)
+    std::array<char, 256> buf {};
+    size_t size = buf.size();
+    if (sysctlbyname("machdep.cpu.brand_string", buf.data(), &size, nullptr, 0) == 0 && buf[0] != '\0') {
+        return buf.data();
+    }
+#elif defined(_WIN32)
+    HKEY key {};
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                      0, KEY_READ, &key) == ERROR_SUCCESS) {
+        char buf[256] = {};
+        DWORD size = sizeof(buf);
+        const LSTATUS status = RegQueryValueExA(key, "ProcessorNameString", nullptr, nullptr,
+                                                reinterpret_cast<LPBYTE>(buf), &size);
+        RegCloseKey(key);
+        if (status == ERROR_SUCCESS && buf[0] != '\0') {
+            return buf;
+        }
+    }
+#else
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(cpuinfo, line)) {
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && line.rfind("model name", 0) == 0) {
+            std::string value = line.substr(colon + 1);
+            const auto start = value.find_first_not_of(" \t");
+            return start == std::string::npos ? "unknown" : value.substr(start);
+        }
+    }
+#endif
+    return "unknown";
+}
+
+double systemCpuMhz() {
+#if defined(__APPLE__)
+    uint64_t hz = 0;
+    size_t size = sizeof(hz);
+    if (sysctlbyname("hw.cpufrequency", &hz, &size, nullptr, 0) == 0 && hz > 0) {
+        return static_cast<double>(hz) / 1.0e6;   // Intel Macs report this; Apple Silicon returns 0.
+    }
+#elif defined(_WIN32)
+    HKEY key {};
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                      0, KEY_READ, &key) == ERROR_SUCCESS) {
+        DWORD mhz = 0, size = sizeof(mhz);
+        const LSTATUS status = RegQueryValueExA(key, "~MHz", nullptr, nullptr,
+                                                reinterpret_cast<LPBYTE>(&mhz), &size);
+        RegCloseKey(key);
+        if (status == ERROR_SUCCESS && mhz > 0) {
+            return static_cast<double>(mhz);
+        }
+    }
+#else
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(cpuinfo, line)) {
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && line.rfind("cpu MHz", 0) == 0) {
+            return std::atof(line.substr(colon + 1).c_str());
+        }
+    }
+#endif
+    return 0.0;   // 0 = unknown (Apple Silicon has no fixed clock to report)
+}
+
+uint32_t systemMemoryMb() {
+#if defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t size = sizeof(bytes);
+    if (sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0 && bytes > 0) {
+        return static_cast<uint32_t>(bytes / (1024ull * 1024ull));
+    }
+#elif defined(_WIN32)
+    MEMORYSTATUSEX status {};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return static_cast<uint32_t>(status.ullTotalPhys / (1024ull * 1024ull));
+    }
+#else
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    while (std::getline(meminfo, line)) {
+        if (line.rfind("MemTotal:", 0) == 0) {
+            const unsigned long long kb = std::strtoull(line.c_str() + 9, nullptr, 10);
+            return static_cast<uint32_t>(kb / 1024ull);
+        }
+    }
+#endif
+    return 0;
 }
 
 struct ParsedParameter {
@@ -1018,9 +1118,9 @@ void runStatusServer(SocketHandle socketHandle,
             << "version=0.1.0\n"
             << "hostname=" << hostName() << "\n"
             << "mac=00:00:00:00:00:00\n"
-            << "cpu_model=generic\n"
-            << "cpu_mhz=0\n"
-            << "memory_mb=0\n"
+            << "cpu_model=" << systemCpuModel() << "\n"
+            << "cpu_mhz=" << systemCpuMhz() << "\n"
+            << "memory_mb=" << systemMemoryMb() << "\n"
             << "temperature_c=0\n"
             << "temperature_f=32\n"
             << "cpu_core_loads=0\n"

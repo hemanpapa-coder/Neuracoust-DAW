@@ -111,16 +111,23 @@ TimeSignatureMarkerState activeTimeSignatureAtSeconds(double seconds, const std:
 }
 
 double clickUnitQuarterNotesForSettings(const AudioEngineSettings& settings, int denominator) {
+    double unit;
     if (settings.metronomeSubdivision == "quarter") {
-        return 1.0;
+        unit = 1.0;
+    } else if (settings.metronomeSubdivision == "eighth") {
+        unit = 0.5;
+    } else if (settings.metronomeSubdivision == "sixteenth") {
+        unit = 0.25;
+    } else {
+        unit = std::max(0.125, 4.0 / static_cast<double>(denominator));
     }
-    if (settings.metronomeSubdivision == "eighth") {
-        return 0.5;
+    // Swing is only *felt* when there are sub-beats to shift: a shuffle/triplet feel implies at
+    // least an eighth-note grid, so enabling swing always lays down the swung sub-beats — the way
+    // a Boss Dr. Beat or Logic does it — even if the visible subdivision is set to the beat.
+    if ((settings.grooveFeel == "shuffle" || settings.grooveFeel == "triplet") && unit > 0.5) {
+        unit = 0.5;
     }
-    if (settings.metronomeSubdivision == "sixteenth") {
-        return 0.25;
-    }
-    return std::max(0.125, 4.0 / static_cast<double>(denominator));
+    return unit;
 }
 
 } // namespace
@@ -152,6 +159,11 @@ float renderMetronomeClickSampleAtFrame(int64_t frame, const AudioEngineSettings
             ? (2.0 / 3.0)
             : std::max(0.5001, std::min(0.90, settings.grooveSwingAmount));
         const double swungOffset = swing * 2.0;
+        // Each beat-pair is [pairBase, pairBase+2) in eighth-note units: the ON-beat sits at
+        // pairBase, the swung OFF-beat at pairBase+swungOffset. The region before the off-beat
+        // belongs to the on-beat (its onset), the region after to the off-beat. (An earlier
+        // version handed the on-beat region to the *previous* pair's off-beat, which silenced
+        // every on-beat but the first — "박이 사라지고 엇박만" — so only the off-beats sounded.)
         const auto pairIndex = static_cast<int64_t>(std::floor(clickPosition / 2.0 + 1.0e-9));
         const double pairBase = static_cast<double>(pairIndex) * 2.0;
         double previousClickPosition = pairBase;
@@ -159,26 +171,89 @@ float renderMetronomeClickSampleAtFrame(int64_t frame, const AudioEngineSettings
         if (clickPosition + 1.0e-9 >= pairBase + swungOffset) {
             previousClickPosition = pairBase + swungOffset;
             clickIndex = pairIndex * 2 + 1;
-        } else if (pairIndex > 0) {
-            previousClickPosition = static_cast<double>(pairIndex - 1) * 2.0 + swungOffset;
-            clickIndex = (pairIndex - 1) * 2 + 1;
         }
         clickFraction = std::max(0.0, clickPosition - previousClickPosition);
     }
     const double beatPhaseSeconds = clickFraction * clickUnitQuarterNotes * 60.0 / std::max(1.0, bpm);
-    const int64_t clickFrames = std::max<int64_t>(1, static_cast<int64_t>(settings.sampleRate * 0.025));
+    // The click's length is timbre-dependent: a rim/wood tick is short and dry, a cowbell rings.
+    const std::string& sound = settings.metronomeSound;
+    double clickSeconds = 0.025;
+    if (sound == "rim") { clickSeconds = 0.010; }
+    else if (sound == "wood") { clickSeconds = 0.016; }
+    else if (sound == "cowbell") { clickSeconds = 0.070; }
+    const int64_t clickFrames = std::max<int64_t>(1, static_cast<int64_t>(settings.sampleRate * clickSeconds));
     if (beatPhaseSeconds * settings.sampleRate >= static_cast<double>(clickFrames)) {
         return 0.0f;
     }
-    const int pulseInBar = static_cast<int>(clickIndex % numerator);
+    // Drummer-metronome accent hierarchy over the subdivision grid (Boss Dr. Beat style):
+    //   • bar downbeat  → STRONG
+    //   • each main beat → MEDIUM
+    //   • the sub-beats in between → WEAK (quiet fills)
+    // This is what makes a subdivided or swung click musical instead of a wall of equal ticks:
+    // "딴 따 따 따" per beat, not "딴 딴 딴 딴". clickIndex is the subdivision index (the swing
+    // branch above keeps it 0-based), so position/beat math works for straight and swung alike.
+    const double barQuarters = static_cast<double>(numerator) * 4.0 / static_cast<double>(denominator);
+    const int clicksPerBar = std::max(1, static_cast<int>(std::lround(barQuarters / clickUnitQuarterNotes)));
     const bool compoundEighthMeter = denominator == 8 && numerator >= 6 && (numerator % 3) == 0;
-    const bool strongAccent = pulseInBar == 0;
-    const bool mediumAccent = compoundEighthMeter && pulseInBar > 0 && (pulseInBar % 3) == 0;
-    const double frequency = strongAccent ? 1760.0 : (mediumAccent ? 1396.91 : 1174.66);
-    const double phase = kTwoPi * frequency * beatPhaseSeconds;
-    const float envelope = static_cast<float>(1.0 - (beatPhaseSeconds * settings.sampleRate) / static_cast<double>(clickFrames));
-    const float level = strongAccent ? 0.22f : (mediumAccent ? 0.18f : 0.10f);
-    return static_cast<float>(std::sin(phase)) * level * envelope;
+    // Clicks between MEDIUM accents: a quarter note normally, a dotted quarter in compound meters.
+    const double accentBeatQuarters = compoundEighthMeter ? 1.5 : 1.0;
+    const int clicksPerBeat = std::max(1, static_cast<int>(std::lround(accentBeatQuarters / clickUnitQuarterNotes)));
+    const int positionInBar = ((static_cast<int>(clickIndex % clicksPerBar)) + clicksPerBar) % clicksPerBar;
+
+    // accent: 0/1/2 → weak/medium/strong (drives pitch). accentLevel: the amplitude.
+    int accent;
+    float accentLevel;
+    const std::vector<float>& pattern = settings.metronomeAccentPattern;
+    if (!pattern.empty()) {
+        // A genre groove: the pattern's per-step gain fully defines the accents (a 0 is a rest).
+        // This is what turns a flat click into Samba / Bossa / Rock / Jazz feel.
+        const float gain = pattern[static_cast<size_t>(positionInBar) % pattern.size()];
+        if (gain <= 0.001f) {
+            return 0.0f;   // rest step — no click here
+        }
+        accent = gain > 0.80f ? 2 : (gain > 0.45f ? 1 : 0);
+        accentLevel = std::max(0.05f, std::min(0.28f, gain * 0.26f));
+    } else {
+        // The default bar/beat/sub-beat hierarchy. With downbeat accent off, beat 1 is treated
+        // like any other beat (a flat, even click); the sub-beats stay quiet either way.
+        const bool strongAccent = settings.metronomeAccentFirst && positionInBar == 0;
+        const bool mediumAccent = !strongAccent && (positionInBar % clicksPerBeat == 0);
+        accent = strongAccent ? 2 : (mediumAccent ? 1 : 0);
+        // A wider strong>medium>weak spread so the sub-beats sit clearly under the main beats.
+        accentLevel = strongAccent ? 0.24f : (mediumAccent ? 0.15f : 0.075f);
+    }
+    const double linearPhase = (beatPhaseSeconds * settings.sampleRate) / static_cast<double>(clickFrames);  // 0..1
+    const float envelope = static_cast<float>(std::max(0.0, 1.0 - linearPhase));
+
+    float wave;
+    if (sound == "cowbell") {
+        // The classic 808 cowbell: two detuned square-ish tones. Accent nudges the pitch up.
+        const double f1 = (accent == 2 ? 620.0 : 540.0);
+        const double f2 = f1 * 1.5060;   // ~ perfect-fifth-ish beating ratio
+        const auto sq = [](double p) { return std::sin(p) >= 0.0 ? 1.0 : -1.0; };
+        wave = static_cast<float>(0.5 * (sq(kTwoPi * f1 * beatPhaseSeconds) + sq(kTwoPi * f2 * beatPhaseSeconds)));
+        // A sharper attack decay so it reads as metallic, not a sustained buzz.
+        wave *= static_cast<float>(std::exp(-linearPhase * 3.5));
+    } else if (sound == "wood") {
+        // Woodblock: a mid tone with a second harmonic and a fast exponential decay.
+        const double freq = accent == 2 ? 1050.0 : (accent == 1 ? 900.0 : 800.0);
+        wave = static_cast<float>(std::sin(kTwoPi * freq * beatPhaseSeconds)
+                                  + 0.35 * std::sin(kTwoPi * 2.0 * freq * beatPhaseSeconds));
+        wave *= static_cast<float>(std::exp(-linearPhase * 6.0));
+    } else if (sound == "rim") {
+        // Rim/side-stick: a very short bright click, near noise-like via a high partial mix.
+        const double freq = accent == 2 ? 2600.0 : (accent == 1 ? 2300.0 : 2000.0);
+        wave = static_cast<float>(0.7 * std::sin(kTwoPi * freq * beatPhaseSeconds)
+                                  + 0.3 * std::sin(kTwoPi * 1.7 * freq * beatPhaseSeconds));
+        wave *= static_cast<float>(std::exp(-linearPhase * 8.0));
+    } else {
+        // Default "beep": the original clean sine, pitched by accent.
+        const double freq = accent == 2 ? 1760.0 : (accent == 1 ? 1396.91 : 1174.66);
+        wave = static_cast<float>(std::sin(kTwoPi * freq * beatPhaseSeconds)) * envelope;
+    }
+
+    const float userGain = static_cast<float>(std::max(0.0, std::min(2.0, settings.metronomeGain)));
+    return wave * accentLevel * userGain;
 }
 
 } // namespace neuracoust::daw

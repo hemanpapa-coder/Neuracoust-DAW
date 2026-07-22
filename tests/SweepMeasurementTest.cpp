@@ -89,6 +89,40 @@ int main() {
         check((m4k - m500) < -5.0, "recovered dip at 4 kHz");
     }
 
+    // ---- Harmonic separation (roadmap ②c, Farina) --------------------------------------
+    // Drive a KNOWN memoryless Chebyshev nonlinearity — the same basis the AudioInterfaceModeler
+    // waveshaper uses — and check the separated coefficients come back. f(x)=x+a2·T2(x)+a3·T3(x)
+    // with x=sin synthesizes a pure 2nd harmonic at amplitude a2 and a pure 3rd at a3.
+    {
+        SweepParams ph;
+        ph.sampleRate = 48000.0; ph.startHz = 20.0; ph.endHz = 20000.0;
+        ph.durationSeconds = 2.0; ph.amplitude = 1.0;   // Chebyshev maps amplitude cleanly at unity
+        const auto drive = generateLogSweep(ph);
+
+        const double a2 = 0.08, a3 = 0.04;   // ≈ −22 dBc, −28 dBc
+        auto rec = drive;
+        for (auto& s : rec) {
+            const double x = s;
+            const double t2 = 2.0 * x * x - 1.0;
+            const double t3 = 4.0 * x * x * x - 3.0 * x;
+            s = static_cast<float>(x + a2 * t2 + a3 * t3);
+        }
+        const auto h = separateHarmonics(rec, ph, 7);
+        check(h.valid && h.coefficients.size() == 6, "harmonic separation returns 6 orders");
+        if (h.valid && h.coefficients.size() == 6) {
+            check(std::abs(h.coefficients[0] - a2) < 0.02, "recovered c2 ≈ a2 (2nd harmonic)");
+            check(std::abs(h.coefficients[1] - a3) < 0.02, "recovered c3 ≈ a3 (3rd harmonic)");
+            check(h.coefficients[3] < 0.02 && h.coefficients[4] < 0.02, "unused orders ≈ 0");
+            check(h.thdPercent > 5.0 && h.thdPercent < 20.0, "THD in the expected range");
+        }
+
+        // Null test: a clean linear system reports essentially no harmonics.
+        const auto hz = separateHarmonics(drive, ph, 7);
+        bool clean = hz.valid;
+        for (double c : hz.coefficients) clean = clean && (c < 0.02);
+        check(clean, "linear system → ~0 harmonics (null-safe)");
+    }
+
     printf(failures == 0 ? "\nSweepMeasurement test passed\n" : "\n%d check(s) failed\n", failures);
     return failures == 0 ? 0 : 1;
 }

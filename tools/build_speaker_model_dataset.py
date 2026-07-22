@@ -49,8 +49,41 @@ BRANDS = sorted({
     "Dynaudio", "KRK", "JBL", "Mackie", "PreSonus", "Kali", "EVE Audio", "HEDD",
     "Amphion", "ATC", "PMC", "Barefoot", "Quested", "Ocean Way", "Augspurger",
     "Meyer Sound", "Kii", "Dutch & Dutch", "GGNTKT", "PSI Audio", "Manger",
-    "Unity Audio", "Klein + Hummel", "Tannoy", "Westlake",
+    "Unity Audio", "Klein + Hummel", "Tannoy", "Westlake", "Meyer Sound",
 }, key=len, reverse=True)
+
+# Explicit additions backed by independent high-quality Klippel measurements.
+# Do not grow this list from vendor plots or name-only matches.
+ADDITIONAL_CATALOG_MODELS = [
+    "ADAM D3V (NF)",
+    "Genelec M040 (NF)",
+    "Kali LP-6v2 (NF)",
+    "Kali LP-UNF (NF)",
+    "Kali SM-5 (NF)",
+    "PreSonus Eris E5 XT (NF)",
+]
+
+# Manufacturer measurement digitized from Figure 1's continuous 1/3-octave
+# curve. The paper describes a 0.5 m tweeter-axis measurement with one boundary
+# 8 ft away. These anchors deliberately stop at 20 kHz; no response is invented
+# beyond the published graph. The source measurement is excellent, while the
+# digitization step makes the production curve medium confidence.
+MEYER_HD1_ANCHORS = [
+    [30.0, -12.0], [31.5, -11.0], [35.0, -7.0], [40.0, -3.0],
+    [50.0, 0.0], [63.0, 0.4], [80.0, 0.8], [100.0, 0.0],
+    [125.0, 0.2], [160.0, 0.5], [200.0, 0.0], [250.0, 0.5],
+    [315.0, 0.3], [400.0, -0.7], [500.0, -0.6], [630.0, 0.4],
+    [800.0, 0.0], [1000.0, 0.7], [1250.0, 0.3], [1600.0, -0.4],
+    [2000.0, 0.1], [2500.0, 0.1], [3150.0, -0.4], [4000.0, -0.4],
+    [5000.0, -0.5], [6300.0, 0.0], [8000.0, -0.6], [10000.0, 0.3],
+    [12500.0, 0.7], [16000.0, 0.4], [18000.0, 0.0], [20000.0, -1.0],
+]
+
+MEYER_HD1_REPORT = (
+    "https://docs.meyersound.com/pdf/technical-reports/"
+    "18.550.064.01%20B%20FREQ%20RESPONSE%20MEASUREMENTS%20%26%20THE%20HD-1.pdf"
+)
+MEYER_HD1_INDEPENDENT = "https://www.diyaudio.com/community/threads/meyer-sound-hd1-looking-inside.388266/"
 
 
 def get_json(path: str):
@@ -125,6 +158,91 @@ def normalize_midband(points: list[list[float]]) -> list[list[float]]:
         raise ValueError("curve has no samples between 300 Hz and 3 kHz")
     mean = sum(mid) / len(mid)
     return [[round(freq, 2), round(level - mean, 2)] for freq, level in points]
+
+
+def resample_log_curve(anchors: list[list[float]], count: int = 200) -> list[list[float]]:
+    pairs = sorted((float(freq), float(level)) for freq, level in anchors)
+    lo, hi = pairs[0][0], pairs[-1][0]
+    targets = [lo * ((hi / lo) ** (i / (count - 1))) for i in range(count)]
+    out, cursor = [], 0
+    for target in targets:
+        while cursor + 1 < len(pairs) and pairs[cursor + 1][0] < target:
+            cursor += 1
+        if target <= pairs[0][0]:
+            value = pairs[0][1]
+        elif target >= pairs[-1][0]:
+            value = pairs[-1][1]
+        else:
+            x0, y0 = pairs[cursor]
+            x1, y1 = pairs[cursor + 1]
+            ratio = (math.log(target) - math.log(x0)) / (math.log(x1) - math.log(x0))
+            value = y0 + ratio * (y1 - y0)
+        out.append([round(target, 2), value])
+    return normalize_midband(out)
+
+
+def meyer_hd1_entry() -> dict:
+    points = resample_log_curve(MEYER_HD1_ANCHORS)
+    return {
+        "catalog_name": "Meyer Sound HD-1 (NF)",
+        "brand": "Meyer Sound",
+        "model": "HD-1",
+        "type": "active",
+        "field": "NF",
+        "form_factor": "bookshelf monitor",
+        "drivers": "8-inch cone woofer; 1-inch soft-dome tweeter",
+        "enclosure": "vented",
+        "freq_response_hz": {"low": 32.0, "high": 22000.0, "tolerance_db": 3.0},
+        "sensitivity_db": None,
+        "impedance_ohm": None,
+        "amplification": "active (two-channel complementary MOSFET)",
+        "crossover_hz": [],
+        "tonal_signature": tonal_summary(points),
+        "response_curve": {
+            "confidence": "measured",
+            "source": "Meyer Sound official continuous 1/3-octave response (digitized)",
+            "source_url": MEYER_HD1_REPORT,
+            "points": points,
+            "normalized": True,
+        },
+        "shared_curve_with": None,
+        "sources": [MEYER_HD1_REPORT, MEYER_HD1_INDEPENDENT],
+        "research": {
+            "spinorama_match": None,
+            "selected_measurement": {
+                "version": "meyer-figure-1-continuous-third-octave",
+                "origin": "Meyer Sound",
+                "method": "webplotdigitizer",
+                "quality": "medium",
+            },
+            "measurement_evidence": [{
+                "version": "official-technical-report-figure-1",
+                "origin": "Meyer Sound",
+                "method": "multiple FFT; continuous 1/3-octave presentation",
+                "quality": "manufacturer-measured; digitized",
+                "published": "2015-04",
+                "selected_for_curve": True,
+                "links": [MEYER_HD1_REPORT],
+                "conditions": "0.5 m on tweeter axis; one boundary 8 ft from cabinet",
+            }, {
+                "version": "1997-independent-outdoor",
+                "origin": "Jack Hidley / diyAudio",
+                "method": "outdoor FFT; on-axis 1 m and 30-degree lateral",
+                "quality": "supporting evidence",
+                "published": "2022-07-21",
+                "selected_for_curve": False,
+                "links": [MEYER_HD1_INDEPENDENT],
+            }],
+            "raw_specifications": {
+                "free_field_frequency_response": "32 Hz-22 kHz at -3 dB; 40 Hz-20 kHz +/-1 dB at 1/3-octave resolution",
+                "maximum_spl": "125 dB peak; 120 dB at 1 m",
+                "measurement_note": "Each production unit was individually factory calibrated.",
+            },
+            "metadata_url": MEYER_HD1_REPORT,
+            "provenance_note": "Official measured curve digitized from Figure 1. The measurement is authoritative; point accuracy is limited by graph reading and 1/3-octave smoothing.",
+        },
+        "notes": "Not in Spinorama. Curve is log-interpolated from manually digitized Figure 1 anchors and must not be described as raw Meyer Sound numeric data.",
+    }
 
 
 def fetch_curve(speaker: str, version: str) -> tuple[list[list[float]] | None, str | None]:
@@ -284,9 +402,17 @@ def main() -> int:
     if not output.exists():
         raise FileNotFoundError(f"existing dataset not found: {output}")
     rows = json.loads(output.read_text(encoding="utf-8"))
-    if not isinstance(rows, list) or len(rows) != 184:
-        raise ValueError(f"expected existing 184-item array, got {len(rows) if isinstance(rows, list) else type(rows)}")
+    if not isinstance(rows, list):
+        raise ValueError(f"expected existing item array, got {type(rows)}")
     speakers = get_json("/speakers")
+    existing_names = {row.get("catalog_name") for row in rows if isinstance(row, dict)}
+    if "Meyer Sound HD-1 (NF)" not in existing_names:
+        rows.append(meyer_hd1_entry())
+        existing_names.add("Meyer Sound HD-1 (NF)")
+    for catalog_name in ADDITIONAL_CATALOG_MODELS:
+        if catalog_name not in existing_names:
+            rows.append(build_one(catalog_name, speakers))
+            existing_names.add(catalog_name)
     failures: list[str] = []
     unavailable: list[str] = []
     filled: list[str] = []
@@ -297,6 +423,9 @@ def main() -> int:
         matched = match_speaker(clean, speakers)
         curve = row.setdefault("response_curve", {})
         if not matched:
+            selected = ((row.get("research") or {}).get("selected_measurement") or {})
+            if selected.get("version") == "meyer-figure-1-continuous-third-octave":
+                return row, "manual", None
             # Existing measured curves still receive the required mid-band normalization.
             if curve.get("confidence") == "measured" and curve.get("points"):
                 curve["points"] = normalize_midband(curve["points"])
@@ -341,6 +470,8 @@ def main() -> int:
         name = row["catalog_name"]
         if status == "filled":
             filled.append(f"{name} -> {matched}")
+        elif status == "manual":
+            continue
         elif status == "match_failed":
             failures.append(name)
         elif status.startswith("error:"):

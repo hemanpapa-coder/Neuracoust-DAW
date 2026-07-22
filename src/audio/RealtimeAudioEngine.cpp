@@ -660,6 +660,18 @@ public:
         settings_.physicalInputAccessAllowed = allowed;
     }
     void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setMonitorReferenceArmed(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setTapInputMonitor(bool) {}
+    void setTapInputHold(bool) {}
+    void beginInputRecording(int, int, int) {}
+    bool endInputRecording(const std::string&, int, std::string& error, double&, int&) { error = "no engine"; return false; }
+    void cancelInputRecording() {}
+    bool inputRecordingActive() const { return false; }
+    double recordingLiveSeconds() const { return 0.0; }
+    int recordingLivePeakCount() const { return 0; }
+    int recordingLivePeaksSince(int, float*, int) const { return 0; }
+    int recordingChannels() const { return 2; }
+    int recordingPeakSamples() const { return 512; }
     void setInputDeviceLive(const std::string&) {}
     void setInsertTailOnStopSeconds(double) {}
 
@@ -815,6 +827,42 @@ public:
         }
         clipIt->clip.gainDb = std::max(-60.0f, std::min(24.0f, gainDb));
         status_.message = "Updated clip gain without reloading project.";
+        return true;
+    }
+
+    bool updateClipStart(const std::string& clipId, double startSeconds) {
+        if (clipId.empty() || !std::isfinite(startSeconds)) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(playbackMutex_);
+        auto clipIt = std::find_if(projectPlan_.clips.begin(), projectPlan_.clips.end(), [&](const ProjectRenderClip& renderClip) {
+            return renderClip.clip.id == clipId;
+        });
+        if (clipIt == projectPlan_.clips.end()) {
+            return false;
+        }
+        clipIt->clip.startSeconds = std::max(0.0, startSeconds);
+        status_.message = "Updated clip start without reloading project.";
+        return true;
+    }
+
+    bool updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds,
+                          double sourceOffsetSeconds) {
+        if (clipId.empty() || !std::isfinite(startSeconds) || !std::isfinite(durationSeconds) ||
+            !std::isfinite(sourceOffsetSeconds)) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(playbackMutex_);
+        auto clipIt = std::find_if(projectPlan_.clips.begin(), projectPlan_.clips.end(), [&](const ProjectRenderClip& renderClip) {
+            return renderClip.clip.id == clipId;
+        });
+        if (clipIt == projectPlan_.clips.end()) {
+            return false;
+        }
+        clipIt->clip.startSeconds = std::max(0.0, startSeconds);
+        clipIt->clip.durationSeconds = std::max(0.0, durationSeconds);
+        clipIt->clip.sourceOffsetSeconds = std::max(0.0, sourceOffsetSeconds);
+        status_.message = "Updated clip bounds without reloading project.";
         return true;
     }
 
@@ -1575,12 +1623,26 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
+void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
+void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
+void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
+bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }
+double RealtimeAudioEngine::recordingLiveSeconds() const { return impl_->recordingLiveSeconds(); }
+int RealtimeAudioEngine::recordingLivePeakCount() const { return impl_->recordingLivePeakCount(); }
+int RealtimeAudioEngine::recordingLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const { return impl_->recordingLivePeaksSince(fromBucket, outLR, maxBuckets); }
+int RealtimeAudioEngine::recordingChannels() const { return impl_->recordingChannels(); }
+int RealtimeAudioEngine::recordingPeakSamples() const { return impl_->recordingPeakSamples(); }
 void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
 bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
+bool RealtimeAudioEngine::updateClipStart(const std::string& clipId, double startSeconds) { return impl_->updateClipStart(clipId, startSeconds); }
+bool RealtimeAudioEngine::updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds, double sourceOffsetSeconds) { return impl_->updateClipBounds(clipId, startSeconds, durationSeconds, sourceOffsetSeconds); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }
 bool RealtimeAudioEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) { return impl_->updateTrackSendSlot(trackName, sendIndex, send); }
@@ -1695,6 +1757,18 @@ public:
     }
     void setPhysicalInputAccessAllowed(bool allowed) { settings_.physicalInputAccessAllowed = allowed; }
     void setMonitorListenSource(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setMonitorReferenceArmed(bool) {}  // No NeuracoustDspEngine on this backend.
+    void setTapInputMonitor(bool) {}
+    void setTapInputHold(bool) {}
+    void beginInputRecording(int, int, int) {}
+    bool endInputRecording(const std::string&, int, std::string& error, double&, int&) { error = "no engine"; return false; }
+    void cancelInputRecording() {}
+    bool inputRecordingActive() const { return false; }
+    double recordingLiveSeconds() const { return 0.0; }
+    int recordingLivePeakCount() const { return 0; }
+    int recordingLivePeaksSince(int, float*, int) const { return 0; }
+    int recordingChannels() const { return 2; }
+    int recordingPeakSamples() const { return 512; }
     void setInputDeviceLive(const std::string&) {}
     void setInsertTailOnStopSeconds(double) {}
     bool loadAudioFile(const std::string&, std::string& error) {
@@ -1710,6 +1784,8 @@ public:
         return false;
     }
     bool updateClipGain(const std::string&, float) { return false; }
+    bool updateClipStart(const std::string&, double) { return false; }
+    bool updateClipBounds(const std::string&, double, double, double) { return false; }
     bool updateClipFades(const std::string&, double, double) { return false; }
     bool updateTrackMix(const std::string&, float, float) { return false; }
     bool updateTrackSendSlot(const std::string&, size_t, const TrackSendState&) { return false; }
@@ -1764,12 +1840,26 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
+void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
+void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
+void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
+bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }
+double RealtimeAudioEngine::recordingLiveSeconds() const { return impl_->recordingLiveSeconds(); }
+int RealtimeAudioEngine::recordingLivePeakCount() const { return impl_->recordingLivePeakCount(); }
+int RealtimeAudioEngine::recordingLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const { return impl_->recordingLivePeaksSince(fromBucket, outLR, maxBuckets); }
+int RealtimeAudioEngine::recordingChannels() const { return impl_->recordingChannels(); }
+int RealtimeAudioEngine::recordingPeakSamples() const { return impl_->recordingPeakSamples(); }
 void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
 bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
+bool RealtimeAudioEngine::updateClipStart(const std::string& clipId, double startSeconds) { return impl_->updateClipStart(clipId, startSeconds); }
+bool RealtimeAudioEngine::updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds, double sourceOffsetSeconds) { return impl_->updateClipBounds(clipId, startSeconds, durationSeconds, sourceOffsetSeconds); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }
 bool RealtimeAudioEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) { return impl_->updateTrackSendSlot(trackName, sendIndex, send); }

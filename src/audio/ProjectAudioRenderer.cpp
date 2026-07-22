@@ -1,4 +1,5 @@
 #include "audio/ProjectAudioRenderer.h"
+#include <cstdlib>
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MixMath.h"
 #include "audio/MixerProcessorChain.h"
@@ -272,6 +273,10 @@ double secondsForBeatOffsetFromTempoMap(const std::vector<TempoMarkerState>& mar
 }
 
 bool trackInputMonitorOverridesTimelinePlayback(const ProjectAudioRenderPlan& plan, const TrackState& track) {
+    // Auto-input: the armed track's recorded clips play on plain playback, but while actively PUNCHED
+    // IN (transportRecordingActive is set only by the Record punch now, NOT the background capture)
+    // the tape under the record pass is silenced so you hear the input, not the clip you're recording
+    // over — like analog tape. An explicit input-monitor toggle also replaces playback with the input.
     return trackSupportsPhysicalInputMonitoring(track) &&
         (track.inputMonitoring || (plan.transportRecordingActive && track.recordArmed));
 }
@@ -404,15 +409,28 @@ float fadeCurveGain(const std::string& curve, double normalized) {
     return std::sin(x * kPi * 0.5f);
 }
 
+/// Continuous fade shape bend: warps the fade position before the named curve. curvature 0 = no
+/// change; [-1,1] maps to a pow() exponent in [0.25, 4], so the fade eases faster or slower. The
+/// editor graph and the timeline drawing apply the identical warp so the picture matches the sound.
+double applyFadeCurvature(double x, double curvature) {
+    const double c = std::max(-1.0, std::min(1.0, curvature));
+    const double xc = std::max(0.0, std::min(1.0, x));
+    if (c == 0.0) return xc;
+    return std::pow(xc, std::pow(2.0, c * 2.0));
+}
+
 float clipFadeGain(const ClipState& clip, double localSeconds) {
     float gain = 1.0f;
-    if (clip.fadeInSeconds > 0.0) {
-        const double normalized = std::max(0.0, std::min(1.0, localSeconds / clip.fadeInSeconds));
+    // The effective fade is the longer of the user's manual fade and the overlap-derived crossfade.
+    const double fadeIn = std::max(clip.fadeInSeconds, clip.crossfadeInSeconds);
+    const double fadeOut = std::max(clip.fadeOutSeconds, clip.crossfadeOutSeconds);
+    if (fadeIn > 0.0) {
+        const double normalized = applyFadeCurvature(localSeconds / fadeIn, clip.fadeInCurvature);
         gain = std::min(gain, fadeCurveGain(clip.fadeInCurve, normalized));
     }
-    if (clip.fadeOutSeconds > 0.0) {
+    if (fadeOut > 0.0) {
         const double remaining = clip.durationSeconds - localSeconds;
-        const double normalized = std::max(0.0, std::min(1.0, remaining / clip.fadeOutSeconds));
+        const double normalized = applyFadeCurvature(remaining / fadeOut, clip.fadeOutCurvature);
         gain = std::min(gain, fadeCurveGain(clip.fadeOutCurve, normalized));
     }
     return gain;
@@ -487,9 +505,16 @@ std::pair<float, float> dryClipSampleAtTimelineFrame(const ProjectRenderClip& re
     const double clipLocalSeconds = static_cast<double>(timelineFrame - clipStartFrame) / sampleRate;
     const float fadeGain = clipFadeGain(clip, clipLocalSeconds);
     const float polarity = clip.polarityInverted ? -1.0f : 1.0f;
-    const double sourceFrame = clip.sourceOffsetSeconds * renderClip.source.sampleRate
-        + (static_cast<double>(timelineFrame - clipStartFrame) * sourceRateRatio / timeScale);
     const double resampleStep = sourceRateRatio / timeScale;         // source frames per output frame
+    // Reverse (non-destructive): read the clip's source window back-to-front. Fades stay keyed to the
+    // clip's timeline position (start = fade-in) — only the source read is mirrored.
+    double localOutputFrame = static_cast<double>(timelineFrame - clipStartFrame);
+    if (clip.reversed) {
+        const double durationOutputFrames = clip.durationSeconds * sampleRate;
+        localOutputFrame = std::max(0.0, durationOutputFrames - 1.0 - localOutputFrame);
+    }
+    const double sourceFrame = clip.sourceOffsetSeconds * renderClip.source.sampleRate
+        + localOutputFrame * resampleStep;
     const float dryLeft = sourceSampleAt(renderClip.source, sourceFrame, 0, resampleStep) * clipGain * fadeGain * polarity;
     const float dryRight = sourceSampleAt(renderClip.source, sourceFrame, 1, resampleStep) * clipGain * fadeGain * polarity;
     return {dryLeft, dryRight};
@@ -968,49 +993,37 @@ bool synthesizeSourceGeneratorFallback(ProjectAudioRenderState& state,
     if (on < 0.5) {
         return false;
     }
+    // Map the six normalized insert params onto the high-accuracy generator. Frequency/gain keep the
+    // original EMO-Generator calibration; the waveform selector is widened to all seven shapes so
+    // square/saw/triangle (band-limited) and the log/lin sweep are reachable, not just sine/white/pink.
     const double signal = insertParameterValueOr(*generator, 1u, 0.0);
     const double frequencyNorm = insertParameterValueOr(*generator, 2u, 0.562351);
     const double gainNorm = insertParameterValueOr(*generator, 3u, 0.833);
     const double route = insertParameterValueOr(*generator, 4u, 0.5);
     const double phaseFlip = insertParameterValueOr(*generator, 5u, 0.0);
-    const double frequency = std::clamp(100.0 * std::pow(100.0, frequencyNorm), 20.0, 20000.0);
-    const float gain = dbToGain(static_cast<float>(-60.0 + gainNorm * 48.0));
-    double& phase = state.sourceGeneratorPhases[routeName];
-    uint32_t noise = static_cast<uint32_t>(std::hash<std::string>{}(routeName)) ^ 0x9E3779B9u;
-    float pink = 0.0f;
-    for (int64_t frame = 0; frame < frameCount; ++frame) {
-        float sample = 0.0f;
-        if (signal < 0.25) {
-            sample = static_cast<float>(std::sin(phase));
-            phase += (2.0 * 3.14159265358979323846 * frequency) / sampleRate;
-            if (phase >= 2.0 * 3.14159265358979323846) {
-                phase = std::fmod(phase, 2.0 * 3.14159265358979323846);
-            }
-        } else {
-            noise = noise * 1664525u + 1013904223u;
-            const float white = (static_cast<float>((noise >> 8) & 0x00FFFFFFu) / 8388607.5f) - 1.0f;
-            if (signal < 0.75) {
-                sample = white;
-            } else {
-                pink = 0.98f * pink + 0.02f * white;
-                sample = pink * 3.0f;
-            }
-        }
-        sample = std::clamp(sample * gain, -1.0f, 1.0f);
-        float left = sample;
-        float right = sample;
-        if (route < 0.25) {
-            right = 0.0f;
-        } else if (route > 0.75) {
-            left = 0.0f;
-        }
-        if (phaseFlip >= 0.5) {
-            right = -right;
-        }
-        const auto index = static_cast<size_t>(frame) * 2u;
-        interleavedStereo[index] = left;
-        interleavedStereo[index + 1u] = right;
-    }
+
+    static constexpr TestSignalWaveform kWaves[7] = {
+        TestSignalWaveform::Sine, TestSignalWaveform::Square, TestSignalWaveform::Triangle,
+        TestSignalWaveform::Saw, TestSignalWaveform::WhiteNoise, TestSignalWaveform::PinkNoise,
+        TestSignalWaveform::Sweep};
+    const int waveIdx = std::clamp(static_cast<int>(std::lround(signal * 6.0)), 0, 6);
+
+    TestSignalParams params;
+    params.waveform = kWaves[waveIdx];
+    // Full audio range: norm 0..1 → 20 Hz..20 kHz (log), and −60..0 dBFS. (The earlier 100 Hz..10 kHz /
+    // −60..−12 dB range was too narrow for a test generator.) The bridge's real-unit setters use the
+    // inverse of exactly these mappings.
+    params.frequencyHz = std::clamp(20.0 * std::pow(1000.0, frequencyNorm), 20.0, 20000.0);
+    params.levelDb = -60.0 + gainNorm * 60.0;
+    params.channel = route < 0.25 ? TestSignalChannel::Left
+                   : route > 0.75 ? TestSignalChannel::Right
+                                  : TestSignalChannel::Stereo;
+    params.polarityInvert = phaseFlip >= 0.5;
+    params.enabled = true;
+
+    TestSignalGenerator& gen = state.sourceGenerators[routeName];
+    gen.setParams(params);
+    gen.generateInterleavedStereo(interleavedStereo.data(), static_cast<int>(frameCount), sampleRate);
     return blockPeakAbs(interleavedStereo) > 0.000001f;
 }
 
@@ -1365,6 +1378,45 @@ bool readPcmWavFileCached(const std::string& path, WavAudioData& out, std::strin
     return true;
 }
 
+// A crossfade is not a stored property — it is what two abutting clips on the same track DO where
+// they overlap. We derive it fresh from the render clips' current positions on every plan build, so
+// pulling clips apart (no more overlap) removes the crossfade with no residue, matching Pro Tools /
+// Cubase / Logic. The clip's own manual fadeIn/Out (drawn by the user) are untouched — the render
+// takes max(manual, crossfade), so a hand-drawn fade longer than the overlap still wins.
+void deriveClipCrossfadesFromOverlap(std::vector<ProjectRenderClip>& clips) {
+    // Group render-clip indices by track, sorted along the timeline.
+    std::map<std::string, std::vector<size_t>> byTrack;
+    for (size_t i = 0; i < clips.size(); ++i) {
+        clips[i].clip.crossfadeInSeconds = 0.0;
+        clips[i].clip.crossfadeOutSeconds = 0.0;
+        byTrack[clips[i].clip.trackName].push_back(i);
+    }
+    for (auto& [trackName, idx] : byTrack) {
+        (void)trackName;
+        std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
+            return clips[a].clip.startSeconds < clips[b].clip.startSeconds;
+        });
+        for (size_t k = 0; k + 1 < idx.size(); ++k) {
+            ClipState& left = clips[idx[k]].clip;
+            ClipState& right = clips[idx[k + 1]].clip;
+            const double leftEnd = left.startSeconds + left.durationSeconds;
+            const double overlap = leftEnd - right.startSeconds;
+            if (overlap <= 1.0e-6) {
+                continue;  // clips separated → no crossfade
+            }
+            // Clamp so a crossfade never exceeds half of either clip (equal-power sanity).
+            const double maxFade = std::max(0.0, std::min({overlap,
+                                                            left.durationSeconds * 0.5,
+                                                            right.durationSeconds * 0.5}));
+            if (maxFade <= 1.0e-6) {
+                continue;
+            }
+            left.crossfadeOutSeconds = std::max(left.crossfadeOutSeconds, maxFade);
+            right.crossfadeInSeconds = std::max(right.crossfadeInSeconds, maxFade);
+        }
+    }
+}
+
 } // namespace
 
 bool makeProjectAudioRenderPlan(const ProjectDocument& project, ProjectAudioRenderPlan& plan, std::string& error) {
@@ -1451,6 +1503,7 @@ bool makeProjectAudioRenderPlan(const ProjectDocument& project, ProjectAudioRend
         }
         plan.clips.push_back(std::move(renderClip));
     }
+    deriveClipCrossfadesFromOverlap(plan.clips);
     error.clear();
     return true;
 }
@@ -1882,6 +1935,7 @@ void ProjectAudioRenderState::reset() {
     routeInsertDeclickTotal.clear();
     routeInsertEngagementChangedThisBlock = false;
     sourceGeneratorPhases.clear();
+    sourceGenerators.clear();
     liveMidiEvents.clear();
     masterInsertDryFallback.clear();
     masterInsertChainMaxBlockSize = 0;
@@ -1894,6 +1948,7 @@ void ProjectAudioRenderState::reset() {
 void ProjectAudioRenderState::resetForSeek() {
     routeDelayLines.clear();
     sourceGeneratorPhases.clear();
+    for (auto& [name, gen] : sourceGenerators) gen.reset();
     liveMidiEvents.clear();
     masterInsertProcessingFailed = false;
     masterInsertLastError.clear();
@@ -1901,6 +1956,17 @@ void ProjectAudioRenderState::resetForSeek() {
     routeInsertLastErrors.clear();
     // A warm-up render (done while stopped) may have flipped a route dry↔wet; don't let that arm
     // the output crossfade on the first real playback block.
+    routeInsertEngagementChangedThisBlock = false;
+}
+
+void ProjectAudioRenderState::resetForEdit() {
+    // Preserve routeDelayLines / sourceGenerators / liveMidiEvents — flushing them mid-playback
+    // is what clicked/gapped the sound on every clip move/trim/split/delete. Only the per-block error
+    // and engagement flags are cleared.
+    masterInsertProcessingFailed = false;
+    masterInsertLastError.clear();
+    instrumentLastErrors.clear();
+    routeInsertLastErrors.clear();
     routeInsertEngagementChangedThisBlock = false;
 }
 

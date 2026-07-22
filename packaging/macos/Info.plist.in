@@ -75,6 +75,8 @@
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Neuracoust DAW records audio when you arm tracks and start recording.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Neuracoust DAW can monitor other apps' audio ("다른 앱") through its monitor path using a Core Audio process tap.</string>
   <key>NSHumanReadableCopyright</key>
   <string>${MACOSX_BUNDLE_COPYRIGHT}</string>
 </dict>

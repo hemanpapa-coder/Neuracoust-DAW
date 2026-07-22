@@ -1,4 +1,6 @@
 #include "audio/MonitorDspProcessor.h"
+#include "audio/HeadphoneProfiles.h"
+#include "audio/SpeakerProfiles.h"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -498,8 +500,26 @@ StereoFrame MonitorDspProcessor::process(StereoFrame frame) {
     return frame;
 }
 
+// The bare catalog name behind a slotted "Speaker A: <name>" string, for a profile lookup.
+std::string speakerModelCatalogKey(const std::string& stored) {
+    const auto pos = stored.find(": ");
+    return pos == std::string::npos ? stored : stored.substr(pos + 2);
+}
+
 StereoFrame MonitorDspProcessor::applySpeakerSimulation(StereoFrame frame, const MonitorDspModule& module) {
     if (speakerTargetMatchesReal(module)) {
+        return frame;
+    }
+    // Single-EQ design: a model with a MEASURED response curve is voiced entirely by the one
+    // monitor parametric EQ (the bridge loads that curve into it), so pass the audio through
+    // here untouched — otherwise this heuristic voicing chain would double-colour it. Models
+    // without measured data keep the name-heuristic tone below.
+    // A/B/C slots may hold a MEASURED HEADPHONE model too (EngineController allows a headphone with
+    // a curve as a slot target, and nc_monitor_eq_sync loads its curve into the one EQ). Check both
+    // catalogs so the guard is symmetric with the bridge — otherwise a headphone slot gets its
+    // measured curve in the EQ AND this heuristic speaker voicing on top (the double-colour Codex flagged).
+    const std::string key = speakerModelCatalogKey(activeTargetModel(module));
+    if (!speakerProfileCurve(key).empty() || !headphoneProfileCurve(key).empty()) {
         return frame;
     }
     const StereoFrame dry = frame;
@@ -527,8 +547,19 @@ StereoFrame MonitorDspProcessor::applyHeadphoneSimulation(StereoFrame frame, con
     const float filteredRight = headphoneCrossfeedRight_.process(frame.right);
     const float crossfeed = headphoneCrossfeedAmount(module);
     const float direct = std::max(0.82f, 1.0f - crossfeed * 0.82f);
-    frame.left = left_.headphoneTilt.process(frame.left * direct + filteredRight * crossfeed);
-    frame.right = right_.headphoneTilt.process(frame.right * direct + filteredLeft * crossfeed);
+    frame.left = frame.left * direct + filteredRight * crossfeed;
+    frame.right = frame.right * direct + filteredLeft * crossfeed;
+    // If the active target is a MEASURED model, its curve already voices the single monitor EQ, so the
+    // generic fixed 6.8 kHz tilt (and its make-up) would double-attenuate the treble (Codex #5). Skip
+    // the tilt in that case and leave the tone entirely to the measurement — crossfeed still applies.
+    // A target with no measured data keeps the generic voicing tilt.
+    const std::string key = speakerModelCatalogKey(activeTargetModel(module));
+    const bool measured = !headphoneProfileCurve(key).empty() || !speakerProfileCurve(key).empty();
+    if (measured) {
+        return {std::clamp(frame.left, -1.0f, 1.0f), std::clamp(frame.right, -1.0f, 1.0f)};
+    }
+    frame.left = left_.headphoneTilt.process(frame.left);
+    frame.right = right_.headphoneTilt.process(frame.right);
     return {
         std::clamp(frame.left * 1.035f, -1.0f, 1.0f),
         std::clamp(frame.right * 1.035f, -1.0f, 1.0f)

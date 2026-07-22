@@ -200,6 +200,74 @@ int main() {
     check(nc_history_redo(engine), "redo the import");
     check(nc_clip_count(engine) == 1, "redo restored the clip");
 
+    // --- offline time/pitch print (Serato phase vocoder) ---------------------
+    {
+        char clipId[128] = {0};
+        nc_clip_id(engine, 0, clipId, sizeof(clipId));
+        const double before = nc_clip_duration_seconds(engine, 0);
+        char srcBefore[512] = {0};
+        nc_clip_source_path(engine, 0, srcBefore, sizeof(srcBefore));
+        char tpErr[256] = {0};
+        check(nc_clip_apply_time_pitch(engine, clipId, 2.0, 0.0, 1, tpErr, sizeof(tpErr)),
+              "time/pitch 2x applied");
+        if (strlen(tpErr) > 0) fprintf(stderr, "  time/pitch error: %s\n", tpErr);
+        const double after = nc_clip_duration_seconds(engine, 0);
+        check(after > before * 1.8 && after < before * 2.2, "time/pitch 2x ~doubled clip duration");
+        char srcAfter[512] = {0};
+        nc_clip_source_path(engine, 0, srcAfter, sizeof(srcAfter));
+        check(strcmp(srcBefore, srcAfter) != 0, "time/pitch repointed the clip at a new file");
+        check(nc_history_undo(engine), "undo time/pitch");
+        check(nc_clip_duration_seconds(engine, 0) < before * 1.2, "undo restored clip duration");
+    }
+
+    // --- Melodyne-mode note detection + per-note pitch edit -------------------
+    {
+        char clipId[128] = {0};
+        nc_clip_id(engine, 0, clipId, sizeof(clipId));
+        const int noteCount = nc_clip_detect_notes(engine, clipId, 0);   // 0 = melodic
+        check(noteCount >= 1, "detected at least one note in the 440 Hz tone");
+        if (noteCount >= 1) {
+            const double midi = nc_clip_note_detected_midi(engine, 0);
+            check(midi > 67.5 && midi < 70.5, "440 Hz note detected as ~A4 (midi 69)");
+            nc_clip_note_set_offset(engine, 0, 12.0);   // shift up an octave
+            check(nc_clip_note_offset_semitones(engine, 0) == 12.0, "per-note offset stored");
+
+            // Export the edit to a standalone WAV — the clip must NOT change.
+            const char* exportPath = "/tmp/neuracoust-export-test.wav";
+            char srcPreExport[512] = {0};
+            nc_clip_source_path(engine, 0, srcPreExport, sizeof(srcPreExport));
+            char exErr[256] = {0};
+            check(nc_clip_export_note_edits(engine, clipId, exportPath, exErr, sizeof(exErr)), "exported pitch edit to a WAV");
+            if (strlen(exErr) > 0) fprintf(stderr, "  export error: %s\n", exErr);
+            FILE* ef = fopen(exportPath, "rb");
+            long esz = 0; if (ef) { fseek(ef, 0, SEEK_END); esz = ftell(ef); fclose(ef); }
+            check(esz > 1000, "exported WAV exists and is non-empty");
+            char srcPostExport[512] = {0};
+            nc_clip_source_path(engine, 0, srcPostExport, sizeof(srcPostExport));
+            check(strcmp(srcPreExport, srcPostExport) == 0, "export left the clip untouched");
+            char srcBefore[512] = {0};
+            nc_clip_source_path(engine, 0, srcBefore, sizeof(srcBefore));
+            const double durBefore = nc_clip_duration_seconds(engine, 0);
+            char peErr[256] = {0};
+            check(nc_clip_apply_note_edits(engine, clipId, peErr, sizeof(peErr)), "applied pitch edit");
+            if (strlen(peErr) > 0) fprintf(stderr, "  pitch edit error: %s\n", peErr);
+            char srcAfter[512] = {0};
+            nc_clip_source_path(engine, 0, srcAfter, sizeof(srcAfter));
+            check(strcmp(srcBefore, srcAfter) != 0, "pitch edit repointed the clip at a new file");
+            check(fabs(nc_clip_duration_seconds(engine, 0) - durBefore) < 0.02, "pitch edit preserves clip length");
+            check(nc_history_undo(engine), "undo pitch edit");
+
+            // Polyphonic accumulate helpers: reset + add notes from a file (Demucs stem path).
+            nc_detect_notes_reset(engine);
+            check(nc_clip_note_count(engine) == 0, "note cache reset to empty");
+            const int added = nc_detect_notes_add_from_file(engine, wavPath, 0);
+            check(added >= 1, "detected notes from a stem-like file");
+            check(nc_clip_note_count(engine) == added, "notes accumulated into the cache");
+            const int added2 = nc_detect_notes_add_from_file(engine, wavPath, 0);
+            check(nc_clip_note_count(engine) == added + added2, "second file appends (merge across parts)");
+        }
+    }
+
     // --- save, then import a non-WAV so it converts into Audio Files ---------
     const char* projectPath = "/tmp/neuracoust-io-smoke/Session.ndaw";
     std::system("rm -rf /tmp/neuracoust-io-smoke && mkdir -p /tmp/neuracoust-io-smoke");

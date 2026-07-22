@@ -522,18 +522,20 @@ int main(void) {
         nc_dsp_set_core_count(engine, 99);
         if (nc_dsp_core_count(engine) != 16) { fprintf(stderr, "FAIL: 99 not clamped to 16 (%d)\n", nc_dsp_core_count(engine)); failures++; }
 
-        // With isolation on, the count floors at 4.
+        // No isolation floor: the user can drop the internal reserve as low as 1 even with
+        // isolation on (was floored at 4; the floor was removed on request so a light session can
+        // hand cores back to the OS).
         nc_dsp_set_core_count(engine, 1);
-        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: isolation floor not 4 (%d)\n", nc_dsp_core_count(engine)); failures++; }
+        if (nc_dsp_core_count(engine) != 1) { fprintf(stderr, "FAIL: isolation-on count did not reach 1 (%d)\n", nc_dsp_core_count(engine)); failures++; }
 
-        // Off, it can go to 1.
+        // Off, it can also go to 1.
         nc_dsp_set_core_isolation(engine, false);
         nc_dsp_set_core_count(engine, 1);
         if (nc_dsp_core_count(engine) != 1) { fprintf(stderr, "FAIL: isolation off floor (%d)\n", nc_dsp_core_count(engine)); failures++; }
 
-        // Re-enabling isolation lifts the count back to the floor.
+        // Re-enabling isolation leaves the chosen count as-is (no floor to lift it to).
         nc_dsp_set_core_isolation(engine, true);
-        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: re-enable did not floor to 4 (%d)\n", nc_dsp_core_count(engine)); failures++; }
+        if (nc_dsp_core_count(engine) != 1) { fprintf(stderr, "FAIL: re-enable changed count (%d)\n", nc_dsp_core_count(engine)); failures++; }
         printf("dsp core allocation OK\n");
     }
 
@@ -548,8 +550,8 @@ int main(void) {
         if (nc_dsp_external_core_count(engine) != 1) { fprintf(stderr, "FAIL: external floor to 1 (%d)\n", nc_dsp_external_core_count(engine)); failures++; }
         nc_dsp_set_external_core_count(engine, 99);
         if (nc_dsp_external_core_count(engine) != 16) { fprintf(stderr, "FAIL: external 99 not clamped to 16 (%d)\n", nc_dsp_external_core_count(engine)); failures++; }
-        // Internal reserve is unchanged by external edits.
-        if (nc_dsp_core_count(engine) != 4) { fprintf(stderr, "FAIL: external edit disturbed internal core (%d)\n", nc_dsp_core_count(engine)); failures++; }
+        // Internal reserve is unchanged by external edits (left at 1 from the block above).
+        if (nc_dsp_core_count(engine) != 1) { fprintf(stderr, "FAIL: external edit disturbed internal core (%d)\n", nc_dsp_core_count(engine)); failures++; }
         printf("external dsp core reserve OK\n");
     }
 
@@ -645,6 +647,125 @@ int main(void) {
         fd = shm_open(shm, O_RDWR, 0600);
         if (fd >= 0) { fprintf(stderr, "FAIL: monitor shm survived close\n"); failures++; close(fd); }
         printf("instrument editor monitor lifecycle OK\n");
+    }
+
+    // Controller (CC) + pitch-bend lane round trip: add, filter-by-controller, get, move, delete.
+    {
+        char region[128] = {0};
+        const int mtrack = nc_track_add_instrument(engine);
+        if (mtrack < 0 ||
+            !nc_midi_region_add(engine, mtrack, 0.0, 4.0, region, sizeof region) || region[0] == 0) {
+            fprintf(stderr, "FAIL: could not add MIDI region for CC test\n"); failures++;
+        }
+        char id1[128] = {0};
+        if (!nc_midi_cc_add(engine, region, 1, 0.5, 100, id1, sizeof id1) || id1[0] == 0) {
+            fprintf(stderr, "FAIL: nc_midi_cc_add cc1\n"); failures++;
+        }
+        char id2[128] = {0};
+        if (!nc_midi_cc_add(engine, region, 10, 1.0, 64, id2, sizeof id2)) {
+            fprintf(stderr, "FAIL: nc_midi_cc_add cc10\n"); failures++;
+        }
+        // Each lane only sees its own controller number.
+        if (nc_midi_cc_count(engine, region, 1) != 1 || nc_midi_cc_count(engine, region, 10) != 1) {
+            fprintf(stderr, "FAIL: cc counts (%d, %d)\n",
+                    nc_midi_cc_count(engine, region, 1), nc_midi_cc_count(engine, region, 10)); failures++;
+        }
+        char gotId[128] = {0}; double gotBeat = 0; int gotVal = 0;
+        if (!nc_midi_cc_get(engine, region, 1, 0, gotId, sizeof gotId, &gotBeat, &gotVal)
+            || gotVal != 100 || gotBeat < 0.49 || gotBeat > 0.51) {
+            fprintf(stderr, "FAIL: cc1 get (%s,%.3f,%d)\n", gotId, gotBeat, gotVal); failures++;
+        }
+        if (!nc_midi_cc_move(engine, region, id1, 2.0, 40)) {
+            fprintf(stderr, "FAIL: cc move\n"); failures++;
+        }
+        nc_midi_cc_get(engine, region, 1, 0, gotId, sizeof gotId, &gotBeat, &gotVal);
+        if (gotVal != 40 || gotBeat < 1.99 || gotBeat > 2.01) {
+            fprintf(stderr, "FAIL: cc after move (%.3f,%d)\n", gotBeat, gotVal); failures++;
+        }
+        if (!nc_midi_cc_delete(engine, region, id1) || nc_midi_cc_count(engine, region, 1) != 0) {
+            fprintf(stderr, "FAIL: cc delete\n"); failures++;
+        }
+        char pb[128] = {0};
+        if (!nc_midi_pb_add(engine, region, 0.25, 12000, pb, sizeof pb)
+            || nc_midi_pb_count(engine, region) != 1) {
+            fprintf(stderr, "FAIL: pb add/count\n"); failures++;
+        }
+        if (!nc_midi_pb_move(engine, region, pb, 0.75, 4000)) {
+            fprintf(stderr, "FAIL: pb move\n"); failures++;
+        }
+        double pbBeat = 0; int pbVal = 0; char pbId[128] = {0};
+        nc_midi_pb_get(engine, region, 0, pbId, sizeof pbId, &pbBeat, &pbVal);
+        if (pbVal != 4000 || pbBeat < 0.74 || pbBeat > 0.76) {
+            fprintf(stderr, "FAIL: pb after move (%.3f,%d)\n", pbBeat, pbVal); failures++;
+        }
+        if (!nc_midi_pb_delete(engine, region, pb) || nc_midi_pb_count(engine, region) != 0) {
+            fprintf(stderr, "FAIL: pb delete\n"); failures++;
+        }
+        printf("controller (CC + pitch bend) lane round trip OK\n");
+    }
+
+    // Single monitor EQ, context-driven (the "one EQ, values swap" design). nc_monitor_eq_sync
+    // imposes a measured model's curve, and clears the bands when there is neither a curve nor
+    // room tuning — so a physical route or a non-measured model leaves the one EQ flat.
+    {
+        int measuredCount = nc_virtual_monitor_count(engine);
+        if (measuredCount <= 0) {
+            fprintf(stderr, "FAIL: no measured speaker profiles for eq sync\n"); failures++;
+        } else {
+            char measured[256] = {0};
+            nc_virtual_monitor_name(engine, 0, measured, sizeof measured);
+            // A measured slot model → the single EQ picks up bands.
+            nc_monitor_eq_sync(engine, measured, "", false);
+            if (nc_monitor_eq_band_count(engine) <= 0) {
+                fprintf(stderr, "FAIL: eq sync '%s' produced no bands\n", measured); failures++;
+            }
+            // Empty slot + empty correction, no room → the single EQ is cleared flat.
+            nc_monitor_eq_sync(engine, "", "", false);
+            if (nc_monitor_eq_band_count(engine) != 0) {
+                fprintf(stderr, "FAIL: eq sync empty left %d bands\n",
+                        nc_monitor_eq_band_count(engine)); failures++;
+            }
+            printf("single monitor EQ context sync OK (model '%s')\n", measured);
+        }
+    }
+
+    // --- Built-in test signal generator (track source) -------------------------------------------
+    {
+        const int t = 0;   // track 0 exists in the default project
+        if (nc_track_test_signal_generator_slot(engine, t) != -1) {
+            fprintf(stderr, "FAIL: generator present before add\n"); failures++;
+        }
+        if (!nc_track_add_test_signal_generator(engine, t)) {
+            fprintf(stderr, "FAIL: could not add signal generator\n"); failures++;
+        }
+        if (nc_track_test_signal_generator_slot(engine, t) < 0) {
+            fprintf(stderr, "FAIL: generator not present after add\n"); failures++;
+        }
+        // Defaults: enabled, sine, 1 kHz, -6 dB, stereo.
+        if (!nc_track_test_signal_enabled(engine, t)) { fprintf(stderr, "FAIL: gen not enabled by default\n"); failures++; }
+        if (nc_track_test_signal_waveform(engine, t) != 0) { fprintf(stderr, "FAIL: default waveform not sine\n"); failures++; }
+        double f0 = nc_track_test_signal_frequency_hz(engine, t);
+        if (f0 < 980.0 || f0 > 1020.0) { fprintf(stderr, "FAIL: default freq %.1f not ~1kHz\n", f0); failures++; }
+        // Real-unit round-trips.
+        nc_track_test_signal_set_frequency_hz(engine, t, 440.0);
+        double f1 = nc_track_test_signal_frequency_hz(engine, t);
+        if (f1 < 436.0 || f1 > 444.0) { fprintf(stderr, "FAIL: freq round-trip 440 -> %.2f\n", f1); failures++; }
+        nc_track_test_signal_set_level_db(engine, t, -12.0);
+        double lv = nc_track_test_signal_level_db(engine, t);
+        if (lv < -12.5 || lv > -11.5) { fprintf(stderr, "FAIL: level round-trip -12 -> %.2f\n", lv); failures++; }
+        nc_track_test_signal_set_waveform(engine, t, 6);   // Sweep
+        if (nc_track_test_signal_waveform(engine, t) != 6) { fprintf(stderr, "FAIL: waveform round-trip\n"); failures++; }
+        nc_track_test_signal_set_channel(engine, t, 2);    // Right
+        if (nc_track_test_signal_channel(engine, t) != 2) { fprintf(stderr, "FAIL: channel round-trip\n"); failures++; }
+        nc_track_test_signal_set_polarity(engine, t, true);
+        if (!nc_track_test_signal_polarity(engine, t)) { fprintf(stderr, "FAIL: polarity round-trip\n"); failures++; }
+        // Adding again is idempotent (one per track).
+        nc_track_add_test_signal_generator(engine, t);
+        if (nc_track_remove_test_signal_generator(engine, t) &&
+            nc_track_test_signal_generator_slot(engine, t) != -1) {
+            fprintf(stderr, "FAIL: generator still present after remove\n"); failures++;
+        }
+        printf("test signal generator OK\n");
     }
 
     nc_engine_stop(engine);

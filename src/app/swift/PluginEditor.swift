@@ -89,6 +89,16 @@ final class PluginEditorHost: ObservableObject {
         }
     }
 
+    /// Removing/clearing an instrument (its main slot -1, or a rack layer < -1) must take its
+    /// editor window with it — otherwise a ghost TRITON window lingers after "악기 제거". All
+    /// instrument-slot editors use a negative insertIndex, so close every negative slot for the
+    /// track (layers renumber on removal, so closing them all is the safe choice).
+    func closeInstrumentEditors(trackId: Int) {
+        for slot in Array(sessions.keys) where slot.trackId == trackId && slot.insertIndex < 0 {
+            close(slot)
+        }
+    }
+
     /// Called on quit. Editors are child processes; orphaning them leaves windows behind.
     func closeAll() {
         for slot in sessions.keys {

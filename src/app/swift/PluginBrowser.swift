@@ -90,7 +90,11 @@ struct PluginBrowser: View {
             facetRow("전체", tally: nil, active: selection.wrappedValue.isEmpty) {
                 selection.wrappedValue = ""
             }
-            // Long facet lists (20 categories) would push the column off-screen.
+            // Long facet lists (20 categories) would push the column off-screen, so they scroll.
+            // The list is alphabetical: with the old 140 pt cap + hidden indicators, brands past
+            // ~Neuracoust (Waldorf, Waves, Yamaha…) were silently clipped with no hint they existed,
+            // so brand filtering "didn't work" for them. Taller cap fits the usual brand set, and a
+            // visible indicator makes any remaining overflow discoverable.
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(facets) { facet in
@@ -102,8 +106,8 @@ struct PluginBrowser: View {
                     }
                 }
             }
-            .frame(maxHeight: 140)
-            .scrollIndicators(.never)
+            .frame(maxHeight: 220)
+            .scrollIndicators(.automatic)
         }
     }
 

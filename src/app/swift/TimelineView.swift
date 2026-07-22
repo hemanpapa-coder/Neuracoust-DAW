@@ -75,7 +75,16 @@ struct TimelineModel: Equatable {
         let selected: Bool
         let fadeInSeconds: Double
         let fadeOutSeconds: Double
+        var fadeInCurve: String = "equal_power"
+        var fadeOutCurve: String = "equal_power"
+        var fadeInCurvature: Double = 0.0
+        var fadeOutCurvature: Double = 0.0
         let gainDb: Float
+        // Non-destructive processing state, reflected in the waveform: dimmed when muted, drawn
+        // back-to-front when reversed, flipped vertically when polarity-inverted.
+        var muted: Bool = false
+        var reversed: Bool = false
+        var polarityInverted: Bool = false
     }
 
     var lanes: [Lane] = []
@@ -126,6 +135,9 @@ struct TimelineModel: Equatable {
     var rangeStart: Double = 0
     var rangeEnd: Double = 0
     var loopEnabled: Bool = false
+    /// If the range was made by dragging a specific lane (Pro Tools selector), the lane it belongs
+    /// to — so the edit-range band highlights that track. nil = a ruler range spanning all lanes.
+    var editRangeLane: Int? = nil
 }
 
 /// Timeline surface: ruler, grid, lanes, clips with waveforms, playhead.
@@ -147,10 +159,18 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         didSet { layoutPlayhead() }
     }
 
+    /// Play or record in progress — a click on empty lane space must NOT relocate the playhead
+    /// (edit freely while it rolls, the Pro Tools way). Ruler clicks still scrub deliberately.
+    var isTransportRunning = false
+
     /// Peaks by source path, supplied by the owner. Decoding lives in the engine.
     var waveforms: [String: EngineController.WaveformData] = [:] {
         didSet { needsDisplay = true }
     }
+
+    /// Live audio-record clips: one growing/frozen red clip per punch region on the armed lane.
+    var recordingClips: [EngineController.RecordingClip] = [] { didSet { needsDisplay = true } }
+    var recordingChannels: Int = 2
 
     var onSeek: ((Double) -> Void)?
     var onToggleTimebase: ((RulerTimebase) -> Void)?
@@ -169,6 +189,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onZoom: ((Double, Double) -> Void)?   // (visibleStart, visibleDuration)
     var onSelect: ((String?) -> Void)?
     var onSetRange: ((Double, Double) -> Void)?          // (start, end)
+    var onSetRangeLane: ((Int?) -> Void)?                // which lane the range belongs to (nil = all)
     var onSelectRegion: ((String?) -> Void)?
     var onOpenRegion: ((String) -> Void)?
     var onMoveRegion: ((String, Int, Double) -> Void)?   // (id, lane, start) — continuous
@@ -189,6 +210,21 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))?
     var onSetClipFadeInCurve: ((String, String) -> Void)?
     var onSetClipFadeOutCurve: ((String, String) -> Void)?
+    // Non-destructive clip processing (Logic/Cubase style), all keyed by clip id.
+    var onReverseClip: ((String) -> Void)?
+    var onNormalizeClip: ((String) -> Void)?
+    var onToggleClipMute: ((String) -> Void)?
+    var onToggleClipPolarity: ((String) -> Void)?
+    var onApplyClipTimePitch: ((String, Double, Double) -> Void)?   // (clipId, timeRatio, semitones)
+    var onDenoiseClip: ((String) -> Void)?   // neural noise-floor removal, repoints the clip
+    var onSeparateStems: ((String) -> Void)?   // Demucs 4-stem separation → new tracks
+    var onOpenPitchEditor: ((String) -> Void)?   // Melodyne / Serato anchor pitch editor
+    var onSetCrossfadeLength: ((String, String, Double) -> Void)?  // (leftId, rightId, seconds)
+    var onSetFadeCurvature: ((String, Bool, Double) -> Void)?      // (clipId, isFadeIn, curvature)
+    var auditionRoll: (() -> Double)?
+    var onSetAuditionRoll: ((Double) -> Void)?
+    var onAuditionRegion: ((Double, Double, Bool) -> Void)?       // (startSeconds, endSeconds, loop)
+    var onStopAudition: (() -> Void)?
     var onClipOriginalStart: ((String) -> Double)?       // 스팟: 원래 위치 (-1 = 미기록)
     var onSpotClips: (([String]) -> Void)?               // 스팟: 각 클립을 자기 원래 위치로
     var onAddAutomationPoint: ((Int, Double, Float) -> Void)?    // (lane, time, value)
@@ -215,6 +251,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onBeginCopySelection: ((String) -> String?)?
     var onTrimStart: ((String, Double) -> Void)?         // (clipId, newStart)
     var onTrimEnd: ((String, Double) -> Void)?           // (clipId, newEnd)
+    var onRollBoundary: ((String, String, Double) -> Void)?  // (leftId, rightId, newBoundary)
     var onSetFades: ((String, Double, Double) -> Void)?  // (clipId, fadeIn, fadeOut)
     var onSetGain: ((String, Float) -> Void)?
     var onCommitGain: ((String) -> Void)?                // drag-end: reconcile + record
@@ -249,6 +286,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case seeking
         case marquee(origin: NSPoint, current: NSPoint)
         case rangingFrom(seconds: Double)
+        /// Pro Tools selector: dragging in a lane's empty space makes a time-range edit selection
+        /// anchored to that lane (so it can be edited during playback without touching the playhead).
+        case rangingInLane(origin: Double, lane: Int)
         /// Dragging one edge of an existing range by its ruler handle, or sliding the
         /// whole range by grabbing its middle.
         case rangingEdgeStart
@@ -276,6 +316,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         case copyMovingSelection(anchorId: String, grabOffsetSeconds: Double, startX: CGFloat)
         case trimmingStart(clipId: String)
         case trimmingEnd(clipId: String)
+        /// Rolling the shared boundary of two exactly-abutting clips: trims the left clip's end and
+        /// the right clip's start together, so the junction slides without opening a gap (Pro Tools).
+        case rollingBoundary(leftId: String, rightId: String)
         case fadingIn(clip: TimelineModel.Clip)
         case fadingOut(clip: TimelineModel.Clip)
         /// Dragging the inline volume fader / pan bar in a lane header.
@@ -291,8 +334,126 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// Clip gain is drawn as a horizontal line across this dB span.
     private static let gainRange: ClosedRange<Float> = -24...24
     private static let fadeHandleSize: CGFloat = 9
+    /// How close (screen px) two same-lane clip edges must be to count as "abutting" for a roll edit.
+    private static let boundaryRollTolerance: CGFloat = 2.5
+
+    /// The same-lane clip whose edge exactly meets `clip`'s left (onLeft) or right edge, if any —
+    /// the partner for a roll edit. Overlapping clips (a crossfade) are NOT abutting and return nil.
+    private func abuttingNeighbor(of clip: TimelineModel.Clip, onLeft: Bool) -> TimelineModel.Clip? {
+        let edgeX = onLeft ? x(forSeconds: clip.startSeconds)
+                           : x(forSeconds: clip.startSeconds + clip.durationSeconds)
+        return model.clips.first { other in
+            guard other.id != clip.id, other.laneIndex == clip.laneIndex else { return false }
+            let otherEdgeX = onLeft ? x(forSeconds: other.startSeconds + other.durationSeconds)
+                                    : x(forSeconds: other.startSeconds)
+            return abs(otherEdgeX - edgeX) <= Self.boundaryRollTolerance
+        }
+    }
 
     private var drag = Drag.none
+    /// Held so the fade/crossfade editor popover survives while shown.
+    private var fadeEditorPopover: NSPopover?
+
+    /// Double-click on the LOWER half of a fade or crossfade region → open the editor popover.
+    /// Returns true when it opened one (crossfade takes priority over a plain fade at the same x).
+    private func presentFadeCrossfadeEditor(at point: NSPoint, hit: TimelineModel.Clip) -> Bool {
+        let rect = clipRect(hit)
+        guard point.y > rect.midY else { return false }   // lower half only
+        let t = seconds(atX: point.x)
+
+        // Crossfade: does `hit` overlap a same-lane neighbour, and is the click inside that overlap?
+        for other in model.clips where other.laneIndex == hit.laneIndex && other.id != hit.id {
+            let a = hit.startSeconds <= other.startSeconds ? hit : other      // earlier
+            let b = hit.startSeconds <= other.startSeconds ? other : hit      // later
+            let aEnd = a.startSeconds + a.durationSeconds
+            let overlapEnd = min(aEnd, b.startSeconds + b.durationSeconds)
+            guard aEnd > b.startSeconds + 1e-6 else { continue }
+            if t >= b.startSeconds - 0.02 && t <= overlapEnd + 0.02 {
+                let overlap = aEnd - b.startSeconds
+                showEditorPopover(FadeCrossfadeEditorConfig(
+                    target: .crossfade(leftId: a.id, rightId: b.id),
+                    initialOutCurve: a.fadeOutCurve, initialInCurve: b.fadeInCurve,
+                    initialSeconds: overlap,
+                    maxSeconds: min(a.durationSeconds, b.durationSeconds),
+                    initialCurvature: a.fadeOutCurvature,
+                    setOutCurve: { [weak self] in self?.onSetClipFadeOutCurve?(a.id, $0) },
+                    setInCurve: { [weak self] in self?.onSetClipFadeInCurve?(b.id, $0) },
+                    setLength: { [weak self] in self?.onSetCrossfadeLength?(a.id, b.id, $0) },
+                    setCurvature: { [weak self] c in
+                        self?.onSetFadeCurvature?(a.id, false, c)   // front clip's fade-out
+                        self?.onSetFadeCurvature?(b.id, true, c)    // back clip's fade-in
+                    },
+                    initialRoll: auditionRoll?() ?? 1.5,
+                    setRoll: { [weak self] in self?.onSetAuditionRoll?($0) },
+                    audition: { [weak self] loop in self?.onAuditionRegion?(b.startSeconds, overlapEnd, loop) },
+                    stopAudition: { [weak self] in self?.onStopAudition?() },
+                    remove: { [weak self] in self?.onSetCrossfadeLength?(a.id, b.id, 0) },
+                    close: { [weak self] in self?.dismissFadeEditor() }),
+                    anchor: rect, atX: point.x)
+                return true
+            }
+        }
+
+        // Fade-in / fade-out on the hit clip itself.
+        let clipEnd = hit.startSeconds + hit.durationSeconds
+        if hit.fadeInSeconds > 0.001, t >= hit.startSeconds - 0.02, t <= hit.startSeconds + hit.fadeInSeconds + 0.02 {
+            showEditorPopover(fadeConfig(hit, edge: .fadeIn), anchor: rect, atX: point.x); return true
+        }
+        if hit.fadeOutSeconds > 0.001, t >= clipEnd - hit.fadeOutSeconds - 0.02, t <= clipEnd + 0.02 {
+            showEditorPopover(fadeConfig(hit, edge: .fadeOut), anchor: rect, atX: point.x); return true
+        }
+        return false
+    }
+
+    private func fadeConfig(_ clip: TimelineModel.Clip, edge: FadeEdge) -> FadeCrossfadeEditorConfig {
+        let isIn = edge == .fadeIn
+        return FadeCrossfadeEditorConfig(
+            target: .fade(clipId: clip.id, edge: edge),
+            initialOutCurve: isIn ? clip.fadeInCurve : clip.fadeOutCurve, initialInCurve: "",
+            initialSeconds: isIn ? clip.fadeInSeconds : clip.fadeOutSeconds,
+            maxSeconds: clip.durationSeconds,
+            initialCurvature: isIn ? clip.fadeInCurvature : clip.fadeOutCurvature,
+            setOutCurve: { [weak self] in
+                isIn ? self?.onSetClipFadeInCurve?(clip.id, $0) : self?.onSetClipFadeOutCurve?(clip.id, $0)
+            },
+            setInCurve: { _ in },
+            setLength: { [weak self] in
+                isIn ? self?.onSetFades?(clip.id, $0, clip.fadeOutSeconds)
+                     : self?.onSetFades?(clip.id, clip.fadeInSeconds, $0)
+            },
+            setCurvature: { [weak self] c in self?.onSetFadeCurvature?(clip.id, isIn, c) },
+            initialRoll: auditionRoll?() ?? 1.5,
+            setRoll: { [weak self] in self?.onSetAuditionRoll?($0) },
+            audition: { [weak self] loop in
+                let end = clip.startSeconds + clip.durationSeconds
+                isIn ? self?.onAuditionRegion?(clip.startSeconds, clip.startSeconds + clip.fadeInSeconds, loop)
+                     : self?.onAuditionRegion?(end - clip.fadeOutSeconds, end, loop)
+            },
+            stopAudition: { [weak self] in self?.onStopAudition?() },
+            remove: { [weak self] in
+                isIn ? self?.onSetFades?(clip.id, 0, clip.fadeOutSeconds)
+                     : self?.onSetFades?(clip.id, clip.fadeInSeconds, 0)
+            },
+            close: { [weak self] in self?.dismissFadeEditor() })
+    }
+
+    private func showEditorPopover(_ config: FadeCrossfadeEditorConfig, anchor rect: NSRect, atX x: CGFloat) {
+        dismissFadeEditor()
+        let pop = NSPopover()
+        pop.behavior = .transient
+        let host = NSHostingController(rootView: FadeCrossfadeEditorView(config: config))
+        host.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host
+        fadeEditorPopover = pop
+        let anchorRect = NSRect(x: x - 3, y: rect.minY, width: 6, height: rect.height)
+        pop.show(relativeTo: anchorRect, of: self, preferredEdge: .maxY)
+    }
+
+    private func dismissFadeEditor() {
+        onStopAudition?()   // stop a looping audition when the editor closes
+        fadeEditorPopover?.close()
+        fadeEditorPopover = nil
+    }
 
     /// The live cursor point during a clip move, so a ghost can follow it into the target
     /// lane — the visual feedback that the clip is being carried.
@@ -732,6 +893,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 }
             }
             let origin = max(0, snapped(seconds(atX: point.x)))
+            onSetRangeLane?(nil)   // a ruler-swept range spans all lanes, not one track
             drag = .rangingFrom(seconds: origin)
             return
         }
@@ -772,18 +934,36 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             return
         }
 
+        // Double-clicking the LOWER half of a fade or crossfade region opens the fade editor popover
+        // (Pro Tools / Cubase). Checked before the instrument-lane double-click so it wins on a clip.
+        if event.clickCount >= 2, let hit = clip(at: point), presentFadeCrossfadeEditor(at: point, hit: hit) {
+            return
+        }
+
         // Double-clicking an empty instrument lane starts a new part there.
         if event.clickCount >= 2, let lane = laneIndex(at: point) {
             onAddRegion?(lane, max(0, snapped(seconds(atX: point.x))))
             return
         }
 
-        // Dragging from empty lane space sweeps a selection rectangle.
+        // Empty lane space. A plain drag makes a Pro Tools time-range edit selection anchored to
+        // this lane — so you can define an edit region on an (even empty) track and edit during
+        // playback, without moving the playhead. ⇧-drag keeps the multi-clip marquee (rectangle).
         guard let hit = clip(at: point) else {
-            if !event.modifierFlags.contains(.shift) {
-                onSelect?(nil)
+            if event.modifierFlags.contains(.shift) {
+                drag = .marquee(origin: point, current: point)
+                needsDisplay = true
+                return
             }
-            drag = .marquee(origin: point, current: point)
+            onSelect?(nil)
+            if let lane = laneIndex(at: point) {
+                let t = max(0, snapped(seconds(atX: point.x)))
+                onSetRange?(t, t)          // collapsed to start; the drag widens it
+                onSetRangeLane?(lane)
+                drag = .rangingInLane(origin: t, lane: lane)
+            } else {
+                drag = .marquee(origin: point, current: point)   // below the last lane → rectangle select
+            }
             needsDisplay = true
             return
         }
@@ -795,6 +975,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         // Clicking inside a multi-selection keeps it, so it can be dragged whole.
         if !hit.selected {
             onSelect?(hit.id)
+        }
+
+        // Pro Tools: double-click a clip (Selector) to set the edit range to its whole length — the
+        // fast "select this clip as a range" gesture. Anchored to the clip's own lane.
+        if event.clickCount >= 2 {
+            onSelect?(hit.id)
+            onSetRange?(hit.startSeconds, hit.startSeconds + hit.durationSeconds)
+            onSetRangeLane?(hit.laneIndex)
+            return
         }
 
         // A specific tool forces its behaviour instead of the smart zone detection.
@@ -858,9 +1047,18 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                                         startX: point.x, axisUnlocked: false)
             }
         } else if point.x - rect.minX <= Self.trimHandleWidth {
-            drag = .trimmingStart(clipId: hit.id)
+            // If the left edge exactly abuts a same-lane neighbour, grab the shared boundary (roll).
+            if let leftN = abuttingNeighbor(of: hit, onLeft: true) {
+                drag = .rollingBoundary(leftId: leftN.id, rightId: hit.id)
+            } else {
+                drag = .trimmingStart(clipId: hit.id)
+            }
         } else if rect.maxX - point.x <= Self.trimHandleWidth {
-            drag = .trimmingEnd(clipId: hit.id)
+            if let rightN = abuttingNeighbor(of: hit, onLeft: false) {
+                drag = .rollingBoundary(leftId: hit.id, rightId: rightN.id)
+            } else {
+                drag = .trimmingEnd(clipId: hit.id)
+            }
         } else if event.modifierFlags.contains(.option) {
             // Option-drag = copy, but the copy is made on release, not now — so an
             // option-click that never moves cannot leave a duplicate summing in place.
@@ -895,6 +1093,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             drag = .movingMarker(fromSeconds: target)
         case .rangingFrom(let origin):
             onSetRange?(origin, max(0, snapped(time)))
+        case .rangingInLane(let origin, _):
+            let t = max(0, snapped(time))
+            onSetRange?(min(origin, t), max(origin, t))   // widen either direction from the anchor
+            needsDisplay = true
         case .rangingEdgeStart:
             // Drag the left edge; keep it left of the right edge.
             onSetRange?(min(max(0, snapped(time)), model.rangeEnd - 0.01), model.rangeEnd)
@@ -963,6 +1165,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             onTrimStart?(clipId, snapped(time))
         case .trimmingEnd(let clipId):
             onTrimEnd?(clipId, snapped(time))
+        case .rollingBoundary(let leftId, let rightId):
+            onRollBoundary?(leftId, rightId, snapped(time))
         case .fadingIn(let clip):
             let fade = min(clip.durationSeconds, max(0, time - clip.startSeconds))
             onSetFades?(clip.id, fade, clip.fadeOutSeconds)
@@ -1032,6 +1236,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             }
         case .trimmingStart, .trimmingEnd:
             onCommitEdit?("Trim clip")
+        case .rollingBoundary:
+            onCommitEdit?("Roll edit")
         case .fadingIn, .fadingOut:
             onCommitEdit?("Clip fade")
         case .gaining(let clip, _, _):
@@ -1042,8 +1248,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             break   // never crossed the threshold — nothing was copied, nothing to commit
         case .marquee(let origin, let current):
             if origin == current {
-                // A click, not a sweep: the playhead follows, snapped to the grid.
-                onSeek?(snapped(seconds(atX: point.x)))
+                // A click, not a sweep: the playhead follows (snapped) — but NOT while playing or
+                // recording, so you can click/deselect and edit without interrupting the roll.
+                if !isTransportRunning {
+                    onSeek?(snapped(seconds(atX: point.x)))
+                }
             } else {
                 onSelectMany?(clipsIntersecting(NSRect(x: min(origin.x, current.x),
                                                        y: min(origin.y, current.y),
@@ -1078,7 +1287,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 onReorderTrack?(trackId, targetId, point.y > mid)
             }
             needsDisplay = true
-        case .none, .seeking, .rangingFrom, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
+        case .none, .seeking, .rangingFrom, .rangingInLane, .rangingEdgeStart, .rangingEdgeEnd, .movingRange:
             // The range is a view of where to edit, not an edit. Nothing to undo.
             break
         }
@@ -1169,7 +1378,20 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                                  width: Self.trimHandleWidth, height: rect.height),
                           cursor: .resizeLeftRight)
         }
+        // A roll cursor over each shared boundary of two abutting clips — added last so it wins over
+        // the plain resize handles that meet there, telling the user this junction moves BOTH clips.
+        for clip in model.clips {
+            guard let right = abuttingNeighbor(of: clip, onLeft: false) else { continue }
+            let rect = clipRect(clip)
+            let boundaryX = clipRect(right).minX
+            _ = rect
+            addCursorRect(NSRect(x: boundaryX - Self.trimHandleWidth, y: rect.minY,
+                                 width: Self.trimHandleWidth * 2, height: rect.height),
+                          cursor: Self.rollCursor)
+        }
     }
+
+    private static var rollCursor: NSCursor { symbolCursor("arrow.left.and.right") }
 
     /// Scroll pans; ⌘-scroll (or a pinch) zooms about the pointer.
     override func scrollWheel(with event: NSEvent) {
@@ -1178,7 +1400,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         if event.modifierFlags.contains(.command) || event.phase == .changed && event.magnification != 0 {
             let anchor = seconds(atX: point.x)
             let factor = event.scrollingDeltaY > 0 ? 0.9 : 1.1
-            let duration = min(600, max(0.25, model.visibleDuration * factor))
+            let duration = min(3600, max(0.25, model.visibleDuration * factor))
 
             // Keep the time under the pointer pinned while the span changes.
             let fraction = Double((point.x - lanesRect.minX) / max(1, lanesRect.width))
@@ -1317,6 +1539,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         drawLaneHeaders(context)
         drawGrid(context)
         drawClips(context)
+        drawRecordingClip(context)
+        drawCrossfades(context)
         drawDragGhost(context)
         drawMidiRegions(context)
         drawAutomation(context)
@@ -1361,6 +1585,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         tint.withAlphaComponent(0.08).setFill()
         NSRect(x: left, y: rulerHeight, width: right - left,
                height: bounds.height - rulerHeight).fill()
+
+        // A lane-drag range (Pro Tools selector) belongs to its own track — highlight that lane
+        // more strongly so the edit selection reads as being "on that track".
+        if let lane = model.editRangeLane, lane < model.lanes.count {
+            tint.withAlphaComponent(0.20).setFill()
+            NSRect(x: left, y: laneTop(lane), width: right - left, height: laneHeight(lane)).fill()
+        }
 
         tint.withAlphaComponent(0.55).setFill()
         NSRect(x: left, y: 0, width: right - left, height: Self.rangeStripHeight).fill()
@@ -1771,6 +2002,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         init(_ clipId: String, _ curve: String) { self.clipId = clipId; self.curve = curve } }
     private final class SpotMenuRef: NSObject { let clipIds: [String]
         init(_ clipIds: [String]) { self.clipIds = clipIds } }
+    private final class TimePitchRef: NSObject { let clipId: String; let ratio: Double; let semis: Double
+        init(_ clipId: String, _ ratio: Double, _ semis: Double) { self.clipId = clipId; self.ratio = ratio; self.semis = semis } }
 
     /// Right-click a clip → spot back to its original position, fade curves.
     private func showClipFadeMenu(_ clip: TimelineModel.Clip, event: NSEvent) {
@@ -1791,6 +2024,53 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         // still contain clips that do, so it stays clickable.
         if spotTargets.count == 1 && original < 0 { spot.action = nil }
         menu.addItem(spot)
+
+        // Non-destructive clip processing (Logic/Cubase style) — the renderer honours the flags, so
+        // nothing writes a new file and every one undoes. Mute shows a checkmark from the model;
+        // reverse/polarity are plain toggles.
+        menu.addItem(.separator())
+        func clipProc(_ title: String, _ sel: Selector, checked: Bool = false) {
+            let it = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            it.target = self
+            it.representedObject = clip.id as NSString
+            it.state = checked ? .on : .off
+            menu.addItem(it)
+        }
+        clipProc("리버스", #selector(reverseClipMenu(_:)))
+        clipProc("노멀라이즈", #selector(normalizeClipMenu(_:)))
+        clipProc("뮤트", #selector(muteClipMenu(_:)))
+        clipProc("Ø 위상 반전", #selector(polarityClipMenu(_:)))
+
+        // Offline time/pitch print (Serato phase vocoder): common presets, applied to the clip window.
+        if onApplyClipTimePitch != nil {
+            let tpItem = NSMenuItem(title: "타임/피치", action: nil, keyEquivalent: "")
+            let tp = NSMenu()
+            func tpEntry(_ title: String, _ ratio: Double, _ semis: Double) {
+                let it = NSMenuItem(title: title, action: #selector(applyTimePitchMenu(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = TimePitchRef(clip.id, ratio, semis)
+                tp.addItem(it)
+            }
+            tpEntry("길이 2배 (½ 속도)", 2.0, 0.0)
+            tpEntry("길이 절반 (2× 속도)", 0.5, 0.0)
+            tp.addItem(.separator())
+            tpEntry("피치 +12 반음 (옥타브 ↑)", 1.0, 12.0)
+            tpEntry("피치 +7 반음", 1.0, 7.0)
+            tpEntry("피치 +1 반음", 1.0, 1.0)
+            tpEntry("피치 −1 반음", 1.0, -1.0)
+            tpEntry("피치 −12 반음 (옥타브 ↓)", 1.0, -12.0)
+            tpItem.submenu = tp
+            menu.addItem(tpItem)
+        }
+        if onDenoiseClip != nil {
+            clipProc("노이즈 제거 (뉴럴 디노이저)", #selector(denoiseClipMenu(_:)))
+        }
+        if onSeparateStems != nil {
+            clipProc("스템 분리 (드럼/베이스/보컬/기타)", #selector(separateStemsMenu(_:)))
+        }
+        if onOpenPitchEditor != nil {
+            clipProc("피치 에디터 (멜로다인 / 세라토 앵커)", #selector(openPitchEditorMenu(_:)))
+        }
 
         let opts = onFadeCurveOptions?() ?? []
         if opts.isEmpty {
@@ -1832,6 +2112,16 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard let r = s.representedObject as? ClipCurveRef else { return }
         onSetClipFadeInCurve?(r.clipId, r.curve)
     }
+    @objc private func reverseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onReverseClip?(id) } }
+    @objc private func normalizeClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onNormalizeClip?(id) } }
+    @objc private func applyTimePitchMenu(_ s: NSMenuItem) {
+        if let r = s.representedObject as? TimePitchRef { onApplyClipTimePitch?(r.clipId, r.ratio, r.semis) }
+    }
+    @objc private func denoiseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onDenoiseClip?(id) } }
+    @objc private func separateStemsMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onSeparateStems?(id) } }
+    @objc private func openPitchEditorMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onOpenPitchEditor?(id) } }
+    @objc private func muteClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onToggleClipMute?(id) } }
+    @objc private func polarityClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onToggleClipPolarity?(id) } }
     @objc private func setFadeOutCurveMenu(_ s: NSMenuItem) {
         guard let r = s.representedObject as? ClipCurveRef else { return }
         onSetClipFadeOutCurve?(r.clipId, r.curve)
@@ -2234,8 +2524,147 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 body.lineWidth = 1
             }
             body.stroke()
+
+            // Muted clip: a translucent grey wash over the whole body so it reads as inactive
+            // (Logic/Cubase style), on top of the already-dimmed waveform.
+            if clip.muted {
+                NSColor(hex: 0x0b0806).withAlphaComponent(0.5).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+            }
         }
 
+        context.restoreGState()
+    }
+
+    /// The live "recording" clips on the armed lane — one red-tinted body per punch region, each
+    /// with its streaming waveform. Nothing draws during a plain background pass (empty array).
+    private func drawRecordingClip(_ context: CGContext) {
+        guard !recordingClips.isEmpty else { return }
+        context.saveGState()
+        context.clip(to: lanesRect)
+        for clip in recordingClips {
+            guard let laneIndex = model.lanes.firstIndex(where: { $0.trackId == clip.trackId }),
+                  clip.durationSeconds > 0 else { continue }
+            let left = x(forSeconds: clip.startSeconds)
+            let right = x(forSeconds: clip.startSeconds + clip.durationSeconds)
+            guard right > lanesRect.minX, left < lanesRect.maxX else { continue }
+            let top = laneTop(laneIndex) + 6
+            let rect = NSRect(x: left, y: top, width: max(2, right - left), height: laneHeight(laneIndex) - 12)
+
+            let body = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+            NSColor(hex: 0x4a1f2a).setFill()
+            body.fill()
+
+            let wave = rect.insetBy(dx: 2, dy: 14)
+            if recordingChannels > 1, !clip.peaksR.isEmpty {
+                let gap: CGFloat = 2
+                let half = (wave.height - gap) / 2
+                drawRecordingEnvelope(clip.peaksL, in: NSRect(x: wave.minX, y: wave.minY, width: wave.width, height: half))
+                drawRecordingEnvelope(clip.peaksR, in: NSRect(x: wave.minX, y: wave.maxY - half, width: wave.width, height: half))
+            } else {
+                drawRecordingEnvelope(clip.peaksL, in: wave)
+            }
+
+            NSColor(hex: 0x0b0806).withAlphaComponent(0.55).setFill()
+            NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: 13).fill()
+            ("● REC" as NSString).draw(
+                at: NSPoint(x: rect.minX + 5, y: rect.minY + 1),
+                withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                    .foregroundColor: NSColor(hex: 0xff6b81),
+                ])
+
+            NSColor(hex: 0xe0556a).setStroke()
+            body.lineWidth = 1.5
+            body.stroke()
+        }
+        context.restoreGState()
+    }
+
+    /// One symmetric live-record envelope from coarse mono peaks mapped across `rect`'s width.
+    private func drawRecordingEnvelope(_ peaks: [Float], in rect: NSRect) {
+        guard rect.width >= 1, !peaks.isEmpty, rect.height > 1 else { return }
+        let midY = rect.midY
+        let halfH = rect.height / 2
+        let n = peaks.count
+        let firstCol = Int(max(0, lanesRect.minX - rect.minX))
+        let lastCol = Int(min(rect.width, lanesRect.maxX - rect.minX))
+        guard lastCol > firstCol else { return }
+        let path = NSBezierPath()
+        for col in firstCol..<lastCol {
+            let f0 = Double(col) / Double(rect.width)
+            let f1 = Double(col + 1) / Double(rect.width)
+            let i0 = min(n - 1, max(0, Int(f0 * Double(n))))
+            let i1 = min(n - 1, max(i0, Int(f1 * Double(n))))
+            var pk: Float = 0
+            for i in i0...i1 { pk = max(pk, peaks[i]) }
+            let h = max(0.5, min(halfH, CGFloat(pk) * halfH))
+            let px = rect.minX + CGFloat(col) + 0.5
+            path.move(to: NSPoint(x: px, y: midY - h))
+            path.line(to: NSPoint(x: px, y: midY + h))
+        }
+        NSColor(hex: 0xff9fb0).withAlphaComponent(0.95).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    /// Pro Tools crossfade: where two same-lane clips overlap, draw the X — the earlier clip's
+    /// fade-out crossing the later clip's fade-in — in a boxed region, so the crossfade reads as the
+    /// two clips crossing rather than one just covering the other.
+    private func drawCrossfades(_ context: CGContext) {
+        context.saveGState()
+        context.clip(to: lanesRect)
+        let byLane = Dictionary(grouping: model.clips.filter { $0.laneIndex < model.lanes.count }) { $0.laneIndex }
+        for (lane, clips) in byLane {
+            let sorted = clips.sorted { $0.startSeconds < $1.startSeconds }
+            for i in 0..<max(0, sorted.count - 1) {
+                let a = sorted[i], b = sorted[i + 1]
+                let aEnd = a.startSeconds + a.durationSeconds
+                let overlapEnd = min(aEnd, b.startSeconds + b.durationSeconds)
+                guard b.startSeconds < aEnd - 1e-6, overlapEnd > b.startSeconds else { continue }  // real overlap
+                // Any same-track overlap IS a crossfade now — the render derives it from the overlap
+                // itself (max with each clip's manual fade), so it draws wherever clips overlap and
+                // clears the instant they are pulled apart. No baked fade to check.
+                let left = x(forSeconds: b.startSeconds)
+                let right = x(forSeconds: overlapEnd)
+                guard right > left + 0.5, right > lanesRect.minX, left < lanesRect.maxX else { continue }
+
+                let top = laneTop(lane) + 6 + 13                       // below the clip name bar
+                let bottom = laneTop(lane) + laneHeight(lane) - 6
+                guard bottom > top else { continue }
+                let l = max(left, lanesRect.minX), r = min(right, lanesRect.maxX)
+
+                // Tint the overlap so it stands apart from the two clip bodies.
+                NSColor(hex: 0x0b0806).withAlphaComponent(0.30).setFill()
+                NSRect(x: l, y: top, width: r - l, height: bottom - top).fill()
+
+                // The crossing fade curves, sampled from each clip's actual curve so the picture
+                // matches the sound (top = full level, bottom = silence). A (earlier) fades out with
+                // its fadeOutCurve; B (later) fades in with its fadeInCurve.
+                let steps = 24
+                let outCurve = NSBezierPath()   // A: full→silence, left→right
+                let inCurve = NSBezierPath()     // B: silence→full, left→right
+                for i in 0...steps {
+                    let t = CGFloat(i) / CGFloat(steps)
+                    let px = left + (right - left) * t
+                    let outGain = Self.fadeCurveGain(a.fadeOutCurve, Self.fadeCurvature(1 - t, a.fadeOutCurvature))
+                    let inGain = Self.fadeCurveGain(b.fadeInCurve, Self.fadeCurvature(t, b.fadeInCurvature))
+                    let outY = top + (1 - outGain) * (bottom - top)
+                    let inY = top + (1 - inGain) * (bottom - top)
+                    if i == 0 { outCurve.move(to: NSPoint(x: px, y: outY)); inCurve.move(to: NSPoint(x: px, y: inY)) }
+                    else { outCurve.line(to: NSPoint(x: px, y: outY)); inCurve.line(to: NSPoint(x: px, y: inY)) }
+                }
+                NSColor(hex: 0xf0c674).withAlphaComponent(0.9).setStroke()
+                outCurve.lineWidth = 1.2; outCurve.stroke()
+                inCurve.lineWidth = 1.2; inCurve.stroke()
+
+                // Box outline around the crossfade.
+                let box = NSBezierPath(rect: NSRect(x: l, y: top, width: r - l, height: bottom - top))
+                NSColor(hex: 0xe6a23c).withAlphaComponent(0.55).setStroke()
+                box.lineWidth = 1
+                box.stroke()
+            }
+        }
         context.restoreGState()
     }
 
@@ -2254,25 +2683,60 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         return min(rect.maxY - bottomMargin, max(rect.minY + topMargin, y))
     }
 
-    /// Fades are drawn as the region the clip loses: a wedge from silence up to
-    /// full level. Handles ride the top edge where the fade ends.
+    /// The render's fade curve, replicated for drawing so the picture matches the sound exactly
+    /// (see fadeCurveGain in ProjectAudioRenderer.cpp): linear=x, slow=x², fast=√x, else equal-power.
+    static func fadeCurveGain(_ curve: String, _ t: CGFloat) -> CGFloat {
+        let x = max(0, min(1, t))
+        switch curve {
+        case "linear": return x
+        case "slow": return x * x
+        case "fast": return sqrt(x)
+        default: return sin(x * .pi / 2)   // equal_power
+        }
+    }
+
+    /// Continuous shape bend applied to the fade position before the curve — matches the render's
+    /// applyFadeCurvature so the drawing and the sound agree. curvature 0 = unchanged.
+    static func fadeCurvature(_ t: CGFloat, _ curvature: Double) -> CGFloat {
+        let x = max(0, min(1, t))
+        let c = max(-1.0, min(1.0, curvature))
+        if c == 0 { return x }
+        return pow(x, CGFloat(pow(2.0, c * 2.0)))
+    }
+
+    /// Fades are drawn as the region the clip loses: the area ABOVE the gain curve, darkened.
+    /// The top edge follows the fade curve (not a straight line), so changing the curve reshapes
+    /// the picture the same way it reshapes the sound. Handles ride where the fade ends.
     private func drawFades(_ clip: TimelineModel.Clip, in rect: NSRect) {
         NSColor(hex: 0x0b0806).withAlphaComponent(0.55).setFill()
+        let steps = 24
 
         if clip.fadeInSeconds > 0 {
             let end = x(forSeconds: clip.startSeconds + clip.fadeInSeconds)
+            // The lost region is above the rising gain curve: silence at the left edge up to full at `end`.
             let wedge = NSBezierPath()
             wedge.move(to: NSPoint(x: rect.minX, y: rect.minY))
-            wedge.line(to: NSPoint(x: min(end, rect.maxX), y: rect.minY))
+            for i in 0...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let px = rect.minX + (end - rect.minX) * t
+                let gain = Self.fadeCurveGain(clip.fadeInCurve, Self.fadeCurvature(t, clip.fadeInCurvature))
+                wedge.line(to: NSPoint(x: px, y: rect.minY + gain * rect.height))
+            }
             wedge.line(to: NSPoint(x: rect.minX, y: rect.maxY))
             wedge.close()
             wedge.fill()
         }
         if clip.fadeOutSeconds > 0 {
             let begin = x(forSeconds: clip.startSeconds + clip.durationSeconds - clip.fadeOutSeconds)
+            // The lost region is above the falling gain curve: full at `begin` down to silence at the right.
             let wedge = NSBezierPath()
-            wedge.move(to: NSPoint(x: max(begin, rect.minX), y: rect.minY))
-            wedge.line(to: NSPoint(x: rect.maxX, y: rect.minY))
+            wedge.move(to: NSPoint(x: rect.maxX, y: rect.minY))
+            for i in 0...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let px = begin + (rect.maxX - begin) * t
+                let gain = Self.fadeCurveGain(clip.fadeOutCurve, Self.fadeCurvature(1 - t, clip.fadeOutCurvature))
+                wedge.line(to: NSPoint(x: px, y: rect.minY + gain * rect.height))
+            }
             wedge.line(to: NSPoint(x: rect.maxX, y: rect.maxY))
             wedge.close()
             wedge.fill()
@@ -2351,8 +2815,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let windowSpan = fileDuration > 0 ? clip.durationSeconds / fileDuration : 1
 
         for column in firstColumn..<lastColumn {
-            let startFraction = windowStart + Double(column) / Double(rect.width) * windowSpan
-            let endFraction = windowStart + Double(column + 1) / Double(rect.width) * windowSpan
+            // Reverse: draw the source window back-to-front so the picture mirrors what actually plays.
+            let mappedColumn = clip.reversed ? (Double(rect.width) - 1 - Double(column)) : Double(column)
+            let startFraction = windowStart + mappedColumn / Double(rect.width) * windowSpan
+            let endFraction = windowStart + (mappedColumn + 1) / Double(rect.width) * windowSpan
             let first = min(buckets - 1, max(0, Int(startFraction * Double(buckets))))
             let last = min(buckets - 1, max(first, Int(endFraction * Double(buckets))))
 
@@ -2362,6 +2828,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 low = min(low, mins[bucket])
                 high = max(high, maxs[bucket])
             }
+            // Polarity invert: flip the envelope vertically (max↔−min).
+            if clip.polarityInverted { let h = high; high = -low; low = -h }
             let pointX = rect.minX + CGFloat(column) + 0.5
             let highY = max(-halfHeight, min(halfHeight, CGFloat(high) * gainFactor * halfHeight))
             let lowY = max(-halfHeight, min(halfHeight, CGFloat(low) * gainFactor * halfHeight))
@@ -2371,7 +2839,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         }
 
         guard drew else { return }
-        accent.withAlphaComponent(0.85).setStroke()
+        // Muted clips read as inactive — dim the waveform well down.
+        accent.withAlphaComponent(clip.muted ? 0.22 : 0.85).setStroke()
         path.lineWidth = 1
         path.stroke()
     }
@@ -2396,11 +2865,16 @@ extension NSColor {
 struct TimelineView: NSViewRepresentable {
     let model: TimelineModel
     let playheadSeconds: Double
+    var isTransportRunning: Bool = false
     let waveforms: [String: EngineController.WaveformData]
+    // Live audio-record clips (empty = not recording / plain background pass).
+    var recordingClips: [EngineController.RecordingClip] = []
+    var recordingChannels: Int = 2
     let onSeek: (Double) -> Void
     let onZoom: (Double, Double) -> Void
     let onSelect: (String?) -> Void
     let onSetRange: (Double, Double) -> Void
+    let onSetRangeLane: (Int?) -> Void
     let onSelectRegion: (String?) -> Void
     let onOpenRegion: (String) -> Void
     let onMoveRegion: (String, Int, Double) -> Void
@@ -2421,6 +2895,20 @@ struct TimelineView: NSViewRepresentable {
     var onClipCurrentFades: ((String) -> (inCurve: String, outCurve: String))? = nil
     var onSetClipFadeInCurve: ((String, String) -> Void)? = nil
     var onSetClipFadeOutCurve: ((String, String) -> Void)? = nil
+    var onReverseClip: ((String) -> Void)? = nil
+    var onNormalizeClip: ((String) -> Void)? = nil
+    var onToggleClipMute: ((String) -> Void)? = nil
+    var onToggleClipPolarity: ((String) -> Void)? = nil
+    var onApplyClipTimePitch: ((String, Double, Double) -> Void)? = nil
+    var onDenoiseClip: ((String) -> Void)? = nil
+    var onSeparateStems: ((String) -> Void)? = nil
+    var onOpenPitchEditor: ((String) -> Void)? = nil
+    var onSetCrossfadeLength: ((String, String, Double) -> Void)? = nil
+    var onSetFadeCurvature: ((String, Bool, Double) -> Void)? = nil
+    var auditionRoll: (() -> Double)? = nil
+    var onSetAuditionRoll: ((Double) -> Void)? = nil
+    var onAuditionRegion: ((Double, Double, Bool) -> Void)? = nil
+    var onStopAudition: (() -> Void)? = nil
     var onClipOriginalStart: ((String) -> Double)? = nil
     var onSpotClips: (([String]) -> Void)? = nil
     let onAddAutomationPoint: (Int, Double, Float) -> Void
@@ -2437,6 +2925,7 @@ struct TimelineView: NSViewRepresentable {
     let onMoveSelection: (Double) -> Void
     let onTrimStart: (String, Double) -> Void
     let onTrimEnd: (String, Double) -> Void
+    var onRollBoundary: ((String, String, Double) -> Void)? = nil
     let onSetFades: (String, Double, Double) -> Void
     let onSetGain: (String, Float) -> Void
     let onCommitGain: (String) -> Void
@@ -2481,6 +2970,9 @@ struct TimelineView: NSViewRepresentable {
         }
         view.model = model
         view.playheadSeconds = playheadSeconds
+        view.isTransportRunning = isTransportRunning
+        view.recordingChannels = recordingChannels
+        view.recordingClips = recordingClips            // didSet repaints
     }
 
     private func wire(_ view: TimelineNSView) {
@@ -2500,6 +2992,7 @@ struct TimelineView: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSelect = onSelect
         view.onSetRange = onSetRange
+        view.onSetRangeLane = onSetRangeLane
         view.onSelectRegion = onSelectRegion
         view.onOpenRegion = onOpenRegion
         view.onMoveRegion = onMoveRegion
@@ -2522,6 +3015,20 @@ struct TimelineView: NSViewRepresentable {
         view.onSpotClips = onSpotClips
         view.onSetClipFadeInCurve = onSetClipFadeInCurve
         view.onSetClipFadeOutCurve = onSetClipFadeOutCurve
+        view.onReverseClip = onReverseClip
+        view.onNormalizeClip = onNormalizeClip
+        view.onApplyClipTimePitch = onApplyClipTimePitch
+        view.onDenoiseClip = onDenoiseClip
+        view.onSeparateStems = onSeparateStems
+        view.onOpenPitchEditor = onOpenPitchEditor
+        view.onToggleClipMute = onToggleClipMute
+        view.onToggleClipPolarity = onToggleClipPolarity
+        view.onSetCrossfadeLength = onSetCrossfadeLength
+        view.onSetFadeCurvature = onSetFadeCurvature
+        view.auditionRoll = auditionRoll
+        view.onSetAuditionRoll = onSetAuditionRoll
+        view.onAuditionRegion = onAuditionRegion
+        view.onStopAudition = onStopAudition
         view.onAddAutomationPoint = onAddAutomationPoint
         view.onMoveAutomationPoint = onMoveAutomationPoint
         view.onDeleteAutomationPoint = onDeleteAutomationPoint
@@ -2536,6 +3043,7 @@ struct TimelineView: NSViewRepresentable {
         view.onBeginCopySelection = onBeginCopySelection
         view.onTrimStart = onTrimStart
         view.onTrimEnd = onTrimEnd
+        view.onRollBoundary = onRollBoundary
         view.onSetFades = onSetFades
         view.onSetGain = onSetGain
         view.onCommitGain = onCommitGain

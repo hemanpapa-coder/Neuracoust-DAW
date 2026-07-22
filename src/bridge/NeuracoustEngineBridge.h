@@ -113,10 +113,37 @@ bool nc_goniometer_samples(NCEngine* engine, float* out, int count);
 
 void nc_engine_set_transport_running(NCEngine* engine, bool running);
 void nc_engine_set_recording(NCEngine* engine, bool active);
+// Audio recording-to-disk (V1). Begin captures the record-armed track's input (physical pair or
+// the "다른 앱" reference tap); end saves a WAV and drops a clip at the record-start position.
+bool nc_engine_begin_audio_record(NCEngine* engine);
+bool nc_engine_finish_audio_record(NCEngine* engine, char* outPath, size_t pathLen,
+                                   char* outError, size_t errLen);
+bool nc_engine_add_take_clip(NCEngine* engine, const char* path, double clipStartSeconds,
+                             double sourceOffsetSeconds, double durationSeconds,
+                             char* outClipId, size_t outLen, char* outError, size_t errLen);
+bool nc_engine_audio_recording_active(NCEngine* engine);
+void nc_engine_discard_audio_record(NCEngine* engine);
+double nc_recording_live_seconds(NCEngine* engine);
+int nc_recording_live_peak_count(NCEngine* engine);
+int nc_recording_live_peaks_since(NCEngine* engine, int fromBucket, float* outLR, int maxBuckets);
+int nc_recording_channels(NCEngine* engine);
+int nc_recording_peak_samples(NCEngine* engine);
 void nc_engine_seek(NCEngine* engine, double seconds);
 void nc_engine_rewind(NCEngine* engine);
 
 void nc_engine_set_metronome_enabled(NCEngine* engine, bool enabled);
+void nc_engine_set_metronome_subdivision(NCEngine* engine, const char* subdivision);
+void nc_engine_set_metronome_gain(NCEngine* engine, float gain);
+void nc_engine_set_metronome_sound(NCEngine* engine, const char* sound);
+void nc_engine_set_groove(NCEngine* engine, const char* feel, float swingAmount);
+void nc_engine_set_metronome_accent_first(NCEngine* engine, bool accent);
+void nc_engine_set_metronome_pattern(NCEngine* engine, const float* gains, int count);
+void nc_engine_set_metronome_genre(NCEngine* engine, const char* genre);
+// Getters — the UI reloads metronome settings from an opened project (they persist in the .ndaw).
+float nc_metronome_gain(NCEngine* engine);
+void  nc_metronome_sound(NCEngine* engine, char* out, size_t outLen);
+bool  nc_metronome_accent_first(NCEngine* engine);
+void  nc_metronome_genre(NCEngine* engine, char* out, size_t outLen);
 void nc_engine_set_test_tone_enabled(NCEngine* engine, bool enabled);
 
 // Project readouts. `out` receives a NUL-terminated string.
@@ -183,6 +210,8 @@ void nc_track_set_muted(NCEngine* engine, int index, bool muted);
 void nc_track_set_solo(NCEngine* engine, int index, bool solo);
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
+// Apply one flag to several selected tracks in one undo step. flag: 0=mute 1=solo 2=armed 3=inputMon.
+bool nc_track_set_flag_many(NCEngine* engine, const int* indices, int count, int flag, bool value);
 
 /// New tracks land at the end of the list. Returns the new track's index, or -1.
 int nc_track_add_audio(NCEngine* engine);
@@ -219,12 +248,16 @@ bool nc_track_move_near(NCEngine* engine, const char* sourceName, const char* ta
 /// later clips left to fill it. Both record their own step.
 bool nc_clip_shuffle_move(NCEngine* engine, const char* clipId, double newStartSeconds);
 int nc_clip_shuffle_delete_range(NCEngine* engine, double startSeconds, double endSeconds);
+int nc_clip_shuffle_delete_many(NCEngine* engine, const char* const* clipIds, int count);
 void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_t outLen);
 int nc_track_add_midi(NCEngine* engine);
 
 /// Deletes the track and, when `removeClips` is true, everything on it. Refuses on
 /// Master and Monitor. Returns false when the track cannot go.
 bool nc_track_delete(NCEngine* engine, int index, bool removeClips);
+// Delete several tracks (by index) in a single undo step. Indices are resolved to names before any
+// deletion so the shift from removing one does not misaddress the rest.
+bool nc_track_delete_many(NCEngine* engine, const int* indices, int count, bool removeClips);
 
 /// Fails when the name is empty or already taken.
 bool nc_track_rename(NCEngine* engine, int index, const char* newName);
@@ -405,6 +438,11 @@ bool nc_project_save_as(NCEngine* engine, const char* path, char* error, size_t 
 /// number of files copied, or -1 on error. Requires the project to have a path.
 int nc_project_consolidate_media(NCEngine* engine, char* error, size_t errorLen);
 
+/// Save a fully self-contained COPY to `path` (a project folder), collecting all external media
+/// (audio + video) into its Audio Files, WITHOUT changing the working session (its path, bindings,
+/// or dirty state). Returns the number of media files gathered, or -1 on error.
+int nc_project_save_copy(NCEngine* engine, const char* path, char* error, size_t errorLen);
+
 /// wav, wave, mp3, aif, aiff, m4a, caf.
 bool nc_audio_import_supported(const char* path);
 
@@ -453,22 +491,102 @@ void nc_project_pan_law(NCEngine* engine, char* out, size_t outLen);
 void nc_project_set_pan_law(NCEngine* engine, const char* law);
 
 bool nc_clip_move(NCEngine* engine, const char* clipId, double newStartSeconds);
+// Lightweight live-drag move (in-place render slide, no reconcile) + a one-shot commit reconcile.
+bool nc_clip_update_start(NCEngine* engine, const char* clipId, double startSeconds);
+int nc_clip_update_start_many(NCEngine* engine, const char* const* clipIds, int count, double deltaSeconds);
+void nc_project_reconcile(NCEngine* engine);
 bool nc_clip_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds);
 bool nc_clip_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds);
+// Lightweight live-drag trim: patches the clip's bounds in the render plan in place (no rebuild), so
+// stretching a clip during playback never stops the sound. Commit once on drop via nc_project_reconcile.
+bool nc_clip_update_trim_start(NCEngine* engine, const char* clipId, double newStartSeconds);
+bool nc_clip_update_trim_end(NCEngine* engine, const char* clipId, double newEndSeconds);
+// Roll edit: slide the shared boundary of two abutting clips together (one clamped boundary). Live.
+bool nc_clip_roll_boundary(NCEngine* engine, const char* leftId, const char* rightId, double boundarySeconds);
 
 /// Splits at `seconds`; the right-hand piece gets a new id. Records a step.
 bool nc_clip_split(NCEngine* engine, const char* clipId, double seconds);
 // Heal (re-join) adjacent same-source clips within a time range; returns how many
 // resulting clips were glued. Pass the span of the selected clips or the edit range.
 int  nc_clip_glue_range(NCEngine* engine, double startSeconds, double endSeconds);
+// Heal only the given clips to each other (abutting same-source), never their unselected neighbours.
+int  nc_clip_glue_selection(NCEngine* engine, const char* const* clipIds, int count);
 bool nc_clip_delete(NCEngine* engine, const char* clipId);
 
 /// -60…+12 dB. Continuous, like move and trim.
 float nc_clip_gain_db(NCEngine* engine, int index);
+/// Non-destructive processing state (by clip index), so the timeline can reflect it in the waveform.
+bool nc_clip_muted(NCEngine* engine, int index);
+bool nc_clip_reversed(NCEngine* engine, int index);
+bool nc_clip_polarity(NCEngine* engine, int index);
 bool nc_clip_set_gain_db(NCEngine* engine, const char* clipId, float gainDb);
 /// Continuous preview: sets the gain field only, no graph rebuild (smooth drag).
 /// Commit with nc_clip_set_gain_db to reconcile + record one step.
 bool nc_clip_set_gain_db_preview(NCEngine* engine, const char* clipId, float gainDb);
+
+/// Non-destructive clip processing the renderer honours directly (no new file); each records one
+/// undo step. Reverse plays the source window back-to-front; polarity flips the sign; mute silences
+/// the clip; normalize bakes a clip gain that brings the source peak to just under 0 dBFS.
+bool nc_clip_toggle_reversed(NCEngine* engine, const char* clipId);
+bool nc_clip_toggle_muted(NCEngine* engine, const char* clipId);
+bool nc_clip_toggle_polarity(NCEngine* engine, const char* clipId);
+bool nc_clip_normalize(NCEngine* engine, const char* clipId);
+
+/// Offline time-stretch + pitch-shift PRINT (Serato phase vocoder). Renders the clip's played window
+/// to a new WAV in the project's Audio Files folder and repoints the clip at it — timeRatio (0.125..8)
+/// changes length independently of semitones (±24) which change pitch. Returns false with `error` set.
+/// formantPreserve != 0 keeps the timbre through a pitch shift (WORLD-style source/filter separation),
+/// so a shifted vocal/instrument does not chipmunk; 0 = raw shift. Ignored when semitones == 0.
+bool nc_clip_apply_time_pitch(NCEngine* engine, const char* clipId,
+                              double timeRatio, double semitones, int formantPreserve,
+                              char* error, size_t errorLen);
+
+/// Piecewise time remap PRINT (Serato anchor time map). sourceAnchors/destAnchors are matched
+/// normalized [0,1] positions; each segment stretches independently to its dest span, at the global
+/// pitch. anchorCount 0 behaves like nc_clip_apply_time_pitch. formantPreserve as above.
+bool nc_clip_apply_time_map(NCEngine* engine, const char* clipId, double timeRatio, double semitones,
+                            const double* sourceAnchors, const double* destAnchors, int anchorCount,
+                            int formantPreserve, char* error, size_t errorLen);
+
+// Melodyne-mode pitch editing. detect runs YIN + note segmentation on the clip window and caches the
+// notes on the engine (returns the count). The editor reads each note, sets a per-note semitone offset,
+// then applies — rendering a new WAV and repointing the clip (length preserved). One undo step.
+// mode: 0 = Melodic (monophonic pitch), 1 = Polyphonic (chords; falls back to Melodic for now),
+// 2 = Percussive (onset/transient events, no pitch).
+int nc_clip_detect_notes(NCEngine* engine, const char* clipId, int mode);
+int nc_clip_note_count(NCEngine* engine);
+double nc_clip_note_start_seconds(NCEngine* engine, int index);
+double nc_clip_note_duration_seconds(NCEngine* engine, int index);
+double nc_clip_note_detected_midi(NCEngine* engine, int index);
+double nc_clip_note_offset_semitones(NCEngine* engine, int index);
+double nc_clip_note_confidence(NCEngine* engine, int index);
+void nc_clip_note_set_offset(NCEngine* engine, int index, double semitones);
+bool nc_clip_apply_note_edits(NCEngine* engine, const char* clipId, char* error, size_t errorLen);
+
+// Polyphonic detection helpers: write the clip window as-is (to feed the separator), then reset the
+// note cache and append the notes found in each stem file (they accumulate, sorted by time).
+bool nc_clip_export_raw_window(NCEngine* engine, const char* clipId, const char* outPath, char* error, size_t errorLen);
+
+// Repoint a clip at an externally-produced WAV that spans exactly its played window (same length): the
+// file is copied into the project's Audio Files folder, the clip's source is swapped to it with offset 0
+// and its duration/fades unchanged, and one undo step is recorded under `label`. Used by the neural
+// denoiser (offline print): export the window → denoise it into a WAV → repoint here.
+bool nc_clip_repoint_to_window_wav(NCEngine* engine, const char* clipId, const char* wavPath,
+                                   const char* label, char* error, size_t errorLen);
+void nc_detect_notes_reset(NCEngine* engine);
+int nc_detect_notes_add_from_file(NCEngine* engine, const char* wavPath, int mode);
+void nc_detect_notes_bind_clip(NCEngine* engine, const char* clipId);
+// Segment an external pitch track (from the CREPE neural detector helper) into cached notes.
+int nc_segment_pitch_track(NCEngine* engine, const double* times, const double* hzs,
+                           const double* confs, int count);
+
+// Export the processed result to a standalone WAV at `outPath` — the clip/project is NOT changed.
+// note_edits uses the cached Melodyne edits; time_map uses the Serato anchor remap (+ ratio/pitch).
+bool nc_clip_export_note_edits(NCEngine* engine, const char* clipId, const char* outPath,
+                               char* error, size_t errorLen);
+bool nc_clip_export_time_map(NCEngine* engine, const char* clipId, double timeRatio, double semitones,
+                             const double* sourceAnchors, const double* destAnchors, int anchorCount,
+                             const char* outPath, char* error, size_t errorLen);
 
 /// Fades, in seconds from each end. Continuous, like move and trim.
 double nc_clip_fade_in(NCEngine* engine, int index);
@@ -478,8 +596,17 @@ bool nc_clip_set_fade_curves(NCEngine* engine, const char* clipId,
                              const char* inCurve, const char* outCurve);
 /// Turn a same-track overlap around this clip into a crossfade (no history step).
 bool nc_clip_apply_crossfades(NCEngine* engine, const char* clipId);
+// Consolidate: render each track's selected clips (gain/fades/crossfades baked) into one new WAV
+// and replace them with a single clip. One undo step. Returns false with a message on failure.
+bool nc_clip_consolidate(NCEngine* engine, const char* const* clipIds, int count,
+                         char* outError, size_t errLen);
 void nc_clip_fade_in_curve(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_clip_fade_out_curve(NCEngine* engine, int index, char* out, size_t outLen);
+/// Continuous fade shape bend, [-1, 1], 0 = the named curve unchanged. The fade editor's middle handle.
+double nc_clip_fade_in_curvature(NCEngine* engine, int index);
+double nc_clip_fade_out_curvature(NCEngine* engine, int index);
+bool nc_clip_set_fade_curvature(NCEngine* engine, const char* clipId,
+                                double inCurvature, double outCurvature);
 
 /// Moves a clip onto another track at `startSeconds`, leaving every other clip
 /// where it is. (`shuffleMoveClip` would ripple its neighbours — that is Shuffle
@@ -588,6 +715,27 @@ bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* not
 bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity);
 bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId);
 
+// Controller (CC) lanes. Counts/reads are filtered to one controller number (0-127); values
+// are 0-127. The engine already renders these to the instrument, so an edited curve is heard.
+int nc_midi_cc_count(NCEngine* engine, const char* regionId, int controller);
+bool nc_midi_cc_get(NCEngine* engine, const char* regionId, int controller, int index,
+                    char* outId, size_t idLen, double* outBeat, int* outValue);
+bool nc_midi_cc_add(NCEngine* engine, const char* regionId, int controller, double beat, int value,
+                    char* outId, size_t idLen);
+/// Continuous: dragging a CC point records nothing. Commit with nc_history_record_gesture.
+bool nc_midi_cc_move(NCEngine* engine, const char* regionId, const char* eventId, double beat, int value);
+bool nc_midi_cc_delete(NCEngine* engine, const char* regionId, const char* eventId);
+
+// Pitch-bend lane. Values are 0-16383, centre 8192.
+int nc_midi_pb_count(NCEngine* engine, const char* regionId);
+bool nc_midi_pb_get(NCEngine* engine, const char* regionId, int index,
+                    char* outId, size_t idLen, double* outBeat, int* outValue);
+bool nc_midi_pb_add(NCEngine* engine, const char* regionId, double beat, int value,
+                    char* outId, size_t idLen);
+/// Continuous: records nothing. Commit with nc_history_record_gesture.
+bool nc_midi_pb_move(NCEngine* engine, const char* regionId, const char* eventId, double beat, int value);
+bool nc_midi_pb_delete(NCEngine* engine, const char* regionId, const char* eventId);
+
 // ---------------------------------------------------------------------------
 // Markers
 //
@@ -627,6 +775,17 @@ bool nc_lyric_add(NCEngine* engine, double timeSeconds, const char* text);
 bool nc_lyric_rename(NCEngine* engine, double timeSeconds, double tol, const char* text);
 bool nc_lyric_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
 bool nc_lyric_delete(NCEngine* engine, double timeSeconds, double tol);
+
+// Song-form / arrangement sections — per-project (stored in the project document, not app-global).
+int nc_song_section_count(NCEngine* engine);
+double nc_song_section_time(NCEngine* engine, int index);
+void nc_song_section_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_song_section_add(NCEngine* engine, double timeSeconds, const char* name);
+bool nc_song_section_move(NCEngine* engine, double fromSeconds, double tol, double toSeconds);
+bool nc_song_section_delete(NCEngine* engine, double timeSeconds, double tol);
+// Delete all conductor events (marker/chord/lyric/song section/tempo/meter) in [start,end], one
+// undo step. Returns the count removed. Tempo/meter keep their t=0 anchor.
+int  nc_conductor_clear_range(NCEngine* engine, double start, double end);
 
 int nc_tempo_marker_count(NCEngine* engine);
 double nc_tempo_marker_time(NCEngine* engine, int index);
@@ -827,6 +986,27 @@ int nc_plugin_facet_tally(NCEngine* engine, int kind, int index);
 /// InsertDspPolicy. Returns false when the track refuses inserts or is full.
 bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex);
 bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot);
+
+// Built-in high-accuracy test signal generator as a track SOURCE (band-limited sine/square/triangle/
+// saw, white/pink noise, log/lin sweep). It voices a silent track, so add it to an empty track and
+// enable it. Setters take real units (Hz, dBFS); waveform 0..6 = sine/square/triangle/saw/white/pink/
+// sweep; channel 0=L, 1=Stereo, 2=R. Frequency/level setters record no undo step (continuous); the
+// discrete ones do. One generator per track.
+bool nc_track_add_test_signal_generator(NCEngine* engine, int trackIndex);
+bool nc_track_remove_test_signal_generator(NCEngine* engine, int trackIndex);
+int nc_track_test_signal_generator_slot(NCEngine* engine, int trackIndex);   // -1 if none
+void nc_track_test_signal_set_enabled(NCEngine* engine, int trackIndex, bool enabled);
+void nc_track_test_signal_set_waveform(NCEngine* engine, int trackIndex, int waveform);
+void nc_track_test_signal_set_frequency_hz(NCEngine* engine, int trackIndex, double hz);
+void nc_track_test_signal_set_level_db(NCEngine* engine, int trackIndex, double db);
+void nc_track_test_signal_set_channel(NCEngine* engine, int trackIndex, int channel);
+void nc_track_test_signal_set_polarity(NCEngine* engine, int trackIndex, bool inverted);
+bool nc_track_test_signal_enabled(NCEngine* engine, int trackIndex);
+int nc_track_test_signal_waveform(NCEngine* engine, int trackIndex);
+double nc_track_test_signal_frequency_hz(NCEngine* engine, int trackIndex);
+double nc_track_test_signal_level_db(NCEngine* engine, int trackIndex);
+int nc_track_test_signal_channel(NCEngine* engine, int trackIndex);
+bool nc_track_test_signal_polarity(NCEngine* engine, int trackIndex);
 /// direction is -1 (earlier in the chain) or +1. Returns the new slot index, or -1.
 int nc_track_move_insert(NCEngine* engine, int trackIndex, int slot, int direction);
 int nc_track_move_insert_to_index(NCEngine* engine, int trackIndex, int fromSlot, int toSlot);
@@ -838,6 +1018,12 @@ bool nc_track_move_insert_across(NCEngine* engine, int srcTrackIndex, int srcSlo
 
 /// "NAT", "INT", "RINT" or "EXT" — what the insert will actually run on.
 void nc_track_insert_mode_badge(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);
+
+/// Set a track/master insert's DSP execution mode from the channel UI. Only "native" (in-process,
+/// audio thread) and "internal" (out-of-process on the isolated performance core) are accepted;
+/// returns false for anything else or if unchanged. Rebuilds the chain through a declick.
+bool nc_track_insert_set_dsp_mode(NCEngine* engine, int trackIndex, int slot, const char* mode);
+bool nc_master_insert_set_dsp_mode(NCEngine* engine, int slot, const char* mode);
 
 // ---------------------------------------------------------------------------
 // Monitor station
@@ -867,6 +1053,7 @@ bool nc_delay_compensation_enabled(NCEngine* engine);
 void nc_delay_compensation_set(NCEngine* engine, bool enabled);
 double nc_delay_compensation_ms(NCEngine* engine);
 int nc_delay_compensation_samples(NCEngine* engine);
+int nc_track_delay_compensation_samples(NCEngine* engine, int index);
 
 bool nc_dsp_core_isolation(NCEngine* engine);
 void nc_dsp_set_core_isolation(NCEngine* engine, bool enabled);
@@ -892,6 +1079,27 @@ void nc_dsp_set_external_core_count(NCEngine* engine, int count);
 void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen);
 void nc_dsp_set_remote_host(NCEngine* engine, const char* host);
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen);
+
+// A discovered/queried remote DSP node's identity + hardware specs, for the Remote Core panel.
+typedef struct {
+    int reachable;          // 1 if a node answered, else 0 (other fields undefined when 0)
+    double roundTripMs;     // status-query round-trip, ms
+    char host[128];         // resolved address / host
+    char model[128];        // node product string ("Remote Core DSP")
+    char cpuModel[192];     // CPU brand string; "unknown" if the node can't report it
+    double cpuMhz;          // CPU clock in MHz; 0 if unknown (e.g. Apple Silicon)
+    int memoryMb;           // physical RAM in MB; 0 if unknown
+    int coreCount;          // reported logical cores
+} NCRemoteNodeInfo;
+
+// Probe the current remote host for its identity + specs. Returns 1 and fills `out` if a node
+// answered, else 0. Blocks briefly on the network — call off the UI hot path.
+int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out);
+
+// The "use this node" master switch: whether the external DSP node participates at all. Off gates the
+// node out of the monitor/DAW/plugin core plan regardless of the requested reserve. Applies live.
+int nc_dsp_external_enabled(NCEngine* engine);
+void nc_dsp_set_external_enabled(NCEngine* engine, int enabled);
 
 // ---------------------------------------------------------------------------
 // Output device
@@ -932,15 +1140,33 @@ bool nc_monitor_talkback(NCEngine* engine);
 void nc_monitor_set_mono(NCEngine* engine, bool on);
 void nc_monitor_set_mute(NCEngine* engine, bool on);
 void nc_monitor_set_dim(NCEngine* engine, bool on);
+float nc_monitor_dim_db(NCEngine* engine);
+void nc_monitor_set_dim_db(NCEngine* engine, float db);
 
 // Monitor source: master (false, default) vs the computer's input source (true).
 bool nc_monitor_listen_source(NCEngine* engine);
 void nc_monitor_set_listen_source(NCEngine* engine, bool on);
+// Reference-hold arming: run the tap + mute the tapped apps while armed, so A/B-ing to the
+// master never leaks their sound out of the computer. Disarm also clears the listening state.
+bool nc_monitor_reference_armed(NCEngine* engine);
+void nc_monitor_set_reference_armed(NCEngine* engine, bool on);
+// Auto-input punch: hear the tap on the master only while punched in.
+void nc_monitor_set_tap_input_monitor(NCEngine* engine, bool on);
+// Input-Monitor toggle on a tap-input track: run + hear the tap continuously.
+void nc_monitor_set_tap_input_hold(NCEngine* engine, bool on);
 
 // Reverb/delay tail rendered after stop, in seconds (0 = cut immediately).
 double nc_insert_tail_on_stop_seconds(NCEngine* engine);
 void nc_set_insert_tail_on_stop_seconds(NCEngine* engine, double seconds);
 void nc_monitor_set_talkback(NCEngine* engine, bool on);
+// Talkback destination: "monitor_bus", "listen_room" (default, remote listeners only), "all".
+void nc_monitor_talkback_route(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_talkback_route(NCEngine* engine, const char* route);
+// Talkback mic input channel (1-based) + the picker's live-channel helpers.
+int   nc_monitor_talkback_channel(NCEngine* engine);
+void  nc_monitor_set_talkback_channel(NCEngine* engine, int oneBased);
+int   nc_talkback_channel_count(NCEngine* engine);
+float nc_talkback_channel_activity(NCEngine* engine, int oneBased);
 
 // The monitor listen state, ported whole from the old UI. It is not four exclusive
 // modes: it is a listen mode string ("LR"/"L"/"R"/"M"/"S"), a separate mono flag, and
@@ -994,10 +1220,35 @@ int  nc_power_amp_model_count(void);
 void nc_power_amp_model_name(int index, char* out, size_t outLen);
 int  nc_speaker_cable_model_count(void);
 void nc_speaker_cable_model_name(int index, char* out, size_t outLen);
+int  nc_power_cable_model_count(void);
+void nc_power_cable_model_name(int index, char* out, size_t outLen);
+int  nc_connector_model_count(void);
+void nc_connector_model_name(int index, char* out, size_t outLen);
 void nc_monitor_physical_power_amp_model(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_physical_power_amp_model(NCEngine* engine, const char* model);
 void nc_monitor_physical_speaker_cable_model(NCEngine* engine, char* out, size_t outLen);
 void nc_monitor_set_physical_speaker_cable_model(NCEngine* engine, const char* model);
+void nc_monitor_physical_power_cable_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_power_cable_model(NCEngine* engine, const char* model);
+void nc_monitor_physical_connector_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_connector_model(NCEngine* engine, const char* model);
+// Whether a passive speaker's amp / cable name-heuristic actually colours the monitor sound.
+bool nc_power_amp_tone_active(NCEngine* engine);
+bool nc_speaker_cable_tone_active(NCEngine* engine);
+// Audio-interface D/A output-stage model (catalog + measurement status only; no audio effect yet).
+int  nc_audio_interface_model_count(void);
+void nc_audio_interface_model_name(int index, char* out, size_t outLen);
+bool nc_audio_interface_model_measured(const char* name);
+void nc_monitor_physical_audio_interface_model(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_audio_interface_model(NCEngine* engine, const char* model);
+// Purpose 2: render the physical interface AS a different model (A->B). Stored intent only.
+void nc_monitor_physical_audio_interface_target(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_physical_audio_interface_target(NCEngine* engine, const char* model);
+// True only when a raw-measured A->B transform is actually applied to audio (never from specs).
+bool nc_audio_interface_transform_active(NCEngine* engine);
+// Optional 2단계 harmonic (waveshaper) modeling of the interface's measured nonlinear character.
+bool nc_monitor_interface_modeling_enabled(NCEngine* engine);
+void nc_monitor_set_interface_modeling_enabled(NCEngine* engine, bool enabled);
 
 // Measurement microphone selection (drives absolute vs relative-only room correction).
 int  nc_measurement_mic_model_count(void);
@@ -1017,6 +1268,18 @@ bool nc_monitor_eq_set_band(NCEngine* engine, int index, bool enabled, const cha
 bool nc_monitor_eq_remove_band(NCEngine* engine, int index);
 void nc_monitor_eq_clear(NCEngine* engine);
 void nc_monitor_eq_response(NCEngine* engine, double* outMagsDb, int count, double minHz, double maxHz);
+// Linear-phase (FIR) monitor EQ. When on, the monitor EQ is a FIR that matches the target curve
+// across the whole band (no biquad ripple/cramping) at the cost of latency. Toggling requires a
+// re-sync (reloadMonitorState) to rebuild through the chosen path.
+bool nc_monitor_eq_linear_phase(NCEngine* engine);
+void nc_monitor_eq_set_linear_phase(NCEngine* engine, bool enabled);
+double nc_monitor_eq_latency_ms(NCEngine* engine);
+// Optional: reference a headphone model to the Harman OE target (removes the raw ear-gain baseline).
+bool nc_monitor_eq_headphone_oe_target(NCEngine* engine);
+void nc_monitor_eq_set_headphone_oe_target(NCEngine* engine, bool enabled);
+// The room-tuning correction curve (Harman − measured, fitted), sampled like nc_monitor_eq_response
+// without touching the live EQ. Flat until a room measurement exists; returns false when unmeasured.
+bool nc_monitor_room_correction_response(NCEngine* engine, int channel, double* outMagsDb, int count, double minHz, double maxHz);
 
 // Acoustic measurement (②b): play a sweep out a channel (0=L,1=R), capture the mic, deconvolve
 // to the in-room response curve. Requires input monitoring / a mic input for samples to arrive.
@@ -1028,13 +1291,58 @@ bool   nc_measure_finish(NCEngine* engine, int channel);
 bool   nc_measure_has_curve(NCEngine* engine, int channel);
 void   nc_measure_curve_response(NCEngine* engine, int channel, double* out, int count, double minHz, double maxHz);
 
+// Audio-interface loopback measurement (②d): patch the interface DAC output back to its ADC
+// input, run nc_measure_start (channel 0), then nc_measure_interface_finish. One ESS capture
+// yields the D/A frequency response AND the harmonic coefficients, stored for the currently
+// selected physical interface (project.physicalAudioInterfaceModel) and persisted per-model.
+// A live measurement overrides the offline baked profile. Requires input monitoring on.
+bool   nc_measure_interface_start(NCEngine* engine);   // loopback: sweep on measure-output channel
+bool   nc_measure_interface_finish(NCEngine* engine);  // holds the result as PENDING for review
+// Pending-measurement review + commit/discard (quality verdict before saving over a good profile).
+bool   nc_measure_interface_pending(NCEngine* engine);
+double nc_measure_interface_pending_thd(NCEngine* engine);
+float  nc_measure_interface_pending_peak(NCEngine* engine);   // sweep peak 0..1 (>=~0.99 clipped)
+void   nc_measure_interface_pending_name(NCEngine* engine, char* out, size_t outLen);
+void   nc_measure_interface_commit(NCEngine* engine);         // save + apply the pending measurement
+void   nc_measure_interface_discard(NCEngine* engine);
+// Multi-level auto run (A단계): drive level per sweep, accumulate per-level results, read the curve.
+void   nc_measure_set_sweep_amplitude(NCEngine* engine, double amplitude);   // 0.001..0.99
+void   nc_measure_interface_reset_levels(NCEngine* engine);
+void   nc_measure_interface_record_level(NCEngine* engine, double returnDbfs);
+int    nc_measure_interface_level_count(NCEngine* engine);
+double nc_measure_interface_level_dbfs(NCEngine* engine, int index);
+double nc_measure_interface_level_thd(NCEngine* engine, int index);
+bool   nc_measure_interface_has_profile(NCEngine* engine, const char* name);
+// Loopback measurement channel selection (1-based physical channels). Output = DAC channel the
+// sweep exits; input = ADC channel the loopback is patched into. Counts come from the open device.
+void   nc_measure_level_check(NCEngine* engine, bool on);   // live input meter for gain setup
+float  nc_measure_input_level(NCEngine* engine);            // linear peak of the chosen ADC channel, 0..1
+void   nc_measure_set_output_channel(NCEngine* engine, int oneBased);
+void   nc_measure_set_input_channel(NCEngine* engine, int oneBased);
+int    nc_measure_output_channel(NCEngine* engine);
+int    nc_measure_input_channel(NCEngine* engine);
+int    nc_measure_output_channel_count(NCEngine* engine);
+int    nc_measure_input_channel_count(NCEngine* engine);
+double nc_measure_interface_thd(NCEngine* engine, const char* name);   // total harmonic distortion, %
+void   nc_measure_interface_harmonics(NCEngine* engine, const char* name, double* out, int count);  // [c2..] linear
+void   nc_measure_interface_curve_response(NCEngine* engine, const char* name, double* out, int count, double minHz, double maxHz);
+void   nc_measure_interface_clear(NCEngine* engine, const char* name); // drop the measurement, revert to baked
+
 // Virtual monitor: model a target speaker (by catalog name) on the physical monitor by loading
 // its fitted correction curve into the monitor EQ.
 int  nc_virtual_monitor_count(NCEngine* engine);
 void nc_virtual_monitor_name(NCEngine* engine, int index, char* out, size_t outLen);
+// Headphone models with a measured curve (feeds the headphone modeller + the "측정" badge).
+int  nc_headphone_profile_count(NCEngine* engine);
+void nc_headphone_profile_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_headphone_profile_response(NCEngine* engine, const char* name, double* outMagsDb, int count, double minHz, double maxHz);
+bool nc_audio_interface_profile_response(NCEngine* engine, const char* name, double* outMagsDb, int count, double minHz, double maxHz);
 bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName);
 // Room correction (③): flatten the measured in-room curve toward the Harman target.
 bool nc_monitor_eq_apply_room_correction(NCEngine* engine, int channel);
+// Rebuild the single monitor EQ from the active context: the given model's measured curve
+// (empty = none) plus room-tuning correction (applyRoom). Records no history — derived state.
+void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* correctionHeadphone, bool applyRoom);
 bool nc_monitor_output_exclusive(NCEngine* engine);
 void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive);
 
@@ -1053,6 +1361,11 @@ void nc_speaker_output_route(int index, char* out, size_t outLen);
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
 void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
+// Per-slot amp/cable for a passive modeled speaker (heuristic tone folded into the monitor EQ).
+void nc_monitor_speaker_amp(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_monitor_speaker_cable(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_monitor_set_speaker_amp(NCEngine* engine, int slot, const char* model);
+void nc_monitor_set_speaker_cable(NCEngine* engine, int slot, const char* model);
 
 // Live MIDI input: monitor a keyboard through armed/input-monitoring instrument tracks.
 // Enumerate sources, start on one (empty = first available), then call

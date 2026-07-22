@@ -171,6 +171,10 @@ enum Theme {
     /// Fixed artboard the design was drawn against.
     static let artboard = CGSize(width: 1920, height: 1180)
     static let monitorDockWidth: CGFloat = 294
+    /// Natural width the top toolbars (title + transport + status) need to lay out without clipping —
+    /// the window's minimum in full-DAW mode, so the right-edge tabs never push off-screen. Tune up
+    /// if a toolbar cluster is added; too small and the tabs become unclickable.
+    static let topBarMinWidth: CGFloat = 1320
     static let toolRailWidth: CGFloat = 44
     static let laneHeaderWidth: CGFloat = 576
 }

@@ -1,4 +1,5 @@
 #include "audio/NeuracoustDspEngine.h"
+#include <cstdlib>
 #include "audio/MetronomeClick.h"
 #include "audio/RemoteDspPluginCatalog.h"
 #include "audio/RemoteDspServerClient.h"
@@ -13,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -763,6 +765,7 @@ void NeuracoustDspEngine::resetRuntime() {
     {
         std::lock_guard<std::mutex> inputLock(inputMonitorMutex_);
         inputMonitorBuffer_.clear();
+        talkbackMonoBuffer_.clear();
         inputPeak_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActive_ = false;
@@ -784,6 +787,23 @@ void NeuracoustDspEngine::resetRuntime() {
     configured_ = false;
 }
 
+void NeuracoustDspEngine::setMeasurementLevelCheck(bool on) {
+    if (on == measurementLevelCheck_.load(std::memory_order_relaxed)) return;
+    if (on) {
+        // Force input capture so the ADC channel meters; remember the prior state to restore.
+        measurementPrevInputMonitor_ = inputMonitorCaptureActive_.load(std::memory_order_relaxed);
+        inputMonitorCaptureActive_.store(true, std::memory_order_relaxed);
+        measurementLevelCheck_.store(true, std::memory_order_relaxed);
+    } else {
+        measurementLevelCheck_.store(false, std::memory_order_relaxed);
+        measurementInputPeak_.store(0.0f, std::memory_order_relaxed);
+        // Only release capture if a measurement sweep is not itself relying on it.
+        if (!measurementActive_.load(std::memory_order_relaxed)) {
+            inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+        }
+    }
+}
+
 void NeuracoustDspEngine::startMeasurement(int channel, std::vector<float> signal) {
     {
         std::lock_guard<std::mutex> lock(measurementMutex_);
@@ -793,18 +813,25 @@ void NeuracoustDspEngine::startMeasurement(int channel, std::vector<float> signa
     measurementChannel_ = (channel == 1) ? 1 : 0;
     measurementSignal_ = std::move(signal);
     measurementEmitPos_ = 0;
+    measurementSweepPeak_.store(0.0f, std::memory_order_relaxed);   // fresh clip check for this sweep
     measurementTotalFrames_.store(static_cast<int64_t>(measurementSignal_.size()), std::memory_order_relaxed);
     measurementProgressFrames_.store(0, std::memory_order_relaxed);
     // The mic only reaches pushInputMonitorInterleaved while input capture is on; remember the
-    // prior state so we can restore it when the measurement ends.
-    measurementPrevInputMonitor_ = inputMonitorCaptureActive_.load(std::memory_order_relaxed);
+    // TRUE prior state (before ANY forcer) so restore never leaves it stuck on. Only the first of
+    // {measurement, level-check} to force it saves the snapshot — otherwise measuring while level
+    // check is on would snapshot the forced "true" and leave the mic monitoring afterwards.
+    if (!measurementLevelCheck_.load(std::memory_order_relaxed)) {
+        measurementPrevInputMonitor_ = inputMonitorCaptureActive_.load(std::memory_order_relaxed);
+    }
     inputMonitorCaptureActive_.store(true, std::memory_order_relaxed);
     measurementActive_.store(true, std::memory_order_relaxed);
 }
 
 void NeuracoustDspEngine::cancelMeasurement() {
     measurementActive_.store(false, std::memory_order_relaxed);
-    inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+    if (!measurementLevelCheck_.load(std::memory_order_relaxed)) {
+        inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+    }
 }
 
 double NeuracoustDspEngine::measurementProgress() const {
@@ -835,7 +862,10 @@ void NeuracoustDspEngine::setMetronomeEnabled(bool enabled,
                                              const std::string& grooveFeel,
                                              double grooveSwingAmount,
                                              const std::vector<TimeSignatureMarkerState>& timeSignatureMap,
-                                             const std::string& metronomeSubdivision) {
+                                             const std::string& metronomeSubdivision,
+                                             double metronomeGain,
+                                             const std::string& metronomeSound,
+                                             bool metronomeAccentFirst) {
     std::lock_guard<std::mutex> lock(mutex_);
     settings_.metronomeEnabled = enabled;
     settings_.tempoBpm = std::max(1, tempoBpm);
@@ -847,6 +877,12 @@ void NeuracoustDspEngine::setMetronomeEnabled(bool enabled,
         (metronomeSubdivision == "quarter" || metronomeSubdivision == "eighth" || metronomeSubdivision == "sixteenth")
             ? metronomeSubdivision
             : "auto";
+    settings_.metronomeGain = std::max(0.0, std::min(2.0, metronomeGain));
+    settings_.metronomeSound =
+        (metronomeSound == "wood" || metronomeSound == "rim" || metronomeSound == "cowbell")
+            ? metronomeSound
+            : "beep";
+    settings_.metronomeAccentFirst = metronomeAccentFirst;
     if (!tempoMap.empty()) {
         settings_.tempoMap = tempoMap;
         std::sort(settings_.tempoMap.begin(), settings_.tempoMap.end(), [](const TempoMarkerState& left, const TempoMarkerState& right) {
@@ -860,6 +896,11 @@ void NeuracoustDspEngine::setMetronomeEnabled(bool enabled,
         return left.timeSeconds < right.timeSeconds;
     });
     syncProjectMonitorDspRenderPathLocked();
+}
+
+void NeuracoustDspEngine::setMetronomeAccentPattern(const std::vector<float>& pattern) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    settings_.metronomeAccentPattern = pattern;
 }
 
 void NeuracoustDspEngine::setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) {
@@ -954,6 +995,7 @@ void NeuracoustDspEngine::setMonitorStationControls(bool mono, const std::string
     if (!talkback && !inputMonitorCaptureActive_.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> inputLock(inputMonitorMutex_);
         inputMonitorBuffer_.clear();
+        talkbackMonoBuffer_.clear();
         inputPeak_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActive_ = false;
@@ -1033,7 +1075,7 @@ bool NeuracoustDspEngine::loadProject(const ProjectDocument& project, std::strin
     settings_.monitorStationDimDb = project.monitorStationDimDb;
     settings_.monitorStationTalkbackRoute = project.monitorStationTalkbackRoute.empty() ? "listen_room" : project.monitorStationTalkbackRoute;
     settings_.monitorInputTrimDb = std::max(-12.0f, std::min(0.0f, project.monitorInputTrimDb));
-    settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb));
+    settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb));  // +12 dB monitor ceiling, matching setMonitorVolumeDb
     settings_.monitorModules = project.monitorModules.empty() ? defaultMonitorDspModules() : project.monitorModules;
     projectPlan_.monitorModules = settings_.monitorModules;
     monitorProcessor_.configure(std::max(1.0, projectSampleRate), settings_.monitorModules);
@@ -1142,7 +1184,7 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
     settings_.monitorStationDimDb = project.monitorStationDimDb;
     settings_.monitorStationTalkbackRoute = project.monitorStationTalkbackRoute.empty() ? "listen_room" : project.monitorStationTalkbackRoute;
     settings_.monitorInputTrimDb = std::max(-12.0f, std::min(0.0f, project.monitorInputTrimDb));
-    settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb));
+    settings_.monitorVolumeDb = std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb));  // +12 dB monitor ceiling, matching setMonitorVolumeDb
     const auto nextMonitorModules = project.monitorModules.empty() ? defaultMonitorDspModules() : project.monitorModules;
     // A clip edit never touches the monitor chain (that path is setMonitorDspModules, which
     // crossfades). Reconfiguring the monitor processor resets its filter state — a click on
@@ -1174,15 +1216,16 @@ bool NeuracoustDspEngine::updateProject(const ProjectDocument& project, std::str
     sampleRateForStatus_.store(std::max(1.0, projectSampleRate));
     updateProjectMonitorPolicyLocked();
     syncProjectMonitorDspRenderPathLocked();
-    // Preserve the keyed plug-in processors and the monitor / master-insert DSP across an
-    // edit; resetForSeek clears only the transient decode/phase/live-MIDI state. Force the
-    // flag-gated master-insert chain and monitor DSP to rebuild only when their content
-    // actually changed, so a plain clip edit does not click or gap the sound.
+    // Preserve the keyed plug-in processors and the monitor / master-insert DSP across an edit.
+    // resetForEdit (NOT resetForSeek) keeps the continuous-playback buffers — route delay lines and
+    // generator phases — so editing a clip mid-playback (move/trim/split/delete, and edits while
+    // recording) no longer clicks or gaps the sound. Only a real seek flushes those. The flag-gated
+    // master-insert chain and monitor DSP still rebuild only when their content actually changed.
     const std::string nextInsertGraphSignature = configured_
         ? realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize_)
         : std::string();
     const bool insertGraphChanged = configured_ && nextInsertGraphSignature != realtimeInsertGraphSignature_;
-    projectRenderState_.resetForSeek();
+    projectRenderState_.resetForEdit();
     if (insertGraphChanged) {
         projectRenderState_.masterInsertChainPrepared = false;
         projectRenderState_.masterInsertChain.reset();
@@ -1236,6 +1279,48 @@ bool NeuracoustDspEngine::updateClipGain(const std::string& clipId, float gainDb
     }
     clipIt->clip.gainDb = std::max(-60.0f, std::min(24.0f, gainDb));
     message_ = "Updated clip gain without reloading project.";
+    return true;
+}
+
+bool NeuracoustDspEngine::updateClipStart(const std::string& clipId, double startSeconds) {
+    if (clipId.empty() || !std::isfinite(startSeconds)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto clipIt = std::find_if(projectPlan_.clips.begin(), projectPlan_.clips.end(), [&](const ProjectRenderClip& renderClip) {
+        return renderClip.clip.id == clipId;
+    });
+    if (clipIt == projectPlan_.clips.end()) {
+        return false;
+    }
+    // The render maps the playhead to the source via clip.startSeconds directly, so patching it in
+    // place slides the clip during a drag with NO plan rebuild — the rebuild (per drag frame) is what
+    // stopped/gapped the music while moving a clip.
+    clipIt->clip.startSeconds = std::max(0.0, startSeconds);
+    message_ = "Updated clip start without reloading project.";
+    return true;
+}
+
+bool NeuracoustDspEngine::updateClipBounds(const std::string& clipId, double startSeconds,
+                                           double durationSeconds, double sourceOffsetSeconds) {
+    if (clipId.empty() || !std::isfinite(startSeconds) || !std::isfinite(durationSeconds) ||
+        !std::isfinite(sourceOffsetSeconds)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto clipIt = std::find_if(projectPlan_.clips.begin(), projectPlan_.clips.end(), [&](const ProjectRenderClip& renderClip) {
+        return renderClip.clip.id == clipId;
+    });
+    if (clipIt == projectPlan_.clips.end()) {
+        return false;
+    }
+    // Trim maps to the source through start + sourceOffset together (a start trim slides both so the
+    // retained audio keeps playing at the same timeline position); duration bounds the read. Patching
+    // all three in place makes the render honour the new clip length immediately, with no plan rebuild.
+    clipIt->clip.startSeconds = std::max(0.0, startSeconds);
+    clipIt->clip.durationSeconds = std::max(0.0, durationSeconds);
+    clipIt->clip.sourceOffsetSeconds = std::max(0.0, sourceOffsetSeconds);
+    message_ = "Updated clip bounds without reloading project.";
     return true;
 }
 
@@ -1667,13 +1752,63 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
     if (samples == nullptr || frameCount <= 0 || channels <= 0) {
         return;
     }
-    // Acoustic measurement: capture the mono mic while a sweep is playing.
+    // Recording (physical mic source): extract the armed track's channel pair and append to the take.
+    if (recordingActive_.load(std::memory_order_acquire) && recordSource_.load(std::memory_order_relaxed) == 1) {
+        std::lock_guard<std::mutex> rlock(recordMutex_);
+        if (recordTake_) {
+            const int off = recordChannelOffset_;
+            const int rc = recordChannels_;
+            static thread_local std::vector<float> recTmp;
+            recTmp.resize(static_cast<size_t>(frameCount) * static_cast<size_t>(rc));
+            for (int64_t f = 0; f < frameCount; ++f) {
+                for (int c = 0; c < rc; ++c) {
+                    const int srcCh = off + c;
+                    recTmp[static_cast<size_t>(f) * rc + c] =
+                        (srcCh < channels) ? samples[static_cast<size_t>(f * channels + srcCh)] : 0.0f;
+                }
+            }
+            recordTake_->appendInterleavedFloat(recTmp.data(), static_cast<int>(frameCount));
+            accumulateRecordPeaksLocked(recTmp.data(), frameCount, rc);
+        }
+    }
+    // Acoustic measurement: capture the chosen input channel while a sweep is playing. For an
+    // interface loopback this is the ADC channel the DAC is patched back into (default 0 = ch 1).
     if (measurementActive_.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> mlock(measurementMutex_, std::try_to_lock);
         if (mlock.owns_lock()) {
+            const int ic = std::max(0, std::min(channels - 1, measurementInputChannel_.load(std::memory_order_relaxed)));
             for (int64_t frame = 0; frame < frameCount; ++frame) {
-                measurementCapture_.push_back(samples[static_cast<size_t>(frame * channels)]);
+                measurementCapture_.push_back(samples[static_cast<size_t>(frame * channels + ic)]);
             }
+        }
+    }
+    // Live peak of the chosen ADC channel for the gain-setup meter (also during the sweep).
+    if (measurementLevelCheck_.load(std::memory_order_relaxed) || measurementActive_.load(std::memory_order_relaxed)) {
+        const int ic = std::max(0, std::min(channels - 1, measurementInputChannel_.load(std::memory_order_relaxed)));
+        float pk = 0.0f;
+        for (int64_t frame = 0; frame < frameCount; ++frame) {
+            pk = std::max(pk, std::abs(samples[static_cast<size_t>(frame * channels + ic)]));
+        }
+        const float prev = measurementInputPeak_.load(std::memory_order_relaxed);
+        measurementInputPeak_.store(std::max(pk, prev * 0.85f), std::memory_order_relaxed);   // brief peak-hold
+        if (measurementActive_.load(std::memory_order_relaxed)) {   // undecayed max, for the clip check
+            measurementSweepPeak_.store(std::max(pk, measurementSweepPeak_.load(std::memory_order_relaxed)),
+                                        std::memory_order_relaxed);
+        }
+    }
+
+    // Per-channel input activity for the talkback channel picker ("which mics are live"). Cheap
+    // decayed peak across up to 32 channels, metered whenever input flows (regardless of routing).
+    {
+        const int nch = std::min(channels, kMaxMeteredInputChannels);
+        inputChannelCount_.store(nch, std::memory_order_relaxed);
+        for (int c = 0; c < nch; ++c) {
+            float pk = 0.0f;
+            for (int64_t frame = 0; frame < frameCount; ++frame) {
+                pk = std::max(pk, std::abs(samples[static_cast<size_t>(frame * channels + c)]));
+            }
+            const float prev = inputChannelPeak_[static_cast<size_t>(c)].load(std::memory_order_relaxed);
+            inputChannelPeak_[static_cast<size_t>(c)].store(std::max(pk, prev * 0.90f), std::memory_order_relaxed);
         }
     }
 
@@ -1704,19 +1839,83 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
     // opposite — latency is irrelevant, but the input and output run on independent clocks
     // and the driver delivers in bursts, so a shallow cap dropped and starved constantly
     // (severe stutter). Give the reference feed a deep cushion (~170 ms) to ride over both.
+    // This FIFO is now the MIC path only (record-arm / talkback); the reference tap has its own
+    // deep FIFO in pushReferenceInterleaved. A shallow cushion keeps the mic low-latency.
     const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
-    const bool listenSourceFeed = listenSourceActive_.load(std::memory_order_relaxed);
-    const int64_t capFrames = listenSourceFeed ? blockFrames * 96
-                                               : blockFrames * (talkbackActive ? 2 : 4);
+    const int64_t capFrames = blockFrames * (talkbackActive ? 2 : 4);
     const size_t maxSamples = static_cast<size_t>(capFrames) * 2;
     if (inputMonitorBuffer_.size() > maxSamples) {
         inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(), inputMonitorBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
+    }
+    // Talkback mic: one input channel, captured mono to shadow the stereo FIFO frame-for-frame
+    // while talkback is engaged. Centered on the monitor / listen-room in mixInputMonitorLocked so
+    // a talkback mic on ch2 is heard on both speakers, not stuck on one side, and does not pull in
+    // whatever the record-monitor channels (ch1/ch2) carry.
+    if (talkbackActive) {
+        const int tch = std::max(0, std::min(channels - 1, talkbackInputChannel_.load(std::memory_order_relaxed)));
+        const auto tStart = talkbackMonoBuffer_.size();
+        talkbackMonoBuffer_.resize(tStart + static_cast<size_t>(frameCount));
+        for (int64_t frame = 0; frame < frameCount; ++frame) {
+            talkbackMonoBuffer_[tStart + static_cast<size_t>(frame)] =
+                samples[static_cast<size_t>(frame * channels + tch)];
+        }
+        if (talkbackMonoBuffer_.size() > static_cast<size_t>(capFrames)) {
+            talkbackMonoBuffer_.erase(talkbackMonoBuffer_.begin(),
+                                      talkbackMonoBuffer_.end() - static_cast<std::ptrdiff_t>(capFrames));
+        }
+    } else if (!talkbackMonoBuffer_.empty()) {
+        talkbackMonoBuffer_.clear();
     }
     inputPeak_ = std::min(1.0f, peak);
     physicalInputMonitoringActive_ = true;
     physicalInputMonitoringActiveForStatus_.store(true, std::memory_order_relaxed);
     inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
     inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
+}
+
+void NeuracoustDspEngine::pushReferenceInterleaved(const float* interleavedStereo, int64_t frameCount) {
+    if (interleavedStereo == nullptr || frameCount <= 0) return;
+    // Feed the reference FIFO FIRST, in its own short scope. The render thread try_locks this mutex
+    // and skips the block if it can't get it, so we hold it only for the fast copy — never across
+    // the recording append below. (This is the monitored audio; it must not glitch.)
+    float peak = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(inputMonitorMutex_);
+        const size_t start = referenceBuffer_.size();
+        referenceBuffer_.resize(start + static_cast<size_t>(frameCount) * 2u);
+        for (int64_t f = 0; f < frameCount; ++f) {
+            const float l = interleavedStereo[f * 2];
+            const float r = interleavedStereo[f * 2 + 1];
+            referenceBuffer_[start + static_cast<size_t>(f) * 2u]      = l;
+            referenceBuffer_[start + static_cast<size_t>(f) * 2u + 1u] = r;
+            peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+        }
+        // Deep cushion (~170 ms+): the tap and the output run on independent clocks and the tap
+        // delivers in bursts, so a shallow cap would starve. The resampler parks the depth near
+        // maxBlockSize_*40; keep the cap well above that.
+        const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
+        const size_t maxSamples = static_cast<size_t>(blockFrames * 96) * 2u;
+        if (referenceBuffer_.size() > maxSamples) {
+            referenceBuffer_.erase(referenceBuffer_.begin(),
+                                   referenceBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
+        }
+    }
+    inputPeak_ = std::min(1.0f, peak);
+    inputMonitorChannels_ = 2;
+    physicalInputMonitoringActive_ = true;
+    physicalInputMonitoringActiveForStatus_.store(true, std::memory_order_relaxed);
+    inputMonitorChannelsForStatus_.store(2, std::memory_order_relaxed);
+    inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
+
+    // Recording (reference-tap source) LAST: the tap is already stereo. recordMutex_ is a separate
+    // lock from the FIFO's, so a slow disk-take append here can never starve the monitored feed.
+    if (recordingActive_.load(std::memory_order_acquire) && recordSource_.load(std::memory_order_relaxed) == 2) {
+        std::lock_guard<std::mutex> rlock(recordMutex_);
+        if (recordTake_) {
+            recordTake_->appendInterleavedFloat(interleavedStereo, static_cast<int>(frameCount));
+            accumulateRecordPeaksLocked(interleavedStereo, frameCount, 2);
+        }
+    }
 }
 
 void NeuracoustDspEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) {
@@ -1997,8 +2196,21 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         // The user's monitor parametric EQ (room correction / tone) sits at the end of the
         // monitor chain — it colours what you hear, never the printed mix. Skipped on silence
         // with everything else.
-        if (monitorEq_.active()) {
+        if (monitorFir_.active()) {
+            monitorFir_.processInterleavedStereo(interleavedStereo.data(), static_cast<int>(frameCount));
+        } else if (monitorEq_.active()) {
             monitorEq_.processInterleavedStereo(interleavedStereo.data(), static_cast<int>(frameCount));
+        }
+        // Nonlinear interface character (2단계 waveshaper) sits at the output stage, after the tone EQ.
+        if (interfaceModeler_.active()) {
+            interfaceModeler_.processInterleavedStereo(interleavedStereo.data(), static_cast<int>(frameCount));
+        }
+        // Safety soft-clip AFTER the whole monitor colouring chain: the monitor EQ is now level-matched
+        // on the midband (not peak-normalized), so a presence/air boost is a real boost and a hot mix
+        // can momentarily exceed full scale. Catch only that overshoot softly here — this is what lets
+        // the tone stay un-darkened without the sim clipping into gritty broadband distortion.
+        for (float& sample : interleavedStereo) {
+            sample = monitorSafetySoftClip(sample);
         }
     }
     applyMonitorStationControlsLocked(interleavedStereo);
@@ -2035,17 +2247,45 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         measurementProgressFrames_.store(measurementEmitPos_, std::memory_order_relaxed);
         if (measurementEmitPos_ >= total) {
             measurementActive_.store(false, std::memory_order_relaxed);
-            inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+            // Leave capture forced if level-check still owns it; else restore the true prior state.
+            if (!measurementLevelCheck_.load(std::memory_order_relaxed)) {
+                inputMonitorCaptureActive_.store(measurementPrevInputMonitor_, std::memory_order_relaxed);
+            }
+        }
+    } else if (measurementLevelCheck_.load(std::memory_order_relaxed)) {
+        // Gain-setup reference tone: a 1 kHz sine at the SWEEP's level and path (overwrites the
+        // output here, after the monitor gain, exactly like the sweep) so the input meter predicts
+        // the sweep's return level — set gain to 적정 and the sweep will not clip.
+        const double inc = 2.0 * M_PI * 1000.0 / std::max(1.0, settings_.sampleRate);
+        for (int64_t f = 0; f < frameCount; ++f) {
+            const float s = 0.5f * static_cast<float>(std::sin(measurementTonePhase_));
+            measurementTonePhase_ += inc;
+            if (measurementTonePhase_ >= 2.0 * M_PI) measurementTonePhase_ -= 2.0 * M_PI;
+            const auto idx = static_cast<size_t>(f) * 2u;
+            if (idx + 1 < interleavedStereo.size()) {
+                interleavedStereo[idx] = (measurementChannel_ == 0) ? s : 0.0f;
+                interleavedStereo[idx + 1] = (measurementChannel_ == 1) ? s : 0.0f;
+            }
         }
     }
 
     playbackFrameForStatus_.store(playbackFrame_);
     storeMetering(interleavedStereo);
+    // Publish the status snapshot for the UI poll WHILE we already hold mutex_. try_lock only, so the
+    // render NEVER blocks on the reader; it reuses statusShadow_'s capacity so it doesn't allocate in
+    // steady state. Published EVERY block: an earlier 3-block throttle left the shadow stale for the
+    // first two blocks after a seek/start, so a poll right after seeking read zeros and the meters —
+    // and any single-block probe — saw silence (audio_engine_smoke's portable-render check).
+    ++statusPublishCounter_;
+    if (statusShadowMutex_.try_lock()) {
+        populateStatusLocked(statusShadow_);
+        statusShadowMutex_.unlock();
+    }
 }
 
-AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    AudioEngineStatus status;
+void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const {
+    // Caller holds mutex_. Assign into `status` (the render's shadow), reusing its vector capacity
+    // so this does not allocate in steady state.
     status.sampleRate = settings_.sampleRate;
     status.transportRunning = settings_.transportRunning;
     status.outputPeakLeft = outputPeakLeft_.load();
@@ -2088,6 +2328,7 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
     status.directMonitoringEnabled = settings_.lowLatencyRecordMonitoringEnabled;
     status.lowLatencyRecordMonitoringActive = lowLatencyRecordMonitoringActive_;
     status.listenSourceActive = listenSourceActive_.load(std::memory_order_relaxed);
+    status.referenceTapArmed = referenceTapArmed_.load(std::memory_order_relaxed);
     status.physicalInputMonitoringActive = physicalInputMonitoringActiveForStatus_.load(std::memory_order_relaxed);
     status.recordArmedTrackCount = recordArmedTrackCount_;
     status.inputChannels = inputMonitorChannelsForStatus_.load(std::memory_order_relaxed);
@@ -2119,7 +2360,28 @@ AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
     status.activeOfflineVst3TrackInsertCount = static_cast<int>(projectPlan_.activeTrackVst3InsertLabels.size());
     status.listenRoom = listenRoomSender_.status();
     status.message = message_;
-    return status;
+}
+
+// Status read that never STALLS the render: try_lock the render mutex so the ~30 Hz UI poll can
+// never hold the render lock while descheduled under background CPU load (the dropout this guards).
+// When the lock is free — the common case, including whenever the transport is stopped or between
+// blocks — populate a LIVE snapshot so status reflects edits (loadProject/updateProject, insert
+// add/remove, seek) immediately, even with no render running to publish the shadow. Only when the
+// render currently holds the lock do we fall back to the shadow it publishes every block (fresh to
+// within one block). This keeps both invariants: no render stall, and no stale status after an edit.
+AudioEngineStatus NeuracoustDspEngine::statusSnapshot() const {
+    if (mutex_.try_lock()) {
+        AudioEngineStatus live;
+        populateStatusLocked(live);
+        {
+            std::lock_guard<std::mutex> shadowLock(statusShadowMutex_);
+            statusShadow_ = live;
+        }
+        mutex_.unlock();
+        return live;
+    }
+    std::lock_guard<std::mutex> lock(statusShadowMutex_);
+    return statusShadow_;
 }
 
 std::string NeuracoustDspEngine::lastMessage() const {
@@ -2723,6 +2985,31 @@ void NeuracoustDspEngine::updateMonitorEq(const std::vector<MonitorEqBandState>&
     configureMonitorEqLocked(shim, sampleRateForStatus_.load(std::memory_order_relaxed));
 }
 
+void NeuracoustDspEngine::updateMonitorFir(const ResponseCurve& curveDb, int numTaps) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (curveDb.empty() || numTaps < 4) {
+        monitorFir_.clear();
+        return;
+    }
+    monitorFir_.designFromCurve(sampleRateForStatus_.load(std::memory_order_relaxed), curveDb, numTaps);
+}
+
+void NeuracoustDspEngine::updateInterfaceModeler(const std::vector<double>& harmonics, double mix) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    interfaceModeler_.configure(harmonics, mix);
+}
+
+int NeuracoustDspEngine::monitorFirLatencySamples() const {
+    return monitorFir_.latencySamples();
+}
+
+double NeuracoustDspEngine::monitorEqMagnitudeDb(double frequencyHz) const {
+    if (monitorFir_.active()) {
+        return monitorFir_.magnitudeDb(frequencyHz, sampleRateForStatus_.load(std::memory_order_relaxed));
+    }
+    return monitorEq_.magnitudeDb(frequencyHz);
+}
+
 void NeuracoustDspEngine::configureMonitorEqLocked(const ProjectDocument& project, double sampleRate) {
     auto typeFromString = [](const std::string& s) {
         if (s == "low_shelf") return EqBandType::LowShelf;
@@ -2929,6 +3216,11 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
     // "Listen to source" routes the input (e.g. BlackHole) through the monitor bus even
     // with no record-armed track, so it enables input capture on its own.
     const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
+    // Capture-active gates the monitor MIX. It must key on the *listening* state, NOT the armed
+    // state: while armed but auditioning the master (holds the apps muted) the tap keeps running,
+    // but its captured audio must NOT be mixed into the monitor — otherwise the record-monitor mix
+    // path leaks the tapped apps on top of the master. The tap muting the apps at their own output
+    // is what silences them; the monitor simply plays the master alone.
     inputMonitorCaptureActive_.store(lowLatencyRecordMonitoringActive_ || listenSource,
                                      std::memory_order_relaxed);
     if (!lowLatencyRecordMonitoringActive_ && !listenSource &&
@@ -2936,6 +3228,7 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
         std::lock_guard<std::mutex> inputLock(inputMonitorMutex_);
         physicalInputMonitoringActive_ = false;
         inputMonitorBuffer_.clear();
+        talkbackMonoBuffer_.clear();
         listenSourcePrerolling_ = true;   // next engagement pre-rolls a fresh cushion
         listenReadPosFrames_ = 0.0;
         listenResampleRatio_ = 1.0;
@@ -2946,6 +3239,33 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
         inputMonitorChannelsForStatus_.store(0, std::memory_order_relaxed);
         inputPeakForStatus_.store(0.0f, std::memory_order_relaxed);
     }
+}
+
+void NeuracoustDspEngine::beginGraphChangeDeclick() {
+    // Ask the render to fade the monitor to silence, then wait (bounded) for it to get there so the
+    // structural swap lands in silence. Does NOT hold the mutex — the render must be free to run
+    // and advance the envelope. If no render is running (engine stopped), the wait just times out
+    // and we proceed: no audio means no click to hide.
+    graphChangeDeclick_.store(1, std::memory_order_relaxed);   // FadingOut
+    for (int i = 0; i < 25; ++i) {                             // up to ~50 ms
+        if (graphChangeDeclick_.load(std::memory_order_relaxed) == 2) break;   // Silent
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
+int NeuracoustDspEngine::routeDelayCompensationSamplesFor(const std::string& routeName) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!settings_.delayCompensationEnabled) return 0;
+    const auto it = projectPlan_.routeDelayCompensationSamples.find(routeName);
+    return it == projectPlan_.routeDelayCompensationSamples.end() ? 0 : static_cast<int>(it->second);
+}
+
+void NeuracoustDspEngine::endGraphChangeDeclick() {
+    // Hold silence for ~40 ms AFTER the swap before fading in: CoreAudio is double-buffered, so the
+    // new graph's first (discontinuous) output block plays ~a buffer later — this keeps that under
+    // silence instead of revealing it mid fade-in.
+    graphChangeDeclickHold_ = static_cast<int>(std::max(1.0, settings_.sampleRate) * 0.040);
+    graphChangeDeclick_.store(3, std::memory_order_release);   // PostSwapHold → render counts down → FadingIn
 }
 
 void NeuracoustDspEngine::applyMonitorStationControlsLocked(std::vector<float>& interleavedStereo) {
@@ -2959,7 +3279,35 @@ void NeuracoustDspEngine::applyMonitorStationControlsLocked(std::vector<float>& 
     }
     const float rampSeconds = settings_.monitorStationMute ? 0.035f : 0.045f;
     const float rampStep = 1.0f / std::max(1.0f, static_cast<float>(settings_.sampleRate) * rampSeconds);
+    // Graph-change declick envelope: fade out fast (~4 ms) to reach silence for the swap, fade back
+    // in a touch slower (~12 ms) after. A separate factor multiplied on top of the normal gain.
+    const float declickOutStep = 1.0f / std::max(1.0f, static_cast<float>(settings_.sampleRate) * 0.004f);
+    const float declickInStep = 1.0f / std::max(1.0f, static_cast<float>(settings_.sampleRate) * 0.012f);
     for (size_t index = 0; index + 1 < interleavedStereo.size(); index += 2) {
+        // Advance the declick envelope per sample (state re-read each sample so transitions apply now).
+        const int declickState = graphChangeDeclick_.load(std::memory_order_acquire);
+        if (declickState == 1) {                 // FadingOut
+            graphChangeDeclickGain_ -= declickOutStep;
+            if (graphChangeDeclickGain_ <= 0.0f) {
+                graphChangeDeclickGain_ = 0.0f;
+                graphChangeDeclick_.store(2, std::memory_order_relaxed);   // Silent → swap may proceed
+            }
+        } else if (declickState == 2) {          // Silent (holding until endGraphChangeDeclick)
+            graphChangeDeclickGain_ = 0.0f;
+        } else if (declickState == 3) {          // PostSwapHold: stay silent while the new graph settles
+            graphChangeDeclickGain_ = 0.0f;
+            if (--graphChangeDeclickHold_ <= 0) {
+                graphChangeDeclick_.store(4, std::memory_order_relaxed);
+            }
+        } else if (declickState == 4) {          // FadingIn
+            graphChangeDeclickGain_ += declickInStep;
+            if (graphChangeDeclickGain_ >= 1.0f) {
+                graphChangeDeclickGain_ = 1.0f;
+                graphChangeDeclick_.store(0, std::memory_order_relaxed);   // done
+            }
+        } else {
+            graphChangeDeclickGain_ = 1.0f;
+        }
         float left = interleavedStereo[index];
         float right = interleavedStereo[index + 1];
         if (settings_.monitorStationListenMode == "M") {
@@ -3002,8 +3350,108 @@ void NeuracoustDspEngine::applyMonitorStationControlsLocked(std::vector<float>& 
         } else {
             monitorStationGainSmoothed_ += delta > 0.0f ? rampStep : -rampStep;
         }
-        interleavedStereo[index] = left * monitorStationGainSmoothed_;
-        interleavedStereo[index + 1] = right * monitorStationGainSmoothed_;
+        interleavedStereo[index] = left * monitorStationGainSmoothed_ * graphChangeDeclickGain_;
+        interleavedStereo[index + 1] = right * monitorStationGainSmoothed_ * graphChangeDeclickGain_;
+    }
+}
+
+// DIAG (temporary): reference-tap FIFO health to a file readable from an `open`-launched bundle
+// (stderr is not captured when LaunchServices starts the app). Opened once, truncating.
+namespace { FILE* refDiagLog() { static FILE* f = fopen("/tmp/dw_ref_diag.log", "w"); return f; } }
+
+void NeuracoustDspEngine::beginRecording(int source, int channelOffset, int channels, int sampleRate) {
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    recordChannelOffset_ = std::max(0, channelOffset);
+    recordChannels_ = std::max(1, std::min(2, channels));
+    const int sr = sampleRate > 0 ? sampleRate : 48000;
+    recordTake_ = std::make_unique<RecordingTake>(recordChannels_, sr);
+    recordLivePeaks_.clear();
+    recordLivePeaks_.reserve(static_cast<size_t>(sr / kRecordPeakSamples) * 300u * 2u);   // ~5 min, L/R
+    recordPeakAccumL_ = 0.0f;
+    recordPeakAccumR_ = 0.0f;
+    recordPeakFill_ = 0;
+    recordSource_.store(source, std::memory_order_relaxed);
+    recordingActive_.store(true, std::memory_order_release);
+}
+
+// One coarse L/R abs-max peak per kRecordPeakSamples input samples. Caller holds recordMutex_.
+void NeuracoustDspEngine::accumulateRecordPeaksLocked(const float* interleaved, int64_t frames, int channels) {
+    for (int64_t f = 0; f < frames; ++f) {
+        const float l = std::fabs(interleaved[static_cast<size_t>(f) * channels]);
+        const float r = channels >= 2 ? std::fabs(interleaved[static_cast<size_t>(f) * channels + 1]) : l;
+        recordPeakAccumL_ = std::max(recordPeakAccumL_, l);
+        recordPeakAccumR_ = std::max(recordPeakAccumR_, r);
+        if (++recordPeakFill_ >= kRecordPeakSamples) {
+            recordLivePeaks_.push_back(recordPeakAccumL_);
+            recordLivePeaks_.push_back(recordPeakAccumR_);
+            recordPeakAccumL_ = 0.0f;
+            recordPeakAccumR_ = 0.0f;
+            recordPeakFill_ = 0;
+        }
+    }
+}
+
+double NeuracoustDspEngine::recordLiveSeconds() const {
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    return recordTake_ ? recordTake_->durationSeconds() : 0.0;
+}
+
+int NeuracoustDspEngine::recordLivePeakCount() const {
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    return static_cast<int>(recordLivePeaks_.size() / 2);
+}
+
+int NeuracoustDspEngine::recordChannels() const {
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    return recordChannels_;
+}
+
+// Copy only buckets [fromBucket, end) so the read lock is O(new peaks) — never the whole take.
+int NeuracoustDspEngine::copyRecordLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const {
+    if (outLR == nullptr || maxBuckets <= 0 || fromBucket < 0) return 0;
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    const int total = static_cast<int>(recordLivePeaks_.size() / 2);
+    if (fromBucket >= total) return 0;
+    const int n = std::min(maxBuckets, total - fromBucket);
+    std::copy(recordLivePeaks_.begin() + static_cast<std::ptrdiff_t>(fromBucket) * 2,
+              recordLivePeaks_.begin() + static_cast<std::ptrdiff_t>(fromBucket + n) * 2,
+              outLR);
+    return n;
+}
+
+bool NeuracoustDspEngine::endRecording(const std::string& path, int bitDepth, std::string& error,
+                                       double& outDurationSeconds, int& outChannels) {
+    std::unique_ptr<RecordingTake> take;
+    {
+        std::lock_guard<std::mutex> lock(recordMutex_);
+        recordingActive_.store(false, std::memory_order_release);
+        recordSource_.store(0, std::memory_order_relaxed);
+        take = std::move(recordTake_);
+    }
+    if (!take || take->frameCount() == 0) {
+        error = "녹음된 오디오가 없습니다.";
+        return false;
+    }
+    outDurationSeconds = take->durationSeconds();
+    outChannels = take->channels();
+    return take->saveWav(path, bitDepth, error);
+}
+
+void NeuracoustDspEngine::cancelRecording() {
+    std::lock_guard<std::mutex> lock(recordMutex_);
+    recordingActive_.store(false, std::memory_order_release);
+    recordSource_.store(0, std::memory_order_relaxed);
+    recordTake_.reset();
+    recordLivePeaks_.clear();
+    recordPeakAccumL_ = 0.0f;
+    recordPeakAccumR_ = 0.0f;
+    recordPeakFill_ = 0;
+}
+
+void NeuracoustDspEngine::logReferenceRates(double tapRate, double outRate) {
+    if (FILE* df = refDiagLog()) {
+        fprintf(df, "tap-aggregate rate=%.0f  engine output rate=%.0f\n", tapRate, outRate);
+        fflush(df);
     }
 }
 
@@ -3014,15 +3462,38 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
         talkbackActive &&
         (settings_.monitorStationTalkbackRoute == "monitor_bus" ||
          settings_.monitorStationTalkbackRoute == "all");
+    const bool talkbackToListenRoom =
+        talkbackActive &&
+        (settings_.monitorStationTalkbackRoute == "listen_room" ||
+         settings_.monitorStationTalkbackRoute == "all");
+    // Talkback to the remote listeners rides its own path (publishListenRoomLocked adds it
+    // after the monitor mix), so the stash is rebuilt every block and left empty otherwise.
+    // "all" already reaches listeners through the forwarded monitor mix, so it is NOT stashed
+    // (avoids double-counting) — only a listen_room-exclusive route needs the separate inject.
+    const bool stashTalkbackForListenRoom = talkbackToListenRoom && !talkbackToMonitor;
+    talkbackListenRoomBlock_.clear();
     const bool listenSource = listenSourceActive_.load(std::memory_order_relaxed);
-    if ((!monitorCaptureActive && !talkbackToMonitor) || frameCount <= 0 || interleavedStereo.empty()) {
+    // Record-monitor the tap: when recording a "다른 앱" (tap) input track while the monitor is on
+    // the MASTER, mix the tapped source into the monitor ON TOP of the master so the engineer hears
+    // what they are capturing (the tap mutes the apps' own output, so this is the only way to hear
+    // it). Unlike A/B listening this does NOT silence the master.
+    // Auto-input style: the tapped source is heard ONLY while actively punched in (tapInputMonitorActive_
+    // set by the Record punch), not merely because a tap track is armed or capturing in the background —
+    // on plain playback you hear the recorded tape, not the live input.
+    const bool recTapMonitor = !listenSource &&
+        (tapInputMonitorActive_.load(std::memory_order_relaxed) ||
+         tapInputHoldActive_.load(std::memory_order_relaxed));
+    const bool feedReference = listenSource || recTapMonitor;
+    if ((!monitorCaptureActive && !talkbackToMonitor && !stashTalkbackForListenRoom && !recTapMonitor) ||
+        frameCount <= 0 || interleavedStereo.empty()) {
         return;
     }
-    // Source monitoring is EXCLUSIVE: while a source is selected you hear only it, never the
+    // Source monitoring is EXCLUSIVE: while a source is A/B-selected you hear only it, never the
     // DAW master. Silence the master here — before the buffer lock and before the resample
     // pre-roll — so switching to the source never lets the master leak through during the
     // ~1 s the input device takes to open and prime (you get brief silence, then the source).
     // The master transport keeps running underneath, so switching back resumes it in place.
+    // Record-monitoring (recTapMonitor) deliberately keeps the master and adds the tap on top.
     if (listenSource) {
         std::fill(interleavedStereo.begin(), interleavedStereo.end(), 0.0f);
     }
@@ -3035,8 +3506,19 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     // FIFO with a fractional position advanced by listenResampleRatio_, and nudge that ratio
     // to hold the FIFO near a target depth. The ratio self-tunes to the true input/output
     // rate — correcting both drift and a 44.1↔48 mismatch — with no pre-roll or underrun.
-    if (listenSource) {
-        const int64_t availFrames = static_cast<int64_t>(inputMonitorBuffer_.size() / 2);
+    if (!feedReference) {
+        referenceFeedActive_ = false;
+    }
+    if (feedReference) {
+        // Re-prime a fresh cushion on the feeding-start edge (A/B into reference, or record-monitor
+        // begins) or on an explicit A/B engage — drop stale audio so it never plays a blip.
+        if (!referenceFeedActive_ || listenJustEngaged_.exchange(false, std::memory_order_relaxed)) {
+            listenSourcePrerolling_ = true;
+            listenReadPosFrames_ = 0.0;
+            referenceBuffer_.clear();
+        }
+        referenceFeedActive_ = true;
+        const int64_t availFrames = static_cast<int64_t>(referenceBuffer_.size() / 2);
         // Deep cushion (~213 ms): reference monitoring tolerates latency, and a deep FIFO lets
         // the ratio control be slow (stable pitch) yet never underrun on the driver's bursty,
         // core-isolation-starved delivery. Cap (pushInputMonitorInterleaved) is deeper still.
@@ -3070,17 +3552,23 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
         // inaudible glide; steady-state tracking of the tiny clock offset is unaffected.
         const double maxStep = 5.0e-6;
         listenResampleRatio_ += std::clamp(targetRatio - listenResampleRatio_, -maxStep, maxStep);
+        // DIAG: throttled steady-state report — if the ratio parks at a clamp rail (0.94/1.06) the
+        // tap/output nominal rates differ by more than the resampler can track → periodic underruns.
+        static int64_t s_diagCounter = 0;
+        static int64_t s_underruns = 0;
+        bool s_dryThisBlock = false;
         for (int64_t f = 0; f < frameCount; ++f) {
             const int64_t i0 = static_cast<int64_t>(listenReadPosFrames_);
             const int64_t i1 = i0 + 1;
             if (i1 >= availFrames) {
+                s_dryThisBlock = true;
                 break;   // genuinely dry this block; ratio control will refill the cushion
             }
             const float frac = static_cast<float>(listenReadPosFrames_ - static_cast<double>(i0));
-            const float l = inputMonitorBuffer_[static_cast<size_t>(i0) * 2u] * (1.0f - frac) +
-                            inputMonitorBuffer_[static_cast<size_t>(i1) * 2u] * frac;
-            const float r = inputMonitorBuffer_[static_cast<size_t>(i0) * 2u + 1u] * (1.0f - frac) +
-                            inputMonitorBuffer_[static_cast<size_t>(i1) * 2u + 1u] * frac;
+            const float l = referenceBuffer_[static_cast<size_t>(i0) * 2u] * (1.0f - frac) +
+                            referenceBuffer_[static_cast<size_t>(i1) * 2u] * frac;
+            const float r = referenceBuffer_[static_cast<size_t>(i0) * 2u + 1u] * (1.0f - frac) +
+                            referenceBuffer_[static_cast<size_t>(i1) * 2u + 1u] * frac;
             // Add raw — the monitor DSP path colours the summed block downstream, so running
             // the speaker sim per input sample here was redundant (double processing) and the
             // biggest per-block cost. The reference feed gets the same monitor colour as the mix.
@@ -3088,16 +3576,25 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
             interleavedStereo[static_cast<size_t>(f) * 2u + 1u] += r;
             listenReadPosFrames_ += listenResampleRatio_;
         }
+        if (s_dryThisBlock) ++s_underruns;
+        if (++s_diagCounter % 200 == 0) {
+            if (FILE* df = refDiagLog()) {
+                fprintf(df, "ref-fifo: ratio=%.5f target=%.5f depth=%.0f/%.0f avail=%lld under=%lld blk=%lld\n",
+                        listenResampleRatio_, targetRatio, listenSmoothedDepth_, targetFrames,
+                        (long long)availFrames, (long long)s_underruns, (long long)maxBlockSize_);
+                fflush(df);
+            }
+        }
         const int64_t consumedFrames = static_cast<int64_t>(listenReadPosFrames_);
         if (consumedFrames > 0) {
-            const size_t consumedSamples = std::min(inputMonitorBuffer_.size(),
+            const size_t consumedSamples = std::min(referenceBuffer_.size(),
                                                     static_cast<size_t>(consumedFrames) * 2u);
-            inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(),
-                                      inputMonitorBuffer_.begin() + static_cast<std::ptrdiff_t>(consumedSamples));
+            referenceBuffer_.erase(referenceBuffer_.begin(),
+                                   referenceBuffer_.begin() + static_cast<std::ptrdiff_t>(consumedSamples));
             listenReadPosFrames_ -= static_cast<double>(consumedFrames);
         }
         inputPeak_ *= 0.96f;
-        if (inputMonitorBuffer_.empty() && inputPeak_ < 0.0001f) {
+        if (referenceBuffer_.empty() && inputPeak_ < 0.0001f) {
             inputPeak_ = 0.0f;
         }
         inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
@@ -3106,26 +3603,50 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     }
     // --- Talkback / record-arm monitoring: low-latency 1:1 (unchanged) ----------------
     const bool unityPassthrough = talkbackToMonitor;
+    // Who hears the mic on the local monitor bus. A listen_room-exclusive talkback route
+    // (stashTalkbackForListenRoom) reaches only the remote listeners, never the monitor —
+    // so the engineer does not hear their own talkback on the speakers (no feedback).
+    const bool mixToMonitor = talkbackToMonitor || monitorCaptureActive;
     const size_t neededSamples = static_cast<size_t>(frameCount) * 2;
     const size_t availableSamples = std::min(neededSamples, inputMonitorBuffer_.size());
+    if (stashTalkbackForListenRoom) {
+        talkbackListenRoomBlock_.assign(neededSamples, 0.0f);   // full block, zero-padded
+    }
     for (size_t index = 0; index + 1 < availableSamples; index += 2) {
-        const auto [monitoredLeft, monitoredRight] = unityPassthrough
-            ? std::pair<float, float>{inputMonitorBuffer_[index], inputMonitorBuffer_[index + 1]}
-            : (recordMonitorMuted_
-            ? std::pair<float, float>{0.0f, 0.0f}
-            : applyStereoGainPan(inputMonitorBuffer_[index],
-                                 inputMonitorBuffer_[index + 1],
-                                 recordMonitorVolumeDb_,
-                                 recordMonitorPan_));
-        StereoFrame frame {monitoredLeft, monitoredRight};
-        if (settings_.monitorDspEnabled && !remoteMonitorDspRequestedLocked()) {
-            frame = monitorProcessor_.process(frame);
+        // Talkback is a mono mic on one chosen input channel, centered. Record-arm monitoring keeps
+        // the true stereo input (the armed track's source, ch1/ch2).
+        const size_t frameIdx = index / 2;
+        const float talkMono = frameIdx < talkbackMonoBuffer_.size() ? talkbackMonoBuffer_[frameIdx] : 0.0f;
+        if (mixToMonitor) {
+            const auto [monitoredLeft, monitoredRight] = unityPassthrough
+                ? std::pair<float, float>{talkMono, talkMono}
+                : (recordMonitorMuted_
+                ? std::pair<float, float>{0.0f, 0.0f}
+                : applyStereoGainPan(inputMonitorBuffer_[index],
+                                     inputMonitorBuffer_[index + 1],
+                                     recordMonitorVolumeDb_,
+                                     recordMonitorPan_));
+            StereoFrame frame {monitoredLeft, monitoredRight};
+            if (settings_.monitorDspEnabled && !remoteMonitorDspRequestedLocked()) {
+                frame = monitorProcessor_.process(frame);
+            }
+            interleavedStereo[index] += frame.left;
+            interleavedStereo[index + 1] += frame.right;
         }
-        interleavedStereo[index] += frame.left;
-        interleavedStereo[index + 1] += frame.right;
+        if (stashTalkbackForListenRoom) {
+            // Remote listeners get the raw mic at unity, unaffected by the engineer's
+            // monitor gain/pan/DSP — a clean talkback voice, mono-centered, over the programme.
+            talkbackListenRoomBlock_[index] = talkMono;
+            talkbackListenRoomBlock_[index + 1] = talkMono;
+        }
     }
     if (availableSamples > 0) {
         inputMonitorBuffer_.erase(inputMonitorBuffer_.begin(), inputMonitorBuffer_.begin() + static_cast<std::ptrdiff_t>(availableSamples));
+        const size_t framesConsumed = std::min(availableSamples / 2, talkbackMonoBuffer_.size());
+        if (framesConsumed > 0) {
+            talkbackMonoBuffer_.erase(talkbackMonoBuffer_.begin(),
+                                      talkbackMonoBuffer_.begin() + static_cast<std::ptrdiff_t>(framesConsumed));
+        }
     }
     inputPeak_ *= 0.96f;
     if (inputMonitorBuffer_.empty() && inputPeak_ < 0.0001f) {
@@ -3574,6 +4095,20 @@ void NeuracoustDspEngine::storeMetering(const std::vector<float>& interleavedSte
 
 void NeuracoustDspEngine::publishListenRoomLocked(const std::vector<float>& interleavedStereo) {
     if (!settings_.listenRoom.enabled || interleavedStereo.empty()) {
+        return;
+    }
+    // Talkback routed exclusively to the listen room is summed on top of the programme here,
+    // so remote listeners hear the engineer over the music while the local monitor stays dry.
+    // The stash (filled in mixInputMonitorLocked) is empty when talkback is off or routed to
+    // the monitor bus; "all" already carries the mic in the forwarded monitor mix.
+    if (!talkbackListenRoomBlock_.empty()) {
+        listenRoomMixBlock_.assign(interleavedStereo.begin(), interleavedStereo.end());
+        const size_t n = std::min(listenRoomMixBlock_.size(), talkbackListenRoomBlock_.size());
+        for (size_t i = 0; i < n; ++i) {
+            listenRoomMixBlock_[i] += talkbackListenRoomBlock_[i];
+        }
+        listenRoomSender_.pushInterleavedStereo(listenRoomMixBlock_.data(),
+                                                static_cast<int64_t>(listenRoomMixBlock_.size() / 2u));
         return;
     }
     listenRoomSender_.pushInterleavedStereo(interleavedStereo.data(), static_cast<int64_t>(interleavedStereo.size() / 2u));

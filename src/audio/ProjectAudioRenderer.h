@@ -6,6 +6,7 @@
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MonitorDspProcessor.h"
 #include "audio/ProjectRenderTypes.h"
+#include "audio/TestSignalGenerator.h"
 #include "audio/WavFile.h"
 #include "plugins/Vst3SdkAdapter.h"
 #include "project/ProjectDocument.h"
@@ -120,11 +121,18 @@ struct ProjectAudioRenderState {
     // wet audio arrives. Owned/reset by the engine each block.
     bool routeInsertEngagementChangedThisBlock = false;
     std::map<std::string, double> sourceGeneratorPhases;
+    // High-accuracy per-route signal generators (band-limited, click-free). Keyed by route name so a
+    // generator's phase/noise/ramp stay continuous across blocks. Preserved across a plain edit.
+    std::map<std::string, TestSignalGenerator> sourceGenerators;
     std::map<std::string, std::vector<Vst3MidiEvent>> liveMidiEvents;
     std::vector<float> masterInsertDryFallback;
 
     void reset();
     void resetForSeek();
+    // A plain clip edit during playback: keep the continuous-playback buffers (route delay lines,
+    // generator phases, queued live MIDI) so the sound never gaps/clicks — only drop per-block error
+    // state. The delay lines self-adapt if a delay amount changed, so keeping them is always safe.
+    void resetForEdit();
 };
 
 double projectDurationSeconds(const ProjectDocument& project);

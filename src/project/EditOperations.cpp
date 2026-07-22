@@ -1528,6 +1528,11 @@ bool splitClip(ProjectDocument& project, const std::string& clipId, double split
     }
 
     clip->durationSeconds = splitSeconds - clip->startSeconds;
+    // The cut edges get NO fade — only the outer edges keep the original clip's fades. Otherwise the
+    // right half inherits the original's fade-IN (a fade at the cut) and the left half keeps a
+    // fade-OUT at the cut, both wrong for a plain split.
+    clip->fadeOutSeconds = 0.0;
+    right.fadeInSeconds = 0.0;
     clampClipFades(*clip);
     clampClipFades(right);
     newClipId = right.id;
@@ -1638,6 +1643,44 @@ bool glueSelectedAdjacentClips(ProjectDocument& project,
     gluedClipId = leftIt->id;
     project.clips.erase(rightIt);
     return true;
+}
+
+bool glueSelectedClips(ProjectDocument& project,
+                       const std::vector<std::string>& clipIds,
+                       std::vector<std::string>& gluedClipIds) {
+    gluedClipIds.clear();
+    if (clipIds.size() < 2) {
+        return false;
+    }
+    // Only ever touch clips whose id is in the selection. glueSelectedAdjacentClips keeps the earlier
+    // clip's id and erases the later one, so we collapse pairs and shrink the working set until no two
+    // remaining selected clips still abut. Neighbours outside `ids` are never candidates.
+    std::vector<std::string> ids = clipIds;
+    bool changedAny = false;
+    bool progress = true;
+    while (progress && ids.size() >= 2) {
+        progress = false;
+        for (size_t i = 0; i < ids.size() && !progress; ++i) {
+            for (size_t j = i + 1; j < ids.size(); ++j) {
+                std::string glued;
+                if (!glueSelectedAdjacentClips(project, ids[i], ids[j], glued) || glued.empty()) {
+                    continue;
+                }
+                // `glued` is the surviving (earlier) clip's id — one of ids[i]/ids[j]; the other was
+                // erased from the project. Drop the consumed id, keep the survivor in the set so it can
+                // glue further.
+                const std::string consumed = (glued == ids[i]) ? ids[j] : ids[i];
+                ids.erase(std::remove(ids.begin(), ids.end(), consumed), ids.end());
+                changedAny = true;
+                progress = true;
+                break;
+            }
+        }
+    }
+    if (changedAny) {
+        gluedClipIds = ids;  // the survivors
+    }
+    return changedAny;
 }
 
 bool glueClipRange(ProjectDocument& project,
@@ -1857,6 +1900,80 @@ bool clearClipRange(ProjectDocument& project, double rangeStartSeconds, double r
         project.clips = std::move(nextClips);
     }
     return changed;
+}
+
+bool clearTrackClipRange(ProjectDocument& project, const std::string& trackName,
+                         double rangeStartSeconds, double rangeEndSeconds) {
+    if (!std::isfinite(rangeStartSeconds) || !std::isfinite(rangeEndSeconds)) {
+        return false;
+    }
+    const double start = std::max(0.0, std::min(rangeStartSeconds, rangeEndSeconds));
+    const double end = std::max(rangeStartSeconds, rangeEndSeconds);
+    if (end <= start) {
+        return false;
+    }
+    std::vector<ClipState> nextClips;
+    nextClips.reserve(project.clips.size());
+    bool changed = false;
+    for (const auto& clip : project.clips) {
+        const double clipStart = clip.startSeconds;
+        const double clipEndSeconds = clipEnd(clip);
+        // Only the target track's clips are cut; every other track is left untouched.
+        if (clip.trackName != trackName || clip.locked || clipEndSeconds <= start || clipStart >= end) {
+            nextClips.push_back(clip);
+            continue;
+        }
+        changed = true;
+        if (clipStart < start) {
+            ClipState left = clip;
+            left.durationSeconds = start - clipStart;
+            clampClipFades(left);
+            if (left.durationSeconds > 0.0) {
+                nextClips.push_back(left);
+            }
+        }
+        if (clipEndSeconds > end) {
+            ClipState right = clip;
+            right.id = uniqueSplitId(project, clip.id);
+            right.startSeconds = end;
+            right.sourceOffsetSeconds += end - clipStart;
+            right.durationSeconds = clipEndSeconds - end;
+            clampClipFades(right);
+            if (right.durationSeconds > 0.0) {
+                nextClips.push_back(right);
+            }
+        }
+    }
+    if (changed) {
+        project.clips = std::move(nextClips);
+    }
+    return changed;
+}
+
+bool shuffleDeleteClips(ProjectDocument& project, const std::vector<std::string>& clipIds) {
+    // Snapshot the clips to delete (track + span) BEFORE removing them.
+    struct Del { std::string track; double start; double dur; };
+    std::vector<Del> dels;
+    for (const auto& id : clipIds) {
+        const auto* c = findClip(project, id);
+        if (c != nullptr && !c->locked) dels.push_back({c->trackName, c->startSeconds, c->durationSeconds});
+    }
+    if (dels.empty()) return false;
+
+    bool any = false;
+    for (const auto& id : clipIds) any = deleteClip(project, id) || any;
+
+    // Ripple each remaining clip left by the total width of deleted clips that were BEFORE it ON ITS
+    // OWN TRACK — closing the gap on that track only, never touching other tracks.
+    for (auto& clip : project.clips) {
+        if (clip.locked) continue;
+        double shift = 0.0;
+        for (const auto& d : dels) {
+            if (d.track == clip.trackName && d.start < clip.startSeconds) shift += d.dur;
+        }
+        if (shift > 0.0) clip.startSeconds = std::max(0.0, clip.startSeconds - shift);
+    }
+    return any;
 }
 
 bool shuffleDeleteClipRange(ProjectDocument& project, double rangeStartSeconds, double rangeEndSeconds) {
@@ -2423,6 +2540,19 @@ bool setClipFadeCurves(ProjectDocument& project,
     return true;
 }
 
+bool setClipFadeCurvature(ProjectDocument& project,
+                          const std::string& clipId,
+                          double fadeInCurvature,
+                          double fadeOutCurvature) {
+    auto* clip = findClip(project, clipId);
+    if (clip == nullptr || clipIsLocked(clip)) {
+        return false;
+    }
+    clip->fadeInCurvature = std::max(-1.0, std::min(1.0, fadeInCurvature));
+    clip->fadeOutCurvature = std::max(-1.0, std::min(1.0, fadeOutCurvature));
+    return true;
+}
+
 bool applyAutomaticClipCrossfades(ProjectDocument& project, const std::string& clipId) {
     const auto* selected = findClip(project, clipId);
     if (selected == nullptr || selected->locked) {
@@ -2586,6 +2716,36 @@ bool setClipMuted(ProjectDocument& project, const std::string& clipId, bool mute
         return false;
     }
     clip->muted = muted;
+    return true;
+}
+
+bool setClipReversed(ProjectDocument& project, const std::string& clipId, bool reversed) {
+    auto* clip = findClip(project, clipId);
+    if (clip == nullptr || clipIsLocked(clip)) {
+        return false;
+    }
+    clip->reversed = reversed;
+    return true;
+}
+
+bool toggleClipMuted(ProjectDocument& project, const std::string& clipId) {
+    auto* clip = findClip(project, clipId);
+    if (clip == nullptr || clipIsLocked(clip)) return false;
+    clip->muted = !clip->muted;
+    return true;
+}
+
+bool toggleClipReversed(ProjectDocument& project, const std::string& clipId) {
+    auto* clip = findClip(project, clipId);
+    if (clip == nullptr || clipIsLocked(clip)) return false;
+    clip->reversed = !clip->reversed;
+    return true;
+}
+
+bool toggleClipPolarityInverted(ProjectDocument& project, const std::string& clipId) {
+    auto* clip = findClip(project, clipId);
+    if (clip == nullptr || clipIsLocked(clip)) return false;
+    clip->polarityInverted = !clip->polarityInverted;
     return true;
 }
 

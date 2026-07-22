@@ -42,7 +42,12 @@ std::vector<std::string> sortedUniqueNonEmptyValues(const std::vector<PluginCand
             values.insert(value);
         }
     }
-    return {values.begin(), values.end()};
+    std::vector<std::string> result(values.begin(), values.end());
+    // Case-INSENSITIVE display order so e.g. "iZotope" sorts under I with the rest, not last after
+    // Z (a byte sort puts lowercase after all uppercase). Brand / category lists read alphabetically.
+    std::sort(result.begin(), result.end(),
+              [](const std::string& a, const std::string& b) { return lowerCopy(a) < lowerCopy(b); });
+    return result;
 }
 
 bool pathStartsWithHome(const std::string& path) {
@@ -735,6 +740,21 @@ std::vector<PluginCandidate> filterPluginCandidates(const std::vector<PluginCand
     return filtered;
 }
 
+// Higher = more relevant to the search query. A NAME match beats a match found only in the brand,
+// category, path or alias — so typing "emo" surfaces "EMO-Generator" at the top instead of burying
+// it among the many plug-ins whose path/alias merely contains those letters.
+static int pluginSearchRelevance(const PluginCandidate& candidate, const std::string& query) {
+    const std::string q = lowerCopy(query);
+    if (q.empty()) return 0;
+    const std::string name = lowerCopy(candidate.name);
+    if (name == q) return 100;
+    if (name.rfind(q, 0) == 0) return 80;                          // name starts with the query
+    if (name.find(q) != std::string::npos) return 60;             // name contains the query
+    if (lowerCopy(candidate.brand).find(q) != std::string::npos) return 20;
+    if (lowerCopy(candidate.category).find(q) != std::string::npos) return 10;
+    return 0;                                                       // matched only via path / alias
+}
+
 std::vector<PluginCandidate> filterPluginCandidates(const std::vector<PluginCandidate>& candidates,
                                                     const PluginCandidateFilterCriteria& criteria) {
     std::vector<PluginCandidate> filtered;
@@ -742,6 +762,14 @@ std::vector<PluginCandidate> filterPluginCandidates(const std::vector<PluginCand
         if (pluginCandidateMatchesCriteria(candidate, criteria)) {
             filtered.push_back(candidate);
         }
+    }
+    // With a text query, rank by relevance (stable, so the display order breaks ties).
+    if (!criteria.text.empty()) {
+        std::stable_sort(filtered.begin(), filtered.end(),
+                         [&](const PluginCandidate& a, const PluginCandidate& b) {
+                             return pluginSearchRelevance(a, criteria.text) >
+                                    pluginSearchRelevance(b, criteria.text);
+                         });
     }
     return filtered;
 }

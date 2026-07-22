@@ -1121,6 +1121,9 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
         result.info.monitorPort = statusPort;
         result.info.channels = static_cast<uint32_t>(integer("channels"));
         result.info.coreCount = static_cast<uint32_t>(integer("core_count"));
+        result.info.cpuModel = text("cpu_model");
+        result.info.cpuMhz = std::strtod(text("cpu_mhz").c_str(), nullptr);
+        result.info.memoryMb = static_cast<uint32_t>(integer("memory_mb"));
         result.info.temperatureC = static_cast<double>(std::strtod(text("temperature_c").c_str(), nullptr));
         result.info.temperatureF = static_cast<double>(std::strtod(text("temperature_f").c_str(), nullptr));
         result.info.packetsIn = integer("packets_in");

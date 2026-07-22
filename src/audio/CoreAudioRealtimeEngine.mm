@@ -5,17 +5,22 @@
 #if defined(__APPLE__)
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreAudio/CoreAudio.h>
+#import <CoreAudio/CATapDescription.h>
+#import <CoreAudio/AudioHardwareTapping.h>
 #include <mach/mach_time.h>
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <thread>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <pthread.h>
 #include <pthread/qos.h>
+#include <unistd.h>
 #include <vector>
 
 namespace neuracoust::daw {
@@ -37,12 +42,28 @@ AudioObjectID defaultOutputDevice() {
 }
 
 int outputDeviceChannelCount(AudioObjectID device);   // defined below
+std::string deviceName(AudioObjectID device);         // defined below
+
+// A virtual loopback (BlackHole, Loopback, Soundflower, VB-Cable) is a capture bus, not a
+// speaker: audio the DAW renders into it vanishes into the loop instead of reaching the ears.
+// We must never AUTO-select one for output — the classic "BlackHole is the system default
+// output so the DAW is silent" trap. An explicit user pick is still honoured.
+bool isVirtualLoopbackName(const std::string& name) {
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* marker : {"blackhole", "loopback", "soundflower", "vb-cable", "vb cable", "aggregate output"}) {
+        if (lower.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
 
 // Any real output device, for when the chosen one turns out to be input-only. Prevents the
 // output AudioUnit from being pointed at a microphone (0 output channels), which it cannot
 // render — it then spins/retries, the engine status thrashes, and the whole UI storms
 // (measured ~60% CPU). Seen at startup when the system-default output resolved to a mic.
-AudioObjectID firstDeviceWithOutput() {
+// `physicalOnly` additionally skips virtual loopbacks (see isVirtualLoopbackName).
+AudioObjectID firstDeviceWithOutput(bool physicalOnly = false) {
     AudioObjectPropertyAddress address {
         kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain
     };
@@ -55,12 +76,16 @@ AudioObjectID firstDeviceWithOutput() {
         return kAudioObjectUnknown;
     }
     for (auto device : devices) {
-        if (outputDeviceChannelCount(device) > 0) return device;
+        if (outputDeviceChannelCount(device) <= 0) continue;
+        if (physicalOnly && isVirtualLoopbackName(deviceName(device))) continue;
+        return device;
     }
     return kAudioObjectUnknown;
 }
 
 AudioObjectID outputDeviceFromSettings(const AudioEngineSettings& settings) {
+    // An explicit user choice is honoured as-is (even BlackHole, if they really mean it).
+    const bool userChose = !settings.outputDeviceId.empty();
     AudioObjectID chosen = deviceIdFromStoredIdentity(settings.outputDeviceId);
     if (chosen == kAudioObjectUnknown) {
         chosen = defaultOutputDevice();
@@ -71,6 +96,14 @@ AudioObjectID outputDeviceFromSettings(const AudioEngineSettings& settings) {
         const AudioObjectID def = defaultOutputDevice();
         chosen = (def != kAudioObjectUnknown && outputDeviceChannelCount(def) > 0)
             ? def : firstDeviceWithOutput();
+    }
+    // Auto-picking a virtual loopback would send the mix into the void (BlackHole set as the
+    // system default output → DAW silent). Redirect the AUTO choice to a real physical output.
+    if (!userChose && chosen != kAudioObjectUnknown && isVirtualLoopbackName(deviceName(chosen))) {
+        const AudioObjectID physical = firstDeviceWithOutput(/*physicalOnly=*/true);
+        if (physical != kAudioObjectUnknown) {
+            chosen = physical;
+        }
     }
     return chosen;
 }
@@ -227,6 +260,34 @@ int outputDeviceChannelCount(AudioObjectID device) {
     return channelCount;
 }
 
+// The device's native INPUT channel count. Needed so a wide loopback (BlackHole 16ch) is opened
+// at its true width and captured at unity on channels 1-2 — opening it as 2ch made CoreAudio
+// downmix 16→2 and bury the level ~50 dB (BlackHole monitoring was barely audible).
+int inputDeviceChannelCount(AudioObjectID device) {
+    if (device == kAudioObjectUnknown) {
+        return 0;
+    }
+    AudioObjectPropertyAddress address {
+        kAudioDevicePropertyStreamConfiguration,
+        kAudioDevicePropertyScopeInput,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &address, 0, nullptr, &size) != noErr || size == 0) {
+        return 0;
+    }
+    std::vector<std::byte> storage(size);
+    auto* bufferList = reinterpret_cast<AudioBufferList*>(storage.data());
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, bufferList) != noErr) {
+        return 0;
+    }
+    int channelCount = 0;
+    for (UInt32 index = 0; index < bufferList->mNumberBuffers; ++index) {
+        channelCount += static_cast<int>(bufferList->mBuffers[index].mNumberChannels);
+    }
+    return channelCount;
+}
+
 int audioBufferListChannelCount(const AudioBufferList* outputData) {
     if (outputData == nullptr) {
         return 0;
@@ -290,39 +351,16 @@ class RealtimeAudioEngine::Impl {
 public:
     ~Impl() { stop(); }
 
-    bool start(const AudioEngineSettings& requestedSettings) {
-        const double requestedPlaybackSeconds = std::max(0.0, dspEngine_.statusSnapshot().playbackSeconds);
-        stop();
-        settings_ = requestedSettings;
-        audioThreadPolicyApplied_.store(false);
-        resetRealtimeTelemetry();
-        settings_.outputDriver = AudioDriverKind::CoreAudio;
-        if (settings_.monitorModules.empty()) {
-            settings_.monitorModules = defaultMonitorDspModules();
-        }
-        device_ = outputDeviceFromSettings(settings_);
-        if (device_ == kAudioObjectUnknown) {
-            status_.message = "No Core Audio output device is available.";
-            return false;
-        }
-        requestDeviceBufferSize(device_, settings_.bufferSize);
-        settings_.bufferSize = actualDeviceBufferSize(device_, settings_.bufferSize);
+    /// Creates, initialises and starts the output unit on `device`, setting `device_` and
+    /// `outputChannelCount_` to match. Retries the start a few times: right after another instance
+    /// quits (or a device change), the driver can hold the device for a beat and the first start
+    /// returns an error. Tears the unit back down and returns false on failure, with a message set.
+    bool buildOutputUnitOnDevice(AudioObjectID device) {
+        device_ = device;
         const int deviceOutputChannels = outputDeviceChannelCount(device_);
-        outputChannelCount_ = std::max(2, deviceOutputChannels > 0 ? deviceOutputChannels : monitorOutputRequiredChannels(settings_.monitorModules));
+        outputChannelCount_ = std::max(2, deviceOutputChannels > 0 ? deviceOutputChannels
+                                          : monitorOutputRequiredChannels(settings_.monitorModules));
         outputChannelCount_ = std::min(outputChannelCount_, 64);
-        std::string prepareError;
-        if (!dspEngine_.configure(settings_, settings_.bufferSize, prepareError)) {
-            status_.running = false;
-            status_.outputDriver = AudioDriverKind::CoreAudio;
-            status_.sampleRate = settings_.sampleRate;
-            status_.outputChannels = 0;
-            status_.deviceName = "Neuracoust DSP Engine";
-            status_.message = prepareError;
-            return false;
-        }
-        if (requestedPlaybackSeconds > 0.0) {
-            dspEngine_.seek(requestedPlaybackSeconds);
-        }
 
         AudioStreamBasicDescription format {};
         format.mSampleRate = settings_.sampleRate;
@@ -342,6 +380,7 @@ public:
         AudioComponent component = AudioComponentFindNext(nullptr, &desc);
         if (component == nullptr || AudioComponentInstanceNew(component, &unit_) != noErr) {
             status_.message = "Could not create Core Audio output unit.";
+            unit_ = nullptr;
             return false;
         }
 
@@ -357,14 +396,75 @@ public:
 
         if (AudioUnitInitialize(unit_) != noErr) {
             status_.message = "Could not initialize Core Audio output unit.";
-            stop();
+            AudioComponentInstanceDispose(unit_);
+            unit_ = nullptr;
             return false;
         }
 
-        if (AudioOutputUnitStart(unit_) != noErr) {
-            status_.message = "Could not start Core Audio output.";
-            stop();
+        OSStatus startStatus = noErr;
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            startStatus = AudioOutputUnitStart(unit_);
+            if (startStatus == noErr) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        }
+        status_.message = "Could not start Core Audio output.";
+        AudioUnitUninitialize(unit_);
+        AudioComponentInstanceDispose(unit_);
+        unit_ = nullptr;
+        return false;
+    }
+
+    bool start(const AudioEngineSettings& requestedSettings) {
+        const double requestedPlaybackSeconds = std::max(0.0, dspEngine_.statusSnapshot().playbackSeconds);
+        stop();
+        settings_ = requestedSettings;
+        audioThreadPolicyApplied_.store(false);
+        resetRealtimeTelemetry();
+        settings_.outputDriver = AudioDriverKind::CoreAudio;
+        if (settings_.monitorModules.empty()) {
+            settings_.monitorModules = defaultMonitorDspModules();
+        }
+        device_ = outputDeviceFromSettings(settings_);
+        if (device_ == kAudioObjectUnknown) {
+            status_.message = "No Core Audio output device is available.";
             return false;
+        }
+        requestDeviceBufferSize(device_, settings_.bufferSize);
+        settings_.bufferSize = actualDeviceBufferSize(device_, settings_.bufferSize);
+        std::string prepareError;
+        if (!dspEngine_.configure(settings_, settings_.bufferSize, prepareError)) {
+            status_.running = false;
+            status_.outputDriver = AudioDriverKind::CoreAudio;
+            status_.sampleRate = settings_.sampleRate;
+            status_.outputChannels = 0;
+            status_.deviceName = "Neuracoust DSP Engine";
+            status_.message = prepareError;
+            return false;
+        }
+        if (requestedPlaybackSeconds > 0.0) {
+            dspEngine_.seek(requestedPlaybackSeconds);
+        }
+
+        // Build and start the output unit on the chosen device. If that device will not start —
+        // it is momentarily held by a just-quit instance, or was disconnected — fall back so the
+        // app is never left with a dead engine. Crucially the fallback must NOT be a virtual
+        // loopback: with BlackHole set as the system default output, falling back to the default
+        // silently swallowed the whole mix (the "sound just stops" trap) while the UI still named
+        // the requested interface. Prefer the system default only if it is a REAL output, else the
+        // first physical output device.
+        if (!buildOutputUnitOnDevice(device_)) {
+            AudioObjectID fallback = defaultOutputDevice();
+            if (fallback == kAudioObjectUnknown || fallback == device_ ||
+                outputDeviceChannelCount(fallback) == 0 ||
+                isVirtualLoopbackName(deviceName(fallback))) {
+                fallback = firstDeviceWithOutput(/*physicalOnly=*/true);
+            }
+            if (fallback == kAudioObjectUnknown || fallback == device_ || !buildOutputUnitOnDevice(fallback)) {
+                return false;   // buildOutputUnitOnDevice left status_.message set and unit torn down
+            }
+            device_ = fallback;   // reflect the device that actually opened, so the UI never lies
         }
 
         const bool inputMonitorStarted = startInputMonitorIfNeeded();
@@ -374,6 +474,8 @@ public:
         status_.sampleRate = settings_.sampleRate;
         status_.outputChannels = outputChannelCount_;
         status_.deviceName = deviceName(device_);
+        fprintf(stderr, "[NCAudio] output opened on '%s' (%d ch) @ %.0f Hz\n",
+                status_.deviceName.c_str(), outputChannelCount_, settings_.sampleRate);
         status_.dspEngineName = "Neuracoust DSP Engine";
         status_.requestedBufferSize = settings_.bufferSize;
         status_.monitorPathDescription = resolveMonitorOutputRoute(settings_.monitorModules, outputChannelCount_).description;
@@ -393,11 +495,19 @@ public:
 
     void stop() {
         stopInputMonitor();
+        stopProcessTap();
         if (unit_ != nullptr) {
+            // Let the render callback ramp the output to silence (~12 ms) before we cut the DAC
+            // feed, so stopping/quitting mid-playback fades instead of clicking. The unit is still
+            // running here, so a couple of render blocks fire during the short sleep and fade.
+            fadingOut_.store(true, std::memory_order_relaxed);
+            std::this_thread::sleep_for(std::chrono::milliseconds(18));
             AudioOutputUnitStop(unit_);
             AudioUnitUninitialize(unit_);
             AudioComponentInstanceDispose(unit_);
             unit_ = nullptr;
+            fadingOut_.store(false, std::memory_order_relaxed);
+            shutdownGain_ = 1.0f;
         }
         dspEngine_.resetRuntime();
         audioThreadPolicyApplied_.store(false);
@@ -497,7 +607,10 @@ public:
                              const std::string& grooveFeel,
                              double grooveSwingAmount,
                              const std::vector<TimeSignatureMarkerState>& timeSignatureMap,
-                             const std::string& metronomeSubdivision) {
+                             const std::string& metronomeSubdivision,
+                             double metronomeGain,
+                             const std::string& metronomeSound,
+                             bool metronomeAccentFirst) {
         settings_.metronomeEnabled = enabled;
         settings_.tempoBpm = std::max(1, tempoBpm);
         settings_.timeSignatureNumerator = std::max(1, std::min(16, timeSignatureNumerator));
@@ -508,6 +621,9 @@ public:
             (metronomeSubdivision == "quarter" || metronomeSubdivision == "eighth" || metronomeSubdivision == "sixteenth")
                 ? metronomeSubdivision
                 : "auto";
+        settings_.metronomeGain = std::max(0.0, std::min(2.0, metronomeGain));
+        settings_.metronomeSound = metronomeSound;
+        settings_.metronomeAccentFirst = metronomeAccentFirst;
         settings_.tempoMap = tempoMap;
         std::sort(settings_.tempoMap.begin(), settings_.tempoMap.end(), [](const TempoMarkerState& left, const TempoMarkerState& right) {
             return left.timeSeconds < right.timeSeconds;
@@ -524,7 +640,15 @@ public:
                                        settings_.grooveFeel,
                                        settings_.grooveSwingAmount,
                                        settings_.timeSignatureMap,
-                                       settings_.metronomeSubdivision);
+                                       settings_.metronomeSubdivision,
+                                       settings_.metronomeGain,
+                                       settings_.metronomeSound,
+                                       settings_.metronomeAccentFirst);
+    }
+
+    void setMetronomeAccentPattern(const std::vector<float>& pattern) {
+        settings_.metronomeAccentPattern = pattern;
+        dspEngine_.setMetronomeAccentPattern(pattern);
     }
 
     void setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) {
@@ -592,10 +716,38 @@ public:
 
     void setMonitorListenSource(bool active) {
         dspEngine_.setMonitorListenSource(active);
-        // Open (or close) the physical input queue now, so selecting BlackHole starts
-        // capturing immediately instead of waiting for a record-arm or talkback.
+        // Start/stop the process tap now, so switching to the reference starts capturing
+        // immediately instead of waiting for a record-arm or talkback.
         refreshInputMonitorForCurrentProject();
     }
+    void setMonitorReferenceArmed(bool armed) {
+        dspEngine_.setMonitorReferenceArmed(armed);
+        // The tap lifecycle keys off referenceTapArmed, so (dis)arming must re-run the policy
+        // to start/stop it — and, on disarm, unmute the tapped apps by tearing the tap down.
+        refreshInputMonitorForCurrentProject();
+    }
+    void setTapInputMonitor(bool active) { dspEngine_.setTapInputMonitor(active); }
+    void setTapInputHold(bool active) { dspEngine_.setTapInputHold(active); }
+    void beginInputRecording(int source, int channelOffset, int channels) {
+        dspEngine_.beginRecording(source, channelOffset, channels, static_cast<int>(settings_.sampleRate));
+        refreshInputMonitorForCurrentProject();   // open the mic AudioQueue if recording a physical source
+    }
+    bool endInputRecording(const std::string& path, int bitDepth, std::string& error,
+                           double& durationSeconds, int& channels) {
+        const bool ok = dspEngine_.endRecording(path, bitDepth, error, durationSeconds, channels);
+        refreshInputMonitorForCurrentProject();   // release the mic if nothing else needs it
+        return ok;
+    }
+    void cancelInputRecording() {
+        dspEngine_.cancelRecording();
+        refreshInputMonitorForCurrentProject();   // release the mic if nothing else needs it
+    }
+    bool inputRecordingActive() const { return dspEngine_.recordingActive(); }
+    double recordingLiveSeconds() const { return dspEngine_.recordLiveSeconds(); }
+    int recordingLivePeakCount() const { return dspEngine_.recordLivePeakCount(); }
+    int recordingLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const { return dspEngine_.copyRecordLivePeaksSince(fromBucket, outLR, maxBuckets); }
+    int recordingChannels() const { return dspEngine_.recordChannels(); }
+    int recordingPeakSamples() const { return dspEngine_.recordPeakSamples(); }
     // Change the monitor INPUT device without restarting the output engine — only the input
     // queue reopens, so the master transport keeps playing uninterrupted while you A/B a
     // reference source. A full restart (as for the output device) would stop the transport.
@@ -662,15 +814,48 @@ public:
         return updated;
     }
 
+    void beginGraphChangeDeclick() { dspEngine_.beginGraphChangeDeclick(); }
+    void endGraphChangeDeclick() { dspEngine_.endGraphChangeDeclick(); }
+    int routeDelayCompensationSamplesFor(const std::string& routeName) { return dspEngine_.routeDelayCompensationSamplesFor(routeName); }
+
     void updateMonitorEq(const std::vector<neuracoust::daw::MonitorEqBandState>& bands) {
         dspEngine_.updateMonitorEq(bands);
     }
+    void updateInterfaceModeler(const std::vector<double>& harmonics, double mix) {
+        dspEngine_.updateInterfaceModeler(harmonics, mix);
+    }
+
+    void updateMonitorFir(const neuracoust::daw::ResponseCurve& curveDb, int numTaps) {
+        dspEngine_.updateMonitorFir(curveDb, numTaps);
+    }
+
+    int monitorFirLatencySamples() const { return dspEngine_.monitorFirLatencySamples(); }
+    double monitorEqMagnitudeDb(double frequencyHz) const { return dspEngine_.monitorEqMagnitudeDb(frequencyHz); }
 
     void updateTrackSendGain(const std::string& trackName, int slot, float gainDb) {
         dspEngine_.updateTrackSendGain(trackName, slot, gainDb);
     }
 
-    void startMeasurement(int channel, std::vector<float> signal) { dspEngine_.startMeasurement(channel, std::move(signal)); }
+    void startMeasurement(int channel, std::vector<float> signal) {
+        dspEngine_.startMeasurement(channel, std::move(signal));
+        refreshInputMonitorForCurrentProject();   // ensure the input queue is open to capture
+    }
+    void setMeasurementChannels(int outputChannel, int inputChannel) { dspEngine_.setMeasurementChannels(outputChannel, inputChannel); }
+    // The selected input device's NATIVE channel count, queried without opening the stream — the
+    // status' inputChannels is capped at 2 for the monitor mix, so the measurement UI uses this.
+    int selectedInputChannelCount() const {
+        const int n = inputDeviceChannelCount(deviceIdFromStoredIdentity(settings_.inputDeviceId));
+        return n > 0 ? n : 2;
+    }
+    void setMeasurementLevelCheck(bool on) {
+        dspEngine_.setMeasurementLevelCheck(on);
+        refreshInputMonitorForCurrentProject();   // open the input queue to meter (or close on stop)
+    }
+    float measurementInputPeak() const { return dspEngine_.measurementInputPeak(); }
+    float measurementSweepPeak() const { return dspEngine_.measurementSweepPeak(); }
+    void setTalkbackInputChannel(int oneBased) { dspEngine_.setTalkbackInputChannel(std::max(0, oneBased - 1)); }
+    int inputChannelActivityCount() const { return dspEngine_.inputChannelCount(); }
+    float inputChannelActivity(int oneBased) const { return dspEngine_.inputChannelPeak(std::max(0, oneBased - 1)); }
     void cancelMeasurement() { dspEngine_.cancelMeasurement(); }
     bool measurementActive() const { return dspEngine_.measurementActive(); }
     double measurementProgress() const { return dspEngine_.measurementProgress(); }
@@ -682,6 +867,13 @@ public:
             status_.message = dspEngine_.lastMessage();
         }
         return updated;
+    }
+    bool updateClipStart(const std::string& clipId, double startSeconds) {
+        return dspEngine_.updateClipStart(clipId, startSeconds);
+    }
+    bool updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds,
+                          double sourceOffsetSeconds) {
+        return dspEngine_.updateClipBounds(clipId, startSeconds, durationSeconds, sourceOffsetSeconds);
     }
 
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) {
@@ -817,15 +1009,24 @@ private:
         }
         const auto dspStatus = dspEngine_.statusSnapshot();
         if (!prewarm && !dspStatus.lowLatencyRecordMonitoringActive &&
-            !dspStatus.listenSourceActive && !settings_.monitorStationTalkback) {
-            return false;
+            !settings_.monitorStationTalkback &&
+            !dspEngine_.measurementActive() && !dspEngine_.measurementLevelCheck()) {
+            return false;   // reference monitoring uses the process tap, not this physical-input queue
         }
 
         inputFormat_ = {};
         inputFormat_.mSampleRate = settings_.sampleRate;
         inputFormat_.mFormatID = kAudioFormatLinearPCM;
         inputFormat_.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-        const int inputChannels = std::max(1, std::min(2, settings_.inputMonitorChannelCount));
+        // Open at the device's NATIVE input width. A many-channel loopback (BlackHole 16ch) opened
+        // as 2ch made CoreAudio downmix 16→2, burying the level ~50 dB while the system audio only
+        // occupies channels 1-2. At native width the queue delivers all channels and
+        // pushInputMonitorInterleaved takes channels 1-2 at unity. Falls back to 2 when unknown.
+        const AudioObjectID inputDevice = deviceIdFromStoredIdentity(settings_.inputDeviceId);
+        const int nativeInputChannels = inputDeviceChannelCount(inputDevice);
+        const int inputChannels = nativeInputChannels > 0
+            ? std::min(64, nativeInputChannels)
+            : std::max(1, std::min(2, settings_.inputMonitorChannelCount));
         inputFormat_.mBytesPerPacket = static_cast<UInt32>(inputChannels * sizeof(Float32));
         inputFormat_.mFramesPerPacket = 1;
         inputFormat_.mBytesPerFrame = static_cast<UInt32>(inputChannels * sizeof(Float32));
@@ -860,6 +1061,9 @@ private:
             stopInputMonitor();
             return false;
         }
+        fprintf(stderr, "[NCAudio] input opened on '%s' (%u ch) @ %.0f Hz\n",
+                settings_.inputDeviceId.empty() ? "(default)" : settings_.inputDeviceId.c_str(),
+                inputFormat_.mChannelsPerFrame, inputFormat_.mSampleRate);
         return true;
     }
 
@@ -868,13 +1072,18 @@ private:
             return;
         }
         const auto dspStatus = dspEngine_.statusSnapshot();
-        if (settings_.physicalInputAccessAllowed &&
-            (dspStatus.lowLatencyRecordMonitoringActive || dspStatus.listenSourceActive ||
-             settings_.monitorStationTalkback)) {
-            startInputMonitorIfNeeded();
-        } else {
-            stopInputMonitor();
-        }
+        // Physical mic (AudioQueue): record-arm monitoring, talkback, measurement/level-check.
+        const bool wantMic = settings_.physicalInputAccessAllowed &&
+            (dspStatus.lowLatencyRecordMonitoringActive ||
+             settings_.monitorStationTalkback ||
+             dspEngine_.measurementActive() || dspEngine_.measurementLevelCheck() ||
+             dspEngine_.recordingWantsMic());   // keep the mic open while recording a physical input
+        // Reference monitoring of other apps comes from the process tap. Keyed on the *armed*
+        // state, not the listening state, so the tap keeps running (and the apps stay muted)
+        // while you A/B back to the master — no sound leaks out of the computer.
+        const bool wantTap = dspStatus.referenceTapArmed;
+        if (wantMic) startInputMonitorIfNeeded(); else stopInputMonitor();
+        if (wantTap) startProcessTap(); else stopProcessTap();
     }
 
     void stopInputMonitor() {
@@ -886,6 +1095,133 @@ private:
         for (auto& buffer : inputBuffers_) {
             buffer = nullptr;
         }
+    }
+
+    // Our own audio process object, so the tap can exclude us (else our monitor output loops back).
+    AudioObjectID ownProcessObject() {
+        pid_t pid = getpid();
+        AudioObjectID obj = kAudioObjectUnknown;
+        AudioObjectPropertyAddress addr {
+            kAudioHardwarePropertyTranslatePIDToProcessObject,
+            kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain
+        };
+        UInt32 size = sizeof(obj);
+        AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, sizeof(pid), &pid, &size, &obj);
+        return obj;
+    }
+
+    // Reference monitoring via a Core Audio process tap (macOS 14.4+): tap every other app's output
+    // (unmuted, so they keep playing to their own device), read it through a private aggregate + an
+    // IOProc, and push it into the monitor path. Replaces the BlackHole loopback entirely.
+    bool startProcessTap() {
+        if (tapAggregate_ != kAudioObjectUnknown) return true;   // already running
+
+        CATapDescription* desc = nil;
+        const AudioObjectID me = ownProcessObject();
+        NSArray<NSNumber*>* exclude = (me != kAudioObjectUnknown) ? @[@(me)] : @[];
+        desc = [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:exclude];
+        desc.privateTap = YES;
+        // Mute the tapped apps' OWN output while we monitor them, so they are heard only through the
+        // DAW monitor (with its EQ/level) and not doubled by their own direct output. Restored the
+        // instant the tap stops.
+        desc.muteBehavior = CATapMutedWhenTapped;
+        desc.name = @"Neuracoust Reference Tap";
+
+        if (AudioHardwareCreateProcessTap(desc, &tapObject_) != noErr || tapObject_ == kAudioObjectUnknown) {
+            fprintf(stderr, "[NCAudio] process tap create failed\n");
+            tapObject_ = kAudioObjectUnknown;
+            return false;
+        }
+        NSString* tapUID = desc.UUID.UUIDString;
+
+        // A PRIVATE aggregate is required (a public one comes up with sample-rate 0 and won't start).
+        NSString* aggUID = [NSString stringWithFormat:@"nc-reference-tap-%@", tapUID];
+        NSDictionary* aggDict = @{
+            @(kAudioAggregateDeviceNameKey):       @"Neuracoust Reference Tap",
+            @(kAudioAggregateDeviceUIDKey):        aggUID,
+            @(kAudioAggregateDeviceIsPrivateKey):  @1,
+            @(kAudioAggregateDeviceTapAutoStartKey): @1,
+            @(kAudioAggregateDeviceTapListKey):    @[ @{ @(kAudioSubTapUIDKey): tapUID } ],
+        };
+        if (AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggDict, &tapAggregate_) != noErr ||
+            tapAggregate_ == kAudioObjectUnknown) {
+            fprintf(stderr, "[NCAudio] process-tap aggregate create failed\n");
+            stopProcessTap();
+            return false;
+        }
+
+        // IOProc MUST run on a dispatch queue — with a nil queue the callback never fires.
+        if (tapQueue_ == nullptr) {
+            tapQueue_ = dispatch_queue_create("com.neuracoust.reference-tap", DISPATCH_QUEUE_SERIAL);
+        }
+        OSStatus st = AudioDeviceCreateIOProcIDWithBlock(&tapIOProc_, tapAggregate_, tapQueue_,
+            ^(const AudioTimeStamp*, const AudioBufferList* inInput, const AudioTimeStamp*,
+              AudioBufferList*, const AudioTimeStamp*) {
+                this->handleTapInput(inInput);
+            });
+        if (st != noErr || tapIOProc_ == nullptr) {
+            fprintf(stderr, "[NCAudio] process-tap IOProc create failed (%d)\n", (int)st);
+            stopProcessTap();
+            return false;
+        }
+        if (AudioDeviceStart(tapAggregate_, tapIOProc_) != noErr) {
+            fprintf(stderr, "[NCAudio] process-tap start failed\n");
+            stopProcessTap();
+            return false;
+        }
+        // DIAG: a tap-vs-output nominal-rate mismatch beyond the varispeed clamp (±6%) would cause
+        // periodic reference-FIFO underruns (the intermittent dropouts). Log both rates to confirm.
+        {
+            Float64 tapRate = 0; UInt32 sz = sizeof(tapRate);
+            AudioObjectPropertyAddress ra = {kAudioDevicePropertyNominalSampleRate,
+                                             kAudioObjectPropertyScopeGlobal,
+                                             kAudioObjectPropertyElementMain};
+            AudioObjectGetPropertyData(tapAggregate_, &ra, 0, nullptr, &sz, &tapRate);
+            dspEngine_.logReferenceRates(tapRate, (double)settings_.sampleRate);
+        }
+        return true;
+    }
+
+    void stopProcessTap() {
+        if (tapAggregate_ != kAudioObjectUnknown && tapIOProc_ != nullptr) {
+            AudioDeviceStop(tapAggregate_, tapIOProc_);
+            AudioDeviceDestroyIOProcID(tapAggregate_, tapIOProc_);
+        }
+        tapIOProc_ = nullptr;
+        if (tapAggregate_ != kAudioObjectUnknown) {
+            AudioHardwareDestroyAggregateDevice(tapAggregate_);
+            tapAggregate_ = kAudioObjectUnknown;
+        }
+        if (tapObject_ != kAudioObjectUnknown) {
+            AudioHardwareDestroyProcessTap(tapObject_);
+            tapObject_ = kAudioObjectUnknown;
+        }
+    }
+
+    // Tap IOProc body (dispatch-queue thread): interleave the tapped audio to stereo and push it into
+    // the same monitor buffer the mic path uses. The DSP engine treats it as the listen-source feed.
+    void handleTapInput(const AudioBufferList* input) {
+        if (input == nullptr || input->mNumberBuffers == 0) return;
+        const AudioBuffer& b0 = input->mBuffers[0];
+        const int chan0 = std::max<int>(1, static_cast<int>(b0.mNumberChannels));
+        const int frames = static_cast<int>(b0.mDataByteSize / (sizeof(float) * chan0));
+        if (frames <= 0) return;
+        tapInterleaved_.assign(static_cast<size_t>(frames) * 2, 0.0f);
+        if (input->mNumberBuffers >= 2) {                 // non-interleaved: buffer 0 = L, buffer 1 = R
+            const float* L = static_cast<const float*>(input->mBuffers[0].mData);
+            const float* R = static_cast<const float*>(input->mBuffers[1].mData);
+            for (int i = 0; i < frames; ++i) {
+                tapInterleaved_[i * 2]     = L ? L[i] : 0.0f;
+                tapInterleaved_[i * 2 + 1] = R ? R[i] : (L ? L[i] : 0.0f);
+            }
+        } else {                                           // interleaved single buffer
+            const float* s = static_cast<const float*>(b0.mData);
+            for (int i = 0; i < frames; ++i) {
+                tapInterleaved_[i * 2]     = s[i * chan0];
+                tapInterleaved_[i * 2 + 1] = chan0 >= 2 ? s[i * chan0 + 1] : s[i * chan0];
+            }
+        }
+        dspEngine_.pushReferenceInterleaved(tapInterleaved_.data(), frames);
     }
 
     static void inputCallback(void* userData,
@@ -940,9 +1276,33 @@ private:
         const auto renderStart = std::chrono::steady_clock::now();
         dspEngine_.renderInterleavedStereo(frameCount, renderBlock_);
         applyOutputSafety(renderBlock_, static_cast<size_t>(frameCount) * 2u);
+        // Shutdown fade: while stop() is winding down, ramp the block to silence so cutting the
+        // DAC feed mid-waveform never clicks (heard on quit-during-playback and device changes).
+        if (fadingOut_.load(std::memory_order_relaxed)) {
+            const float step = 1.0f / std::max(1.0f, static_cast<float>(settings_.sampleRate) * 0.012f);
+            float g = shutdownGain_;
+            for (UInt32 frame = 0; frame < frameCount; ++frame) {
+                g = std::max(0.0f, g - step);
+                const size_t idx = static_cast<size_t>(frame) * 2u;
+                if (idx + 1 < renderBlock_.size()) { renderBlock_[idx] *= g; renderBlock_[idx + 1] *= g; }
+            }
+            shutdownGain_ = g;
+        }
         const int availableChannels = std::max(2, audioBufferListChannelCount(outputData));
         const auto route = resolveMonitorOutputRoute(settings_.monitorModules, availableChannels);
-        if (route.assigned && route.available) {
+        // Interface loopback measurement can pin the sweep to a specific physical output channel
+        // (e.g. DigiGrid out 3) instead of the monitor route, so it lands on the loopback cable.
+        // The sweep sits on the stereo bus' left channel (measurement emit uses channel 0).
+        const int measOut = ((dspEngine_.measurementActive() || dspEngine_.measurementLevelCheck()) &&
+                             dspEngine_.measurementOutputChannel() >= 0)
+                                ? dspEngine_.measurementOutputChannel() : -1;
+        if (measOut >= 0 && measOut < availableChannels) {
+            for (UInt32 frame = 0; frame < frameCount; ++frame) {
+                const auto source = static_cast<size_t>(frame * 2);
+                const float sweep = source < renderBlock_.size() ? renderBlock_[source] : 0.0f;
+                writeAudioBufferListChannel(outputData, measOut, frame, sweep);
+            }
+        } else if (route.assigned && route.available) {
             for (UInt32 frame = 0; frame < frameCount; ++frame) {
                 const auto source = static_cast<size_t>(frame * 2);
                 const float left = source + 1 < renderBlock_.size() ? renderBlock_[source] : 0.0f;
@@ -1119,6 +1479,14 @@ private:
     AudioQueueRef inputQueue_ = nullptr;
     AudioQueueBufferRef inputBuffers_[3] {};
     AudioStreamBasicDescription inputFormat_ {};
+    // Reference monitoring ("listen to other apps") via a Core Audio process tap — replaces the old
+    // BlackHole loopback. Captures every other process's output (excluding ourselves, so our own
+    // monitor does not feed back) and pushes it down the same monitor path the mic used.
+    AudioObjectID tapObject_ = kAudioObjectUnknown;
+    AudioObjectID tapAggregate_ = kAudioObjectUnknown;
+    AudioDeviceIOProcID tapIOProc_ = nullptr;
+    dispatch_queue_t tapQueue_ = nullptr;
+    std::vector<float> tapInterleaved_;
     int outputChannelCount_ = 2;
     NeuracoustDspEngine dspEngine_;
     std::vector<float> renderBlock_;
@@ -1132,6 +1500,8 @@ private:
     std::atomic<uint64_t> safetyFaultBlocks_ {0};
     std::atomic<uint64_t> safetyClampedSamples_ {0};
     std::atomic<bool> audioThreadPolicyApplied_ {false};
+    std::atomic<bool> fadingOut_ {false};        // ramp the output to silence before stop()
+    float shutdownGain_ = 1.0f;                   // current fade level (audio thread only)
     std::atomic<bool> inputThreadPolicyApplied_ {false};
     std::atomic<uint64_t> realtimeCallbackCount_ {0};
     std::atomic<double> realtimeAverageWakeJitterUs_ {0.0};
@@ -1156,9 +1526,13 @@ void RealtimeAudioEngine::setMetronomeEnabled(bool enabled,
                                               const std::string& grooveFeel,
                                               double grooveSwingAmount,
                                               const std::vector<TimeSignatureMarkerState>& timeSignatureMap,
-                                              const std::string& metronomeSubdivision) {
-    impl_->setMetronomeEnabled(enabled, tempoBpm, tempoMap, timeSignatureNumerator, timeSignatureDenominator, grooveFeel, grooveSwingAmount, timeSignatureMap, metronomeSubdivision);
+                                              const std::string& metronomeSubdivision,
+                                              double metronomeGain,
+                                              const std::string& metronomeSound,
+                                              bool metronomeAccentFirst) {
+    impl_->setMetronomeEnabled(enabled, tempoBpm, tempoMap, timeSignatureNumerator, timeSignatureDenominator, grooveFeel, grooveSwingAmount, timeSignatureMap, metronomeSubdivision, metronomeGain, metronomeSound, metronomeAccentFirst);
 }
+void RealtimeAudioEngine::setMetronomeAccentPattern(const std::vector<float>& pattern) { impl_->setMetronomeAccentPattern(pattern); }
 void RealtimeAudioEngine::setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) { impl_->setMonitorDspModules(modules, enabled); }
 void RealtimeAudioEngine::setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer) { impl_->setMonitorDspPathMode(mode, remoteDspServer); }
 void RealtimeAudioEngine::setListenRoomSettings(const ListenRoomSettings& settings) { impl_->setListenRoomSettings(settings); }
@@ -1167,19 +1541,48 @@ void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string
 }
 void RealtimeAudioEngine::setPhysicalInputAccessAllowed(bool allowed) { impl_->setPhysicalInputAccessAllowed(allowed); }
 void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonitorListenSource(active); }
+void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
+void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
+void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
+void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
+bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }
+double RealtimeAudioEngine::recordingLiveSeconds() const { return impl_->recordingLiveSeconds(); }
+int RealtimeAudioEngine::recordingLivePeakCount() const { return impl_->recordingLivePeakCount(); }
+int RealtimeAudioEngine::recordingLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const { return impl_->recordingLivePeaksSince(fromBucket, outLR, maxBuckets); }
+int RealtimeAudioEngine::recordingChannels() const { return impl_->recordingChannels(); }
+int RealtimeAudioEngine::recordingPeakSamples() const { return impl_->recordingPeakSamples(); }
 void RealtimeAudioEngine::setInputDeviceLive(const std::string& deviceId) { impl_->setInputDeviceLive(deviceId); }
 void RealtimeAudioEngine::setInsertTailOnStopSeconds(double seconds) { impl_->setInsertTailOnStopSeconds(seconds); }
 bool RealtimeAudioEngine::loadAudioFile(const std::string& path, std::string& error) { return impl_->loadAudioFile(path, error); }
 bool RealtimeAudioEngine::loadProject(const ProjectDocument& project, std::string& error) { return impl_->loadProject(project, error); }
 bool RealtimeAudioEngine::updateProject(const ProjectDocument& project, std::string& error) { return impl_->updateProject(project, error); }
 void RealtimeAudioEngine::updateMonitorEq(const std::vector<MonitorEqBandState>& bands) { impl_->updateMonitorEq(bands); }
+void RealtimeAudioEngine::updateInterfaceModeler(const std::vector<double>& harmonics, double mix) { impl_->updateInterfaceModeler(harmonics, mix); }
+void RealtimeAudioEngine::updateMonitorFir(const ResponseCurve& curveDb, int numTaps) { impl_->updateMonitorFir(curveDb, numTaps); }
+void RealtimeAudioEngine::beginGraphChangeDeclick() { impl_->beginGraphChangeDeclick(); }
+void RealtimeAudioEngine::endGraphChangeDeclick() { impl_->endGraphChangeDeclick(); }
+int RealtimeAudioEngine::routeDelayCompensationSamplesFor(const std::string& routeName) { return impl_->routeDelayCompensationSamplesFor(routeName); }
+int RealtimeAudioEngine::monitorFirLatencySamples() const { return impl_->monitorFirLatencySamples(); }
+double RealtimeAudioEngine::monitorEqMagnitudeDb(double frequencyHz) const { return impl_->monitorEqMagnitudeDb(frequencyHz); }
 void RealtimeAudioEngine::updateTrackSendGain(const std::string& trackName, int slot, float gainDb) { impl_->updateTrackSendGain(trackName, slot, gainDb); }
 void RealtimeAudioEngine::startMeasurement(int channel, std::vector<float> signal) { impl_->startMeasurement(channel, std::move(signal)); }
+void RealtimeAudioEngine::setMeasurementChannels(int outputChannel, int inputChannel) { impl_->setMeasurementChannels(outputChannel, inputChannel); }
+int RealtimeAudioEngine::selectedInputChannelCount() const { return impl_->selectedInputChannelCount(); }
+void RealtimeAudioEngine::setMeasurementLevelCheck(bool on) { impl_->setMeasurementLevelCheck(on); }
+float RealtimeAudioEngine::measurementInputPeak() const { return impl_->measurementInputPeak(); }
+float RealtimeAudioEngine::measurementSweepPeak() const { return impl_->measurementSweepPeak(); }
+void RealtimeAudioEngine::setTalkbackInputChannel(int oneBased) { impl_->setTalkbackInputChannel(oneBased); }
+int RealtimeAudioEngine::inputChannelActivityCount() const { return impl_->inputChannelActivityCount(); }
+float RealtimeAudioEngine::inputChannelActivity(int oneBased) const { return impl_->inputChannelActivity(oneBased); }
 void RealtimeAudioEngine::cancelMeasurement() { impl_->cancelMeasurement(); }
 bool RealtimeAudioEngine::measurementActive() const { return impl_->measurementActive(); }
 double RealtimeAudioEngine::measurementProgress() const { return impl_->measurementProgress(); }
 std::vector<float> RealtimeAudioEngine::takeMeasurementCapture() { return impl_->takeMeasurementCapture(); }
 bool RealtimeAudioEngine::updateClipGain(const std::string& clipId, float gainDb) { return impl_->updateClipGain(clipId, gainDb); }
+bool RealtimeAudioEngine::updateClipStart(const std::string& clipId, double startSeconds) { return impl_->updateClipStart(clipId, startSeconds); }
+bool RealtimeAudioEngine::updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds, double sourceOffsetSeconds) { return impl_->updateClipBounds(clipId, startSeconds, durationSeconds, sourceOffsetSeconds); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }
 bool RealtimeAudioEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) { return impl_->updateTrackSendSlot(trackName, sendIndex, send); }

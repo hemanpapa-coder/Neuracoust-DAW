@@ -881,11 +881,15 @@ public:
             }
             events_.push_back(event);
         }
-        std::sort(events_.begin(), events_.end(), [](const Steinberg::Vst::Event& left, const Steinberg::Vst::Event& right) {
-            if (left.sampleOffset != right.sampleOffset) {
-                return left.sampleOffset < right.sampleOffset;
-            }
-            return left.type < right.type;
+        // STABLE sort by sample offset only — events that share an offset keep their arrival order.
+        // Live MIDI arrives with every event at offset 0 (a whole UI tick collapses to one instant),
+        // so a type tie-break here (note-on type 0 before note-off type 1) reordered chronological
+        // [note-off, note-on] into [note-on, note-off]: a re-pressed note was turned on then instantly
+        // killed by the previous note's stray off, dropping notes selectively while sustained notes
+        // played fine. Preserving arrival order keeps note-off→note-on correct. The timeline path
+        // pre-sorts note-off-first with distinct offsets, so it is unaffected.
+        std::stable_sort(events_.begin(), events_.end(), [](const Steinberg::Vst::Event& left, const Steinberg::Vst::Event& right) {
+            return left.sampleOffset < right.sampleOffset;
         });
     }
 

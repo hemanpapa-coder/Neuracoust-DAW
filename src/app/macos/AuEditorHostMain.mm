@@ -2,12 +2,47 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <AudioToolbox/AUCocoaUIView.h>
 
+#include "audio/WavFile.h"
+
 #include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <vector>
+#include <chrono>
 
 namespace {
+
+struct FixturePlayback {
+    std::vector<float> stereo;
+    size_t positionFrames = 0;
+};
+
+OSStatus fixtureInputCallback(void* refCon,
+                              AudioUnitRenderActionFlags*,
+                              const AudioTimeStamp*,
+                              UInt32,
+                              UInt32 frameCount,
+                              AudioBufferList* ioData) {
+    auto* fixture = static_cast<FixturePlayback*>(refCon);
+    if (fixture == nullptr || ioData == nullptr) return kAudio_ParamError;
+    for (UInt32 bufferIndex = 0; bufferIndex < ioData->mNumberBuffers; ++bufferIndex) {
+        auto* output = static_cast<float*>(ioData->mBuffers[bufferIndex].mData);
+        if (output == nullptr) continue;
+        const bool interleaved = ioData->mNumberBuffers == 1 && ioData->mBuffers[bufferIndex].mNumberChannels >= 2;
+        for (UInt32 frame = 0; frame < frameCount; ++frame) {
+            const size_t sourceFrame = fixture->positionFrames + frame;
+            const float left = sourceFrame * 2u < fixture->stereo.size() ? fixture->stereo[sourceFrame * 2u] : 0.0f;
+            const float right = sourceFrame * 2u + 1u < fixture->stereo.size() ? fixture->stereo[sourceFrame * 2u + 1u] : 0.0f;
+            if (interleaved) { output[frame * 2u] = left; output[frame * 2u + 1u] = right; }
+            else output[frame] = bufferIndex == 0 ? left : right;
+        }
+        ioData->mBuffers[bufferIndex].mDataByteSize = frameCount * sizeof(float) * (interleaved ? 2u : 1u);
+    }
+    fixture->positionFrames += frameCount;
+    return noErr;
+}
 
 NSString* const kPluginEditorTransportToggleNotification = @"com.neuracoust.daw.pluginEditor.transport.toggle";
 
@@ -151,10 +186,13 @@ int main(int argc, const char* argv[]) {
         const std::string nameArgument = argumentValue(argc, argv, "--name");
         const std::string titleArgument = argumentValue(argc, argv, "--title");
         const bool probeMode = hasArgument(argc, argv, "--probe");
+        const std::string inputArgument = argumentValue(argc, argv, "--input");
+        const std::string holdArgument = argumentValue(argc, argv, "--hold-seconds");
+        const int holdSeconds = holdArgument.empty() ? 20 : std::max(0, std::atoi(holdArgument.c_str()));
 
         logStage("app.begin");
         [NSApplication sharedApplication];
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         logStage("app.ready");
 
         NSString* componentPath = componentArgument.empty()
@@ -187,6 +225,36 @@ int main(int argc, const char* argv[]) {
             return 5;
         }
         logStage("unit.new.ok");
+
+        auto* fixture = new FixturePlayback();
+        double fixtureSampleRate = 48000.0;
+        int64_t fixtureFrames = 0;
+        if (!inputArgument.empty()) {
+            neuracoust::daw::WavAudioData audio;
+            std::string readError;
+            if (!neuracoust::daw::readPcmWavFile(inputArgument, audio, readError) || audio.channels < 1) {
+                std::cerr << "AU_ERROR Could not read fixture: " << readError << std::endl;
+                delete fixture; AudioComponentInstanceDispose(unit); return 12;
+            }
+            fixtureSampleRate = audio.sampleRate;
+            fixtureFrames = audio.frameCount();
+            fixture->stereo.resize(static_cast<size_t>(fixtureFrames) * 2u);
+            for (int64_t frameIndex = 0; frameIndex < fixtureFrames; ++frameIndex) {
+                fixture->stereo[static_cast<size_t>(frameIndex) * 2u] = audio.interleavedSamples[static_cast<size_t>(frameIndex) * audio.channels];
+                fixture->stereo[static_cast<size_t>(frameIndex) * 2u + 1u] = audio.interleavedSamples[static_cast<size_t>(frameIndex) * audio.channels + std::min(1, audio.channels - 1)];
+            }
+            AudioStreamBasicDescription format {};
+            format.mSampleRate = fixtureSampleRate; format.mFormatID = kAudioFormatLinearPCM;
+            format.mFormatFlags = kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved;
+            format.mBytesPerPacket = sizeof(float); format.mFramesPerPacket = 1;
+            format.mBytesPerFrame = sizeof(float); format.mChannelsPerFrame = 2; format.mBitsPerChannel = 32;
+            UInt32 maxFrames = 256;
+            AURenderCallbackStruct callback { fixtureInputCallback, fixture };
+            AudioUnitSetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, sizeof(maxFrames));
+            AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format, sizeof(format));
+            AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &format, sizeof(format));
+            AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback, sizeof(callback));
+        }
 
         status = AudioUnitInitialize(unit);
         if (status != noErr) {
@@ -286,6 +354,35 @@ int main(int argc, const char* argv[]) {
         [NSApp activateIgnoringOtherApps:YES];
         logStage("view.attach.ok");
         std::cout << "READY" << std::endl;
+
+        if (!inputArgument.empty()) {
+            AudioUnit renderUnit = unit;
+            const auto totalFrames = fixtureFrames;
+            const auto sampleRate = fixtureSampleRate;
+            std::thread([fixture, renderUnit, totalFrames, sampleRate, holdSeconds]() {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                constexpr UInt32 blockSize = 256;
+                std::vector<float> left(blockSize), right(blockSize);
+                const auto start = std::chrono::steady_clock::now();
+                for (int64_t position = 0; position < totalFrames; position += blockSize) {
+                    const UInt32 frames = static_cast<UInt32>(std::min<int64_t>(blockSize, totalFrames - position));
+                    struct { UInt32 count; AudioBuffer buffers[2]; } storage {};
+                    storage.count = 2;
+                    storage.buffers[0] = { 1, frames * static_cast<UInt32>(sizeof(float)), left.data() };
+                    storage.buffers[1] = { 1, frames * static_cast<UInt32>(sizeof(float)), right.data() };
+                    AudioTimeStamp timestamp {}; timestamp.mFlags = kAudioTimeStampSampleTimeValid; timestamp.mSampleTime = position;
+                    AudioUnitRenderActionFlags flags = 0;
+                    const OSStatus renderStatus = AudioUnitRender(renderUnit, &flags, &timestamp, 0, frames,
+                                                                 reinterpret_cast<AudioBufferList*>(&storage));
+                    if (renderStatus != noErr) { std::cerr << "AU_RENDER_ERROR " << renderStatus << std::endl; break; }
+                    std::this_thread::sleep_until(start + std::chrono::duration<double>(static_cast<double>(position + frames) / sampleRate));
+                }
+                std::cout << "AU_PLAYBACK_COMPLETE elapsed=" << (static_cast<double>(totalFrames) / sampleRate) << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(holdSeconds));
+                delete fixture;
+                dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+            }).detach();
+        }
 
         if (probeMode) {
             _Exit(0);

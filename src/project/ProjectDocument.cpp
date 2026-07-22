@@ -1517,8 +1517,11 @@ void rebuildProjectEditModelFromClips(ProjectDocument& project) {
         placement.fadeOutSeconds = clip.fadeOutSeconds;
         placement.fadeInCurve = normalizedFadeCurve(clip.fadeInCurve);
         placement.fadeOutCurve = normalizedFadeCurve(clip.fadeOutCurve);
+        placement.fadeInCurvature = clip.fadeInCurvature;
+        placement.fadeOutCurvature = clip.fadeOutCurvature;
         placement.muted = clip.muted;
         placement.polarityInverted = clip.polarityInverted;
+        placement.reversed = clip.reversed;
         placement.locked = clip.locked;
         placement.colorHex = clip.colorHex;
         placement.timeScale = clip.timeScale;
@@ -1647,8 +1650,11 @@ void mergeOrphanClipsIntoActivePlaylists(ProjectDocument& project) {
         placement.fadeOutSeconds = clip.fadeOutSeconds;
         placement.fadeInCurve = normalizedFadeCurve(clip.fadeInCurve);
         placement.fadeOutCurve = normalizedFadeCurve(clip.fadeOutCurve);
+        placement.fadeInCurvature = clip.fadeInCurvature;
+        placement.fadeOutCurvature = clip.fadeOutCurvature;
         placement.muted = clip.muted;
         placement.polarityInverted = clip.polarityInverted;
+        placement.reversed = clip.reversed;
         placement.locked = clip.locked;
         placement.colorHex = clip.colorHex;
         placement.timeScale = clip.timeScale;
@@ -1728,8 +1734,11 @@ bool rebuildProjectClipsFromActivePlaylists(ProjectDocument& project) {
             clip.fadeOutSeconds = placement.fadeOutSeconds;
             clip.fadeInCurve = normalizedFadeCurve(placement.fadeInCurve);
             clip.fadeOutCurve = normalizedFadeCurve(placement.fadeOutCurve);
+            clip.fadeInCurvature = placement.fadeInCurvature;
+            clip.fadeOutCurvature = placement.fadeOutCurvature;
             clip.muted = placement.muted;
             clip.polarityInverted = placement.polarityInverted;
+            clip.reversed = placement.reversed;
             clip.locked = placement.locked;
             clip.colorHex = placement.colorHex;
             clip.timeScale = placement.timeScale;
@@ -1927,6 +1936,16 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"panLaw\": \"" << escapeJsonString(project.panLaw.empty() ? "legacy" : project.panLaw) << "\",\n";
     out << "  \"grooveSwingAmount\": " << project.grooveSwingAmount << ",\n";
     out << "  \"metronomeSubdivision\": \"" << escapeJsonString(project.metronomeSubdivision.empty() ? "auto" : project.metronomeSubdivision) << "\",\n";
+    out << "  \"metronomeGain\": " << project.metronomeGain << ",\n";
+    out << "  \"metronomeSound\": \"" << escapeJsonString(project.metronomeSound.empty() ? "beep" : project.metronomeSound) << "\",\n";
+    out << "  \"metronomeAccentFirst\": " << (project.metronomeAccentFirst ? "true" : "false") << ",\n";
+    out << "  \"metronomeGenre\": \"" << escapeJsonString(project.metronomeGenre.empty() ? "straight" : project.metronomeGenre) << "\",\n";
+    out << "  \"metronomeAccentPattern\": [";
+    for (size_t i = 0; i < project.metronomeAccentPattern.size(); ++i) {
+        if (i != 0) { out << ","; }
+        out << project.metronomeAccentPattern[i];
+    }
+    out << "],\n";
     out << "  \"detectedKey\": \"" << escapeJsonString(project.detectedKey.empty() ? "C" : project.detectedKey) << "\",\n";
     out << "  \"detectedKeyMode\": \"" << escapeJsonString(project.detectedKeyMode.empty() ? "major" : project.detectedKeyMode) << "\",\n";
     out << "  \"chordKeyModePreference\": \"" << escapeJsonString(project.chordKeyModePreference.empty() ? "auto" : project.chordKeyModePreference) << "\",\n";
@@ -1973,12 +1992,18 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"appleSiliconCoreIsolationEnabled\": " << (project.appleSiliconCoreIsolationEnabled ? "true" : "false") << ",\n";
     out << "  \"requestedDspCoreCount\": " << std::max(1, std::min(16, project.requestedDspCoreCount)) << ",\n";
     out << "  \"externalDspCoreCount\": " << std::max(1, std::min(16, project.externalDspCoreCount)) << ",\n";
+    out << "  \"externalDspEnabled\": " << (project.externalDspEnabled ? "true" : "false") << ",\n";
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
     out << "  \"physicalSpeakerModel\": \"" << escapeJsonString(project.physicalSpeakerModel) << "\",\n";
     out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
     out << "  \"measurementMicModel\": \"" << escapeJsonString(project.measurementMicModel) << "\",\n";
     out << "  \"physicalPowerAmpModel\": \"" << escapeJsonString(project.physicalPowerAmpModel) << "\",\n";
     out << "  \"physicalSpeakerCableModel\": \"" << escapeJsonString(project.physicalSpeakerCableModel) << "\",\n";
+    out << "  \"physicalPowerCableModel\": \"" << escapeJsonString(project.physicalPowerCableModel) << "\",\n";
+    out << "  \"physicalConnectorModel\": \"" << escapeJsonString(project.physicalConnectorModel) << "\",\n";
+    out << "  \"physicalAudioInterfaceModel\": \"" << escapeJsonString(project.physicalAudioInterfaceModel) << "\",\n";
+    out << "  \"physicalAudioInterfaceTargetModel\": \"" << escapeJsonString(project.physicalAudioInterfaceTargetModel) << "\",\n";
+    out << "  \"monitorInterfaceModelingEnabled\": " << (project.monitorInterfaceModelingEnabled ? "true" : "false") << ",\n";
     out << "  \"monitorEqBands\": [\n";
     for (size_t i = 0; i < project.monitorEqBands.size(); ++i) {
         const auto& band = project.monitorEqBands[i];
@@ -2007,6 +2032,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"monitorStationTalkback\": " << (project.monitorStationTalkback ? "true" : "false") << ",\n";
     out << "  \"monitorStationDimDb\": " << std::max(-60.0f, std::min(0.0f, project.monitorStationDimDb)) << ",\n";
     out << "  \"monitorStationTalkbackRoute\": \"" << escapeJsonString(project.monitorStationTalkbackRoute.empty() ? "listen_room" : project.monitorStationTalkbackRoute) << "\",\n";
+    out << "  \"monitorStationTalkbackChannel\": " << std::max(1, project.monitorStationTalkbackChannel) << ",\n";
     out << "  \"monitorInputTrimDb\": " << std::max(-12.0f, std::min(0.0f, project.monitorInputTrimDb)) << ",\n";
     out << "  \"monitorVolumeDb\": " << std::max(-120.0f, std::min(12.0f, project.monitorVolumeDb)) << ",\n";
     out << "  \"listenRoomEnabled\": " << (project.listenRoomEnabled ? "true" : "false") << ",\n";
@@ -2089,9 +2115,12 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"fadeOutSeconds\":" << clip.fadeOutSeconds
             << ",\"fadeInCurve\":\"" << escapeJsonString(normalizedFadeCurve(clip.fadeInCurve))
             << "\",\"fadeOutCurve\":\"" << escapeJsonString(normalizedFadeCurve(clip.fadeOutCurve)) << "\""
+            << ",\"fadeInCurvature\":" << clip.fadeInCurvature
+            << ",\"fadeOutCurvature\":" << clip.fadeOutCurvature
             << ",\"originalStartSeconds\":" << clip.originalStartSeconds
             << ",\"muted\":" << (clip.muted ? "true" : "false")
             << ",\"polarityInverted\":" << (clip.polarityInverted ? "true" : "false")
+            << ",\"reversed\":" << (clip.reversed ? "true" : "false")
             << ",\"locked\":" << (clip.locked ? "true" : "false") << "}";
         out << (i + 1 == project.clips.size() ? "\n" : ",\n");
     }
@@ -2178,8 +2207,11 @@ std::string serializeProject(const ProjectDocument& inputProject) {
                 << ",\"fadeOutSeconds\":" << placement.fadeOutSeconds
                 << ",\"fadeInCurve\":\"" << escapeJsonString(normalizedFadeCurve(placement.fadeInCurve))
                 << "\",\"fadeOutCurve\":\"" << escapeJsonString(normalizedFadeCurve(placement.fadeOutCurve))
-                << "\",\"muted\":" << (placement.muted ? "true" : "false")
+                << "\",\"fadeInCurvature\":" << placement.fadeInCurvature
+                << ",\"fadeOutCurvature\":" << placement.fadeOutCurvature
+                << ",\"muted\":" << (placement.muted ? "true" : "false")
                 << ",\"polarityInverted\":" << (placement.polarityInverted ? "true" : "false")
+                << ",\"reversed\":" << (placement.reversed ? "true" : "false")
                 << ",\"locked\":" << (placement.locked ? "true" : "false")
                 << ",\"colorHex\":\"" << escapeJsonString(placement.colorHex)
                 << "\",\"timeScale\":" << placement.timeScale
@@ -2223,6 +2255,14 @@ std::string serializeProject(const ProjectDocument& inputProject) {
         out << "    {\"id\":\"" << escapeJsonString(chord.id) << "\",\"name\":\"" << escapeJsonString(chord.name)
             << "\",\"timeSeconds\":" << chord.timeSeconds << "}";
         out << (i + 1 == project.chordEvents.size() ? "\n" : ",\n");
+    }
+    out << "  ],\n";
+    out << "  \"songSections\": [\n";
+    for (size_t i = 0; i < project.songSections.size(); ++i) {
+        const auto& section = project.songSections[i];
+        out << "    {\"id\":\"" << escapeJsonString(section.id) << "\",\"name\":\"" << escapeJsonString(section.name)
+            << "\",\"timeSeconds\":" << section.timeSeconds << "}";
+        out << (i + 1 == project.songSections.size() ? "\n" : ",\n");
     }
     out << "  ],\n";
     out << "  \"lyricEvents\": [\n";
@@ -2325,6 +2365,12 @@ std::string serializeProject(const ProjectDocument& inputProject) {
 	            << "\",\"speakerOutputA\":\"" << escapeJsonString(module.speakerOutputA)
 	            << "\",\"speakerOutputB\":\"" << escapeJsonString(module.speakerOutputB)
 	            << "\",\"speakerOutputC\":\"" << escapeJsonString(module.speakerOutputC)
+	            << "\",\"powerAmpA\":\"" << escapeJsonString(module.powerAmpA)
+	            << "\",\"powerAmpB\":\"" << escapeJsonString(module.powerAmpB)
+	            << "\",\"powerAmpC\":\"" << escapeJsonString(module.powerAmpC)
+	            << "\",\"speakerCableA\":\"" << escapeJsonString(module.speakerCableA)
+	            << "\",\"speakerCableB\":\"" << escapeJsonString(module.speakerCableB)
+	            << "\",\"speakerCableC\":\"" << escapeJsonString(module.speakerCableC)
 	            << "\",\"streamingPreview\":\"" << escapeJsonString(module.streamingPreview)
 	            << "\",\"activeTargetSlot\":" << std::max(0, std::min(2, module.activeTargetSlot))
 	            << ",\"speakerRoomEqA\":" << (module.speakerRoomEqA ? "true" : "false")
@@ -2410,6 +2456,35 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         parsed.metronomeSubdivision != "eighth" &&
         parsed.metronomeSubdivision != "sixteenth") {
         parsed.metronomeSubdivision = "auto";
+    }
+    parsed.metronomeGain = finiteRange(numberAfterKey(text, "metronomeGain", 1.0), 1.0, 0.0, 2.0);
+    parsed.metronomeSound = trim(stringAfterKey(text, "metronomeSound"));
+    if (parsed.metronomeSound != "wood" && parsed.metronomeSound != "rim" && parsed.metronomeSound != "cowbell") {
+        parsed.metronomeSound = "beep";
+    }
+    parsed.metronomeAccentFirst = boolAfterKey(text, "metronomeAccentFirst", true);
+    parsed.metronomeGenre = trim(stringAfterKey(text, "metronomeGenre"));
+    if (parsed.metronomeGenre.empty()) {
+        parsed.metronomeGenre = "straight";
+    }
+    parsed.metronomeAccentPattern.clear();
+    {
+        const std::string patternBody = arrayBodyAfterKey(text, "metronomeAccentPattern");
+        size_t pos = 0;
+        while (pos < patternBody.size()) {
+            size_t comma = patternBody.find(',', pos);
+            const std::string token = trim(patternBody.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos));
+            if (!token.empty()) {
+                try {
+                    parsed.metronomeAccentPattern.push_back(
+                        static_cast<float>(std::max(0.0, std::min(4.0, std::stod(token)))));
+                } catch (const std::exception&) {
+                    // skip a malformed entry
+                }
+            }
+            if (comma == std::string::npos) { break; }
+            pos = comma + 1;
+        }
     }
     parsed.detectedKey = trim(stringAfterKey(text, "detectedKey"));
     if (parsed.detectedKey.empty()) {
@@ -2498,6 +2573,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.appleSiliconCoreIsolationEnabled = boolAfterKey(text, "appleSiliconCoreIsolationEnabled", true);
     parsed.requestedDspCoreCount = finiteIntRange(numberAfterKey(text, "requestedDspCoreCount", 4.0), 4, 1, 16);
     parsed.externalDspCoreCount = finiteIntRange(numberAfterKey(text, "externalDspCoreCount", 4.0), 4, 1, 16);
+    parsed.externalDspEnabled = boolAfterKey(text, "externalDspEnabled", true);
     {
         const std::string host = stringAfterKey(text, "remoteDspHost");
         parsed.remoteDspHost = host.empty() ? std::string("studio.local") : host;
@@ -2505,7 +2581,12 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
     parsed.measurementMicModel = stringAfterKey(text, "measurementMicModel");
     parsed.physicalPowerAmpModel = stringAfterKey(text, "physicalPowerAmpModel");
+    parsed.physicalAudioInterfaceModel = stringAfterKey(text, "physicalAudioInterfaceModel");
+    parsed.physicalAudioInterfaceTargetModel = stringAfterKey(text, "physicalAudioInterfaceTargetModel");
+    parsed.monitorInterfaceModelingEnabled = boolAfterKey(text, "monitorInterfaceModelingEnabled", false);
     parsed.physicalSpeakerCableModel = stringAfterKey(text, "physicalSpeakerCableModel");
+    parsed.physicalPowerCableModel = stringAfterKey(text, "physicalPowerCableModel");
+    parsed.physicalConnectorModel = stringAfterKey(text, "physicalConnectorModel");
     parsed.monitorEqBands.clear();
     for (const auto& body : objectBodies(arrayBodyAfterKey(text, "monitorEqBands"))) {
         if (parsed.monitorEqBands.size() >= 64) break;
@@ -2549,6 +2630,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     if (parsed.monitorStationTalkbackRoute.empty()) {
         parsed.monitorStationTalkbackRoute = "listen_room";
     }
+    parsed.monitorStationTalkbackChannel = std::max(1, static_cast<int>(numberAfterKey(text, "monitorStationTalkbackChannel", 1.0)));
     parsed.monitorInputTrimDb = finiteRange(static_cast<float>(numberAfterKey(text, "monitorInputTrimDb", -9.0)), -9.0f, -12.0f, 0.0f);
     parsed.monitorVolumeDb = finiteRange(static_cast<float>(numberAfterKey(text, "monitorVolumeDb", -6.0)), -6.0f, -120.0f, 12.0f);
     parsed.listenRoomEnabled = boolAfterKey(text, "listenRoomEnabled", false);
@@ -2816,8 +2898,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         clip.fadeOutSeconds = finiteRange(numberAfterKey(body, "fadeOutSeconds", 0.0), 0.0, 0.0, maxFadeSeconds);
         clip.fadeInCurve = normalizedFadeCurve(stringAfterKey(body, "fadeInCurve"));
         clip.fadeOutCurve = normalizedFadeCurve(stringAfterKey(body, "fadeOutCurve"));
+        clip.fadeInCurvature = finiteRange(numberAfterKey(body, "fadeInCurvature", 0.0), 0.0, -1.0, 1.0);
+        clip.fadeOutCurvature = finiteRange(numberAfterKey(body, "fadeOutCurvature", 0.0), 0.0, -1.0, 1.0);
         clip.muted = boolAfterKey(body, "muted", false);
         clip.polarityInverted = boolAfterKey(body, "polarityInverted", false);
+        clip.reversed = boolAfterKey(body, "reversed", false);
         clip.locked = boolAfterKey(body, "locked", false);
         if (clip.trackName.empty() ||
             isProtectedTrackName(clip.trackName) ||
@@ -2967,8 +3052,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
             placement.fadeOutSeconds = finiteRange(numberAfterKey(placementBody, "fadeOutSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
             placement.fadeInCurve = normalizedFadeCurve(stringAfterKey(placementBody, "fadeInCurve"));
             placement.fadeOutCurve = normalizedFadeCurve(stringAfterKey(placementBody, "fadeOutCurve"));
+            placement.fadeInCurvature = finiteRange(numberAfterKey(placementBody, "fadeInCurvature", 0.0), 0.0, -1.0, 1.0);
+            placement.fadeOutCurvature = finiteRange(numberAfterKey(placementBody, "fadeOutCurvature", 0.0), 0.0, -1.0, 1.0);
             placement.muted = boolAfterKey(placementBody, "muted", false);
             placement.polarityInverted = boolAfterKey(placementBody, "polarityInverted", false);
+            placement.reversed = boolAfterKey(placementBody, "reversed", false);
             placement.locked = boolAfterKey(placementBody, "locked", false);
             placement.colorHex = trim(stringAfterKey(placementBody, "colorHex"));
             placement.timeScale = finiteRange(numberAfterKey(placementBody, "timeScale", 1.0), 1.0, 0.05, 20.0);
@@ -3057,6 +3145,23 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         if (a.timeSeconds == b.timeSeconds) {
             return a.id < b.id;
         }
+        return a.timeSeconds < b.timeSeconds;
+    });
+
+    parsed.songSections.clear();
+    std::set<std::string> usedSongSectionIds;
+    for (const auto& body : objectBodies(arrayBodyAfterKey(text, "songSections"))) {
+        ChordEventState section;
+        section.id = uniqueIdForImport(stringAfterKey(body, "id"), usedSongSectionIds);
+        section.name = stringAfterKey(body, "name");
+        section.timeSeconds = finiteRange(numberAfterKey(body, "timeSeconds", 0.0), 0.0, 0.0, 24.0 * 60.0 * 60.0);
+        if (!section.id.empty()) {
+            if (section.name.empty()) section.name = section.id;
+            parsed.songSections.push_back(section);
+        }
+    }
+    std::sort(parsed.songSections.begin(), parsed.songSections.end(), [](const ChordEventState& a, const ChordEventState& b) {
+        if (a.timeSeconds == b.timeSeconds) return a.id < b.id;
         return a.timeSeconds < b.timeSeconds;
     });
 
@@ -3288,6 +3393,13 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
 	            if (!speakerOutputC.empty()) {
 	                found->speakerOutputC = speakerOutputC;
 	            }
+	            // Direct assign (allows clearing) — these keys are absent in older projects.
+	            found->powerAmpA = stringAfterKey(body, "powerAmpA");
+	            found->powerAmpB = stringAfterKey(body, "powerAmpB");
+	            found->powerAmpC = stringAfterKey(body, "powerAmpC");
+	            found->speakerCableA = stringAfterKey(body, "speakerCableA");
+	            found->speakerCableB = stringAfterKey(body, "speakerCableB");
+	            found->speakerCableC = stringAfterKey(body, "speakerCableC");
 	            if (!streamingPreview.empty()) {
 	                found->streamingPreview = streamingPreview;
 	            }

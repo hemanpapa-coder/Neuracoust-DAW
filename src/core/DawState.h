@@ -113,8 +113,16 @@ struct ClipState {
     float gainDb = 0.0f;
     double fadeInSeconds = 0.0;
     double fadeOutSeconds = 0.0;
+    // Crossfade amounts DERIVED from same-track overlap (not user-set, not serialized). The render
+    // recomputes them from the current overlaps every plan build, so pulling clips apart removes the
+    // crossfade automatically — like Pro Tools / Cubase / Logic. Manual fadeIn/Out stay separate.
+    double crossfadeInSeconds = 0.0;
+    double crossfadeOutSeconds = 0.0;
     bool muted = false;
     bool polarityInverted = false;
+    // Non-destructive clip edits the renderer honors: reversed reads the clip's source window
+    // back-to-front (like Logic/Cubase "Reverse"), no new file. Mute/polarity already above.
+    bool reversed = false;
     std::string colorHex;
     std::string regionName;
     std::string sourceFileUid;
@@ -136,6 +144,11 @@ struct ClipState {
     bool locked = false;
     std::string fadeInCurve = "equal_power";
     std::string fadeOutCurve = "equal_power";
+    // Continuous shape bend on top of the named curve, [-1, 1], 0 = the named curve unchanged. The
+    // fade editor's middle handle drives it (Pro Tools fade tension); the render warps the fade
+    // position by it so the drawn shape and the sound stay identical.
+    double fadeInCurvature = 0.0;
+    double fadeOutCurvature = 0.0;
     /// Where this clip FIRST landed on the timeline (import), the Pro-Tools
     /// "original time stamp". Moves and trims never touch it; splitting offsets
     /// the right half so spotting both re-forms the original layout.

@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import ServiceManagement
 import SwiftUI
 
 /// Owns the C++ engine and drives every live readout from a 30 Hz poll of its
@@ -40,6 +41,16 @@ final class EngineController: ObservableObject {
     @Published private(set) var bufferSize: Int = 0
     @Published private(set) var delayCompensationMs: Double = 0
     @Published private(set) var maxRenderDurationUs: Double = 0
+    // Cumulative render-deadline misses (late wakes) — each is a potential audible dropout even when
+    // playback keeps rolling. A safe session should hold this at (or near) 0.
+    @Published private(set) var lateWakeCount: Int = 0
+    // The count at the last user reset. The dock shows `lateWakeCount - baseline`, so the reset button
+    // clears the visible tally without touching the realtime engine's atomic. Auto-corrects on an
+    // engine restart (the raw count drops back to 0).
+    @Published private(set) var lateWakeBaseline: Int = 0
+    /// Dropouts since the last reset (or engine start). What the monitor dock displays.
+    var dropoutCount: Int { max(0, lateWakeCount - lateWakeBaseline) }
+    func resetDropoutCount() { lateWakeBaseline = lateWakeCount }
     @Published private(set) var deviceName = ""
     @Published private(set) var startupError: String?
 
@@ -62,7 +73,81 @@ final class EngineController: ObservableObject {
     /// The loop range doubles as the edit range, the way the old UI used it.
     @Published private(set) var loopStartSeconds: Double = 0
     @Published private(set) var loopEndSeconds: Double = 4
+    /// The track lane a lane-dragged edit range belongs to (Pro Tools selector), for the highlight.
+    /// nil = a ruler range that spans all lanes.
+    @Published var editRangeLane: Int? = nil
     @Published var clickEnabled = false
+    /// The click resolution: "auto" / "quarter" / "eighth" / "sixteenth".
+    @Published var metronomeSubdivision = "auto"
+    /// Click level (linear, 0..2) and timbre ("beep"/"wood"/"rim"/"cowbell").
+    @Published var metronomeGain: Double = 1.0
+    @Published var metronomeSound = "beep"
+    /// Groove: "straight" / "shuffle" / "triplet", plus swing amount (0.5..0.9 meaningful).
+    @Published var grooveFeel = "straight"
+    @Published var grooveSwingAmount: Double = 0.6
+    /// Accent the bar's first beat (off = an even, flat click).
+    @Published var metronomeAccentFirst = true
+    /// The selected groove genre (a preset that sets subdivision + swing + accent pattern).
+    @Published var metronomeGenre = "straight"
+
+    /// One groove preset. What matters for a *click* is the rhythmic FEEL (subdivision + swing)
+    /// and the ACCENT pattern, so the catalog is organised by feel category, not by exhaustive
+    /// genre names. `pattern` is per-step gains (0..1) over one 4/4 bar at `subdivision`; empty =
+    /// the default bar/beat hierarchy. A 0 gain is a rest (no click on that step).
+    struct MetronomeGenre {
+        let id: String
+        let title: String
+        let category: String
+        let subdivision: String
+        let feel: String
+        let swing: Double
+        let pattern: [Float]
+    }
+
+    /// Feel categories, in menu order.
+    static let metronomeGenreCategories = ["기본", "스트레이트", "스윙·셔플", "라틴"]
+
+    static let metronomeGenres: [MetronomeGenre] = [
+        // 기본 — the plain accent hierarchy, no genre pattern.
+        .init(id: "straight", title: "기본 (강약 계층)", category: "기본",
+              subdivision: "auto", feel: "straight", swing: 0.6, pattern: []),
+
+        // 스트레이트 — even subdivisions, backbeat-driven (pop / rock / funk / ballad).
+        .init(id: "poprock", title: "팝·락 (백비트)", category: "스트레이트",
+              subdivision: "eighth", feel: "straight", swing: 0.6,
+              pattern: [1.0, 0.25, 0.75, 0.25, 0.6, 0.25, 0.75, 0.3]),
+        .init(id: "sixteen", title: "16비트 그루브", category: "스트레이트",
+              subdivision: "sixteenth", feel: "straight", swing: 0.6,
+              pattern: [1.0, 0.3, 0.45, 0.3, 0.7, 0.3, 0.45, 0.35, 0.6, 0.3, 0.45, 0.3, 0.75, 0.35, 0.5, 0.4]),
+        .init(id: "ballad", title: "발라드 (부드럽게)", category: "스트레이트",
+              subdivision: "eighth", feel: "straight", swing: 0.6,
+              pattern: [0.9, 0.2, 0.55, 0.2, 0.5, 0.2, 0.55, 0.25]),
+
+        // 스윙·셔플 — swung eighths (jazz / blues) and a triplet feel (ballad / gospel).
+        .init(id: "jazz", title: "재즈 스윙", category: "스윙·셔플",
+              subdivision: "eighth", feel: "shuffle", swing: 0.66,
+              pattern: [0.6, 0.3, 0.9, 0.35, 0.55, 0.3, 0.9, 0.4]),
+        .init(id: "blues", title: "블루스 셔플", category: "스윙·셔플",
+              subdivision: "eighth", feel: "shuffle", swing: 0.62,
+              pattern: [1.0, 0.35, 0.55, 0.3, 0.85, 0.4, 0.6, 0.35]),
+        .init(id: "triplet", title: "트리플렛 (12/8)", category: "스윙·셔플",
+              subdivision: "eighth", feel: "triplet", swing: 0.66,
+              pattern: [0.95, 0.25, 0.5, 0.25, 0.55, 0.25, 0.5, 0.3]),
+
+        // 라틴 — clave-based (bossa / samba / son clave).
+        .init(id: "bossa", title: "보사노바", category: "라틴",
+              subdivision: "sixteenth", feel: "straight", swing: 0.6,
+              pattern: [1.0, 0, 0, 0.7, 0.5, 0, 0.7, 0, 0.5, 0, 0.7, 0, 0.6, 0, 0, 0]),
+        .init(id: "samba", title: "삼바", category: "라틴",
+              subdivision: "sixteenth", feel: "straight", swing: 0.6,
+              pattern: [0.9, 0.3, 0.5, 0.35, 0.75, 0.35, 0.5, 0.4, 0.6, 0.3, 0.5, 0.35, 0.8, 0.35, 0.55, 0.5]),
+        .init(id: "clave", title: "손 클라베 (살사)", category: "라틴",
+              subdivision: "sixteenth", feel: "straight", swing: 0.6,
+              pattern: [1.0, 0, 0, 0.85, 0, 0, 0.85, 0, 0, 0, 0.85, 0, 0.85, 0, 0, 0]),
+    ]
+    /// Bars of click before a record take actually begins (0 = off). The transport pre-rolls
+    /// from this many bars back and the take opens when the playhead reaches the record point.
+    @Published var countInBars = 0
     @Published var snapEnabled = true
     @Published var recording = false
     /// Which timebases the timeline ruler shows (bars / time / samples). Any subset.
@@ -146,7 +231,11 @@ final class EngineController: ObservableObject {
     @Published private(set) var redoStepName = ""
     @Published private(set) var projectDirty = false
     @Published private(set) var projectPath = ""
-    @Published private(set) var lastError: String?
+    @Published private(set) var lastError: String? {
+        didSet {
+            if let msg = lastError, !msg.isEmpty { Diagnostics.shared.log("status: \(msg)") }
+        }
+    }
     @Published private(set) var timeSignature = (numerator: 4, denominator: 4)
 
     // MARK: Tracks
@@ -191,6 +280,10 @@ final class EngineController: ObservableObject {
         /// rest are layers), all fed the same MIDI and summed. Empty when there's no instrument.
         var instrumentLayers: [InstrumentLayer] = []
         var sends: [TrackSend]
+
+        /// Plugin delay compensation applied to this track/bus, in samples (0 = none). Shown per
+        /// strip when the mixer's PDC readout is on.
+        var delayCompSamples: Int = 0
 
         var peakLeft: Float = 0
         var peakRight: Float = 0
@@ -439,11 +532,8 @@ final class EngineController: ObservableObject {
             if nc_master_add_insert(handle, Int32(pluginIndex)) {
                 reloadMasterInserts()
                 refreshHistory()
-                // Dismiss the browser first so the editor isn't buried under it, then show it.
-                closePluginBrowser()
-                if !masterInserts.isEmpty {
-                    pluginEditors.openIfNeeded(trackId: Self.masterInsertTargetId, insertIndex: masterInserts.count - 1)
-                }
+                // Keep the browser open so more master inserts can be stacked in one session; open
+                // each from its chain chip after closing (닫기).
             }
             return
         }
@@ -477,17 +567,11 @@ final class EngineController: ObservableObject {
         if changed {
             reloadTracks()
             refreshHistory()
-            // Dismiss the browser first — leaving it open buried the editor behind it and blocked
-            // clicks on the insert chip underneath, which made the whole flow feel broken.
-            closePluginBrowser()
-            // Auto-open the editor for a freshly added FX insert — the plug-in appears with its
-            // window up, no hunting for the chip and clicking it. (Instrument slots open from
-            // their own chip.) The new insert is the last slot in the chain.
-            if addedFxInsert,
-               let updated = tracks.first(where: { $0.id == trackId }),
-               !updated.inserts.isEmpty {
-                pluginEditors.openIfNeeded(trackId: trackId, insertIndex: updated.inserts.count - 1)
-            }
+            // Keep the browser OPEN so several plug-ins can be stacked into the chain in one session
+            // (the right-hand 인서트 체인 updates live as each is added — the "load a bunch at once"
+            // flow the user wanted). We no longer auto-open the editor here: that buried the browser.
+            // Open an editor from its chain chip after closing (닫기).
+            _ = addedFxInsert
         }
     }
 
@@ -511,6 +595,9 @@ final class EngineController: ObservableObject {
 
     func removeInstrumentLayer(track trackId: Int, slot: Int) {
         guard let handle else { return }
+        // Close the track's instrument editor windows first — the layers renumber, so an open
+        // editor would otherwise point at the wrong (or a gone) layer.
+        pluginEditors.closeInstrumentEditors(trackId: trackId)
         if nc_track_remove_instrument_slot(handle, Int32(trackId), Int32(slot)) {
             reloadTracks()
             refreshHistory()
@@ -546,9 +633,27 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Switch an insert between "native" (in-process, on the audio thread) and "internal"
+    /// (out-of-process on the isolated performance core) so the two can be compared per channel.
+    /// Internal only actually runs off-thread while core isolation is on (dock → Remote Core/DSP).
+    func setInsertDspMode(track trackId: Int, slot: Int, mode: String) {
+        guard let handle else { return }
+        let changed = mode.withCString { nc_track_insert_set_dsp_mode(handle, Int32(trackId), Int32(slot), $0) }
+        if changed { reloadTracks(); refreshHistory() }
+    }
+
+    func setMasterInsertDspMode(slot: Int, mode: String) {
+        guard let handle else { return }
+        let changed = mode.withCString { nc_master_insert_set_dsp_mode(handle, Int32(slot), $0) }
+        if changed { reloadTracks(); refreshHistory() }
+    }
+
     /// Remove the instrument from an instrument track's slot.
     func clearInstrument(track trackId: Int) {
         guard let handle else { return }
+        // Take the instrument's editor window(s) down with it — otherwise a ghost TRITON window
+        // lingers after "악기 제거" (and the reverse monitor ring keeps feeding a gone instrument).
+        pluginEditors.closeInstrumentEditors(trackId: trackId)
         if nc_track_clear_instrument(handle, Int32(trackId)) {
             reloadTracks()
             refreshHistory()
@@ -762,6 +867,10 @@ final class EngineController: ObservableObject {
         var output: String
         var simWeight: Float
         var roomEq: Bool
+        // Passive modeled speaker's amp + cable (heuristic tone), and whether the model is passive.
+        var amp: String = ""
+        var cable: String = ""
+        var modelIsPassive: Bool = false
 
         /// The engine stores models as "Speaker B: Yamaha NS-10M Studio (NF)".
         /// The slot letter is already on the tab, so drop the prefix.
@@ -866,6 +975,565 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Non-destructive clip processing (Logic/Cubase style) — the renderer honours the flags, so
+    /// nothing writes a new file and each undoes cleanly.
+    func reverseClip(_ clipId: String) {
+        guard let handle else { return }
+        if nc_clip_toggle_reversed(handle, clipId) { reloadClips(); refreshHistory() }
+    }
+    func toggleClipMute(_ clipId: String) {
+        guard let handle else { return }
+        if nc_clip_toggle_muted(handle, clipId) { reloadClips(); refreshHistory() }
+    }
+    func toggleClipPolarity(_ clipId: String) {
+        guard let handle else { return }
+        if nc_clip_toggle_polarity(handle, clipId) { reloadClips(); refreshHistory() }
+    }
+    func normalizeClip(_ clipId: String) {
+        guard let handle else { return }
+        if nc_clip_normalize(handle, clipId) { reloadClips(); refreshHistory() }
+    }
+
+    /// Offline time-stretch + pitch-shift PRINT (Serato phase vocoder) — renders the clip to a new
+    /// WAV and repoints it. timeRatio changes length, semitones change pitch, independently.
+    func applyClipTimePitch(_ clipId: String, timeRatio: Double, semitones: Double) {
+        guard let handle else { return }
+        var err = [CChar](repeating: 0, count: 256)
+        if nc_clip_apply_time_pitch(handle, clipId, timeRatio, semitones, formantPreserve ? 1 : 0, &err, err.count) {
+            reloadClips(); refreshHistory()
+        } else {
+            let message = String(cString: err)
+            if !message.isEmpty { Diagnostics.shared.log("time/pitch: \(message)") }
+        }
+    }
+
+    /// Separate a clip into 4 stems (Drums/Bass/Other/Vocals) with the bundled Demucs helper, spawned
+    /// as a SUBPROCESS so LibTorch (and any crash) stays out of the audio process. On success each stem
+    /// becomes a new audio track at the clip's start. Runs off the main thread; progress is published.
+    func separateClipStems(_ clipId: String) {
+        guard let handle, stemSeparationProgress == nil else { return }
+        // Resolve the clip's source file + start time by id.
+        var idx = -1
+        let count = Int(nc_clip_count(handle))
+        for i in 0..<count {
+            var id = [CChar](repeating: 0, count: 128)
+            nc_clip_id(handle, Int32(i), &id, id.count)
+            if String(cString: id) == clipId { idx = i; break }
+        }
+        guard idx >= 0 else { return }
+        var srcBuf = [CChar](repeating: 0, count: 1024)
+        nc_clip_source_path(handle, Int32(idx), &srcBuf, srcBuf.count)
+        let sourcePath = String(cString: srcBuf)
+        let startSeconds = nc_clip_start_seconds(handle, Int32(idx))
+        guard !sourcePath.isEmpty else { return }
+
+        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_stem_separator"
+        guard FileManager.default.isExecutableFile(atPath: helper) else {
+            stemSeparationStatus = "스템 분리 도구가 번들에 없습니다"
+            Diagnostics.shared.log("stem separation: helper not bundled at \(helper)")
+            return
+        }
+        let prefix = URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
+        let outDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-stems-\(UUID().uuidString)")
+
+        stemSeparationProgress = 0
+        stemSeparationStatus = "스템 분리 준비 중…"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: helper)
+            proc.arguments = [sourcePath, outDir, "--stem-prefix", prefix]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            var stems: [(String, String)] = []
+            var errMsg = ""
+            var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let data = fh.availableData
+                guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
+                carry += chunk
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl])
+                    carry = String(carry[carry.index(after: nl)...])
+                    let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+                    switch parts.first {
+                    case "PROGRESS":
+                        if parts.count > 1, let p = Double(parts[1]) {
+                            DispatchQueue.main.async {
+                                self.stemSeparationProgress = p
+                                self.stemSeparationStatus = "스템 분리 중… \(Int(p * 100))%"
+                            }
+                        }
+                    case "STEM": if parts.count >= 3 { stems.append((parts[1], parts[2])) }
+                    case "ERROR": errMsg = parts.count > 1 ? parts[1] : "알 수 없는 오류"
+                    default: break
+                    }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async { self.finishStemSeparation(nil, "실행 실패: \(error.localizedDescription)", startSeconds) }
+                return
+            }
+            proc.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            let code = proc.terminationStatus
+            DispatchQueue.main.async {
+                if code == 0 && !stems.isEmpty { self.finishStemSeparation(stems, "", startSeconds) }
+                else { self.finishStemSeparation(nil, errMsg.isEmpty ? "분리 실패 (코드 \(code))" : errMsg, startSeconds) }
+            }
+        }
+    }
+
+    private func finishStemSeparation(_ stems: [(String, String)]?, _ error: String, _ startSeconds: Double) {
+        stemSeparationProgress = nil
+        guard let stems, let handle else {
+            if !error.isEmpty { stemSeparationStatus = "스템 분리 실패: \(error)"; Diagnostics.shared.log("stem separation: \(error)") }
+            return
+        }
+        let koLabel = ["Drums": "드럼", "Bass": "베이스", "Other": "기타", "Vocals": "보컬"]
+        var made = 0
+        for (name, path) in stems {
+            let trackIndex = nc_track_add_audio(handle)
+            guard trackIndex >= 0 else { continue }
+            _ = renameTrack(Int(trackIndex), to: koLabel[name] ?? name)
+            var err = [CChar](repeating: 0, count: 512)
+            if nc_audio_import(handle, trackIndex, path, startSeconds, &err, err.count) { made += 1 }
+        }
+        reloadTracks(); reloadClips(); refreshHistory()
+        stemSeparationStatus = "스템 분리 완료 — \(made)개 트랙 생성"
+    }
+
+    /// Neural noise-floor removal (Facebook DNS denoiser, bundled helper). Exports the clip's played
+    /// window, denoises it off the main thread, then repoints the clip at the cleaned WAV (length
+    /// preserved). Runs BEFORE clip gain in intent: clean first, then boost, so the boost lifts signal
+    /// not hiss. `mix` 0…1 is the denoise strength (1 = full). Reuses the background-DSP status fields.
+    func denoiseClip(_ clipId: String, mix: Double = 1.0) {
+        guard let handle, stemSeparationProgress == nil else { return }
+        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_denoiser"
+        guard FileManager.default.isExecutableFile(atPath: helper),
+              FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/Contents/Resources/denoiser.pt") else {
+            stemSeparationStatus = "디노이저가 번들에 없습니다 (tools/export_denoiser_torchscript.py 실행 필요)"
+            Diagnostics.shared.log("denoise: helper/model not bundled")
+            return
+        }
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-denoise-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let inPath = (tmpDir as NSString).appendingPathComponent("in.wav")
+        let outPath = (tmpDir as NSString).appendingPathComponent("out.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, inPath, &err, err.count) else {
+            stemSeparationStatus = "디노이즈 준비 실패: \(String(cString: err))"; return
+        }
+        stemSeparationProgress = 0
+        stemSeparationStatus = "노이즈 제거 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: helper)
+            proc.arguments = [inPath, outPath, "--mix", String(format: "%.3f", max(0.0, min(1.0, mix)))]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            var errMsg = "", carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let d = fh.availableData
+                guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+                carry += s
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
+                    let p = line.split(separator: " ", maxSplits: 1).map(String.init)
+                    if p.first == "PROGRESS", p.count > 1, let v = Double(p[1]) {
+                        DispatchQueue.main.async { self.stemSeparationProgress = v; self.stemSeparationStatus = "노이즈 제거 중… \(Int(v * 100))%" }
+                    } else if p.first == "ERROR" { errMsg = p.count > 1 ? p[1] : "알 수 없는 오류" }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async { self.finishDenoise(clipId, false, "실행 실패: \(error.localizedDescription)", outPath) }; return
+            }
+            proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
+            let ok = proc.terminationStatus == 0 && FileManager.default.fileExists(atPath: outPath)
+            DispatchQueue.main.async { self.finishDenoise(clipId, ok, errMsg, outPath) }
+        }
+    }
+
+    private func finishDenoise(_ clipId: String, _ ok: Bool, _ error: String, _ outPath: String) {
+        stemSeparationProgress = nil
+        guard ok, let handle else {
+            stemSeparationStatus = "노이즈 제거 실패: \(error.isEmpty ? "알 수 없는 오류" : error)"
+            Diagnostics.shared.log("denoise: \(error)"); return
+        }
+        var err = [CChar](repeating: 0, count: 512)
+        if nc_clip_repoint_to_window_wav(handle, clipId, outPath, "노이즈 제거", &err, err.count) {
+            reloadClips(); refreshHistory()
+            stemSeparationStatus = "노이즈 제거 완료"
+        } else {
+            stemSeparationStatus = "노이즈 제거 반영 실패: \(String(cString: err))"
+        }
+    }
+
+    // MARK: - Pitch editor (Melodyne note mode + Serato anchor time-map mode)
+
+    enum PitchEditorMode: String, CaseIterable { case melodyne = "멜로다인", anchor = "세라토 앵커" }
+
+    // Melodyne-style detection modes. rawValue matches nc_clip_detect_notes's `mode` argument.
+    enum DetectionMode: Int, CaseIterable { case melodic = 0, polyphonic = 1, percussive = 2
+        var label: String { switch self { case .melodic: return "멜로딕"; case .polyphonic: return "폴리포닉"; case .percussive: return "퍼커시브" } }
+    }
+
+    struct PitchNote: Identifiable, Equatable {
+        let id: Int             // index into the engine's detected-note cache
+        var startSeconds: Double
+        var durationSeconds: Double
+        var detectedMidi: Double
+        var offsetSemitones: Double
+        var confidence: Double
+        var editedMidi: Double { detectedMidi + offsetSemitones }
+    }
+
+    @Published var pitchEditorClipId: String? = nil
+    @Published var pitchEditorMode: PitchEditorMode = .melodyne
+    @Published var detectionMode: DetectionMode = .melodic
+    @Published var useCrepe: Bool = false   // CREPE neural detection (precise, async) vs built-in YIN
+    @Published var useCrepeTiny: Bool = false  // tiny model: ~40x smaller, much faster, slightly less accurate
+    @Published var formantPreserve: Bool = true   // keep timbre through a pitch shift (no chipmunk); off = raw shift
+
+    /// The CREPE helper + full model are bundled (export via tools/export_crepe_torchscript.py).
+    var crepeAvailable: Bool {
+        let base = Bundle.main.bundlePath
+        return FileManager.default.isExecutableFile(atPath: base + "/Contents/MacOS/neuracoust_pitch_detector")
+            && FileManager.default.fileExists(atPath: base + "/Contents/Resources/crepe_full.pt")
+    }
+    /// The tiny model is optional — the fast toggle only offers it when it was bundled.
+    var crepeTinyAvailable: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/Contents/Resources/crepe_tiny.pt")
+    }
+    /// Which CREPE model file to run — tiny when the user picked fast AND it's present, else full.
+    private var crepeModelPath: String {
+        let res = Bundle.main.bundlePath + "/Contents/Resources/"
+        return (useCrepeTiny && crepeTinyAvailable) ? res + "crepe_tiny.pt" : res + "crepe_full.pt"
+    }
+    @Published private(set) var pitchEditorClipDuration: Double = 1.0
+    @Published private(set) var pitchNotes: [PitchNote] = []
+    @Published private(set) var pitchClipPeaks: [SIMD2<Float>] = []   // (min,max) per column, clip window
+    // Percussive mode: transient index → its new (dragged) start time in seconds.
+    @Published var percussiveTimeEdits: [Int: Double] = [:]
+    // Anchor mode: matched normalized (source, dest) positions in 0…1.
+    @Published var timeMapAnchors: [SIMD2<Double>] = []
+    @Published var pitchEditTimeRatio: Double = 1.0
+    @Published var pitchEditSemitones: Double = 0.0
+
+    /// Open the editor for a clip: cache its detected notes (Melodyne) and clip length (both modes).
+    func openPitchEditor(_ clipId: String) {
+        guard let handle else { return }
+        pitchEditorClipId = clipId
+        timeMapAnchors = []
+        pitchEditTimeRatio = 1.0
+        pitchEditSemitones = 0.0
+        // Clip length + waveform for the editor's time axis.
+        pitchClipPeaks = []
+        for i in 0..<Int(nc_clip_count(handle)) {
+            var id = [CChar](repeating: 0, count: 128)
+            nc_clip_id(handle, Int32(i), &id, id.count)
+            if String(cString: id) == clipId {
+                pitchEditorClipDuration = max(0.1, nc_clip_duration_seconds(handle, Int32(i)))
+                loadClipWaveform(clipIndex: i)
+                break
+            }
+        }
+        reloadDetectedNotes(clipId)
+    }
+
+    /// Load the clip WINDOW's waveform as ~600 (min,max) columns, for drawing behind the note blobs.
+    private func loadClipWaveform(clipIndex ci: Int) {
+        guard let handle else { return }
+        var pathBuf = [CChar](repeating: 0, count: 1024)
+        nc_clip_source_path(handle, Int32(ci), &pathBuf, pathBuf.count)
+        let path = String(cString: pathBuf)
+        guard !path.isEmpty else { return }
+        let total = nc_waveform_duration_seconds(handle, path)
+        let count = Int(nc_waveform_peak_count(handle, path))
+        guard count > 0, total > 0 else { return }
+        var mins = [Float](repeating: 0, count: count)
+        var maxs = [Float](repeating: 0, count: count)
+        guard nc_waveform_peaks(handle, path, &mins, &maxs, Int32(count)) else { return }
+        let offset = nc_clip_source_offset_seconds(handle, Int32(ci))
+        let dur = nc_clip_duration_seconds(handle, Int32(ci))
+        let lo = max(0, min(count, Int((offset / total) * Double(count))))
+        let hi = max(lo + 1, min(count, Int(((offset + dur) / total) * Double(count))))
+        let cols = 600
+        var out: [SIMD2<Float>] = []
+        out.reserveCapacity(cols)
+        for c in 0..<cols {
+            let s = lo + (hi - lo) * c / cols
+            let e = max(s + 1, lo + (hi - lo) * (c + 1) / cols)
+            var mn: Float = 0, mx: Float = 0
+            for k in s..<min(e, count) { mn = min(mn, mins[k]); mx = max(mx, maxs[k]) }
+            out.append(SIMD2(mn, mx))
+        }
+        pitchClipPeaks = out
+    }
+
+    /// Re-run detection for the open clip with the current `detectionMode` (called when the sub-mode
+    /// picker changes). Percussive returns rhythmic markers (no pitch); melodic/polyphonic return notes.
+    func redetectNotes() {
+        guard let clipId = pitchEditorClipId else { return }
+        reloadDetectedNotes(clipId)
+    }
+
+    private func reloadDetectedNotes(_ clipId: String) {
+        guard let handle else { return }
+        percussiveTimeEdits = [:]
+        // Polyphonic = separate the clip (Demucs) then detect each part — async, off the main thread.
+        if detectionMode == .polyphonic { redetectPolyphonic(clipId); return }
+        // Melodic with the CREPE neural detector (precise, async subprocess) if the user opted in.
+        if useCrepe && detectionMode == .melodic && crepeAvailable { redetectWithCrepe(clipId); return }
+        _ = nc_clip_detect_notes(handle, clipId, Int32(detectionMode.rawValue))
+        loadNotesFromCache()
+    }
+
+    /// Melodic detection via the CREPE neural helper: export the clip window, run the detector, parse
+    /// its pitch track, and segment it (same Viterbi + segmenter as YIN). Falls back to YIN on failure.
+    private func redetectWithCrepe(_ clipId: String) {
+        guard let handle else { return }
+        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_pitch_detector"
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-crepe-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let rawPath = (tmpDir as NSString).appendingPathComponent("clip.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, rawPath, &err, err.count) else {
+            _ = nc_clip_detect_notes(handle, clipId, 0); loadNotesFromCache(); return
+        }
+        let modelPath = crepeModelPath
+        let tiny = useCrepeTiny && crepeTinyAvailable
+        stemSeparationProgress = 0
+        stemSeparationStatus = tiny ? "빠른 검출(CREPE tiny) 중…" : "정밀 검출(CREPE) 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: helper)
+            proc.arguments = [rawPath, "--model", modelPath]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            var times: [Double] = [], hzs: [Double] = [], confs: [Double] = []
+            var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let d = fh.availableData
+                guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+                carry += s
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
+                    let p = line.split(separator: " ").map(String.init)
+                    if p.first == "PITCH", p.count >= 4, let t = Double(p[1]), let hz = Double(p[2]), let c = Double(p[3]) {
+                        times.append(t); hzs.append(hz); confs.append(c)
+                    }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async { self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache() }
+                return
+            }
+            proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self.stemSeparationProgress = nil
+                guard let h = self.handle, !times.isEmpty else {
+                    if let h = self.handle { _ = nc_clip_detect_notes(h, clipId, 0); self.loadNotesFromCache() }
+                    return
+                }
+                _ = times.withUnsafeBufferPointer { tp in hzs.withUnsafeBufferPointer { hp in confs.withUnsafeBufferPointer { cp in
+                    nc_segment_pitch_track(h, tp.baseAddress, hp.baseAddress, cp.baseAddress, Int32(times.count))
+                }}}
+                nc_detect_notes_bind_clip(h, clipId)
+                self.loadNotesFromCache()
+                self.stemSeparationStatus = "정밀 검출 완료 — \(self.pitchNotes.count)개 노트"
+            }
+        }
+    }
+
+    private func loadNotesFromCache() {
+        guard let handle else { return }
+        let count = Int(nc_clip_note_count(handle))
+        var notes: [PitchNote] = []
+        for i in 0..<count {
+            notes.append(PitchNote(id: i,
+                                   startSeconds: nc_clip_note_start_seconds(handle, Int32(i)),
+                                   durationSeconds: nc_clip_note_duration_seconds(handle, Int32(i)),
+                                   detectedMidi: nc_clip_note_detected_midi(handle, Int32(i)),
+                                   offsetSemitones: nc_clip_note_offset_semitones(handle, Int32(i)),
+                                   confidence: nc_clip_note_confidence(handle, Int32(i))))
+        }
+        pitchNotes = notes
+    }
+
+    /// True polyphonic detection: export the clip window, run the Demucs helper on it, then detect
+    /// melodic notes in each PITCHED stem (skip drums) and merge — so a chord shows every part's pitch.
+    /// Falls back to melodic-on-the-mix if the separator isn't bundled.
+    private func redetectPolyphonic(_ clipId: String) {
+        guard let handle else { return }
+        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_stem_separator"
+        guard FileManager.default.isExecutableFile(atPath: helper) else {
+            _ = nc_clip_detect_notes(handle, clipId, 0); loadNotesFromCache(); return
+        }
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-poly-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let rawPath = (tmpDir as NSString).appendingPathComponent("clip.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, rawPath, &err, err.count) else {
+            _ = nc_clip_detect_notes(handle, clipId, 0); loadNotesFromCache(); return
+        }
+        let outDir = (tmpDir as NSString).appendingPathComponent("stems")
+        stemSeparationProgress = 0
+        stemSeparationStatus = "폴리포닉 분석 준비 중…"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: helper)
+            proc.arguments = [rawPath, outDir, "--stem-prefix", "poly"]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            var stems: [(String, String)] = []; var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let d = fh.availableData
+                guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+                carry += s
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
+                    let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+                    if parts.first == "PROGRESS", parts.count > 1, let p = Double(parts[1]) {
+                        DispatchQueue.main.async { self.stemSeparationProgress = p; self.stemSeparationStatus = "폴리포닉 분석 중… \(Int(p * 100))%" }
+                    } else if parts.first == "STEM", parts.count >= 3 { stems.append((parts[1], parts[2])) }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async { self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache() }
+                return
+            }
+            proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self.stemSeparationProgress = nil
+                guard let h = self.handle else { return }
+                nc_detect_notes_reset(h)
+                for (name, path) in stems where name != "Drums" {   // detect pitch on the pitched parts
+                    _ = nc_detect_notes_add_from_file(h, path, 0)   // melodic per stem
+                }
+                nc_detect_notes_bind_clip(h, clipId)
+                self.loadNotesFromCache()
+                self.stemSeparationStatus = "폴리포닉 분석 완료 — \(self.pitchNotes.count)개 노트"
+            }
+        }
+    }
+
+    /// Set a note's pitch offset (snapped to whole semitones for the Melodyne grid).
+    func setPitchNoteOffset(_ index: Int, semitones: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let snapped = semitones.rounded()
+        nc_clip_note_set_offset(handle, Int32(index), snapped)
+        pitchNotes[index].offsetSemitones = snapped
+    }
+
+    /// Apply the Melodyne per-note edits — renders a new WAV and repoints the clip.
+    func applyPitchEdits() {
+        guard let handle, let clipId = pitchEditorClipId else { return }
+        var err = [CChar](repeating: 0, count: 256)
+        if nc_clip_apply_note_edits(handle, clipId, &err, err.count) {
+            reloadClips(); refreshHistory(); closePitchEditor()
+        } else {
+            let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("pitch edit: \(m)") }
+        }
+    }
+
+    /// Apply the Serato-mode anchor time-remap (+ global ratio/pitch) — renders a new WAV.
+    func applyTimeMapEdit() {
+        guard let handle, let clipId = pitchEditorClipId else { return }
+        let src = timeMapAnchors.map { $0.x }
+        let dst = timeMapAnchors.map { $0.y }
+        var err = [CChar](repeating: 0, count: 256)
+        let ok = src.withUnsafeBufferPointer { sp in
+            dst.withUnsafeBufferPointer { dp in
+                nc_clip_apply_time_map(handle, clipId, pitchEditTimeRatio, pitchEditSemitones,
+                                       sp.baseAddress, dp.baseAddress, Int32(src.count),
+                                       formantPreserve ? 1 : 0, &err, err.count)
+            }
+        }
+        if ok { reloadClips(); refreshHistory(); closePitchEditor() }
+        else { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("time map: \(m)") } }
+    }
+
+    /// Export the current pitch-editor result to a standalone WAV the user picks — the clip and
+    /// project are left unchanged (unlike 적용). Works for both Melodyne and Serato-anchor modes.
+    func exportPitchEditToFile() {
+        guard let handle, let clipId = pitchEditorClipId else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = (pitchEditorMode == .melodyne ? "피치편집" : "타임리맵") + ".wav"
+        panel.title = "파일로 내보내기"
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            var err = [CChar](repeating: 0, count: 512)
+            let ok: Bool
+            if self.pitchEditorMode == .melodyne {
+                ok = nc_clip_export_note_edits(handle, clipId, url.path, &err, err.count)
+            } else {
+                let src = self.timeMapAnchors.map { $0.x }
+                let dst = self.timeMapAnchors.map { $0.y }
+                ok = src.withUnsafeBufferPointer { sp in
+                    dst.withUnsafeBufferPointer { dp in
+                        nc_clip_export_time_map(handle, clipId, self.pitchEditTimeRatio, self.pitchEditSemitones,
+                                                sp.baseAddress, dp.baseAddress, Int32(src.count), url.path, &err, err.count)
+                    }
+                }
+            }
+            if !ok { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("export: \(m)") } }
+        }
+    }
+
+    private var pitchPreviewSound: NSSound?
+
+    /// Render the current pitch-editor result to a temp WAV and play it (system playback, not through
+    /// the engine) so the user can hear the edit before committing. Works for both modes.
+    func previewPitchEdit() {
+        guard let handle, let clipId = pitchEditorClipId else { return }
+        pitchPreviewSound?.stop()
+        let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-preview-\(UUID().uuidString).wav")
+        var err = [CChar](repeating: 0, count: 512)
+        let ok: Bool
+        if pitchEditorMode == .melodyne {
+            ok = nc_clip_export_note_edits(handle, clipId, tmp, &err, err.count)
+        } else {
+            let src = timeMapAnchors.map { $0.x }, dst = timeMapAnchors.map { $0.y }
+            ok = src.withUnsafeBufferPointer { sp in dst.withUnsafeBufferPointer { dp in
+                nc_clip_export_time_map(handle, clipId, pitchEditTimeRatio, pitchEditSemitones,
+                                        sp.baseAddress, dp.baseAddress, Int32(src.count), tmp, &err, err.count)
+            }}
+        }
+        guard ok else { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("preview: \(m)") }; return }
+        pitchPreviewSound = NSSound(contentsOfFile: tmp, byReference: true)
+        pitchPreviewSound?.play()
+    }
+
+    func stopPitchPreview() { pitchPreviewSound?.stop() }
+
+    /// Percussive timing: record a transient's new position (dragged horizontally).
+    func setTransientTime(_ index: Int, _ seconds: Double) {
+        guard index >= 0, index < pitchNotes.count else { return }
+        percussiveTimeEdits[index] = min(pitchEditorClipDuration, max(0, seconds))
+    }
+
+    /// Apply percussive timing edits as a time-remap: each moved transient becomes a (source→dest)
+    /// anchor, so the audio slides its hits to the new positions. One render, like the other modes.
+    func applyPercussiveTiming() {
+        guard let handle, let clipId = pitchEditorClipId, !percussiveTimeEdits.isEmpty else { return }
+        var pairs: [(Double, Double)] = []
+        for (idx, newT) in percussiveTimeEdits where idx < pitchNotes.count {
+            let src = pitchNotes[idx].startSeconds / pitchEditorClipDuration
+            let dst = newT / pitchEditorClipDuration
+            pairs.append((min(0.98, max(0.02, src)), min(0.98, max(0.02, dst))))
+        }
+        guard !pairs.isEmpty else { return }
+        pairs.sort { $0.0 < $1.0 }
+        let s = pairs.map { $0.0 }, d = pairs.map { $0.1 }
+        var err = [CChar](repeating: 0, count: 256)
+        let ok = s.withUnsafeBufferPointer { sp in d.withUnsafeBufferPointer { dp in
+            nc_clip_apply_time_map(handle, clipId, 1.0, 0.0, sp.baseAddress, dp.baseAddress, Int32(s.count), 0, &err, err.count)
+        }}
+        if ok { reloadClips(); refreshHistory(); closePitchEditor() }
+        else { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("percussive timing: \(m)") } }
+    }
+
+    func closePitchEditor() { pitchPreviewSound?.stop(); pitchEditorClipId = nil; pitchNotes = []; percussiveTimeEdits = [:] }
+
     /// The monitor listen state, mirroring the engine's `monitorStationListenMode`
     /// ("LR"/"L"/"R"/"M"/"S") plus mono and phase inverts. Not four exclusive modes:
     /// the buttons cycle, the way the old UI's monitor station did.
@@ -923,20 +1591,36 @@ final class EngineController: ObservableObject {
     }
     @Published private(set) var speakerSets: [SpeakerSet] = []
     @Published private(set) var activeSpeakerSlot = 0
-    @Published private(set) var monitorVolumeDb: Float = -6
+    @Published private(set) var monitorVolumeDb: Float = -12
     @Published private(set) var monitorListen = MonitorListen()
     @Published private(set) var monitorDim = false
     @Published private(set) var monitorMono = false
     @Published private(set) var monitorMute = false
     @Published private(set) var monitorTalkback = false
-    /// Monitor the DAW master (false, default) or the computer's input source (true).
+    /// Talkback destination: "listen_room" (default), "monitor_bus", or "all".
+    @Published private(set) var talkbackRoute = "listen_room"
+    /// Which input channel (1-based) the talkback mic is on (e.g. ch2 when ch1 is the singer).
+    @Published private(set) var talkbackChannel = 1
+    /// System-wide keypad capture: drive monitor volume / transport from the numeric keypad even
+    /// when another app is frontmost. Needs the Accessibility permission. Persisted per machine.
+    @Published private(set) var keypadCaptureEnabled = false
+    private let keypadCapture = GlobalKeypadCapture()
+    /// A/B *listening* state: false = hearing the DAW master, true = hearing the reference tap
+    /// (other apps). Only meaningful while `referenceArmed` is on.
     @Published private(set) var monitorListenSource = false
+    /// Reference-hold: the process tap is armed and the tapped apps are muted at their own output,
+    /// so switching to the master never leaks their sound out of the computer. Left-clicking "다른 앱"
+    /// arms it and A/Bs; right-clicking → 레퍼런스 종료 disarms and unmutes the apps.
+    @Published private(set) var referenceArmed = false
     @Published private(set) var monitorDspEnabled = true
     @Published private(set) var monitorPathMode = "internal"
 
     /// Output mode is a UI concept — the engine models speaker vs headphone as
-    /// which simulation module is enabled.
-    @Published var outputMode: OutputMode = .speaker
+    /// which simulation module is enabled. Switching it re-derives the single monitor EQ
+    /// (headphone drops the speaker model curve; speaker restores it).
+    @Published var outputMode: OutputMode = .speaker {
+        didSet { if oldValue != outputMode { syncMonitorEqToContext() } }
+    }
 
     struct OutputDevice: Identifiable, Hashable { let id: String; let name: String }
     @Published private(set) var outputDevices: [OutputDevice] = []
@@ -1009,6 +1693,22 @@ final class EngineController: ObservableObject {
     // The remote DSP node address the engine streams to (External/NDS target).
     @Published var remoteDspHost = "studio.local"
     @Published private(set) var remoteDspRoundTripMs: Double = 0
+    // The "use this node" master switch (whether the external node participates at all).
+    @Published private(set) var externalDspEnabled = true
+    // Discovered/queried node hardware, shown in the Remote Core panel. Populated on 검색/refresh.
+    struct RemoteNodeSpecs: Equatable {
+        var model = ""
+        var cpuModel = ""
+        var cpuMhz: Double = 0
+        var memoryMb = 0
+        var coreCount = 0
+        var roundTripMs: Double = 0
+    }
+    @Published private(set) var remoteNodeSpecs: RemoteNodeSpecs? = nil
+
+    // Stem separation (Demucs helper subprocess). progress nil = idle, 0…1 = running.
+    @Published private(set) var stemSeparationProgress: Double? = nil
+    @Published private(set) var stemSeparationStatus: String = ""
 
     /// Inserts the engine is actually running, summed across paths. This is the
     /// only honest signal that a plug-in loaded rather than merely being listed.
@@ -1033,6 +1733,19 @@ final class EngineController: ObservableObject {
     private var midiPumpTimer: Timer?
     private let midiPumpInterval = 1.0 / 240.0
     private var keyMonitor: Any?
+    /// >0 while one or more NSMenus (context menus, `Menu`s, the menu bar) are tracking. While a
+    /// menu is open the 30 Hz telemetry publish is paused so the heavy engine-observing views
+    /// (esp. MonitorDock) don't re-render and tear the open NSMenu down — which made submenus
+    /// flicker and refuse to expand. Cosmetic meters resume the instant the menu closes.
+    private var menuTrackingDepth = 0
+    private var menuTrackingObservers: [Any] = []
+    private var menuTrackingActive: Bool { menuTrackingDepth > 0 }
+    // Talkback keypad key = console key: a quick TAP latches it on (tap again = off), a HOLD is
+    // momentary (talk while held). These track the press so key-up can tell tap from hold.
+    private var talkbackKeyDownTime: Double = 0
+    private var talkbackKeyLatched = false
+    private var talkbackKeyConsumed = false      // a key-down that turned a latch off; key-up ignores it
+    private let talkbackTapSeconds = 0.30
 
     /// Listen Room drives its own relay process but reads engine state, so it
     /// borrows the handle and rides this controller's tick.
@@ -1086,6 +1799,12 @@ final class EngineController: ObservableObject {
         let ok = nc_engine_start(handle, &errorBuffer, errorBuffer.count)
         if !ok {
             startupError = String(cString: errorBuffer)
+            Diagnostics.shared.reportError("engine start failed: \(startupError ?? "")")
+        } else {
+            // The device that actually opened — logged deterministically (not via stderr piping) so
+            // silence reports always name the interface the engine reached.
+            let dev = readString { nc_active_output_device_name(handle, $0, $1) }
+            Diagnostics.shared.log("engine started — output device: \(dev.isEmpty ? "(system default)" : dev)")
         }
 
         projectName = readString { nc_project_name(handle, $0, $1) }
@@ -1103,6 +1822,7 @@ final class EngineController: ObservableObject {
         nc_history_reset(handle)
         refreshHistory()
         installKeyMonitor()
+        installMenuTrackingObserver()
         installPluginEditorTransportObserver()
 
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
@@ -1131,10 +1851,45 @@ final class EngineController: ObservableObject {
     /// equivalents — all 308 of its menu items carry an empty keyEquivalent. Menu
     /// shortcuts do not reach this window reliably, so do the same here.
     private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self else { return event }
-            return MainActor.assumeIsolated { self.handleKeyDown(event) }
+            return MainActor.assumeIsolated {
+                event.type == .keyUp ? self.handleKeyUp(event) : self.handleKeyDown(event)
+            }
         }
+    }
+
+    /// Key release for the Talk shortcut: a quick TAP latches talkback on (stays lit); a HOLD is
+    /// momentary, so releasing after holding drops it. (A press that turned a latch off is consumed.)
+    private func handleKeyUp(_ event: NSEvent) -> NSEvent? {
+        guard monitorShortcutsEnabled,
+              NSApp.keyWindow?.firstResponder is NSTextView == false,
+              monitorShortcutAction(forKeyCode: event.keyCode) == .talk else { return event }
+        if talkbackKeyConsumed { talkbackKeyConsumed = false; return nil }
+        if CACurrentMediaTime() - talkbackKeyDownTime < talkbackTapSeconds {
+            talkbackKeyLatched = true            // tap → latch on (stays engaged)
+        } else {
+            talkbackKeyLatched = false
+            if monitorTalkback { setTalkbackEngaged(false) }   // hold → release
+        }
+        return nil
+    }
+
+    /// Track NSMenu open/close so `tick()` can pause telemetry while a menu is up. A counter
+    /// (not a bool) because a context menu and its submenu each post their own begin/end.
+    private func installMenuTrackingObserver() {
+        guard menuTrackingObservers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        let begin = nc.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.menuTrackingDepth += 1 }
+        }
+        let end = nc.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.menuTrackingDepth = max(0, self.menuTrackingDepth - 1)
+            }
+        }
+        menuTrackingObservers = [begin, end]
     }
 
     /// An out-of-process plugin editor's window steals key events, so its host process
@@ -1168,14 +1923,16 @@ final class EngineController: ObservableObject {
         static let d: UInt16 = 2
         static let m: UInt16 = 46
         static let t: UInt16 = 17
+        static let r: UInt16 = 15               // Pro Tools single-key zoom out (horizontal)
         static let h: UInt16 = 4
         static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
         static let leftBracket: UInt16 = 33    // [  — Pro Tools zoom out
         static let rightBracket: UInt16 = 30   // ]  — Pro Tools zoom in
-        static let enter: UInt16 = 36          // Return — Pro Tools memory location (marker)
+        static let enter: UInt16 = 36          // Return — Pro Tools: return the playhead to start
         static let f: UInt16 = 3               // Pro Tools zoom-to-fit
+        static let tab: UInt16 = 48            // Pro Tools: Tab → next clip/region/marker boundary
     }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -1185,6 +1942,28 @@ final class EngineController: ObservableObject {
         }
         // Timeline edits carry no modifier, the way every DAW does it.
         if !event.modifierFlags.contains(.command) {
+            // The monitor-shortcut layer (numeric keypad) wins over the normal no-modifier keys
+            // while it is engaged — e.g. keypad Enter drives Talk instead of dropping a marker.
+            if monitorShortcutsEnabled, let action = monitorShortcutAction(forKeyCode: event.keyCode) {
+                // Swallow auto-repeat: a held key must not fire the action over and over (that
+                // machine-gunned talkback on/off — Dim in/out — and pumped the monitor level).
+                if event.isARepeat { return nil }
+                if action == .talk {
+                    if talkbackKeyLatched && monitorTalkback {
+                        talkbackKeyLatched = false        // a press on a latched key turns it off
+                        setTalkbackEngaged(false)
+                        talkbackKeyConsumed = true        // key-up does nothing for this press
+                    } else {
+                        talkbackKeyLatched = false
+                        setTalkbackEngaged(true)          // engage; key-up decides tap(latch) vs hold(release)
+                        talkbackKeyDownTime = CACurrentMediaTime()
+                        talkbackKeyConsumed = false
+                    }
+                } else {
+                    performMonitorShortcut(action)
+                }
+                return nil
+            }
             switch event.keyCode {
             case KeyCode.space:
                 // The transport toggle, the way the spacebar works in every DAW. It has
@@ -1192,9 +1971,27 @@ final class EngineController: ObservableObject {
                 // holds focus.
                 togglePlay()
                 return nil
+            case KeyCode.t:
+                // Modern Pro Tools single-key horizontal zoom: T in, R out (no modifier).
+                // ⌘] / ⌘[ still do the same (handled in the command block below).
+                zoomTimeline(by: 0.5)
+                return nil
+            case KeyCode.r:
+                zoomTimeline(by: 2.0)
+                return nil
             case KeyCode.enter:
-                // Pro Tools: Return drops a memory location (marker) at the playhead.
-                addMarkerAtPlayhead()
+                // Pro Tools: Return returns the playhead to the session start. (Markers are ⌘M.)
+                seek(0)
+                return nil
+            case KeyCode.tab:
+                // Pro Tools Tab-to-boundary: jump the playhead to the next edit point (clip/region
+                // edge or marker); ⇧Tab to the previous one. Consumed so Tab does not shift focus.
+                let boundaries = editBoundaries()
+                if event.modifierFlags.contains(.shift) {
+                    seek(boundaries.last(where: { $0 < playheadSeconds - 0.0005 }) ?? 0)
+                } else if let next = boundaries.first(where: { $0 > playheadSeconds + 0.0005 }) {
+                    seek(next)
+                }
                 return nil
             case KeyCode.b where selectedRegionId != nil:
                 splitRegionAtPlayhead(selectedRegionId!)
@@ -1206,6 +2003,12 @@ final class EngineController: ObservableObject {
                 healSelectedClips()
                 return nil
             case KeyCode.delete, KeyCode.forwardDelete:
+                // With the piano roll open and notes picked, Delete removes those notes
+                // (Logic/Cubase) — checked before the region so it never drops the whole part.
+                if editingRegionId != nil, !selectedNoteIds.isEmpty {
+                    deleteSelectedNotes()
+                    return nil
+                }
                 if selectedConductor != nil {
                     deleteSelectedConductor()
                     return nil
@@ -1280,10 +2083,14 @@ final class EngineController: ObservableObject {
     }
 
     func shutdown() {
+        releaseKeypadCapture()   // return the keypad to the system
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
         }
         keyMonitor = nil
+        menuTrackingObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        menuTrackingObservers.removeAll()
+        menuTrackingDepth = 0
         timer?.invalidate()
         timer = nil
         midiPumpTimer?.invalidate()
@@ -1337,33 +2144,322 @@ final class EngineController: ObservableObject {
         transportWallClockStart = CACurrentMediaTime()
     }
 
-    /// Record. For a record-armed instrument/MIDI track this now captures the live keyboard
-    /// into a MIDI region: pressing Record rolls the transport and opens a take at the
-    /// playhead; pressing it again (or Stop) commits the take. Audio input capture to disk is
-    /// still unbuilt, so an armed AUDIO track only flips the monitor path.
+    private var auditionStopWork: DispatchWorkItem?
+    private var savedLoopForAudition: (enabled: Bool, start: Double, end: Double)?
+    /// Pre-/post-roll around an audition (seconds of lead-in and tail). User-adjustable in the editor.
+    @Published var auditionRollSeconds: Double = 1.5
+
+    /// Audition a fade/crossfade: play from `roll` before it to `roll` after it. With `loop`, it uses
+    /// the ENGINE's loop range (rock-solid — the old self-rescheduling timer stopped at content end
+    /// before looping) and restores the user's loop on stop. Non-loop plays once and stops.
+    /// End of the last audio clip / MIDI region — the engine stops here, so a loop end past it never
+    /// wraps (it just plays once and stops). The audition loop clamps to this.
+    private var projectContentEnd: Double {
+        var e = 0.0
+        for c in clips { e = max(e, c.startSeconds + c.durationSeconds) }
+        for r in midiRegions { e = max(e, r.startSeconds + r.durationSeconds) }
+        return e
+    }
+
+    func auditionRegion(from start: Double, to end: Double, loop: Bool) {
+        guard let handle, end > start else { return }
+        let roll = max(0, auditionRollSeconds)
+        let from = max(0, start - roll)
+        // Clamp the tail to the content end, else the engine reaches the end of audio and STOPS
+        // instead of wrapping — so the loop only ever plays once (the reported bug).
+        let contentEnd = projectContentEnd
+        let to = contentEnd > end ? min(end + roll, contentEnd) : end + roll
+        auditionStopWork?.cancel(); auditionStopWork = nil
+
+        if loop {
+            if savedLoopForAudition == nil {
+                savedLoopForAudition = (loopEnabled, loopStartSeconds, loopEndSeconds)
+            }
+            nc_project_set_loop_range(handle, from, to)
+            nc_project_set_loop_enabled(handle, true)
+            loopEnabled = true; loopStartSeconds = from; loopEndSeconds = to
+            seek(from)
+            setTransport(running: true)
+        } else {
+            seek(from)
+            setTransport(running: true)
+            let work = DispatchWorkItem { [weak self] in self?.stopAudition() }
+            auditionStopWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + (to - from), execute: work)
+        }
+    }
+
+    func stopAudition() {
+        auditionStopWork?.cancel(); auditionStopWork = nil
+        setTransport(running: false)
+        if let handle, let saved = savedLoopForAudition {
+            nc_project_set_loop_range(handle, saved.start, saved.end)
+            nc_project_set_loop_enabled(handle, saved.enabled)
+            loopEnabled = saved.enabled; loopStartSeconds = saved.start; loopEndSeconds = saved.end
+            savedLoopForAudition = nil
+        }
+    }
+
+    /// Sorted timeline edit points — every clip and MIDI-region start/end plus every marker, and 0 —
+    /// for Pro Tools Tab-to-boundary navigation.
+    private func editBoundaries() -> [Double] {
+        var pts: Set<Double> = [0]
+        for c in clips { pts.insert(c.startSeconds); pts.insert(c.startSeconds + c.durationSeconds) }
+        for r in midiRegions { pts.insert(r.startSeconds); pts.insert(r.startSeconds + r.durationSeconds) }
+        for m in markers { pts.insert(m.timeSeconds) }
+        return pts.sorted()
+    }
+
+    /// Is a background audio capture pass running (transport rolling with an armed audio track)?
+    private var audioRecordingActive = false
+    /// Was Record pressed at least once during this pass? Only then is the take kept at Stop.
+    private var recordCommitted = false
+    /// Where the background capture began (transport roll). The file holds the whole pass from here;
+    /// each punch region becomes its own clip that references a window of the file.
+    private var recordCaptureStartSeconds: Double = 0
+    private var recordTrackId: Int? = nil               // the armed audio track punches commit to
+    /// A punch region: timeline seconds + peak-bucket range (for the visible waveform slice).
+    private struct PunchRegion { var inSec: Double; var outSec: Double; var inBucket: Int; var outBucket: Int }
+    private var recordRegions: [PunchRegion] = []       // completed (punched in AND out)
+    private var currentPunchInSeconds: Double? = nil    // the in-progress region (punched in, not out)
+    private var currentPunchInBucket = 0
+    /// Full capture peaks (from captureStart) accumulated incrementally; each clip slices its window.
+    private var captureLivePeaksL: [Float] = []
+    private var captureLivePeaksR: [Float] = []
+    private var recordingPeaksConsumed = 0
+
+    /// A live recording clip drawn on the timeline (one per punch region + the growing one).
+    struct RecordingClip: Equatable {
+        let trackId: Int
+        let startSeconds: Double
+        let durationSeconds: Double
+        let peaksL: [Float]
+        let peaksR: [Float]
+    }
+    @Published private(set) var recordingClips: [RecordingClip] = []
+    @Published private(set) var recordingChannels: Int = 2
+
+    /// Record. A record-armed instrument/MIDI track captures the live keyboard into a MIDI region;
+    /// a record-armed AUDIO track captures its input (a hardware pair, or the "다른 앱" reference
+    /// tap) to a WAV and drops a clip at the playhead when stopped. Both can run at once.
     func toggleRecording() {
         guard let handle else { return }
         recording.toggle()
         nc_engine_set_recording(handle, recording)
         if recording {
+            // Audio (Pro Tools style): rolling the transport already started an INVISIBLE background
+            // capture; pressing Record PUNCHES IN — the visible clip starts here, while the file
+            // already holds the pre-roll captured since playback began.
+            if !transportRunning { setTransport(running: true) }   // begins the background capture
+            if !audioRecordingActive { beginAudioCapture() }        // if transport was already rolling
+            if audioRecordingActive, currentPunchInSeconds == nil {
+                recordCommitted = true
+                currentPunchInSeconds = playheadSeconds            // open a new punch region
+                currentPunchInBucket = captureLivePeaksL.count
+                // Auto-input: hear the live tap source ONLY while punched in.
+                if recordingTapSource { nc_monitor_set_tap_input_monitor(handle, true) }
+                lastError = "녹음 (펀치 인)…"
+            }
             // Begin a MIDI take on the first armed instrument/MIDI track (or the selected one)
             // and roll the transport so the playhead advances under the recorded notes.
             let target = tracks.first { $0.recordArmed && ($0.kind == .instrument || $0.kind == .midi) }
                 ?? tracks.first { $0.id == selectedTrackId && ($0.kind == .instrument || $0.kind == .midi) }
             if let target {
-                if !transportRunning { setTransport(running: true) }
-                nc_midi_record_begin(handle, Int32(target.id), playheadSeconds)
-                lastError = "\(target.name)에 MIDI 녹음 중…"
+                let recordAt = playheadSeconds
+                if countInBars > 0 {
+                    // Count-in: roll from N bars back with the click, and open the take only when
+                    // the playhead reaches the record point (serviceCountIn watches for it).
+                    countInRestoreClick = clickEnabled
+                    if !clickEnabled {
+                        clickEnabled = true
+                        nc_engine_set_metronome_enabled(handle, true)
+                        countInForcedClick = true
+                    }
+                    pendingRecord = (trackId: target.id, atSeconds: recordAt)
+                    let secondsPerBar = (60.0 / Double(max(1, tempoBpm))) * Double(max(1, timeSignature.numerator))
+                    seek(max(0, recordAt - Double(countInBars) * secondsPerBar))
+                    setTransport(running: true)
+                    lastError = "카운트인 \(countInBars)마디…"
+                } else {
+                    if !transportRunning { setTransport(running: true) }
+                    nc_midi_record_begin(handle, Int32(target.id), recordAt)
+                    reloadMidiRegions()   // show the (empty) take region the moment recording starts
+                    lastError = "\(target.name)에 MIDI 녹음 중…"
+                }
             } else {
                 lastError = "MIDI 녹음하려면 악기/MIDI 트랙을 레코드-암 하세요. (오디오 입력 녹음은 미구현)"
             }
         } else {
+            // Record OFF is a punch-out: close the current region as a fixed clip, but keep capturing
+            // in the background so a later punch-in starts a NEW clip (each region is kept).
+            if audioRecordingActive, let pin = currentPunchInSeconds {
+                recordRegions.append(PunchRegion(inSec: pin, outSec: playheadSeconds,
+                                                 inBucket: currentPunchInBucket, outBucket: captureLivePeaksL.count))
+                currentPunchInSeconds = nil
+                nc_monitor_set_tap_input_monitor(handle, false)   // punch-out: back to hearing the tape
+            }
             commitMidiRecording()
         }
     }
 
+    private func slicePeaks(_ arr: [Float], _ from: Int, _ to: Int) -> [Float] {
+        let a = max(0, min(from, arr.count))
+        let b = max(a, min(to, arr.count))
+        return Array(arr[a..<b])
+    }
+
+    /// Start a background audio capture on the first record-armed audio track for this play pass.
+    /// Runs whenever the transport rolls with a track armed — even if Record was never pressed — so
+    /// the audio around a punch-in is retained. Discarded at Stop unless Record committed it.
+    func beginAudioCapture() {
+        guard let handle, !audioRecordingActive,
+              let armed = tracks.first(where: { $0.recordArmed && $0.kind == .audio }) else { return }
+        recordCaptureStartSeconds = playheadSeconds
+        audioRecordingActive = nc_engine_begin_audio_record(handle)
+        if audioRecordingActive {
+            recordCommitted = false
+            recordTrackId = armed.id
+            recordRegions = []
+            currentPunchInSeconds = nil
+            recordingClips = []                    // invisible until Record punches in
+            captureLivePeaksL = []
+            captureLivePeaksR = []
+            recordingPeaksConsumed = 0
+            recordingChannels = max(1, min(2, Int(nc_recording_channels(handle))))
+        }
+    }
+
+    /// The track a punch-in commits to (the first record-armed audio track).
+    private var armedAudioTrackId: Int? { tracks.first(where: { $0.recordArmed && $0.kind == .audio })?.id }
+
+    /// End a background capture pass at Stop: if Record was pressed at least once, save the WAV and
+    /// drop the clip (the whole captured pass is retained on disk); otherwise discard it silently.
+    func endAudioCapturePass() {
+        guard let handle, audioRecordingActive else { return }
+        audioRecordingActive = false
+        // Close any region still open at Stop (punched in, never punched out).
+        if let pin = currentPunchInSeconds {
+            recordRegions.append(PunchRegion(inSec: pin, outSec: playheadSeconds,
+                                             inBucket: currentPunchInBucket, outBucket: captureLivePeaksL.count))
+            currentPunchInSeconds = nil
+        }
+        let committed = recordCommitted
+        let regions = recordRegions
+        let captureStart = recordCaptureStartSeconds
+        // Reset all live state.
+        recordCommitted = false
+        recordRegions = []
+        recordingClips = []
+        captureLivePeaksL = []
+        captureLivePeaksR = []
+        recordingPeaksConsumed = 0
+
+        guard committed, !regions.isEmpty else {
+            nc_engine_discard_audio_record(handle)   // played over an armed track but never recorded
+            return
+        }
+        // Save the whole-pass WAV once, then drop one clip per punch region (each references a window
+        // of the same file, so extending any clip reveals the surrounding background audio).
+        var pathBuf = [CChar](repeating: 0, count: 1024)
+        var errBuf = [CChar](repeating: 0, count: 256)
+        guard nc_engine_finish_audio_record(handle, &pathBuf, 1024, &errBuf, 256) else {
+            let msg = String(cString: errBuf)
+            lastError = msg.isEmpty ? "오디오 녹음 저장 실패" : msg
+            return
+        }
+        let path = String(cString: pathBuf)
+        for r in regions {
+            let offset = max(0, r.inSec - captureStart)
+            var clipId = [CChar](repeating: 0, count: 128)
+            var e2 = [CChar](repeating: 0, count: 256)
+            _ = path.withCString { cpath in
+                nc_engine_add_take_clip(handle, cpath, r.inSec, offset, r.outSec - r.inSec, &clipId, 128, &e2, 256)
+            }
+        }
+        reloadClips()
+        reloadTracks()
+        refreshHistory()
+        lastError = "오디오 녹음 완료 (\(regions.count)개 구간)"
+    }
+
+    /// While an audio take is capturing, pull its growing duration + coarse live peaks so the
+    /// timeline can draw the waveform streaming out under the playhead (like the MIDI take region).
+    private func serviceAudioRecordingWaveform(_ handle: OpaquePointer) {
+        guard audioRecordingActive else { return }
+        // Accumulate the WHOLE-pass peaks (from captureStart) incrementally — a small, constant lock.
+        let total = Int(nc_recording_live_peak_count(handle))
+        let newBuckets = total - recordingPeaksConsumed
+        if newBuckets > 0 {
+            var buf = [Float](repeating: 0, count: newBuckets * 2)
+            let got = Int(nc_recording_live_peaks_since(handle, Int32(recordingPeaksConsumed), &buf, Int32(newBuckets)))
+            for i in 0..<got {
+                captureLivePeaksL.append(buf[i * 2])
+                captureLivePeaksR.append(buf[i * 2 + 1])
+            }
+            recordingPeaksConsumed += got
+        }
+        // Build the visible clips: one per completed punch region + the growing current one. Nothing
+        // shows during a plain background pass (no committed regions).
+        guard recordCommitted, let tid = recordTrackId else {
+            if !recordingClips.isEmpty { recordingClips = [] }
+            return
+        }
+        var clips: [RecordingClip] = []
+        for r in recordRegions {
+            clips.append(RecordingClip(trackId: tid, startSeconds: r.inSec,
+                                       durationSeconds: max(0.01, r.outSec - r.inSec),
+                                       peaksL: slicePeaks(captureLivePeaksL, r.inBucket, r.outBucket),
+                                       peaksR: slicePeaks(captureLivePeaksR, r.inBucket, r.outBucket)))
+        }
+        if let pin = currentPunchInSeconds {
+            // Draw the growing clip exactly to the PLAYHEAD, never to the captured-seconds count —
+            // the tap captures on its own (input) clock, which runs slightly ahead of the output
+            // playhead, so using it made the clip overshoot the timeline (worse the longer you punch).
+            let end = max(pin, playheadSeconds)
+            clips.append(RecordingClip(trackId: tid, startSeconds: pin,
+                                       durationSeconds: max(0.01, end - pin),
+                                       peaksL: slicePeaks(captureLivePeaksL, currentPunchInBucket, captureLivePeaksL.count),
+                                       peaksR: slicePeaks(captureLivePeaksR, currentPunchInBucket, captureLivePeaksR.count)))
+        }
+        recordingClips = clips
+    }
+
+    /// Count-in state: the take to open, and whether/what click to restore afterward.
+    private var pendingRecord: (trackId: Int, atSeconds: Double)?
+    private var countInRestoreClick = false
+    private var countInForcedClick = false
+
+    /// During a count-in the transport rolls but no take is open yet. Once the playhead reaches
+    /// the record point, open the take there — the first played note lands exactly on the beat.
+    private func serviceCountIn(_ handle: OpaquePointer) {
+        guard let pending = pendingRecord else { return }
+        guard playheadSeconds >= pending.atSeconds - 0.001 else { return }
+        pendingRecord = nil
+        nc_midi_record_begin(handle, Int32(pending.trackId), pending.atSeconds)
+        reloadMidiRegions()
+        lastError = "MIDI 녹음 중…"
+    }
+
+    /// Restore the click to the user's setting after a count-in that forced it on (whether the
+    /// take recorded or was stopped early).
+    private func endForcedClick() {
+        guard let handle, countInForcedClick else { return }
+        countInForcedClick = false
+        if clickEnabled != countInRestoreClick {
+            clickEnabled = countInRestoreClick
+            nc_engine_set_metronome_enabled(handle, countInRestoreClick)
+        }
+    }
+
+    /// Clear a pending count-in (stop pressed before the record point) and restore the click.
+    private func cancelCountIn() {
+        pendingRecord = nil
+        endForcedClick()
+    }
+
     /// Finish a MIDI take (on stop or record-off) and drop the recorded region on its track.
     private func commitMidiRecording() {
+        cancelCountIn()   // stop during the count-in leaves a pending take + forced click to undo
         guard let handle, nc_midi_record_active(handle) else { return }
         let regionId = readString { nc_midi_record_commit(handle, $0, $1) }
         reloadMidiRegions()
@@ -1395,19 +2491,124 @@ final class EngineController: ObservableObject {
         nc_engine_set_metronome_enabled(handle, clickEnabled)
     }
 
+    /// The click resolution (자동/♩/♪/♬). Re-asserts the enabled state so it takes effect live.
+    /// A manual subdivision change drops out of any genre groove (its pattern no longer fits).
+    func setMetronomeSubdivision(_ subdivision: String) {
+        guard let handle else { return }
+        metronomeSubdivision = subdivision
+        subdivision.withCString { nc_engine_set_metronome_subdivision(handle, $0) }
+        clearMetronomeGenre()
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Applies a groove genre: subdivision + swing + accent pattern in one go (Boss Dr. Beat /
+    /// drum-machine style). "기본" clears the pattern back to the default hierarchy.
+    func setMetronomeGenre(_ id: String) {
+        guard let handle, let genre = Self.metronomeGenres.first(where: { $0.id == id }) else { return }
+        metronomeGenre = id
+        id.withCString { nc_engine_set_metronome_genre(handle, $0) }   // persist the picker's choice
+        metronomeSubdivision = genre.subdivision
+        grooveFeel = genre.feel
+        grooveSwingAmount = genre.swing
+        genre.subdivision.withCString { nc_engine_set_metronome_subdivision(handle, $0) }
+        genre.feel.withCString { nc_engine_set_groove(handle, $0, Float(genre.swing)) }
+        if genre.pattern.isEmpty {
+            nc_engine_set_metronome_pattern(handle, nil, 0)
+        } else {
+            genre.pattern.withUnsafeBufferPointer {
+                nc_engine_set_metronome_pattern(handle, $0.baseAddress, Int32($0.count))
+            }
+        }
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Clears the genre accent pattern (a manual subdivision/swing tweak leaves the preset).
+    private func clearMetronomeGenre() {
+        guard let handle else { return }
+        metronomeGenre = "straight"
+        "straight".withCString { nc_engine_set_metronome_genre(handle, $0) }
+        nc_engine_set_metronome_pattern(handle, nil, 0)
+    }
+
+    /// Reload the metronome UI + live click from an opened project (these persist in the .ndaw). The
+    /// genre id fully determines subdivision / swing / accent pattern, so re-applying it restores
+    /// those live; gain / sound / accent-first are re-asserted directly.
+    private func reloadMetronomeState() {
+        guard let handle else { return }
+        metronomeGain = Double(nc_metronome_gain(handle))
+        metronomeSound = readEngineString { nc_metronome_sound(handle, $0, $1) }
+        metronomeAccentFirst = nc_metronome_accent_first(handle)
+        nc_engine_set_metronome_gain(handle, Float(metronomeGain))
+        metronomeSound.withCString { nc_engine_set_metronome_sound(handle, $0) }
+        nc_engine_set_metronome_accent_first(handle, metronomeAccentFirst)
+        let genre = readEngineString { nc_metronome_genre(handle, $0, $1) }
+        if genre != "straight", Self.metronomeGenres.contains(where: { $0.id == genre }) {
+            setMetronomeGenre(genre)   // restores subdivision / swing / pattern live + in the UI
+        } else {
+            metronomeGenre = genre.isEmpty ? "straight" : genre
+            nc_engine_set_metronome_enabled(handle, clickEnabled)
+        }
+    }
+
+    /// Click level (linear 0..2). Re-asserts enabled so it applies live.
+    func setMetronomeGain(_ gain: Double) {
+        guard let handle else { return }
+        metronomeGain = max(0, min(2, gain))
+        nc_engine_set_metronome_gain(handle, Float(metronomeGain))
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Click timbre (beep/wood/rim/cowbell).
+    func setMetronomeSound(_ sound: String) {
+        guard let handle else { return }
+        metronomeSound = sound
+        sound.withCString { nc_engine_set_metronome_sound(handle, $0) }
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Groove feel + swing amount. Feel "straight" ignores the amount; "shuffle" uses it.
+    /// A manual swing change drops out of any genre groove.
+    func setGroove(feel: String, swingAmount: Double? = nil) {
+        guard let handle else { return }
+        grooveFeel = feel
+        if let swingAmount { grooveSwingAmount = max(0.5, min(0.9, swingAmount)) }
+        feel.withCString { nc_engine_set_groove(handle, $0, Float(grooveSwingAmount)) }
+        clearMetronomeGenre()
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Toggle the downbeat accent (off = an even click, easier to play against).
+    func setMetronomeAccentFirst(_ accent: Bool) {
+        guard let handle else { return }
+        metronomeAccentFirst = accent
+        nc_engine_set_metronome_accent_first(handle, accent)
+        nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    func setCountInBars(_ bars: Int) {
+        countInBars = max(0, min(2, bars))
+    }
+
     private func setTransport(running: Bool) {
         guard let handle else { return }
         // Stopping the transport ends any MIDI take (space/stop, not just the record button).
-        if !running, recording {
-            recording = false
-            nc_engine_set_recording(handle, false)
+        if !running {
+            if recording { recording = false; nc_engine_set_recording(handle, false) }
             commitMidiRecording()
+            endAudioCapturePass()   // commit the take if Record was pressed, else discard the scratch
         }
         if running, !transportRunning { playStartSeconds = playheadSeconds }   // remember for stop
         nc_engine_set_transport_running(handle, running)
         transportRunning = running
         transportWallClockBase = playheadSeconds
         transportWallClockStart = CACurrentMediaTime()
+        // Pro Tools style: once the transport rolls, a record-armed audio track captures in the
+        // background even without Record pressed (kept only if Record commits it before Stop).
+        // Deferred to the next runloop so opening the capture device never stutters the transport
+        // start; when Record triggers this, toggleRecording begins the capture synchronously first.
+        if running {
+            DispatchQueue.main.async { [weak self] in self?.beginAudioCapture() }
+        }
     }
 
     // MARK: - Readouts
@@ -1503,8 +2704,17 @@ final class EngineController: ObservableObject {
                 }
             )
         }
+        // Per-track PDC (samples), so each strip can show how much it's delayed to stay aligned.
+        for i in tracks.indices { tracks[i].delayCompSamples = Int(nc_track_delay_compensation_samples(handle, Int32(tracks[i].id))) }
 
         reloadMasterInserts()
+    }
+
+    /// Show each mixer strip's plugin-delay-compensation readout at its base. Off by default.
+    @Published var showChannelDelayComp = false
+    func setShowChannelDelayComp(_ on: Bool) {
+        showChannelDelayComp = on
+        UserDefaults.standard.set(on, forKey: "nc.showChannelDelayComp")
     }
 
     /// Mixer strips show every track; the master meter panel handles the master bus.
@@ -1815,6 +3025,29 @@ final class EngineController: ObservableObject {
         return true
     }
 
+    /// Save a self-contained COPY (collecting all external media — audio + video) to a chosen
+    /// folder, while continuing to work on the CURRENT document. For archiving or handing a session
+    /// off with everything it references, even media that lives outside the project folder.
+    func saveProjectCopy() {
+        guard let handle else { return }
+        let base = (projectName.isEmpty ? "Untitled" : projectName) + " Copy"
+        guard let (folderURL, ndawURL) = promptForProjectFolder(defaultName: base) else { return }
+        var errorBuffer = [CChar](repeating: 0, count: 256)
+        let copied = nc_project_save_copy(handle, ndawURL.path, &errorBuffer, errorBuffer.count)
+        if copied < 0 {
+            lastError = String(cString: errorBuffer)
+            return
+        }
+        applyProjectFolderIcon(to: folderURL)
+        rememberRecentProject(ndawURL)
+        let info = NSAlert()
+        info.messageText = "복사본으로 저장 완료"
+        info.informativeText = copied > 0
+            ? "자체 완결형 복사본을 저장했습니다 — 작업 폴더 밖의 미디어 \(copied)개를 함께 모았습니다. 현재 작업 문서는 그대로입니다."
+            : "자체 완결형 복사본을 저장했습니다(모든 미디어가 이미 안에 있었습니다). 현재 작업 문서는 그대로입니다."
+        info.runModal()
+    }
+
     /// Brand the project folder with the Neuracoust logo (the bundled app icon), the way
     /// Logic marks its project folders. Best-effort — a failure just leaves the plain
     /// Finder folder icon.
@@ -1966,6 +3199,7 @@ final class EngineController: ObservableObject {
         reloadMarkers()
         reloadMidiRegions()
         reloadMonitorState()
+        reloadMetronomeState()
         refreshHistory()
         // A new/opened engine project resets to its own default edit mode, so re-apply the
         // UI's mode and grid unit — otherwise snapping silently falls back to the 0.1 s
@@ -1990,7 +3224,13 @@ final class EngineController: ObservableObject {
         let fadeOutSeconds: Double
         var fadeInCurve: String = "equal_power"
         var fadeOutCurve: String = "equal_power"
+        var fadeInCurvature: Double = 0.0
+        var fadeOutCurvature: Double = 0.0
         let gainDb: Float
+        // Non-destructive processing state, mirrored into the waveform drawing.
+        var muted: Bool = false
+        var reversed: Bool = false
+        var polarityInverted: Bool = false
     }
 
     @Published private(set) var clips: [Clip] = []
@@ -2009,6 +3249,15 @@ final class EngineController: ObservableObject {
         guard let handle, let clip = clips.first(where: { $0.id == clipId }) else { return }
         _ = clip.fadeInCurve.withCString { i in curve.withCString { c in nc_clip_set_fade_curves(handle, clipId, i, c) } }
         reloadClips(); refreshHistory()
+    }
+
+    /// Continuous fade shape bend from the editor's middle handle. `edge` picks which side; the other
+    /// side's curvature is preserved.
+    func setClipFadeCurvature(_ clipId: String, fadeIn: Bool, _ curvature: Double) {
+        guard let handle, let clip = clips.first(where: { $0.id == clipId }) else { return }
+        let inC = fadeIn ? curvature : clip.fadeInCurvature
+        let outC = fadeIn ? clip.fadeOutCurvature : curvature
+        if nc_clip_set_fade_curvature(handle, clipId, inC, outC) { reloadClips(); refreshHistory() }
     }
 
     /// Peak envelopes keyed by source path, fetched once per file from the engine.
@@ -2077,6 +3326,40 @@ final class EngineController: ObservableObject {
     @Published var showInspector = true
     @Published var showMonitorDock = true
 
+    /// The app is a monitor-station SHELL that hosts the DAW. In compact mode only the monitor
+    /// station shows (a small always-available controller); expanding reveals the full DAW. The
+    /// engine keeps running across the switch, so monitoring/playback never drops. Persisted.
+    @Published var compactMonitorMode: Bool = UserDefaults.standard.bool(forKey: "nc.compactMonitorMode") {
+        didSet { UserDefaults.standard.set(compactMonitorMode, forKey: "nc.compactMonitorMode") }
+    }
+    /// Start in compact monitor mode when launched (used by the login-item auto-launch).
+    @Published var launchInMonitorMode: Bool = UserDefaults.standard.bool(forKey: "nc.launchInMonitorMode") {
+        didSet { UserDefaults.standard.set(launchInMonitorMode, forKey: "nc.launchInMonitorMode") }
+    }
+    func expandToDaw() { compactMonitorMode = false }
+    func collapseToMonitor() { compactMonitorMode = true }
+
+    /// Launch at login (a login item) so the monitor station is always up. Reflects the real
+    /// SMAppService registration state; toggling registers/unregisters the app.
+    @Published var launchAtLogin: Bool = {
+        if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
+        return false
+    }() {
+        didSet { applyLoginItem() }
+    }
+    private func applyLoginItem() {
+        guard #available(macOS 13.0, *) else {
+            lastError = "로그인 항목은 macOS 13 이상에서 지원됩니다."
+            return
+        }
+        do {
+            if launchAtLogin { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            lastError = "로그인 항목 설정 실패: \(error.localizedDescription)"
+        }
+    }
+
     /// Fades and clip gain edit one clip at a time; they hide on a multi-selection.
     var selectedClipId: String? { selectedClipIds.count == 1 ? selectedClipIds.first : nil }
 
@@ -2112,9 +3395,20 @@ final class EngineController: ObservableObject {
 
     /// Zooms about the middle of the view, which is what a button press implies.
     func zoomTimeline(by factor: Double) {
-        let centre = visibleStart + visibleDuration / 2
-        let duration = min(600, max(0.25, visibleDuration * factor))
-        setViewport(start: centre - duration / 2, duration: duration)
+        // Cap the zoomed-out span at 1 h (was 10 min, too small for long songs to fully zoom out).
+        let duration = min(3600, max(0.25, visibleDuration * factor))
+        // Anchor on the SELECTED clip(s) if any, else the playhead — so zoom keeps what you care
+        // about centred instead of the geometric middle of the (possibly far-off) visible span.
+        let sel = clips.filter { selectedClipIds.contains($0.id) }
+        let anchor: Double
+        if !sel.isEmpty {
+            let lo = sel.map { $0.startSeconds }.min() ?? 0
+            let hi = sel.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
+            anchor = (lo + hi) / 2
+        } else {
+            anchor = playheadSeconds
+        }
+        setViewport(start: max(0, anchor - duration / 2), duration: duration)
     }
 
     /// Frames every clip, with a little air after the last one.
@@ -2182,7 +3476,14 @@ final class EngineController: ObservableObject {
                                           selected: selectedClipIds.contains(clip.id),
                                           fadeInSeconds: clip.fadeInSeconds,
                                           fadeOutSeconds: clip.fadeOutSeconds,
-                                          gainDb: clip.gainDb)
+                                          fadeInCurve: clip.fadeInCurve,
+                                          fadeOutCurve: clip.fadeOutCurve,
+                                          fadeInCurvature: clip.fadeInCurvature,
+                                          fadeOutCurvature: clip.fadeOutCurvature,
+                                          gainDb: clip.gainDb,
+                                          muted: clip.muted,
+                                          reversed: clip.reversed,
+                                          polarityInverted: clip.polarityInverted)
             },
             tempoBpm: tempoBpm,
             beatsPerBar: timeSignature.numerator,
@@ -2216,7 +3517,8 @@ final class EngineController: ObservableObject {
             },
             rangeStart: loopStartSeconds,
             rangeEnd: loopEndSeconds,
-            loopEnabled: loopEnabled
+            loopEnabled: loopEnabled,
+            editRangeLane: editRangeLane
         )
     }
 
@@ -2246,6 +3548,21 @@ final class EngineController: ObservableObject {
     func moveClip(_ clipId: String, to startSeconds: Double) {
         guard let handle else { return }
         if nc_clip_move(handle, clipId, startSeconds) { reloadClips() }
+    }
+
+    /// LIVE-DRAG move (not the commit): slide the clip in place without a plan rebuild, so the music
+    /// keeps playing while you drag. commitClipGesture reconciles once on drop.
+    func previewMoveClip(_ clipId: String, to startSeconds: Double) {
+        guard let handle else { return }
+        if nc_clip_update_start(handle, clipId, startSeconds) { reloadClips() }
+    }
+
+    /// LIVE-DRAG multi-clip move (delta), lightweight like previewMoveClip.
+    func previewMoveSelection(by deltaSeconds: Double) {
+        guard let handle, deltaSeconds != 0 else { return }
+        if (withClipIds(selection, { nc_clip_update_start_many(handle, $0, $1, deltaSeconds) }) ?? 0) > 0 {
+            reloadClips()
+        }
     }
 
     /// Option-drag copy: duplicate the clip, drop the copy onto the original's start so
@@ -2326,19 +3643,45 @@ final class EngineController: ObservableObject {
         return newAnchor ?? newIds.first
     }
 
+    // LIVE-DRAG trim: lightweight in-place bounds patch, like previewMoveClip. The heavy rebuild used
+    // to run per frame and stopped the music at the first drag frame; the drop reconciles once
+    // (commitClipGesture "Trim clip").
     func trimClipStart(_ clipId: String, to startSeconds: Double) {
         guard let handle else { return }
-        if nc_clip_trim_start(handle, clipId, startSeconds) { reloadClips() }
+        if nc_clip_update_trim_start(handle, clipId, startSeconds) { reloadClips() }
     }
 
     func trimClipEnd(_ clipId: String, to endSeconds: Double) {
         guard let handle else { return }
-        if nc_clip_trim_end(handle, clipId, endSeconds) { reloadClips() }
+        if nc_clip_update_trim_end(handle, clipId, endSeconds) { reloadClips() }
+    }
+
+    /// Roll edit: drag the shared boundary of two abutting clips. Live in-place (seamless during
+    /// playback); commit once on drop (commitClipGesture "Roll edit").
+    func rollBoundary(_ leftId: String, _ rightId: String, to boundarySeconds: Double) {
+        guard let handle else { return }
+        if nc_clip_roll_boundary(handle, leftId, rightId, boundarySeconds) { reloadClips() }
     }
 
     func setClipFades(_ clipId: String, fadeIn: Double, fadeOut: Double) {
         guard let handle else { return }
         if nc_clip_set_fades(handle, clipId, fadeIn, fadeOut) { reloadClips() }
+    }
+
+    /// Crossfade length = the overlap of two clips. Adjusting it TRIMS THE FRONT CLIP'S END (never
+    /// moves the back clip), so the back clip's audio stays sync-locked in place — extending the front
+    /// clip's tail deeper into the overlap lengthens the crossfade, shortening it retracts. The render
+    /// derives the fades from the overlap, so this alone reshapes the crossfade. One undo step; the
+    /// front clip's source tail bounds how long the crossfade can grow (trim clamps to it).
+    func setCrossfadeLength(_ leftId: String, _ rightId: String, to seconds: Double) {
+        guard let handle,
+              let right = clips.first(where: { $0.id == rightId }) else { return }
+        let maxOverlap = right.durationSeconds   // can't overlap more than the back clip's length
+        let overlap = max(0, min(maxOverlap, seconds))
+        let newLeftEnd = right.startSeconds + overlap
+        if nc_clip_trim_end(handle, leftId, newLeftEnd) {
+            reloadClips(); refreshHistory()
+        }
     }
 
     /// Continuous, for dragging clip gain. Sets the field without a graph rebuild so the
@@ -2380,11 +3723,36 @@ final class EngineController: ObservableObject {
 
     /// Files dropped onto a lane at a point in time. A drop past the last lane (onto
     /// empty space) makes a new audio track and lands the clip there.
+    enum MultiFileLayout { case multitrack, sequential, cancel }
+    /// Dropping several files at once: ask whether to spread them across new tracks or lay them
+    /// end-to-end on one track (the Logic/Pro Tools import prompt).
+    private func askMultiFileLayout(_ count: Int) -> MultiFileLayout {
+        let alert = NSAlert()
+        alert.messageText = "여러 오디오 파일 가져오기 (\(count)개)"
+        alert.informativeText = "선택한 파일들을 어떻게 배치할까요?"
+        alert.addButton(withTitle: "멀티트랙 (파일별 새 트랙)")
+        alert.addButton(withTitle: "한 트랙에 연이어")
+        alert.addButton(withTitle: "취소")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .multitrack
+        case .alertSecondButtonReturn: return .sequential
+        default: return .cancel
+        }
+    }
+
     func dropAudio(onLane laneIndex: Int, atSeconds seconds: Double, urls: [URL]) {
         let audio = urls.filter { nc_audio_import_supported($0.path) }
         guard !audio.isEmpty else {
             lastError = "가져올 수 있는 오디오 파일이 없습니다."
             return
+        }
+        let start = snap(seconds)
+        if audio.count > 1 {
+            switch askMultiFileLayout(audio.count) {
+            case .cancel: return
+            case .multitrack: importAudioMultitrack(at: start, from: audio); return
+            case .sequential: break   // fall through to the single-track sequential import
+            }
         }
         var targetLane = laneIndex
         if trackId(forLane: targetLane) == nil {
@@ -2393,7 +3761,35 @@ final class EngineController: ObservableObject {
             targetLane = laneTracks.count - 1   // the freshly-added track is the last lane
         }
         guard let trackId = trackId(forLane: targetLane) else { return }
-        importAudio(intoTrack: trackId, at: snap(seconds), from: audio)
+        importAudio(intoTrack: trackId, at: start, from: audio)
+    }
+
+    /// One new audio track per file, all starting at the same time — the multitrack import layout.
+    private func importAudioMultitrack(at start: Double, from urls: [URL]) {
+        guard let handle else { return }
+        let choice = askImportAnalysisChoice()          // one analysis decision for the whole batch
+        let analyze = choice != .skip
+        let applyToTimeline = choice == .apply
+        for url in urls {
+            guard nc_audio_import_supported(url.path) else { continue }
+            guard nc_track_add_audio(handle) >= 0 else { return }
+            reloadTracks()
+            guard let trackId = trackId(forLane: laneTracks.count - 1) else { continue }
+            var buffer = [CChar](repeating: 0, count: 512)
+            if !nc_audio_import_analyzed(handle, Int32(trackId), url.path, start, analyze, applyToTimeline,
+                                         &buffer, buffer.count) {
+                lastError = String(cString: buffer)
+            }
+        }
+        reloadTracks()
+        reloadClips()
+        if applyToTimeline {
+            reloadMarkers()
+            tempoBpm = Int(nc_project_tempo_bpm(handle))
+            timeSignature = (Int(nc_project_time_signature_numerator(handle)),
+                             Int(nc_project_time_signature_denominator(handle)))
+        }
+        refreshHistory()
     }
 
     func moveClipToLane(_ clipId: String, laneIndex: Int, startSeconds: Double) {
@@ -2404,8 +3800,8 @@ final class EngineController: ObservableObject {
         guard nc_clip_move_to_track(handle, clipId, Int32(trackId), startSeconds,
                                     &buffer, buffer.count) else { return }
         selectClip(String(cString: buffer))
-        // Overlapping the destination lane's clips crossfades them, same as a same-lane move.
-        applyCrossfadesForSelection()
+        // Overlapping the destination lane's clips crossfades them — the render derives that from
+        // the overlap itself, so there is nothing to bake here.
         reloadClips()
         refreshHistory()
     }
@@ -2557,33 +3953,52 @@ final class EngineController: ObservableObject {
     }
 
     /// Deleting takes the clips with it, so ask first when the track has any.
-    func deleteSelectedTrack() {
-        guard let handle, let trackId = selectedTrackId,
-              let track = tracks.first(where: { $0.id == trackId }) else { return }
+    /// Every track the Delete key targets: the whole multi-track selection (Pro Tools style), minus
+    /// Master/Monitor which the engine refuses. Falls back to the single last-clicked track.
+    private var deletableSelectedTracks: [Track] {
+        var ids = selectedMixerTrackIds
+        if let id = selectedTrackId { ids.insert(id) }
+        // Keep timeline order so the confirm list and any messaging read top-to-bottom.
+        return tracks.filter { ids.contains($0.id) && !$0.kind.isMasterish }
+    }
 
-        // Ask first when the track carries anything — clips, MIDI, an instrument, inserts or
-        // sends — so a Delete-key press never silently discards work. An empty track deletes
-        // straight away.
-        let clipsOnTrack = clips.filter { $0.trackName == track.name }
-        let regionsOnTrack = midiRegions.filter { $0.trackName == track.name }
-        let hasInstrument = !track.instrumentName.isEmpty && track.instrumentName != "No Instrument"
-        let realInserts = track.inserts.filter { !$0.isEmpty }
+    func deleteSelectedTrack() {
+        guard let handle else { return }
+        let targets = deletableSelectedTracks
+        guard !targets.isEmpty else { return }
+
+        // Ask first when any track carries work — clips, MIDI, an instrument, inserts or sends —
+        // so a Delete never silently discards it. Empty tracks delete straight away. One dialog
+        // covers the whole selection.
         var parts: [String] = []
-        if !clipsOnTrack.isEmpty { parts.append("클립 \(clipsOnTrack.count)개") }
-        if !regionsOnTrack.isEmpty { parts.append("MIDI 리전 \(regionsOnTrack.count)개") }
-        if hasInstrument { parts.append("악기 \(track.instrumentName)") }
-        if !realInserts.isEmpty { parts.append("인서트 \(realInserts.count)개") }
-        if !track.sends.isEmpty { parts.append("센드 \(track.sends.count)개") }
+        let clipCount = targets.reduce(0) { acc, t in acc + clips.filter { $0.trackName == t.name }.count }
+        let regionCount = targets.reduce(0) { acc, t in acc + midiRegions.filter { $0.trackName == t.name }.count }
+        let instrumentCount = targets.filter { !$0.instrumentName.isEmpty && $0.instrumentName != "No Instrument" }.count
+        let insertCount = targets.reduce(0) { acc, t in acc + t.inserts.filter { !$0.isEmpty }.count }
+        let sendCount = targets.reduce(0) { acc, t in acc + t.sends.count }
+        if clipCount > 0 { parts.append("클립 \(clipCount)개") }
+        if regionCount > 0 { parts.append("MIDI 리전 \(regionCount)개") }
+        if instrumentCount > 0 { parts.append("악기 \(instrumentCount)개") }
+        if insertCount > 0 { parts.append("인서트 \(insertCount)개") }
+        if sendCount > 0 { parts.append("센드 \(sendCount)개") }
         if !parts.isEmpty {
             let alert = NSAlert()
-            alert.messageText = "\(track.name) 트랙을 삭제할까요?"
-            alert.informativeText = "이 트랙의 " + parts.joined(separator: ", ") + "도 함께 삭제됩니다."
+            alert.messageText = targets.count == 1
+                ? "\(targets[0].name) 트랙을 삭제할까요?"
+                : "선택한 \(targets.count)개 트랙을 삭제할까요?"
+            let names = targets.map { $0.name }.joined(separator: ", ")
+            alert.informativeText = (targets.count == 1 ? "이 트랙의 " : "\(names) 트랙의 ")
+                + parts.joined(separator: ", ") + "도 함께 삭제됩니다."
             alert.addButton(withTitle: "삭제")
             alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
 
-        guard nc_track_delete(handle, Int32(trackId), true) else {
+        let ids = targets.map { Int32($0.id) }
+        let deleted = ids.withUnsafeBufferPointer { buf in
+            nc_track_delete_many(handle, buf.baseAddress, Int32(buf.count), true)
+        }
+        guard deleted else {
             lastError = "이 트랙은 삭제할 수 없습니다"
             return
         }
@@ -2595,11 +4010,9 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
-    /// Master and Monitor refuse deletion in the engine; do not offer it.
+    /// Master and Monitor refuse deletion in the engine; enable Delete when any selected track can go.
     var canDeleteSelectedTrack: Bool {
-        guard let trackId = selectedTrackId,
-              let track = tracks.first(where: { $0.id == trackId }) else { return false }
-        return !track.kind.isMasterish
+        !deletableSelectedTracks.isEmpty
     }
 
     func commitClipGesture(_ stepName: String) {
@@ -2617,21 +4030,17 @@ final class EngineController: ObservableObject {
                 break
             }
         }
-        // Overlapping a clip onto a same-track neighbour becomes a crossfade, folded into
-        // this one move step (Pro Tools' auto-crossfade on overlap). Applies to a multi-clip
-        // drag ("Move clips") too, not just a single clip, so dragging two selected clips to
-        // overlap crossfades them.
-        if stepName == "Move clip" || stepName == "Move clips" { applyCrossfadesForSelection() }
+        // Overlapping a clip onto a same-track neighbour becomes a crossfade — but that is now
+        // derived by the render from the overlap itself (Pro Tools / Cubase / Logic: pull the clips
+        // apart and the crossfade is gone), so the drop only has to canonicalize the playlist.
+        // Move AND trim both slid/stretched the clip in place during the drag (no reconcile per frame).
+        // Canonicalize the playlist + render once now, on drop — seamless (updateProject preserves the
+        // continuous-playback buffers), so no click.
+        if stepName == "Move clip" || stepName == "Move clips" || stepName == "Trim clip"
+            || stepName == "Roll edit" {
+            if let handle { nc_project_reconcile(handle) }
+        }
         recordGesture(stepName)
-    }
-
-    /// Auto-crossfade any same-track overlaps created by the moved selection. Reloads once;
-    /// records no step of its own so it merges into the caller's gesture.
-    private func applyCrossfadesForSelection() {
-        guard let handle else { return }
-        var changed = false
-        for id in selectedClipIds where nc_clip_apply_crossfades(handle, id) { changed = true }
-        if changed { reloadClips() }
     }
 
     // MARK: Clipboard
@@ -2683,6 +4092,27 @@ final class EngineController: ObservableObject {
         refreshClipboard()
     }
 
+    /// Consolidate the selected clips (Pro Tools ⌥⇧3): bake each track's selection — gain, fades and
+    /// crossfades — into one new audio file and replace them with a single clip. Handles overlapping
+    /// crossfaded clips that Glue can't join.
+    func consolidateSelection() {
+        guard let handle, !selection.isEmpty else { lastError = "합칠 클립을 선택하세요."; return }
+        var errBuf = [CChar](repeating: 0, count: 256)
+        let ok = withClipIds(selection) { ptr, count in
+            nc_clip_consolidate(handle, ptr, count, &errBuf, 256)
+        } ?? false
+        if ok {
+            selectedClipIds = []
+            reloadClips()
+            reloadTracks()
+            refreshHistory()
+            lastError = "통합 완료"
+        } else {
+            let msg = String(cString: errBuf)
+            lastError = msg.isEmpty ? "통합 실패" : msg
+        }
+    }
+
     func cutSelectedClips() {
         guard let handle else { return }
         guard let cut = withClipIds(selection, { nc_clip_cut_many(handle, $0, $1) }), cut > 0 else { return }
@@ -2730,18 +4160,21 @@ final class EngineController: ObservableObject {
     /// clips' span, or the edit range if nothing is selected.
     func healSelectedClips() {
         guard let handle else { return }
-        let selected = clips.filter { selectedClipIds.contains($0.id) }
-        let start: Double
-        let end: Double
-        if selected.isEmpty {
-            guard hasEditRange else { return }
-            start = loopStartSeconds
-            end = loopEndSeconds
-        } else {
-            start = selected.map { $0.startSeconds }.min() ?? 0
-            end = selected.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
+        // Explicit clip selection: glue ONLY those clips to each other. Using a span here would let the
+        // span's own end boundaries catch the unselected neighbours that abut them (the "gluing 2 clips
+        // swallowed the ones before and after" bug). The range path is only for a bare edit range.
+        if !selectedClipIds.isEmpty {
+            let ids = clips.filter { selectedClipIds.contains($0.id) }.map { $0.id }
+            guard ids.count >= 2 else { return }
+            let healed = withClipIds(ids) { nc_clip_glue_selection(handle, $0, $1) } ?? 0
+            if healed > 0 {
+                reloadClips()
+                refreshHistory()
+            }
+            return
         }
-        if nc_clip_glue_range(handle, start, end) > 0 {
+        guard hasEditRange else { return }
+        if nc_clip_glue_range(handle, loopStartSeconds, loopEndSeconds) > 0 {
             reloadClips()
             refreshHistory()
         }
@@ -2749,12 +4182,9 @@ final class EngineController: ObservableObject {
 
     func deleteSelectedClips() {
         guard let handle else { return }
-        // Shuffle mode ripples: deleting closes the gap and pulls later clips left.
+        // Shuffle mode ripples the deleted clip's OWN track left (Pro Tools default), not every track.
         if editMode == .shuffle, !selection.isEmpty {
-            let sel = clips.filter { selectedClipIds.contains($0.id) }
-            let start = sel.map { $0.startSeconds }.min() ?? 0
-            let end = sel.map { $0.startSeconds + $0.durationSeconds }.max() ?? 0
-            if nc_clip_shuffle_delete_range(handle, start, end) > 0 {
+            if let deleted = withClipIds(selection, { nc_clip_shuffle_delete_many(handle, $0, $1) }), deleted > 0 {
                 selectedClipIds = []
                 reloadClips()
                 refreshHistory()
@@ -2808,7 +4238,38 @@ final class EngineController: ObservableObject {
 
     @Published private(set) var midiRegions: [MidiRegion] = []
     /// The region open in the piano roll, or nil while it is closed.
-    @Published var editingRegionId: String?
+    @Published var editingRegionId: String? {
+        didSet { if editingRegionId != oldValue { selectedNoteIds = [] } }
+    }
+    /// Notes selected in the piano roll (the highlighted ones the velocity field edits).
+    /// Cleared whenever the open region changes.
+    @Published var selectedNoteIds: Set<String> = []
+
+    /// The piano-roll pointer tool (Cubase/Logic style). Select never creates a note on a plain
+    /// click — that was the old always-draw behaviour. Draw paints notes; Erase deletes them.
+    enum PianoRollTool: String, CaseIterable {
+        case smart, select, draw, erase
+        var title: String {
+            switch self {
+            case .smart: return "스마트"
+            case .select: return "선택"
+            case .draw: return "연필"
+            case .erase: return "지우개"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .smart: return "cursorarrow.rays"
+            case .select: return "cursorarrow"
+            case .draw: return "pencil"
+            case .erase: return "eraser"
+            }
+        }
+    }
+    @Published var pianoRollTool: PianoRollTool = .select
+
+    /// The docked piano roll's height, dragged from its top edge.
+    @Published var pianoRollHeight: CGFloat = 300
     /// Selecting a region is exclusive with selecting clips: one Delete key, one target.
     @Published private(set) var selectedRegionId: String?
 
@@ -2888,20 +4349,22 @@ final class EngineController: ObservableObject {
 
     // MARK: Piano roll
 
-    func addNote(pitch: Int, startBeats: Double, durationBeats: Double, velocity: Int = 96) {
-        guard let handle, let regionId = editingRegionId else { return }
+    @discardableResult
+    func addNote(pitch: Int, startBeats: Double, durationBeats: Double, velocity: Int = 96) -> String? {
+        guard let handle, let regionId = editingRegionId else { return nil }
         // A click that lands a pixel short of an existing note must not stack a second
         // one on top of it — silently doubled notes are hard to see and easy to hear.
         let occupied = notes(inRegion: regionId).contains {
             $0.pitch == pitch && startBeats < $0.startBeats + $0.durationBeats
                 && $0.startBeats < startBeats + durationBeats
         }
-        guard !occupied else { return }
+        guard !occupied else { return nil }
         var buffer = [CChar](repeating: 0, count: 128)
         guard nc_midi_note_add(handle, regionId, Int32(pitch), startBeats, durationBeats,
-                               Int32(velocity), &buffer, buffer.count) else { return }
+                               Int32(velocity), &buffer, buffer.count) else { return nil }
         reloadMidiRegions()
         refreshHistory()
+        return String(cString: buffer)
     }
 
     /// Continuous.
@@ -2929,8 +4392,221 @@ final class EngineController: ObservableObject {
     func deleteNote(_ noteId: String) {
         guard let handle, let regionId = editingRegionId,
               nc_midi_note_delete(handle, regionId, noteId) else { return }
+        selectedNoteIds.remove(noteId)
         refreshHistory()
         objectWillChange.send()
+    }
+
+    // MARK: Info line (the Cubase-style numeric editor for the focused note)
+
+    /// The note the info line edits: the earliest-starting note in the selection.
+    var focusedNote: MidiNote? {
+        guard let regionId = editingRegionId, !selectedNoteIds.isEmpty else { return nil }
+        return notes(inRegion: regionId).filter { selectedNoteIds.contains($0.id) }
+            .min { $0.startBeats < $1.startBeats }
+    }
+
+    /// Sets the focused note's start in beats (info-line field or nudge). One undo step.
+    func setNoteStart(_ noteId: String, beats: Double) {
+        guard let handle, let regionId = editingRegionId,
+              let note = notes(inRegion: regionId).first(where: { $0.id == noteId }) else { return }
+        guard nc_midi_note_move(handle, regionId, noteId, Int32(note.pitch), max(0, beats)) else { return }
+        recordGesture("Note position")
+        reloadMidiRegions()
+    }
+
+    func setNoteLength(_ noteId: String, beats: Double) {
+        guard let handle, let regionId = editingRegionId,
+              nc_midi_note_resize(handle, regionId, noteId, max(0.01, beats)) else { return }
+        recordGesture("Note length")
+        reloadMidiRegions()
+    }
+
+    func setNotePitch(_ noteId: String, pitch: Int) {
+        guard let handle, let regionId = editingRegionId,
+              let note = notes(inRegion: regionId).first(where: { $0.id == noteId }) else { return }
+        let clamped = max(0, min(127, pitch))
+        guard nc_midi_note_move(handle, regionId, noteId, Int32(clamped), note.startBeats) else { return }
+        recordGesture("Note pitch")
+        reloadMidiRegions()
+    }
+
+    /// Sets the piano-roll note selection (the highlighted set). Cheap; drives redraw.
+    func setNoteSelection(_ ids: Set<String>) {
+        guard ids != selectedNoteIds else { return }
+        selectedNoteIds = ids
+    }
+
+    /// Duplicates a note in place and returns the new note's id, so an ⌥-drag can grab the
+    /// copy and leave the original put — the piano-roll twin of the timeline's ⌥-drag copy.
+    /// Bypasses `addNote`'s stacking guard on purpose: a copy starts exactly over its source.
+    @discardableResult
+    func copyNote(_ noteId: String) -> String? {
+        guard let handle, let regionId = editingRegionId,
+              let source = notes(inRegion: regionId).first(where: { $0.id == noteId }) else { return nil }
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard nc_midi_note_add(handle, regionId, Int32(source.pitch), source.startBeats,
+                               source.durationBeats, Int32(source.velocity),
+                               &buffer, buffer.count) else { return nil }
+        reloadMidiRegions()
+        refreshHistory()
+        return String(cString: buffer)
+    }
+
+    /// Sets velocity on every selected note. Continuous while `commit` is false (a stepper or
+    /// field drag streams these); pass `commit: true` on the final value for one undo step.
+    func setSelectedNotesVelocity(_ velocity: Int, commit: Bool) {
+        guard let handle, let regionId = editingRegionId, !selectedNoteIds.isEmpty else { return }
+        let clamped = max(1, min(127, velocity))
+        var changed = false
+        for id in selectedNoteIds {
+            if nc_midi_note_set_velocity(handle, regionId, id, Int32(clamped)) { changed = true }
+        }
+        guard changed else { return }
+        if commit { recordGesture("Note velocity") }
+        objectWillChange.send()
+    }
+
+    /// Deletes every selected note as one undo step, for the piano roll's Delete key.
+    func deleteSelectedNotes() {
+        guard let handle, let regionId = editingRegionId, !selectedNoteIds.isEmpty else { return }
+        for id in selectedNoteIds { _ = nc_midi_note_delete(handle, regionId, id) }
+        selectedNoteIds = []
+        reloadMidiRegions()
+        refreshHistory()
+    }
+
+    /// The velocity shown in the header field: the common value when the selection agrees,
+    /// otherwise the rounded average (typing a value sets them all to it).
+    var selectedNotesVelocity: Int? {
+        guard let regionId = editingRegionId, !selectedNoteIds.isEmpty else { return nil }
+        let vels = notes(inRegion: regionId).filter { selectedNoteIds.contains($0.id) }.map(\.velocity)
+        guard !vels.isEmpty else { return nil }
+        if let first = vels.first, vels.allSatisfy({ $0 == first }) { return first }
+        return Int((Double(vels.reduce(0, +)) / Double(vels.count)).rounded())
+    }
+
+    // MARK: Controller lanes
+
+    /// Which lane the strip under the piano roll edits. Velocity is per-note; the rest are the
+    /// region's controller / pitch-bend events, which the renderer already sends to the instrument.
+    enum EditorLane: Equatable, Hashable {
+        case velocity
+        case controller(Int)   // a CC number, 0-127
+        case pitchBend
+
+        var title: String {
+            switch self {
+            case .velocity: return "벨로시티"
+            case .pitchBend: return "피치벤드"
+            case .controller(let cc):
+                switch cc {
+                case 1: return "모듈레이션"
+                case 2: return "브레스"
+                case 7: return "볼륨"
+                case 10: return "팬"
+                case 11: return "익스프레션"
+                case 64: return "서스테인"
+                default: return "CC \(cc)"
+                }
+            }
+        }
+
+        /// The full-scale integer value: velocity/CC top out at 127, pitch bend at 16383.
+        var maxValue: Int { if case .pitchBend = self { return 16383 } ; return 127 }
+        /// The rest position drawn as a centre line, if any (pitch bend sits at 8192).
+        var centerFraction: Double? { if case .pitchBend = self { return 0.5 } ; return nil }
+    }
+
+    /// The lanes offered in the picker, in menu order.
+    static let editorLanes: [EditorLane] = [
+        .velocity, .controller(1), .controller(2), .controller(7),
+        .controller(10), .controller(11), .controller(64), .pitchBend,
+    ]
+
+    @Published var editorLane: EditorLane = .velocity
+
+    /// One point on a controller lane. `value` is the raw MIDI value (0-127, or 0-16383 for bend).
+    struct ControllerEvent: Equatable {
+        let id: String
+        let beat: Double
+        let value: Int
+    }
+
+    func controllerEvents(inRegion regionId: String, controller: Int) -> [ControllerEvent] {
+        guard let handle else { return [] }
+        let count = Int(nc_midi_cc_count(handle, regionId, Int32(controller)))
+        return (0..<count).compactMap { index in
+            var id = [CChar](repeating: 0, count: 128)
+            var beat = 0.0
+            var value: Int32 = 0
+            guard nc_midi_cc_get(handle, regionId, Int32(controller), Int32(index),
+                                 &id, id.count, &beat, &value) else { return nil }
+            return ControllerEvent(id: String(cString: id), beat: beat, value: Int(value))
+        }
+    }
+
+    func pitchBendEvents(inRegion regionId: String) -> [ControllerEvent] {
+        guard let handle else { return [] }
+        let count = Int(nc_midi_pb_count(handle, regionId))
+        return (0..<count).compactMap { index in
+            var id = [CChar](repeating: 0, count: 128)
+            var beat = 0.0
+            var value: Int32 = 0
+            guard nc_midi_pb_get(handle, regionId, Int32(index), &id, id.count, &beat, &value) else { return nil }
+            return ControllerEvent(id: String(cString: id), beat: beat, value: Int(value))
+        }
+    }
+
+    /// The current lane's points (empty for velocity, which the velocity lane draws from notes).
+    func laneEvents(inRegion regionId: String) -> [ControllerEvent] {
+        switch editorLane {
+        case .velocity: return []
+        case .controller(let cc): return controllerEvents(inRegion: regionId, controller: cc)
+        case .pitchBend: return pitchBendEvents(inRegion: regionId)
+        }
+    }
+
+    /// Adds a point to the current lane and returns its id, so a place-and-drag gesture can grab it.
+    @discardableResult
+    func addLaneEvent(beat: Double, value: Int) -> String? {
+        guard let handle, let regionId = editingRegionId else { return nil }
+        var id = [CChar](repeating: 0, count: 128)
+        let ok: Bool
+        switch editorLane {
+        case .velocity:
+            return nil
+        case .controller(let cc):
+            ok = nc_midi_cc_add(handle, regionId, Int32(cc), beat, Int32(value), &id, id.count)
+        case .pitchBend:
+            ok = nc_midi_pb_add(handle, regionId, beat, Int32(value), &id, id.count)
+        }
+        guard ok else { return nil }
+        reloadMidiRegions()
+        refreshHistory()
+        return String(cString: id)
+    }
+
+    /// Continuous: a lane drag streams these; commit the gesture at the end for one undo step.
+    func moveLaneEvent(_ eventId: String, beat: Double, value: Int) {
+        guard let handle, let regionId = editingRegionId else { return }
+        switch editorLane {
+        case .velocity: return
+        case .controller: _ = nc_midi_cc_move(handle, regionId, eventId, beat, Int32(value))
+        case .pitchBend: _ = nc_midi_pb_move(handle, regionId, eventId, beat, Int32(value))
+        }
+        objectWillChange.send()
+    }
+
+    func deleteLaneEvent(_ eventId: String) {
+        guard let handle, let regionId = editingRegionId else { return }
+        switch editorLane {
+        case .velocity: return
+        case .controller: _ = nc_midi_cc_delete(handle, regionId, eventId)
+        case .pitchBend: _ = nc_midi_pb_delete(handle, regionId, eventId)
+        }
+        reloadMidiRegions()
+        refreshHistory()
     }
 
     // MARK: MIDI region tools
@@ -2940,6 +4616,35 @@ final class EngineController: ObservableObject {
         guard let handle, nc_midi_region_quantize(handle, regionId, beatQuantum) > 0 else { return }
         reloadMidiRegions()
         refreshHistory()
+    }
+
+    /// Snaps only the selected notes' starts to the grid (Logic/Cubase quantize the selection
+    /// when there is one, the whole region otherwise). One undo step.
+    func quantizeSelectedNotes(beatQuantum: Double) {
+        guard let handle, let regionId = editingRegionId,
+              !selectedNoteIds.isEmpty, beatQuantum > 0 else { return }
+        let target = notes(inRegion: regionId).filter { selectedNoteIds.contains($0.id) }
+        var changed = false
+        for note in target {
+            let snapped = (note.startBeats / beatQuantum).rounded() * beatQuantum
+            if abs(snapped - note.startBeats) > 1e-6,
+               nc_midi_note_move(handle, regionId, note.id, Int32(note.pitch), snapped) {
+                changed = true
+            }
+        }
+        guard changed else { return }
+        recordGesture("Quantize notes")
+        reloadMidiRegions()
+    }
+
+    /// Quantizes the selection when notes are picked, else the whole region — the grid value
+    /// comes from the header's Logic/Cubase-style menu.
+    func quantize(regionId: String, beatQuantum: Double) {
+        if selectedNoteIds.isEmpty {
+            quantizeRegion(regionId, beatQuantum: beatQuantum)
+        } else {
+            quantizeSelectedNotes(beatQuantum: beatQuantum)
+        }
     }
 
     func transposeRegion(_ regionId: String, semitones: Int) {
@@ -3074,6 +4779,10 @@ final class EngineController: ObservableObject {
             ConductorEvent(id: i, timeSeconds: nc_time_sig_time(handle, Int32(i)),
                            label: "\(nc_time_sig_numerator(handle, Int32(i)))/\(nc_time_sig_denominator(handle, Int32(i)))")
         }
+        songForm = (0..<Int(nc_song_section_count(handle))).map { i in
+            ConductorEvent(id: i, timeSeconds: nc_song_section_time(handle, Int32(i)),
+                           label: readEngineString { nc_song_section_name(handle, Int32(i), $0, $1) })
+        }
     }
 
     func addChord(at seconds: Double, name: String) {
@@ -3204,41 +4913,24 @@ final class EngineController: ObservableObject {
         }
     }
 
-    // Song-form / arrangement sections (Intro, Verse, Chorus…). Each event starts a section
-    // that runs until the next one; app-side and persisted with the settings.
+    // Song-form / arrangement sections (Intro, Verse, Chorus…). Per-PROJECT now (stored in the
+    // .ndaw via nc_song_section_*), not app-global — so sections no longer carry across projects.
+    // Each event starts a section that runs until the next one; loaded in reloadConductor().
     @Published private(set) var songForm: [ConductorEvent] = []
-    private var songFormStore: [(seconds: Double, label: String)] = [] { didSet { publishSongForm() }}
-    private func publishSongForm() {
-        songForm = songFormStore.sorted { $0.seconds < $1.seconds }.enumerated().map {
-            ConductorEvent(id: $0.offset, timeSeconds: $0.element.seconds, label: $0.element.label)
-        }
-    }
     func addSongSection(at seconds: Double, name: String) {
+        guard let handle else { return }
         let label = name.trimmingCharacters(in: .whitespaces)
-        songFormStore.removeAll { abs($0.seconds - seconds) < 0.05 }
-        songFormStore.append((seconds, label.isEmpty ? "Section" : label))
-        persistSongForm()
+        if (label.isEmpty ? "Section" : label).withCString({ nc_song_section_add(handle, seconds, $0) }) {
+            reloadConductor(); refreshHistory()
+        }
     }
     func deleteSongSection(at seconds: Double) {
-        songFormStore.removeAll { abs($0.seconds - seconds) <= markerTolerance }
-        persistSongForm()
+        guard let handle else { return }
+        if nc_song_section_delete(handle, seconds, markerTolerance) { reloadConductor(); refreshHistory() }
     }
     func moveSongSection(from: Double, to: Double) {
-        guard let i = songFormStore.firstIndex(where: { abs($0.seconds - from) <= markerTolerance }) else { return }
-        songFormStore[i].seconds = max(0, snap(to))
-        persistSongForm()
-    }
-    private func persistSongForm() {
-        let encoded = songFormStore.map { "\($0.seconds):\($0.label)" }.joined(separator: "|")
-        UserDefaults.standard.set(encoded, forKey: SettingsKey.songForm)
-    }
-    private func restoreSongForm() {
-        guard let s = UserDefaults.standard.string(forKey: SettingsKey.songForm), !s.isEmpty else { return }
-        songFormStore = s.split(separator: "|").compactMap { pair in
-            let kv = pair.split(separator: ":", maxSplits: 1)
-            guard kv.count == 2, let t = Double(kv[0]) else { return nil }
-            return (t, String(kv[1]))
-        }
+        guard let handle else { return }
+        if nc_song_section_move(handle, from, markerTolerance, max(0, snap(to))) { reloadConductor(); refreshHistory() }
     }
 
     /// A stable colour for a song-form section, keyed off common section names.
@@ -3463,6 +5155,37 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// Pro Tools range edit on the conductor lanes (송폼~가사): remove every marker / chord / lyric /
+    /// song section / tempo / meter / key event inside the edit range, in one undo step.
+    func clearConductorInRange() {
+        guard let handle, hasEditRange else { return }
+        let removed = Int(nc_conductor_clear_range(handle, loopStartSeconds, loopEndSeconds))
+        // Key events live app-side (the engine has no key field) — clear them in the range too.
+        let beforeKeys = keyEventStore.count
+        keyEventStore.removeAll { $0.seconds >= loopStartSeconds - 1e-6 && $0.seconds <= loopEndSeconds + 1e-6 }
+        let keysRemoved = beforeKeys - keyEventStore.count
+        if keysRemoved > 0 { persistKeyEvents() }
+        if removed > 0 {
+            reloadMarkers()
+            reloadConductor()
+            reloadTracks()      // tempo/meter changes reshape the ruler
+            refreshHistory()
+        }
+    }
+    /// Whether the range holds any conductor event, so the menu item can enable/disable.
+    var rangeHasConductor: Bool {
+        guard hasEditRange else { return false }
+        let lo = loopStartSeconds, hi = loopEndSeconds
+        func any(_ t: Double) -> Bool { t >= lo - 1e-6 && t <= hi + 1e-6 }
+        return markers.contains { any($0.timeSeconds) }
+            || chords.contains { any($0.timeSeconds) }
+            || lyrics.contains { any($0.timeSeconds) }
+            || tempoMarkers.contains { any($0.timeSeconds) }
+            || meterEvents.contains { any($0.timeSeconds) }
+            || keyEvents.contains { any($0.timeSeconds) }
+            || songForm.contains { any($0.timeSeconds) }
+    }
+
     /// Continuous, for dragging a whole selection. Records nothing; the view calls
     /// `commitClipGesture` when the drag ends.
     func moveSelection(by deltaSeconds: Double) {
@@ -3517,7 +5240,12 @@ final class EngineController: ObservableObject {
                 fadeOutSeconds: nc_clip_fade_out(handle, i),
                 fadeInCurve: readEngineString { nc_clip_fade_in_curve(handle, i, $0, $1) },
                 fadeOutCurve: readEngineString { nc_clip_fade_out_curve(handle, i, $0, $1) },
-                gainDb: nc_clip_gain_db(handle, i)
+                fadeInCurvature: nc_clip_fade_in_curvature(handle, i),
+                fadeOutCurvature: nc_clip_fade_out_curvature(handle, i),
+                gainDb: nc_clip_gain_db(handle, i),
+                muted: nc_clip_muted(handle, i),
+                reversed: nc_clip_reversed(handle, i),
+                polarityInverted: nc_clip_polarity(handle, i)
             )
         }
         loadWaveforms()
@@ -3533,11 +5261,31 @@ final class EngineController: ObservableObject {
         redoStepName = readEngineString { nc_history_redo_step_name(handle, $0, $1) }
     }
 
-    func toggleTrackMute(_ id: Int) {
-        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
-        nc_track_set_muted(handle, Int32(id), !track.muted)
-        syncTrack(id)
+    /// Tracks a per-track toggle should hit: the whole multi-selection when the clicked track is part
+    /// of it (Pro Tools — mute/solo/arm one selected track, they all follow), else just this track.
+    private func trackToggleGroup(_ id: Int) -> [Int] {
+        if selectedMixerTrackIds.count > 1 && selectedMixerTrackIds.contains(id) {
+            return tracks.filter { selectedMixerTrackIds.contains($0.id) }.map { $0.id }
+        }
+        return [id]
+    }
+    /// Apply one flag (0=mute 1=solo 2=armed 3=inputMon) to a group of tracks in one undo step.
+    private func applyTrackFlag(_ ids: [Int], flag: Int32, value: Bool) {
+        guard let handle, !ids.isEmpty else { return }
+        let arr = ids.map { Int32($0) }
+        _ = arr.withUnsafeBufferPointer { nc_track_set_flag_many(handle, $0.baseAddress, Int32($0.count), flag, value) }
+        reloadTracks()
         refreshHistory()
+    }
+
+    /// Is the record-armed audio track's input the reference tap? (decides whether a punch monitors it)
+    private var recordingTapSource: Bool {
+        tracks.first(where: { $0.recordArmed && $0.kind == .audio })?.inputBus == EngineController.referenceTapInputBus
+    }
+
+    func toggleTrackMute(_ id: Int) {
+        guard let track = tracks.first(where: { $0.id == id }) else { return }
+        applyTrackFlag(trackToggleGroup(id), flag: 0, value: !track.muted)
     }
 
     // MARK: Track I/O routing
@@ -3576,8 +5324,12 @@ final class EngineController: ObservableObject {
     }
 
     /// Audio-track input options — a few hardware input pairs.
+    /// The sentinel input that records the "other apps" reference tap instead of a hardware pair.
+    /// Must match `kReferenceTapInputBus` in the bridge.
+    static let referenceTapInputBus = "다른 앱"
+
     func audioInputOptions() -> [String] {
-        ["Input 1-2", "Input 3-4", "Input 5-6", "Input 7-8"]
+        ["Input 1-2", "Input 3-4", "Input 5-6", "Input 7-8", EngineController.referenceTapInputBus]
     }
 
     func setTrackInputBus(_ id: Int, _ bus: String) {
@@ -3585,6 +5337,7 @@ final class EngineController: ObservableObject {
         _ = bus.withCString { nc_track_set_input_bus(handle, Int32(id), $0) }
         reloadTracks()
         refreshHistory()
+        reconcileTapInputHold()
     }
 
     /// Point an instrument/MIDI track's input at a MIDI source: open it for live input
@@ -3674,6 +5427,12 @@ final class EngineController: ObservableObject {
     func toggleTrackSolo(_ id: Int) {
         guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
         let willSolo = !track.solo
+        // Multi-selection: solo the whole group additively (exclusive is a single-click notion), one step.
+        let group = trackToggleGroup(id)
+        if group.count > 1 {
+            applyTrackFlag(group, flag: 1, value: willSolo)
+            return
+        }
         // Exclusive: soloing a track clears every other track's solo first.
         if soloSelectMode == .exclusive && willSolo {
             for other in tracks where other.id != id && other.solo {
@@ -3699,17 +5458,26 @@ final class EngineController: ObservableObject {
     func setSoloMonitorMode(_ mode: SoloMonitorMode) { soloMonitorMode = mode }
 
     func toggleTrackArm(_ id: Int) {
-        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
-        nc_track_set_record_armed(handle, Int32(id), !track.recordArmed)
-        syncTrack(id)
-        refreshHistory()
+        guard let track = tracks.first(where: { $0.id == id }) else { return }
+        applyTrackFlag(trackToggleGroup(id), flag: 2, value: !track.recordArmed)
     }
 
     func toggleTrackInputMonitoring(_ id: Int) {
-        guard let handle, let track = tracks.first(where: { $0.id == id }) else { return }
-        nc_track_set_input_monitoring(handle, Int32(id), !track.inputMonitoring)
-        syncTrack(id)
-        refreshHistory()
+        guard let track = tracks.first(where: { $0.id == id }) else { return }
+        applyTrackFlag(trackToggleGroup(id), flag: 3, value: !track.inputMonitoring)
+        reconcileTapInputHold()
+    }
+
+    /// Run + hear the tap continuously whenever any tap-input track's Input-Monitor toggle is on
+    /// (Input mode), independent of the auto-input punch. Call after an input-monitor or input-bus change.
+    func reconcileTapInputHold() {
+        guard let handle else { return }
+        let anyTapInputMon = tracks.contains {
+            $0.inputMonitoring && $0.kind == .audio && $0.inputBus == EngineController.referenceTapInputBus
+        }
+        // Arming the tap creates a CoreAudio aggregate device (~1 s); defer to the next runloop so
+        // the Input-Monitor button flips instantly instead of freezing under the device open.
+        DispatchQueue.main.async { nc_monitor_set_tap_input_hold(handle, anyTapInputMon) }
     }
 
     /// Re-read one track's mutable fields from the engine rather than assuming the
@@ -3853,23 +5621,31 @@ final class EngineController: ObservableObject {
         let names = ["니어필드", "미드필드", "라지필드"]
         speakerSets = (0..<3).map { slot in
             let s = Int32(slot)
+            let model = readString { nc_monitor_speaker_model(handle, s, $0, $1) }
+            let bare = stripSlotPrefix(model)
             return SpeakerSet(
                 id: slot,
                 letter: ["A", "B", "C"][slot],
                 name: names[slot],
-                model: readString { nc_monitor_speaker_model(handle, s, $0, $1) },
+                model: model,
                 output: readString { nc_monitor_speaker_output(handle, s, $0, $1) },
                 simWeight: nc_monitor_speaker_sim_weight(handle, s),
-                roomEq: nc_monitor_speaker_room_eq(handle, s)
+                roomEq: nc_monitor_speaker_room_eq(handle, s),
+                amp: readString { nc_monitor_speaker_amp(handle, s, $0, $1) },
+                cable: readString { nc_monitor_speaker_cable(handle, s, $0, $1) },
+                modelIsPassive: !bare.isEmpty && bare.withCString { nc_speaker_model_is_passive($0) }
             )
         }
 
         activeSpeakerSlot = Int(nc_monitor_active_speaker_slot(handle))
         monitorVolumeDb = nc_monitor_volume_db(handle)
         monitorDim = nc_monitor_dim(handle)
+        monitorDimDb = nc_monitor_dim_db(handle)
         monitorMono = nc_monitor_mono(handle)
         monitorMute = nc_monitor_mute(handle)
         monitorTalkback = nc_monitor_talkback(handle)
+        talkbackRoute = readString { nc_monitor_talkback_route(handle, $0, $1) }
+        talkbackChannel = Int(nc_monitor_talkback_channel(handle))
         monitorDspEnabled = nc_monitor_dsp_enabled(handle)
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
         // Only re-derive the selection when the engine mode no longer matches it — so a
@@ -3880,18 +5656,31 @@ final class EngineController: ObservableObject {
         coreIsolationEnabled = nc_dsp_core_isolation(handle)
         dspCoreCount = Int(nc_dsp_core_count(handle))
         externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
+        externalDspEnabled = nc_dsp_external_enabled(handle) != 0
         remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
         physicalPowerAmpModel = readString { nc_monitor_physical_power_amp_model(handle, $0, $1) }
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
+        physicalPowerCableModel = readString { nc_monitor_physical_power_cable_model(handle, $0, $1) }
+        physicalConnectorModel = readString { nc_monitor_physical_connector_model(handle, $0, $1) }
+        physicalAudioInterfaceModel = readString { nc_monitor_physical_audio_interface_model(handle, $0, $1) }
+        physicalAudioInterfaceTargetModel = readString { nc_monitor_physical_audio_interface_target(handle, $0, $1) }
+        audioInterfaceTransformActive = nc_audio_interface_transform_active(handle)
+        monitorInterfaceModelingEnabled = nc_monitor_interface_modeling_enabled(handle)
         monitorSwapLeftRight = nc_monitor_swap_left_right(handle)
         monitorOutputExclusive = nc_monitor_output_exclusive(handle)
         measurementMicModel = readString { nc_measurement_mic_model(handle, $0, $1) }
-        reloadMonitorEq()
         autoFadeOutSeconds = nc_master_auto_fade_seconds(handle)
         autoFadeOutCurve = readString { nc_master_auto_fade_curve(handle, $0, $1) }
         reloadMonitorListen()
+        // The single monitor EQ is derived state — re-derive it from the now-current context
+        // (active A/B/C slot, its model or physical route, output mode, room measurement) so a
+        // slot switch, undo/redo, or project load all leave the EQ matching what is monitored.
+        // Runs only here (load / history / speaker setters), never on the poll tick.
+        monitorEqLinearPhase = nc_monitor_eq_linear_phase(handle)
+        monitorEqHeadphoneOeTarget = nc_monitor_eq_headphone_oe_target(handle)
+        syncMonitorEqToContext()
     }
 
     private func reloadMonitorListen() {
@@ -3982,15 +5771,116 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
-    /// Broadcast-probe the LAN for a node and adopt its address if one answers.
+    /// Broadcast-probe the LAN for a node and adopt its address if one answers, then read its specs.
     func discoverRemoteDspHost() {
         guard let handle else { return }
         let found = readString { nc_dsp_discover_remote_host(handle, $0, $1) }
         if !found.isEmpty { setRemoteDspHost(found) }
+        refreshRemoteNodeSpecs()
+    }
+
+    /// Query the current remote host for its identity + hardware specs (blocks briefly on the network,
+    /// on the main thread like discover, since engine calls are main-thread-only). Clears on no answer.
+    func refreshRemoteNodeSpecs() {
+        guard let handle else { return }
+        var info = NCRemoteNodeInfo()
+        if nc_dsp_remote_node_info(handle, &info) != 0 {
+            remoteNodeSpecs = RemoteNodeSpecs(
+                model: Self.cStringField(&info.model),
+                cpuModel: Self.cStringField(&info.cpuModel),
+                cpuMhz: info.cpuMhz,
+                memoryMb: Int(info.memoryMb),
+                coreCount: Int(info.coreCount),
+                roundTripMs: info.roundTripMs)
+        } else {
+            remoteNodeSpecs = nil
+        }
+    }
+
+    /// The "use this node" master switch. Applies live through the monitor path.
+    func setExternalDspEnabled(_ enabled: Bool) {
+        guard let handle else { return }
+        nc_dsp_set_external_enabled(handle, enabled ? 1 : 0)
+        externalDspEnabled = nc_dsp_external_enabled(handle) != 0
+        refreshHistory()
+    }
+
+    /// Read a fixed-size C `char[]` field (imported into Swift as a tuple) as a String.
+    private static func cStringField<T>(_ tuple: inout T) -> String {
+        withUnsafePointer(to: &tuple) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) {
+                String(cString: $0)
+            }
+        }
+    }
+
+    // MARK: - Built-in test signal generator (track source)
+
+    struct TestSignalState: Equatable {
+        var present = false
+        var enabled = true
+        var waveform = 0          // 0 sine, 1 square, 2 triangle, 3 saw, 4 white, 5 pink, 6 sweep
+        var frequencyHz = 1000.0
+        var levelDb = -6.0
+        var channel = 1           // 0 L, 1 stereo, 2 R
+        var polarity = false
+        static let waveformNames = ["사인", "사각", "삼각", "톱니", "화이트", "핑크", "스윕"]
+        static let channelNames = ["L", "L+R", "R"]
+    }
+
+    func testSignalState(track: Int) -> TestSignalState {
+        guard let handle else { return TestSignalState() }
+        var s = TestSignalState()
+        s.present = nc_track_test_signal_generator_slot(handle, Int32(track)) >= 0
+        guard s.present else { return s }
+        s.enabled = nc_track_test_signal_enabled(handle, Int32(track))
+        s.waveform = Int(nc_track_test_signal_waveform(handle, Int32(track)))
+        s.frequencyHz = nc_track_test_signal_frequency_hz(handle, Int32(track))
+        s.levelDb = nc_track_test_signal_level_db(handle, Int32(track))
+        s.channel = Int(nc_track_test_signal_channel(handle, Int32(track)))
+        s.polarity = nc_track_test_signal_polarity(handle, Int32(track))
+        return s
+    }
+
+    func addTestSignalGenerator(track: Int) {
+        guard let handle else { return }
+        nc_track_add_test_signal_generator(handle, Int32(track))
+        reloadTracks(); refreshHistory(); objectWillChange.send()
+    }
+    func removeTestSignalGenerator(track: Int) {
+        guard let handle else { return }
+        nc_track_remove_test_signal_generator(handle, Int32(track))
+        reloadTracks(); refreshHistory(); objectWillChange.send()
+    }
+    func setTestSignalEnabled(track: Int, _ on: Bool) {
+        guard let handle else { return }
+        nc_track_test_signal_set_enabled(handle, Int32(track), on); refreshHistory(); objectWillChange.send()
+    }
+    func setTestSignalWaveform(track: Int, _ waveform: Int) {
+        guard let handle else { return }
+        nc_track_test_signal_set_waveform(handle, Int32(track), Int32(waveform)); refreshHistory(); objectWillChange.send()
+    }
+    func setTestSignalChannel(track: Int, _ channel: Int) {
+        guard let handle else { return }
+        nc_track_test_signal_set_channel(handle, Int32(track), Int32(channel)); refreshHistory(); objectWillChange.send()
+    }
+    func setTestSignalPolarity(track: Int, _ inverted: Bool) {
+        guard let handle else { return }
+        nc_track_test_signal_set_polarity(handle, Int32(track), inverted); refreshHistory(); objectWillChange.send()
+    }
+    /// Continuous (slider) — records no undo step; call refreshHistory once at gesture end if needed.
+    func setTestSignalFrequency(track: Int, _ hz: Double) {
+        guard let handle else { return }
+        nc_track_test_signal_set_frequency_hz(handle, Int32(track), hz); objectWillChange.send()
+    }
+    func setTestSignalLevel(track: Int, _ db: Double) {
+        guard let handle else { return }
+        nc_track_test_signal_set_level_db(handle, Int32(track), db); objectWillChange.send()
     }
 
     /// Isolation keeps a floor of 4 cores, matching the engine.
-    var minDspCoreCount: Int { coreIsolationEnabled ? 4 : 1 }
+    // No 4-core floor while isolation is on — the user can reserve as few as 1 (bridge clamps 1–16).
+    var minDspCoreCount: Int { 1 }
 
     func cycleStereo() { guard let handle else { return }; nc_monitor_cycle_stereo(handle); reloadMonitorListen() }
     func cycleMono() { guard let handle else { return }; nc_monitor_cycle_mono(handle); reloadMonitorListen() }
@@ -4001,6 +5891,212 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_set_dim(handle, !monitorDim)
         monitorDim = nc_monitor_dim(handle)
+    }
+
+    /// How far Dim attenuates the monitor, in dB (negative). Right-click the Dim button to pick.
+    @Published private(set) var monitorDimDb: Float = -20
+    static let monitorDimDbOptions: [Float] = [-10, -15, -20, -25, -30, -40]
+    func setMonitorDimDb(_ db: Float) {
+        guard let handle else { return }
+        nc_monitor_set_dim_db(handle, db)
+        monitorDimDb = nc_monitor_dim_db(handle)
+    }
+
+    // MARK: Monitor station keyboard shortcuts (runtime-only, remappable)
+
+    /// The monitor actions the number-key row can drive. Runtime-only — the key monitor lives on
+    /// this controller and dies with the app, so the shortcuts vanish on quit (as requested).
+    enum MonitorShortcutAction: String, CaseIterable, Identifiable {
+        case volDown, volUp, dim, mute, talk, setA, setB, setC
+        case stereo, mono, midSide, sourceMaster, sourceBlackHole, player
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .volDown: return "볼륨 −2 dB"
+            case .volUp: return "볼륨 +2 dB"
+            case .dim: return "Dim"
+            case .mute: return "Mute"
+            case .talk: return "Talk"
+            case .setA: return "스피커 A"
+            case .setB: return "스피커 B"
+            case .setC: return "스피커 C"
+            case .stereo: return "Stereo"
+            case .mono: return "Mono"
+            case .midSide: return "M/S"
+            case .sourceMaster: return "입력: Master"
+            case .sourceBlackHole: return "입력: BlackHole"
+            case .player: return "입력: Player (미구현)"
+            }
+        }
+        var defaultKeyCode: UInt16 {
+            switch self {
+            case .volDown: return 27        // -
+            case .volUp: return 24          // = (the + key)
+            case .dim: return 29            // 0
+            case .mute: return 47           // .
+            case .talk: return 36           // Return
+            case .setA: return 18           // 1
+            case .setB: return 19           // 2
+            case .setC: return 20           // 3
+            case .stereo: return 21         // 4
+            case .mono: return 23           // 5
+            case .midSide: return 22        // 6
+            case .sourceMaster: return 26   // 7
+            case .sourceBlackHole: return 28 // 8
+            case .player: return 25         // 9
+            }
+        }
+    }
+    /// The number-row keys the user may bind, keyCode → display label.
+    static let monitorShortcutAssignableKeys: [(code: UInt16, label: String)] = [
+        (18, "1"), (19, "2"), (20, "3"), (21, "4"), (23, "5"), (22, "6"),
+        (26, "7"), (28, "8"), (25, "9"), (29, "0"), (27, "−"), (24, "+"), (47, "."), (36, "↵"),
+    ]
+    static func monitorShortcutKeyLabel(_ code: UInt16) -> String {
+        monitorShortcutAssignableKeys.first { $0.code == code }?.label ?? "?"
+    }
+
+    /// Master switch: while on, the number-row keys drive the monitor station instead of their
+    /// normal function. Off by default; toggled from the dock button.
+    @Published var monitorShortcutsEnabled = false
+    /// action.rawValue → keyCode. A missing action is unbound.
+    @Published var monitorShortcutKeys: [String: UInt16] = {
+        var m: [String: UInt16] = [:]
+        for a in MonitorShortcutAction.allCases { m[a.rawValue] = a.defaultKeyCode }
+        return m
+    }()
+
+    func monitorShortcutKey(_ action: MonitorShortcutAction) -> UInt16? { monitorShortcutKeys[action.rawValue] }
+    /// Assign (or clear with nil) a key to an action; a key is unique, so it is removed from any
+    /// other action first.
+    func setMonitorShortcutKey(_ action: MonitorShortcutAction, _ keyCode: UInt16?) {
+        if let kc = keyCode {
+            for a in MonitorShortcutAction.allCases where monitorShortcutKeys[a.rawValue] == kc {
+                monitorShortcutKeys[a.rawValue] = nil
+            }
+            monitorShortcutKeys[action.rawValue] = kc
+        } else {
+            monitorShortcutKeys[action.rawValue] = nil
+        }
+        persistMonitorShortcuts()
+    }
+    func setMonitorShortcutsEnabled(_ on: Bool) {
+        monitorShortcutsEnabled = on
+        persistMonitorShortcuts()
+    }
+    func resetMonitorShortcutsToDefault() {
+        for a in MonitorShortcutAction.allCases { monitorShortcutKeys[a.rawValue] = a.defaultKeyCode }
+        persistMonitorShortcuts()
+    }
+    private func monitorShortcutAction(forKeyCode code: UInt16) -> MonitorShortcutAction? {
+        // Keypad-ONLY: the ten-key drives the monitor station (Pro Tools style); the top number ROW
+        // is deliberately left alone for its normal use. Fold a keypad code onto the logical key the
+        // bindings are stored as; a non-keypad key returns nil so the row is never intercepted.
+        guard let logical = Self.keypadToLogicalKeyCode(code) else { return nil }
+        return MonitorShortcutAction.allCases.first { monitorShortcutKeys[$0.rawValue] == logical }
+    }
+    /// A numeric-keypad keycode → the logical (number-row) keycode the bindings use, or nil when
+    /// `code` isn't a keypad key (so only the ten-key fires the monitor shortcuts).
+    static func keypadToLogicalKeyCode(_ code: UInt16) -> UInt16? {
+        switch code {
+        case 82: return 29   // kp0 → 0
+        case 83: return 18   // kp1 → 1
+        case 84: return 19   // kp2 → 2
+        case 85: return 20   // kp3 → 3
+        case 86: return 21   // kp4 → 4
+        case 87: return 23   // kp5 → 5
+        case 88: return 22   // kp6 → 6
+        case 89: return 26   // kp7 → 7
+        case 91: return 28   // kp8 → 8
+        case 92: return 25   // kp9 → 9
+        case 65: return 47   // kp. → .
+        case 69: return 24   // kp+ → +
+        case 78: return 27   // kp− → −
+        case 76: return 36   // kpEnter → Return
+        default: return nil  // not a keypad key → leave the top row alone
+        }
+    }
+    /// Run a monitor action. Called from the key monitor when the shortcut layer is on.
+    func performMonitorShortcut(_ action: MonitorShortcutAction) {
+        switch action {
+        case .volDown: setMonitorVolume(max(-60, monitorVolumeDb - 2))
+        case .volUp: setMonitorVolume(min(-12, monitorVolumeDb + 2))   // -12 dB monitor ceiling
+        case .dim: toggleDim()
+        case .mute: toggleMonitorMute()
+        case .talk: setTalkbackEngaged(!monitorTalkback)
+        case .setA: setSpeakerSlot(0)
+        case .setB: setSpeakerSlot(1)
+        case .setC: setSpeakerSlot(2)
+        case .stereo: cycleStereo()
+        case .mono: cycleMono()
+        case .midSide: toggleMidSide()
+        case .sourceMaster: selectMonitorInput(blackHole: false)
+        case .sourceBlackHole: selectMonitorInput(blackHole: true)
+        case .player: lastError = "모니터 입력 ‘Player’ 소스는 아직 구현 전입니다."
+        }
+    }
+    /// Route a globally-captured keypad key through the SAME configurable monitor-shortcut bindings
+    /// the in-app keypad uses — so the global pad and the dock's shortcut settings never disagree
+    /// (this fixes Dim/Mute landing on the wrong keys and 1–9 doing nothing). Returns true if the
+    /// key is bound (so it is consumed on both down and up); an unbound key passes through.
+    private func handleGlobalKeypad(_ keyCode: UInt16, isDown: Bool, isRepeat: Bool) -> Bool {
+        guard let action = monitorShortcutAction(forKeyCode: keyCode) else { return false }
+        if action == .talk {
+            // Momentary console talkback: engaged while the key is held, released on key-up. Ignore
+            // the OS auto-repeat key-downs so a held key does not flicker it on and off.
+            if !isRepeat { setTalkbackEngaged(isDown) }
+            return true
+        }
+        // Every other action fires once per press (like the in-app keypad) — swallow repeats and ups.
+        if isDown && !isRepeat { performMonitorShortcut(action) }
+        return true
+    }
+    /// Toggle system-wide keypad capture. Requires Accessibility; if it is not granted we prompt for
+    /// it (once) and surface a message so the user knows where to allow it.
+    func setKeypadCapture(_ on: Bool) {
+        if on {
+            keypadCapture.onKey = { [weak self] keyCode, isDown, isRepeat in
+                self?.handleGlobalKeypad(keyCode, isDown: isDown, isRepeat: isRepeat) ?? false
+            }
+            if keypadCapture.enable() {
+                keypadCaptureEnabled = true
+            } else {
+                keypadCaptureEnabled = false
+                lastError = "키패드 전역 제어에는 손쉬운 사용(Accessibility) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Neuracoust DAW를 켠 뒤 다시 시도해 주세요."
+            }
+        } else {
+            keypadCapture.disable()
+            keypadCaptureEnabled = false
+        }
+        UserDefaults.standard.set(keypadCaptureEnabled, forKey: "nc.keypadCaptureEnabled")
+    }
+    /// Re-arm keypad capture at launch if it was on last time (and the permission still holds).
+    func restoreKeypadCapture() {
+        guard UserDefaults.standard.bool(forKey: "nc.keypadCaptureEnabled") else { return }
+        if GlobalKeypadCapture.accessibilityTrusted(prompt: false) {
+            setKeypadCapture(true)
+        }
+    }
+    /// Release the global tap on quit so the keypad returns to the system.
+    func releaseKeypadCapture() { keypadCapture.disable() }
+
+    private func persistMonitorShortcuts() {
+        let d = UserDefaults.standard
+        d.set(monitorShortcutsEnabled, forKey: "nc.monitorShortcutsEnabled")
+        let encoded = monitorShortcutKeys.map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        d.set(encoded, forKey: "nc.monitorShortcutKeys")
+    }
+    func restoreMonitorShortcuts() {
+        let d = UserDefaults.standard
+        monitorShortcutsEnabled = d.bool(forKey: "nc.monitorShortcutsEnabled")
+        if let enc = d.string(forKey: "nc.monitorShortcutKeys"), !enc.isEmpty {
+            var m: [String: UInt16] = [:]
+            for pair in enc.split(separator: ",") {
+                let kv = pair.split(separator: ":")
+                if kv.count == 2, let code = UInt16(kv[1]) { m[String(kv[0])] = code }
+            }
+            if !m.isEmpty { monitorShortcutKeys = m }
+        }
     }
 
     /// Mute: the old UI's monitor station mute, distinct from the mono listen button.
@@ -4045,9 +6141,12 @@ final class EngineController: ObservableObject {
         static let extDspCores = "nc.externalDspCoreCount"
         static let remoteHost = "nc.remoteDspHost"
         static let monitorExclusive = "nc.monitorOutputExclusive"
+        static let monitorEqLinear = "nc.monitorEqLinearPhase"
+        static let monitorEqOeTarget = "nc.monitorEqHeadphoneOeTarget"
         static let physSpeaker = "nc.physicalSpeakerModel"
         static let physHeadphone = "nc.physicalHeadphoneModel"
         static let physAmp = "nc.physicalPowerAmpModel"
+        static let physInterface = "nc.physicalAudioInterfaceModel"
         static let physCable = "nc.physicalSpeakerCableModel"
         static let monitorVol = "nc.monitorVolumeDb"
         static let delayComp = "nc.delayCompensation"
@@ -4085,7 +6184,10 @@ final class EngineController: ObservableObject {
         let d = UserDefaults.standard
         d.set(currentOutputDeviceId, forKey: SettingsKey.outputDevice)
         d.set(currentInputDeviceId, forKey: SettingsKey.inputDevice)
-        d.set(monitorListenSource, forKey: SettingsKey.listenSource)
+        // NOTE: monitorListenSource (BlackHole exclusive monitoring) is deliberately NOT persisted.
+        // It silences the master, so restoring it on launch would boot the app into silence — you
+        // would hear nothing and the source would be empty. It is a live choice, reset each launch.
+        d.set(false, forKey: SettingsKey.listenSource)
         d.set(insertTailOnStopSeconds, forKey: SettingsKey.insertTail)
         d.set(monitorPathMode, forKey: SettingsKey.monitorPathMode)
         d.set(outputMode == .speaker ? "speaker" : "headphone", forKey: SettingsKey.outputMode)
@@ -4102,9 +6204,12 @@ final class EngineController: ObservableObject {
         d.set(externalDspCoreCount, forKey: SettingsKey.extDspCores)
         d.set(remoteDspHost, forKey: SettingsKey.remoteHost)
         d.set(monitorOutputExclusive, forKey: SettingsKey.monitorExclusive)
+        d.set(monitorEqLinearPhase, forKey: SettingsKey.monitorEqLinear)
+        d.set(monitorEqHeadphoneOeTarget, forKey: SettingsKey.monitorEqOeTarget)
         d.set(physicalSpeakerModel, forKey: SettingsKey.physSpeaker)
         d.set(physicalHeadphoneModel, forKey: SettingsKey.physHeadphone)
         d.set(physicalPowerAmpModel, forKey: SettingsKey.physAmp)
+        d.set(physicalAudioInterfaceModel, forKey: SettingsKey.physInterface)
         d.set(physicalSpeakerCableModel, forKey: SettingsKey.physCable)
         d.set(Double(monitorVolumeDb), forKey: SettingsKey.monitorVol)
         d.set(delayCompensationEnabled, forKey: SettingsKey.delayComp)
@@ -4122,6 +6227,8 @@ final class EngineController: ObservableObject {
     func restorePersistedSettings() {
         let d = UserDefaults.standard
         loadRecentProjects()   // independent of the saved-settings gate below
+        restoreMonitorShortcuts()  // its own keys; runs even on a first launch (keeps defaults)
+        restoreKeypadCapture()     // re-arm global keypad if it was on and permission still holds
         guard d.bool(forKey: SettingsKey.saved) else { return }
         if let out = d.string(forKey: SettingsKey.outputDevice), !out.isEmpty { setOutputDevice(out) }
         if let inp = d.string(forKey: SettingsKey.inputDevice), !inp.isEmpty { setInputDevice(inp) }
@@ -4132,9 +6239,7 @@ final class EngineController: ObservableObject {
             setMonitorPathMode(mode)
             dspSources = dspSourcesFromMode(mode)
         }
-        if d.object(forKey: SettingsKey.listenSource) != nil {
-            setMonitorListenSource(d.bool(forKey: SettingsKey.listenSource))
-        }
+        // monitorListenSource is intentionally not restored — it silences the master (see save).
         if let om = d.string(forKey: SettingsKey.outputMode) {
             outputMode = (om == "headphone") ? .headphone : .speaker
         }
@@ -4156,7 +6261,10 @@ final class EngineController: ObservableObject {
         // settings leaked a stray key event (e.g. a "D") into every new/other project. Start
         // clean: the key row shows the default C at the top until the user adds one.
         musicalKey = "C"
-        restoreSongForm()
+        showChannelDelayComp = d.bool(forKey: "nc.showChannelDelayComp")
+        // Song form is per-project now (loaded via reloadConductor). Purge the old app-global key so
+        // a stale "Intro" from an earlier session stops leaking into every project.
+        d.removeObject(forKey: SettingsKey.songForm)
         if d.object(forKey: SettingsKey.rulerBars) != nil { rulerBars = d.bool(forKey: SettingsKey.rulerBars) }
         if d.object(forKey: SettingsKey.rulerTime) != nil { rulerTime = d.bool(forKey: SettingsKey.rulerTime) }
         if d.object(forKey: SettingsKey.rulerSamples) != nil { rulerSamples = d.bool(forKey: SettingsKey.rulerSamples) }
@@ -4180,9 +6288,16 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.extDspCores) != nil { setExternalDspCoreCount(d.integer(forKey: SettingsKey.extDspCores)) }
         if let host = d.string(forKey: SettingsKey.remoteHost), !host.isEmpty { setRemoteDspHost(host) }
         if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
+        if d.object(forKey: SettingsKey.monitorEqLinear) != nil, d.bool(forKey: SettingsKey.monitorEqLinear) {
+            if let handle { nc_monitor_eq_set_linear_phase(handle, true); monitorEqLinearPhase = true }
+        }
+        if d.object(forKey: SettingsKey.monitorEqOeTarget) != nil, d.bool(forKey: SettingsKey.monitorEqOeTarget) {
+            if let handle { nc_monitor_eq_set_headphone_oe_target(handle, true); monitorEqHeadphoneOeTarget = true }
+        }
         if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
         if let amp = d.string(forKey: SettingsKey.physAmp), !amp.isEmpty { setPhysicalPowerAmpModel(amp) }
+        if let itf = d.string(forKey: SettingsKey.physInterface), !itf.isEmpty { setPhysicalAudioInterfaceModel(itf) }
         if let cab = d.string(forKey: SettingsKey.physCable), !cab.isEmpty { setPhysicalSpeakerCableModel(cab) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
@@ -4205,7 +6320,7 @@ final class EngineController: ObservableObject {
             setMonitorPathMode(mode)
             dspSources = dspSourcesFromMode(mode)
         }
-        if d.object(forKey: SettingsKey.listenSource) != nil { setMonitorListenSource(d.bool(forKey: SettingsKey.listenSource)) }
+        // monitorListenSource is intentionally not restored — it silences the master (see save).
         if let om = d.string(forKey: SettingsKey.outputMode) { outputMode = (om == "headphone") ? .headphone : .speaker }
         if let em = d.string(forKey: SettingsKey.editMode), let mode = EditMode(rawValue: em) { editMode = mode }
         if let gu = d.string(forKey: SettingsKey.gridUnit), let unit = GridUnit(rawValue: gu) { gridUnit = unit }
@@ -4216,9 +6331,16 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.extDspCores) != nil { setExternalDspCoreCount(d.integer(forKey: SettingsKey.extDspCores)) }
         if let host = d.string(forKey: SettingsKey.remoteHost), !host.isEmpty { setRemoteDspHost(host) }
         if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
+        if d.object(forKey: SettingsKey.monitorEqLinear) != nil, d.bool(forKey: SettingsKey.monitorEqLinear) {
+            if let handle { nc_monitor_eq_set_linear_phase(handle, true); monitorEqLinearPhase = true }
+        }
+        if d.object(forKey: SettingsKey.monitorEqOeTarget) != nil, d.bool(forKey: SettingsKey.monitorEqOeTarget) {
+            if let handle { nc_monitor_eq_set_headphone_oe_target(handle, true); monitorEqHeadphoneOeTarget = true }
+        }
         if let sp = d.string(forKey: SettingsKey.physSpeaker), !sp.isEmpty { setPhysicalSpeakerModel(sp) }
         if let hp = d.string(forKey: SettingsKey.physHeadphone), !hp.isEmpty { setPhysicalHeadphoneModel(hp) }
         if let amp = d.string(forKey: SettingsKey.physAmp), !amp.isEmpty { setPhysicalPowerAmpModel(amp) }
+        if let itf = d.string(forKey: SettingsKey.physInterface), !itf.isEmpty { setPhysicalAudioInterfaceModel(itf) }
         if let cab = d.string(forKey: SettingsKey.physCable), !cab.isEmpty { setPhysicalSpeakerCableModel(cab) }
         if d.object(forKey: SettingsKey.monitorVol) != nil { setMonitorVolume(Float(d.double(forKey: SettingsKey.monitorVol))) }
         if d.object(forKey: SettingsKey.delayComp) != nil { setDelayCompensation(d.bool(forKey: SettingsKey.delayComp)) }
@@ -4241,38 +6363,111 @@ final class EngineController: ObservableObject {
 
     /// The monitor station's input: the DAW Master, or the BlackHole loopback (the
     /// computer's audio). Two mutually-exclusive choices, like the Monitor DSP app.
-    func selectMonitorInput(blackHole: Bool) {
-        if blackHole {
-            // Capturing any input device (even a virtual loopback like BlackHole) goes through
-            // the macOS microphone privacy gate. Request it explicitly so the system prompt
-            // reliably appears — the implicit prompt that opening the input queue would raise
-            // does not fire dependably for a locally-built (ad-hoc-signed) app.
-            requestMicrophoneAccess { [weak self] granted in
-                guard let self else { return }
-                guard granted else {
-                    self.lastError = "마이크(입력) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Neuracoust DAW를 켜 주세요."
-                    return
+    /// The capture device the source monitor is bound to (chosen from the BlackHole button's
+    /// right-click menu). Empty = use the default (BlackHole 2ch when present).
+    @Published private(set) var monitorInputDeviceId = ""
+
+    /// Reference monitoring of other apps via the Core Audio process tap (no BlackHole, no input
+    /// device, no mic permission — it captures other apps' output directly).
+    ///
+    /// This is "reference-hold": while armed, the tapped apps stay muted at their own output so you
+    /// can A/B between the master and the reference without their sound ever leaking out of the
+    /// computer. `otherApps: true` from the "다른 앱" button drives the A/B; the "Master" button
+    /// (otherApps: false) flips to the master but keeps the hold armed. Disarm via `exitReference()`.
+    func selectMonitorInput(blackHole otherApps: Bool) {
+        guard let handle else { return }
+        if otherApps {
+            // Left-click "다른 앱": arm on first press, then A/B master↔reference on each press —
+            // always staying armed (apps muted), so nothing leaks when you audition the master.
+            if !referenceArmed {
+                nc_monitor_set_reference_armed(handle, true)
+                nc_monitor_set_listen_source(handle, true)
+                // The process tap / aggregate device needs a few hundred ms to spin up after arming.
+                // The very first press otherwise routes to a not-yet-producing tap and stays silent
+                // until a master↔다른앱 toggle — which works because time passes AND it re-triggers the
+                // rising edge. Mimic that once here: after the tap is up, re-latch false→true so the
+                // monitor grabs the now-running tap instead of the empty pre-start state.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, let h = self.handle,
+                          self.referenceArmed, self.monitorListenSource else { return }
+                    nc_monitor_set_listen_source(h, false)
+                    nc_monitor_set_listen_source(h, true)
+                    self.monitorListenSource = nc_monitor_listen_source(h)
                 }
-                // Light the button now, then open the input device on the next runloop. The
-                // device enumeration + AudioQueue open are synchronous CoreAudio calls that
-                // block the main thread ~1 s; deferring them lets the UI reflect the press
-                // immediately instead of stalling until the device is up.
-                self.monitorListenSource = true
-                DispatchQueue.main.async {
-                    // Re-enumerate devices only if BlackHole isn't already known (the dock
-                    // refreshes on appear); enumeration is a slow CoreAudio round-trip.
-                    if !self.inputDevices.contains(where: { $0.name.lowercased().contains("blackhole") }) {
-                        self.refreshInputDevices()
-                    }
-                    if let bh = self.inputDevices.first(where: { $0.name.lowercased().contains("blackhole") }) {
-                        self.setInputDevice(bh.id)
-                    }
-                    self.setMonitorListenSource(true)
-                }
+            } else {
+                nc_monitor_set_listen_source(handle, !monitorListenSource)
             }
         } else {
-            setMonitorListenSource(false)
+            // "Master": hear the master. Keep the hold armed if it already is (no leak); if it was
+            // never armed, this is just the default master monitoring.
+            if referenceArmed {
+                nc_monitor_set_listen_source(handle, false)
+            }
         }
+        referenceArmed = nc_monitor_reference_armed(handle)
+        monitorListenSource = nc_monitor_listen_source(handle)
+    }
+
+    /// Fully leave reference-hold: stop the tap and unmute the tapped apps so they play normally
+    /// from the computer again. Right-click "다른 앱" → 레퍼런스 종료.
+    func exitReference() {
+        guard let handle else { return }
+        nc_monitor_set_reference_armed(handle, false)   // engine also clears the listening state
+        referenceArmed = nc_monitor_reference_armed(handle)
+        monitorListenSource = nc_monitor_listen_source(handle)
+    }
+
+    /// Explicitly bind the source monitor to a specific internal input device (the BlackHole
+    /// button's right-click menu), and switch monitoring to it.
+    func selectMonitorInputDevice(_ id: String) {
+        monitorInputDeviceId = id
+        openMonitorInput(deviceId: id)
+    }
+
+    /// Turn source monitoring on and open the capture device. `deviceId == nil` keeps the chosen
+    /// device (or defaults to BlackHole 2ch); a value forces that device.
+    private func openMonitorInput(deviceId: String?) {
+        // Capturing any input device (even a virtual loopback like BlackHole) goes through the
+        // macOS microphone privacy gate. Request it explicitly so the system prompt reliably
+        // appears — the implicit prompt that opening the input queue would raise does not fire
+        // dependably for a locally-built (ad-hoc-signed) app.
+        requestMicrophoneAccess { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.lastError = "마이크(입력) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Neuracoust DAW를 켜 주세요."
+                return
+            }
+            // Light the button now, then open the input device on the next runloop. The device
+            // enumeration + AudioQueue open are synchronous CoreAudio calls that block the main
+            // thread ~1 s; deferring lets the UI reflect the press immediately.
+            self.monitorListenSource = true
+            DispatchQueue.main.async {
+                if self.inputDevices.isEmpty { self.refreshInputDevices() }
+                let target = deviceId ?? self.defaultMonitorInputDeviceId()
+                if let id = target, !id.isEmpty {
+                    self.monitorInputDeviceId = id
+                    self.setInputDevice(id)
+                }
+                self.setMonitorListenSource(true)
+            }
+        }
+    }
+
+    /// The default capture device for source monitoring: the previously chosen one if still
+    /// present, else a **BlackHole 2ch** loopback (the reference default), else any BlackHole,
+    /// else the first input.
+    private func defaultMonitorInputDeviceId() -> String? {
+        func norm(_ s: String) -> String { s.lowercased().replacingOccurrences(of: " ", with: "") }
+        if !monitorInputDeviceId.isEmpty, inputDevices.contains(where: { $0.id == monitorInputDeviceId }) {
+            return monitorInputDeviceId
+        }
+        if let bh2 = inputDevices.first(where: { norm($0.name).contains("blackhole2ch") || norm($0.name).contains("blackhole2channel") }) {
+            return bh2.id
+        }
+        if let bh = inputDevices.first(where: { $0.name.lowercased().contains("blackhole") }) {
+            return bh.id
+        }
+        return inputDevices.first?.id
     }
 
     /// Ask macOS for microphone (audio input) access, invoking `completion` on the main actor
@@ -4316,6 +6511,44 @@ final class EngineController: ObservableObject {
         monitorTalkback = nc_monitor_talkback(handle)
     }
 
+    /// The talkback mic = the engine's open input device (shared with the reference-monitor source;
+    /// the engine holds one input device at a time). The talkback route is already `listen_room`, so
+    /// this mic is what the Listen Room broadcast carries when talkback is engaged.
+    var talkbackMicId: String { currentInputDeviceId }
+    /// Where the talkback mic goes: to the Listen Room broadcast (default), the local
+    /// monitor bus, or both. Listen-room-only keeps the engineer's speakers dry.
+    func setTalkbackRoute(_ route: String) {
+        guard let handle else { return }
+        nc_monitor_set_talkback_route(handle, route)
+        talkbackRoute = readString { nc_monitor_talkback_route(handle, $0, $1) }
+    }
+    func setTalkbackMic(_ id: String) {
+        requestMicrophoneAccess { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.lastError = "마이크(입력) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Neuracoust DAW를 켜 주세요."
+                return
+            }
+            self.setInputDevice(id)
+        }
+    }
+    /// Number of physical input channels on the talkback device — the channel picker enumerates these.
+    var talkbackChannelCount: Int {
+        guard let handle else { return 1 }
+        return max(1, Int(nc_talkback_channel_count(handle)))
+    }
+    /// Live peak (0..1) of a physical input channel, for the "which mics are live" indicator. Reads 0
+    /// when the input queue is idle (engage Talk or input-monitoring to make the channels flow).
+    func talkbackChannelActivity(_ oneBased: Int) -> Float {
+        guard let handle else { return 0 }
+        return nc_talkback_channel_activity(handle, Int32(oneBased))
+    }
+    func setTalkbackChannel(_ oneBased: Int) {
+        guard let handle else { return }
+        nc_monitor_set_talkback_channel(handle, Int32(max(1, oneBased)))
+        talkbackChannel = Int(nc_monitor_talkback_channel(handle))
+    }
+
     /// Talkback is momentary and pulls Dim in with it, like a console talkback key.
     /// Engaging remembers Dim's prior state so releasing restores it rather than
     /// forcing it off — the user may have Dim on independently.
@@ -4346,7 +6579,8 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_set_active_speaker_slot(handle, Int32(slot))
         // The speaker-simulation module reports the model of whichever slot is
-        // active, so its row text goes stale unless the list is re-read.
+        // active, so its row text goes stale unless the list is re-read. reloadMonitorState
+        // also swaps the single EQ's band values to this slot's context.
         reloadMonitorState()
     }
 
@@ -4373,6 +6607,25 @@ final class EngineController: ObservableObject {
     lazy var speakerCableModelCatalog: [String] = (0..<Int(nc_speaker_cable_model_count())).map { i in
         readString { nc_speaker_cable_model_name(Int32(i), $0, $1) }
     }
+    lazy var powerCableModelCatalog: [String] = (0..<Int(nc_power_cable_model_count())).map { i in
+        readString { nc_power_cable_model_name(Int32(i), $0, $1) }
+    }
+    lazy var connectorModelCatalog: [String] = (0..<Int(nc_connector_model_count())).map { i in
+        readString { nc_connector_model_name(Int32(i), $0, $1) }
+    }
+    lazy var audioInterfaceModelCatalog: [String] = (0..<Int(nc_audio_interface_model_count())).map { i in
+        readString { nc_audio_interface_model_name(Int32(i), $0, $1) }
+    }
+    /// Interface models with an independent measurement located (lights the "측정" badge only —
+    /// no bundled D/A profile yet).
+    // Interfaces with a profile the picker marks as "측정 있음": baked (성적서) OR live-measured
+    // (your device). Computed, not cached, so a just-saved measurement shows up immediately.
+    private lazy var audioInterfaceBakedMeasured: Set<String> = Set(audioInterfaceModelCatalog.filter { m in
+        m.withCString { nc_audio_interface_model_measured($0) }
+    })
+    var audioInterfaceMeasured: Set<String> {
+        audioInterfaceBakedMeasured.union(audioInterfaceModelCatalog.filter { interfaceMeasuredHasProfile($0) })
+    }
 
     // The real speaker/headphone the user monitors on (definition, not a simulation),
     // and whether speaker and headphone are mutually exclusive.
@@ -4381,6 +6634,15 @@ final class EngineController: ObservableObject {
     // Power amp + speaker cable — only meaningful when the physical speaker is passive.
     @Published var physicalPowerAmpModel = ""
     @Published var physicalSpeakerCableModel = ""
+    @Published var physicalPowerCableModel = ""
+    @Published var physicalConnectorModel = ""
+    // The audio interface's D/A output-stage model (catalog/definition only — no audio effect yet).
+    @Published var physicalAudioInterfaceModel = ""
+    // Purpose 2: render the physical interface AS this model (A→B). Stored intent; inert until raw
+    // measured profiles exist for both. Empty = render as itself.
+    @Published var physicalAudioInterfaceTargetModel = ""
+    // True only when a real raw-measured A→B transform touches audio. Always false today.
+    @Published var audioInterfaceTransformActive = false
     @Published var monitorOutputExclusive = true
     /// Swap L/R in the monitor path — for speakers wired backwards.
     @Published var monitorSwapLeftRight = false
@@ -4403,16 +6665,59 @@ final class EngineController: ObservableObject {
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
         refreshHistory()
     }
+    // The power amp / cable colour a PASSIVE speaker's sound via a name heuristic (until measured),
+    // so their setters re-derive the monitor EQ like the speaker model does.
+    var powerAmpToneActive: Bool { handle.map { nc_power_amp_tone_active($0) } ?? false }
+    var speakerCableToneActive: Bool { handle.map { nc_speaker_cable_tone_active($0) } ?? false }
     func setPhysicalPowerAmpModel(_ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_physical_power_amp_model(handle, $0) }
         physicalPowerAmpModel = readString { nc_monitor_physical_power_amp_model(handle, $0, $1) }
+        syncMonitorEqToContext()
         refreshHistory()
     }
     func setPhysicalSpeakerCableModel(_ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_physical_speaker_cable_model(handle, $0) }
         physicalSpeakerCableModel = readString { nc_monitor_physical_speaker_cable_model(handle, $0, $1) }
+        syncMonitorEqToContext()
+        refreshHistory()
+    }
+    func setPhysicalPowerCableModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_power_cable_model(handle, $0) }
+        physicalPowerCableModel = readString { nc_monitor_physical_power_cable_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setPhysicalConnectorModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_connector_model(handle, $0) }
+        physicalConnectorModel = readString { nc_monitor_physical_connector_model(handle, $0, $1) }
+        refreshHistory()
+    }
+    func setPhysicalAudioInterfaceModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_audio_interface_model(handle, $0) }
+        physicalAudioInterfaceModel = readString { nc_monitor_physical_audio_interface_model(handle, $0, $1) }
+        audioInterfaceTransformActive = nc_audio_interface_transform_active(handle)
+        syncMonitorEqToContext()   // a measured interface (e.g. Kurzweil UNiTE-2) flattens its D/A FR here
+        refreshHistory()
+    }
+    /// Purpose 2: pick the interface to render AS (A→B). Empty string clears it (render as itself).
+    func setPhysicalAudioInterfaceTargetModel(_ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_physical_audio_interface_target(handle, $0) }
+        physicalAudioInterfaceTargetModel = readString { nc_monitor_physical_audio_interface_target(handle, $0, $1) }
+        audioInterfaceTransformActive = nc_audio_interface_transform_active(handle)
+        syncMonitorEqToContext()   // a target with a measured profile colours the monitor as that interface
+        refreshHistory()
+    }
+    /// Optional 2단계: apply the modeled interface's measured nonlinear harmonic character (waveshaper).
+    @Published private(set) var monitorInterfaceModelingEnabled = false
+    func setMonitorInterfaceModeling(_ on: Bool) {
+        guard let handle else { return }
+        nc_monitor_set_interface_modeling_enabled(handle, on)
+        monitorInterfaceModelingEnabled = nc_monitor_interface_modeling_enabled(handle)
         refreshHistory()
     }
 
@@ -4510,16 +6815,242 @@ final class EngineController: ObservableObject {
         return out
     }
     /// Flatten the measured in-room response toward the Harman target (room correction, ③).
+    /// In the single-EQ design this turns room tuning ON for the active slot; the correction
+    /// then rides on top of that slot's model curve when the EQ is re-derived (one combined EQ).
     func applyRoomCorrection(channel: Int) {
-        guard let handle else { return }
-        if nc_monitor_eq_apply_room_correction(handle, Int32(channel)) { reloadMonitorEq(); refreshHistory() }
+        guard let handle, nc_measure_has_curve(handle, Int32(channel)) else { return }
+        if let set = activeSpeakerSet {
+            nc_monitor_set_speaker_room_eq(handle, Int32(set.id), true)
+        }
+        reloadMonitorState()   // enables room tuning as one history step + re-derives the EQ
+        refreshHistory()
     }
+    // Interface loopback measurement (②d): patch the interface DAC output → ADC input, sweep,
+    // and one ESS capture yields the D/A frequency response AND the harmonic coefficients for
+    // the selected physical interface. A live measurement overrides the offline baked profile.
+    @Published private(set) var measuringInterface = false
+    // Loopback channel patch: which physical output the sweep exits, which input it returns on.
+    @Published var measureOutputChannel = 1
+    @Published var measureInputChannel = 1
+    // Live gain-setup meter: peak (linear 0..1) of the chosen loopback input channel.
+    @Published private(set) var measurementLevelCheckActive = false
+    @Published private(set) var measurementInputLevel: Float = 0
+    func setMeasurementLevelCheck(_ on: Bool) {
+        guard let handle else { return }
+        if on {
+            requestMicrophoneAccess { [weak self] granted in
+                guard let self, let handle = self.handle, granted else { return }
+                nc_measure_level_check(handle, true)
+                self.measurementLevelCheckActive = true
+            }
+        } else {
+            nc_measure_level_check(handle, false)
+            measurementLevelCheckActive = false
+            measurementInputLevel = 0
+        }
+    }
+    var measureOutputChannelCount: Int { guard let handle else { return 2 }; return max(2, Int(nc_measure_output_channel_count(handle))) }
+    var measureInputChannelCount: Int { guard let handle else { return 1 }; return max(1, Int(nc_measure_input_channel_count(handle))) }
+    func setMeasureOutputChannel(_ ch: Int) {
+        guard let handle else { return }
+        nc_measure_set_output_channel(handle, Int32(ch))
+        measureOutputChannel = Int(nc_measure_output_channel(handle))
+    }
+    func setMeasureInputChannel(_ ch: Int) {
+        guard let handle else { return }
+        nc_measure_set_input_channel(handle, Int32(ch))
+        measureInputChannel = Int(nc_measure_input_channel(handle))
+    }
+    func startInterfaceMeasurement() {
+        guard let handle, !measurementActive else { return }
+        guard !physicalAudioInterfaceModel.isEmpty else {
+            lastError = "먼저 '실물 오디오 인터페이스' 모델을 선택하세요 — 측정 결과를 저장할 대상이 필요합니다."
+            return
+        }
+        requestMicrophoneAccess { [weak self] granted in
+            guard let self, let handle = self.handle else { return }
+            guard granted else {
+                self.lastError = "루프백 캡처에 입력(마이크) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 켜 주세요."
+                return
+            }
+            if self.measurementLevelCheckActive {         // stop the reference tone before the sweep
+                nc_measure_level_check(handle, false)
+                self.measurementLevelCheckActive = false
+            }
+            if nc_measure_interface_start(handle) {
+                self.measuringInterface = true
+                self.measurementProgress = 0
+                self.measurementActive = true
+            }
+        }
+    }
+    func interfaceMeasuredHasProfile(_ name: String) -> Bool {
+        guard let handle, !name.isEmpty else { return false }
+        return name.withCString { nc_measure_interface_has_profile(handle, $0) }
+    }
+    func interfaceMeasuredThd(_ name: String) -> Double {
+        guard let handle, !name.isEmpty else { return 0 }
+        return name.withCString { nc_measure_interface_thd(handle, $0) }
+    }
+    /// Measured harmonics [c2..c7] (linear amplitude ratios) for the card's harmonic graph.
+    func interfaceMeasuredHarmonics(_ name: String) -> [Double] {
+        guard let handle, !name.isEmpty else { return [] }
+        var out = [Double](repeating: 0, count: 6)
+        name.withCString { nc_measure_interface_harmonics(handle, $0, &out, 6) }
+        return out
+    }
+    /// Measured D/A frequency response (dB deviation), sampled log 20 Hz–20 kHz, for the card graph.
+    func interfaceMeasuredCurve(_ name: String, count: Int = 96) -> [Double] {
+        guard let handle, !name.isEmpty else { return [] }
+        var out = [Double](repeating: 0, count: count)
+        name.withCString { nc_measure_interface_curve_response(handle, $0, &out, Int32(count), 20, 20000) }
+        return out
+    }
+    /// THD-vs-level table for the current output interface (from the saved multi-level profile).
+    func interfaceMeasuredThdVsLevel() -> [(dbfs: Double, thd: Double)] {
+        guard let handle else { return [] }
+        let n = Int(nc_measure_interface_level_count(handle))
+        return (0..<n).map { (dbfs: nc_measure_interface_level_dbfs(handle, Int32($0)),
+                              thd: nc_measure_interface_level_thd(handle, Int32($0))) }
+    }
+    func clearInterfaceMeasurement(_ name: String) {
+        guard let handle, !name.isEmpty else { return }
+        name.withCString { nc_measure_interface_clear(handle, $0) }
+        syncMonitorEqToContext()
+        objectWillChange.send()
+    }
+
+    // A just-finished measurement, held for the user to review (verdict) and confirm before it is
+    // saved + applied — so a clipped or too-low capture never silently overwrites a good profile.
+    @Published private(set) var measurementPendingValid = false
+    @Published private(set) var measurementPendingThd: Double = 0
+    @Published private(set) var measurementPendingPeak: Float = 0   // sweep peak 0..1 (>=~0.99 clipped)
+    func commitInterfaceMeasurement() {
+        guard let handle else { return }
+        nc_measure_interface_commit(handle)
+        measurementPendingValid = false
+        syncMonitorEqToContext()   // apply the committed interface-FR compensation
+        objectWillChange.send()
+    }
+    func discardInterfaceMeasurement() {
+        guard let handle else { return }
+        nc_measure_interface_discard(handle)
+        measurementPendingValid = false
+        multiLevelResults = []
+        multiLevelDone = false
+    }
+
+    // Multi-level auto run (A단계): the user just connects the loopback and clicks once. We calibrate
+    // the loopback gain from the reference tone, auto-scale each sweep so it lands at a target return
+    // level without clipping, run the sweeps in sequence, and plot THD vs level (소자 반응 모니터링).
+    @Published private(set) var multiLevelActive = false
+    @Published private(set) var multiLevelStep = 0
+    @Published private(set) var multiLevelTotal = 0
+    @Published private(set) var multiLevelDone = false
+    @Published private(set) var multiLevelResults: [(dbfs: Double, thd: Double)] = []
+    private var multiLevelAmps: [Double] = []
+
+    func startMultiLevelMeasurement() {
+        guard let handle, !measurementActive, !multiLevelActive else { return }
+        guard !physicalAudioInterfaceModel.isEmpty else {
+            lastError = "먼저 '실물 오디오 인터페이스' 모델을 선택하세요."
+            return
+        }
+        requestMicrophoneAccess { [weak self] granted in
+            guard let self, let handle = self.handle else { return }
+            guard granted else { self.lastError = "루프백 캡처에 입력(마이크) 권한이 필요합니다."; return }
+            nc_measure_interface_reset_levels(handle)
+            nc_measure_interface_discard(handle)
+            self.multiLevelResults = []
+            self.multiLevelDone = false
+            self.measurementPendingValid = false
+            // Calibrate loopback gain from the 0.5 reference tone (level check). The input queue can
+            // take a beat to open (SoundGrid) and the tone to loop back, so poll until it appears.
+            nc_measure_level_check(handle, true)
+            self.multiLevelActive = true
+            self.multiLevelStep = 0
+            self.multiLevelTotal = 0
+            self.calibratePolls = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.calibrateLoopbackThenRun() }
+        }
+    }
+
+    private var calibratePolls = 0
+    private func calibrateLoopbackThenRun() {
+        guard let handle, multiLevelActive else { return }
+        let ret = Double(nc_measure_input_level(handle))   // return level at 0.5 send
+        calibratePolls += 1
+        if ret > 0.02 {                                    // loopback signal established
+            nc_measure_level_check(handle, false)
+            let gain = ret / 0.5
+            let targets: [Double] = [-1, -7, -13, -19, -25]   // target return dBFS, near max → down
+            multiLevelAmps = targets.map { min(0.99, pow(10, $0 / 20) / gain) }
+            multiLevelTotal = multiLevelAmps.count
+            multiLevelStep = 0
+            runNextMultiLevel()
+            return
+        }
+        if calibratePolls > 20 {                           // ~4 s with no signal → give up
+            nc_measure_level_check(handle, false)
+            multiLevelActive = false
+            lastError = "루프백 신호가 없습니다 — 자동 측정에는 입력 신호가 필요합니다. 케이블/SoundGrid 패치와 입력 장치(Waves SoundGrid) 선택을 확인하세요."
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.calibrateLoopbackThenRun() }
+    }
+
+    private func runNextMultiLevel() {
+        guard let handle, multiLevelActive else { return }
+        guard multiLevelStep < multiLevelAmps.count else {
+            // All levels done — surface the curve + save/discard review.
+            multiLevelActive = false
+            reloadMultiLevelResults()
+            multiLevelDone = true
+            measurementPendingValid = true   // reuse the review card (commit writes the multi-level profile)
+            return
+        }
+        nc_measure_set_sweep_amplitude(handle, multiLevelAmps[multiLevelStep])
+        if nc_measure_interface_start(handle) {
+            measuringInterface = true
+            measurementProgress = 0
+            measurementActive = true
+        }
+    }
+
+    private func reloadMultiLevelResults() {
+        guard let handle else { return }
+        let n = Int(nc_measure_interface_level_count(handle))
+        multiLevelResults = (0..<n).map {
+            (dbfs: nc_measure_interface_level_dbfs(handle, Int32($0)),
+             thd: nc_measure_interface_level_thd(handle, Int32($0)))
+        }
+    }
+
     // Called each poll tick while measuring; finishes when the sweep has played out.
     fileprivate func pollMeasurement() {
         guard measurementActive, let handle else { return }
         measurementProgress = nc_measure_progress(handle)
         if !nc_measure_active(handle) {
-            _ = nc_measure_finish(handle, Int32(measuringChannel))
+            if measuringInterface {
+                _ = nc_measure_interface_finish(handle)   // holds a PENDING result for review
+                measuringInterface = false
+                measurementPendingThd = nc_measure_interface_pending_thd(handle)
+                measurementPendingPeak = nc_measure_interface_pending_peak(handle)
+                if multiLevelActive {
+                    // Multi-level run: record this level's result and chain to the next sweep.
+                    let retDb = measurementPendingPeak > 1e-6 ? 20.0 * log10(Double(measurementPendingPeak)) : -120.0
+                    nc_measure_interface_record_level(handle, retDb)
+                    multiLevelStep += 1
+                    measurementProgress = 1
+                    measurementActive = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.runNextMultiLevel() }
+                    return
+                }
+                measurementPendingValid = nc_measure_interface_pending(handle)
+                // Not applied until the user commits (see commitInterfaceMeasurement).
+            } else {
+                _ = nc_measure_finish(handle, Int32(measuringChannel))
+            }
             measurementProgress = 1
             measurementActive = false
         }
@@ -4533,6 +7064,38 @@ final class EngineController: ObservableObject {
             readString { nc_virtual_monitor_name(handle, Int32(i), $0, $1) }
         }
     }()
+
+    /// Headphone models that carry a measured curve — the headphone equivalent of the virtual
+    /// monitor targets (drives the headphone-mode EQ + the "측정" badge).
+    lazy var headphoneMonitorTargets: [String] = {
+        guard let handle else { return [] }
+        let count = Int(nc_headphone_profile_count(handle))
+        return (0..<count).map { i in
+            readString { nc_headphone_profile_name(handle, Int32(i), $0, $1) }
+        }
+    }()
+    func headphoneModelHasCurve(_ model: String) -> Bool {
+        headphoneMonitorTargets.contains { $0 == model || stripSpeakerSlotPrefix($0) == stripSpeakerSlotPrefix(model) }
+    }
+    /// A headphone model's measured curve as [[hz, db]] points (log grid), or nil if unmeasured.
+    func headphoneCurvePoints(_ model: String, count: Int = 200) -> [[Double]]? {
+        guard let handle, !model.isEmpty else { return nil }
+        var out = [Double](repeating: 0, count: count)
+        let ok = model.withCString { nc_headphone_profile_response(handle, $0, &out, Int32(count), 20.0, 20000.0) }
+        guard ok else { return nil }
+        let freqs = EngineController.monitorCurveFrequencies(count: count)
+        return zip(freqs, out).map { [$0, $1] }
+    }
+    /// The measured D/A FR curve of an audio-interface model (nil when it has no measured profile).
+    func audioInterfaceCurvePoints(_ model: String, count: Int = 200) -> [[Double]]? {
+        guard let handle, !model.isEmpty else { return nil }
+        var out = [Double](repeating: 0, count: count)
+        let ok = model.withCString { nc_audio_interface_profile_response(handle, $0, &out, Int32(count), 20.0, 20000.0) }
+        guard ok else { return nil }
+        let freqs = EngineController.monitorCurveFrequencies(count: count)
+        return zip(freqs, out).map { [$0, $1] }
+    }
+    func audioInterfaceHasProfile(_ model: String) -> Bool { audioInterfaceCurvePoints(model, count: 8) != nil }
 
     /// Model a target speaker on the physical monitor — loads its fitted curve into the monitor
     /// EQ so the output takes on that speaker's tonal character.
@@ -4550,10 +7113,25 @@ final class EngineController: ObservableObject {
         nc_monitor_eq_response(handle, &out, Int32(count), 20.0, 20000.0)
         return out
     }
+    /// The room-tuning correction curve (what a room measurement would impose), or nil until
+    /// a measurement exists. Sampled on the same log grid as `monitorEqResponse`.
+    func roomCorrectionResponse(channel: Int = 0, count: Int = 160) -> [Double]? {
+        guard let handle else { return nil }
+        var out = [Double](repeating: 0, count: count)
+        let available = nc_monitor_room_correction_response(handle, Int32(channel), &out, Int32(count), 20.0, 20000.0)
+        return available ? out : nil
+    }
+    /// The frequencies (Hz) matching the magnitude arrays above — log-spaced 20 Hz–20 kHz.
+    static func monitorCurveFrequencies(count: Int = 160) -> [Double] {
+        (0..<count).map { 20.0 * pow(1000.0, Double($0) / Double(max(1, count - 1))) }
+    }
     func setPhysicalHeadphoneModel(_ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_physical_headphone_model(handle, $0) }
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
+        // The physical headphone is the correction term in headphone mode — re-derive the EQ so
+        // selecting it actually flattens it out (otherwise the correction never enters the chain).
+        syncMonitorEqToContext()
         refreshHistory()
     }
     func setMonitorOutputExclusive(_ exclusive: Bool) {
@@ -4594,8 +7172,73 @@ final class EngineController: ObservableObject {
     func setSpeakerModel(_ slot: Int, _ model: String) {
         guard let handle else { return }
         nc_monitor_set_speaker_model(handle, Int32(slot), model)
-        reloadMonitorState()
+        reloadMonitorState()          // re-derives the single EQ if this is the active slot
         refreshHistory()
+    }
+
+    /// The one monitor EQ, rebuilt from the active monitoring context ("one EQ, values swap").
+    /// One modeller at a time, following the output mode: speaker mode → the active A/B/C speaker
+    /// model's curve (physical route → room-tuning only); headphone mode → the physical headphone
+    /// model's curve. Room correction rides on top when measured and the slot's room-EQ is on.
+    /// Derived state: records no undo step (the model/route/mode change already recorded one).
+    func syncMonitorEqToContext() {
+        guard let handle else { return }
+        var slotModel = ""       // the A/B/C target to simulate (speaker or headphone)
+        var correctionModel = "" // the physical headphone being worn (headphone mode → corrected)
+        var includeRoom = false
+        // The active A/B/C slot holds one model — a virtual SPEAKER or a HEADPHONE — to simulate.
+        // A physical output route bypasses the modeller.
+        if let set = activeSpeakerSet {
+            let physical = !set.output.isEmpty && set.output.caseInsensitiveCompare("None") != .orderedSame
+            if !physical {
+                let bare = stripSpeakerSlotPrefix(set.model)
+                if speakerModelHasCurve(bare) || headphoneModelHasCurve(bare) { slotModel = bare }
+            }
+            includeRoom = set.roomEq
+        }
+        // In headphone mode the physical headphone you wear is corrected toward neutral so the
+        // simulated target reproduces cleanly, on top of whatever the slot models.
+        if outputMode == .headphone {
+            let hp = stripSpeakerSlotPrefix(physicalHeadphoneModel)
+            if headphoneModelHasCurve(hp) { correctionModel = hp }
+        }
+        let roomAvailable = includeRoom && (nc_measure_has_curve(handle, 0) || nc_measure_has_curve(handle, 1))
+        slotModel.withCString { slot in correctionModel.withCString { corr in
+            nc_monitor_eq_sync(handle, slot, corr, roomAvailable)
+        }}
+        reloadMonitorEq()
+        monitorEqLatencyMs = nc_monitor_eq_latency_ms(handle)
+    }
+
+    /// Linear-phase (FIR) monitor EQ: matches the target across the whole band (no biquad ripple
+    /// or treble cramping) at the cost of latency. Off = the low-latency biquad path.
+    @Published var monitorEqLinearPhase = false
+    @Published private(set) var monitorEqLatencyMs: Double = 0
+    func setMonitorEqLinearPhase(_ on: Bool) {
+        guard let handle else { return }
+        nc_monitor_eq_set_linear_phase(handle, on)
+        monitorEqLinearPhase = nc_monitor_eq_linear_phase(handle)
+        syncMonitorEqToContext()   // rebuild the current context through the chosen path
+    }
+
+    /// Reference a headphone model to the Harman OE target: off = the raw curve (with ear gain),
+    /// on = the headphone's deviation from neutral. Only affects headphone-model slots.
+    @Published var monitorEqHeadphoneOeTarget = false
+    func setMonitorEqHeadphoneOeTarget(_ on: Bool) {
+        guard let handle else { return }
+        nc_monitor_eq_set_headphone_oe_target(handle, on)
+        monitorEqHeadphoneOeTarget = nc_monitor_eq_headphone_oe_target(handle)
+        syncMonitorEqToContext()
+    }
+
+    /// True when a speaker model has a measured response curve (so selecting it drives the EQ).
+    func speakerModelHasCurve(_ model: String) -> Bool {
+        virtualMonitorTargets.contains { $0 == model || stripSpeakerSlotPrefix($0) == stripSpeakerSlotPrefix(model) }
+    }
+    private func stripSpeakerSlotPrefix(_ name: String) -> String {
+        // Stored A/B/C models read "Speaker A: <name>"; the profile keys are the bare <name>.
+        if let range = name.range(of: ": ") { return String(name[range.upperBound...]) }
+        return name
     }
 
     /// Route a slot straight to a physical output pair (no simulation), or "None" to
@@ -4603,6 +7246,20 @@ final class EngineController: ObservableObject {
     func setSpeakerOutput(_ slot: Int, _ route: String) {
         guard let handle else { return }
         nc_monitor_set_speaker_output(handle, Int32(slot), route)
+        reloadMonitorState()          // physical route drops the modeller → EQ re-derives
+        refreshHistory()
+    }
+
+    /// A passive modeled speaker's power amp / cable colour the simulation (heuristic tone).
+    func setSpeakerAmp(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_speaker_amp(handle, Int32(slot), $0) }
+        reloadMonitorState()          // re-reads slots + re-derives the EQ with the amp tone
+        refreshHistory()
+    }
+    func setSpeakerCable(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_speaker_cable(handle, Int32(slot), $0) }
         reloadMonitorState()
         refreshHistory()
     }
@@ -4610,7 +7267,7 @@ final class EngineController: ObservableObject {
     func setSpeakerRoomEq(_ slot: Int, _ enabled: Bool) {
         guard let handle else { return }
         nc_monitor_set_speaker_room_eq(handle, Int32(slot), enabled)
-        reloadMonitorState()
+        reloadMonitorState()          // room tuning on/off re-derives the EQ
         refreshHistory()
     }
 
@@ -4620,6 +7277,7 @@ final class EngineController: ObservableObject {
     @Published private(set) var midiLiveActive = false
     /// So auto-start is attempted once per set of connected inputs, not every tick.
     private var midiLiveAutoStarted = false
+    private var midiLiveOpenFailLogged = false
 
     /// Opens the first MIDI source when one appears, then drains its notes into every
     /// armed / input-monitoring instrument track. Notes sound stopped or playing.
@@ -4632,11 +7290,24 @@ final class EngineController: ObservableObject {
                 let sources = midiInputs()
                 let keyboard = sources.first { !$0.name.localizedCaseInsensitiveContains("SoundGrid")
                                             && !$0.name.localizedCaseInsensitiveContains("Waves") }
-                let chosen = keyboard?.id ?? sources.first?.id ?? ""
-                _ = chosen.withCString { nc_midi_live_start(handle, $0) }
-                midiLiveAutoStarted = true
+                let pick = keyboard ?? sources.first
+                let chosen = pick?.id ?? ""
+                let ok = chosen.withCString { nc_midi_live_start(handle, $0) }
+                // Only latch once the source is REALLY open. A transient failure — the device not
+                // yet enumerated at launch, or CoreMIDI unsettled after a crash — must be retried on
+                // the next tick, not swallowed, or the keyboard never comes in the whole session.
+                if ok && nc_midi_live_active(handle) {
+                    midiLiveAutoStarted = true
+                    midiLiveOpenFailLogged = false
+                    Diagnostics.shared.log("live MIDI input opened: \(pick?.name ?? chosen)")
+                } else if !midiLiveOpenFailLogged {
+                    midiLiveOpenFailLogged = true
+                    let names = sources.map { $0.name }.joined(separator: ", ")
+                    Diagnostics.shared.log("live MIDI open failed (retrying) — picked \(pick?.name ?? "none") of [\(names)]")
+                }
             } else if count == 0 {
                 midiLiveAutoStarted = false
+                midiLiveOpenFailLogged = false
             }
         }
         drainLiveMidi(handle)
@@ -4674,6 +7345,8 @@ final class EngineController: ObservableObject {
         // take — independent of the monitor path, so what you hear never affects the capture.
         if nc_midi_record_active(handle) {
             nc_midi_record_feed(handle, &events, Int32(count), playheadSeconds)
+            // Redraw: the take's region grew and may have gained notes as keys were released.
+            reloadMidiRegions()
         }
         // Mirror the engine's routing rule: armed / input-monitoring tracks hear the
         // keyboard, plus the selected track (the live-MIDI target). Only instrument
@@ -4781,6 +7454,13 @@ final class EngineController: ObservableObject {
     private func tick() {
         guard let handle else { return }
 
+        // While a menu (context menu, `Menu`, or the menu bar) is tracking, skip the whole
+        // telemetry publish. Every setIfChanged below fires objectWillChange, re-rendering the
+        // engine-observing views — and that re-render tears down the open NSMenu, so submenus
+        // flicker and won't expand. Meters resume the instant the menu closes; live MIDI is
+        // unaffected (its own 240 Hz timer drains it).
+        if menuTrackingActive { return }
+
         var status = NCEngineStatus()
         nc_engine_status(handle, &status)
 
@@ -4796,6 +7476,9 @@ final class EngineController: ObservableObject {
             telemetrySlowCounter = 0
             setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs.rounded())
             setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
+            setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
+            // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
+            if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)
         }
         setIfChanged(\.delayCompensationSamples, Int(nc_delay_compensation_samples(handle)))
@@ -4841,6 +7524,8 @@ final class EngineController: ObservableObject {
         })
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        serviceCountIn(handle)
+        serviceAudioRecordingWaveform(handle)
         // Drive any plugin-parameter automation lanes to the playhead, so a drawn plug-in
         // curve is heard live. (Volume/pan are baked by the renderer; this covers inserts.)
         if transportRunning { nc_apply_plugin_automation(handle, playheadSeconds) }
@@ -4877,6 +7562,9 @@ final class EngineController: ObservableObject {
         // hot-plug detection without polling.
 
         pollMeasurement()
+        if measurementLevelCheckActive || measuringInterface {
+            measurementInputLevel = nc_measure_input_level(handle)
+        }
         listenRoom?.refresh()
     }
     private var deviceRescanTicks = 0

@@ -2,6 +2,7 @@
 
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
+#include "audio/MonitorCorrection.h"   // ResponseCurve
 #include "audio/RemoteDspServerClient.h"
 #include "plugins/MonitorDspModules.h"
 #include "plugins/Vst3SdkAdapter.h"
@@ -31,6 +32,12 @@ struct AudioEngineSettings {
     std::string grooveFeel = "straight";
     double grooveSwingAmount = 0.0;
     std::string metronomeSubdivision = "auto";
+    double metronomeGain = 1.0;            // linear level over the built-in click (0..2)
+    std::string metronomeSound = "beep";   // beep / wood / rim / cowbell
+    bool metronomeAccentFirst = true;      // accent the bar's downbeat (off = every beat equal)
+    // Genre accent pattern: per-step gains (0..1) over one bar at the click subdivision. Empty =
+    // the default bar/beat/sub-beat hierarchy. A 0 gain is a rest (no click on that step).
+    std::vector<float> metronomeAccentPattern;
     bool monitorDspEnabled = true;
     std::string monitorDspPathMode = "internal";
     RemoteDspServerSettings remoteDspServer = defaultRemoteDspServerSettings();
@@ -58,7 +65,7 @@ struct AudioEngineSettings {
     float monitorStationDimDb = -20.0f;
     std::string monitorStationTalkbackRoute = "listen_room";
     float monitorInputTrimDb = -9.0f;
-    float monitorVolumeDb = -6.0f;
+    float monitorVolumeDb = -12.0f;
     ListenRoomSettings listenRoom;
 };
 
@@ -102,9 +109,14 @@ struct AudioEngineStatus {
     bool directMonitoringEnabled = true;
     bool lowLatencyRecordMonitoringActive = false;
     bool physicalInputMonitoringActive = false;
-    /// "Listen to source" (e.g. BlackHole) routes a physical input through the monitor
-    /// bus with no record-armed track, so the input queue must open for it too.
+    /// "Listen to source" routes the reference tap through the monitor bus in place of the
+    /// master. It is the A/B *listening* state — true only while you are actually hearing the
+    /// other apps (not while auditioning the master with the tap still armed).
     bool listenSourceActive = false;
+    /// Reference-hold: the process tap is running and the tapped apps are muted at their own
+    /// output, independent of whether you are currently listening to them or to the master.
+    /// Drives the tap lifecycle so switching to the master never lets the apps leak out.
+    bool referenceTapArmed = false;
     int recordArmedTrackCount = 0;
     int inputChannels = 0;
     float inputPeak = 0.0f;
@@ -153,13 +165,38 @@ public:
                              const std::string& grooveFeel = "straight",
                              double grooveSwingAmount = 0.0,
                              const std::vector<TimeSignatureMarkerState>& timeSignatureMap = {},
-                             const std::string& metronomeSubdivision = "auto");
+                             const std::string& metronomeSubdivision = "auto",
+                             double metronomeGain = 1.0,
+                             const std::string& metronomeSound = "beep",
+                             bool metronomeAccentFirst = true);
+    void setMetronomeAccentPattern(const std::vector<float>& pattern);
     void setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled);
     void setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer);
     void setListenRoomSettings(const ListenRoomSettings& settings);
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room");
     void setPhysicalInputAccessAllowed(bool allowed);
     void setMonitorListenSource(bool active);
+    /// Arm/disarm reference-hold: run the process tap and mute the tapped apps' own output while
+    /// armed, so A/B-ing back to the master never leaks their sound out of the computer. Disarming
+    /// also clears the listening state and unmutes the apps.
+    void setMonitorReferenceArmed(bool armed);
+    /// Input-monitor the tap on top of the master — punch (setTapInputMonitor) or the track's
+    /// Input-Monitor toggle (setTapInputHold).
+    void setTapInputMonitor(bool active);
+    void setTapInputHold(bool active);
+    /// Audio recording-to-disk (V1). source 1 = physical mic (device channels [offset, offset+count)),
+    /// source 2 = reference tap (stereo). endInputRecording saves the take to `path` and reports it.
+    void beginInputRecording(int source, int channelOffset, int channels);
+    bool endInputRecording(const std::string& path, int bitDepth, std::string& error,
+                           double& durationSeconds, int& channels);
+    void cancelInputRecording();
+    bool inputRecordingActive() const;
+    /// Live take metering for the timeline's growing waveform during a record.
+    double recordingLiveSeconds() const;
+    int recordingLivePeakCount() const;
+    int recordingLivePeaksSince(int fromBucket, float* outLR, int maxBuckets) const;
+    int recordingChannels() const;
+    int recordingPeakSamples() const;
     /// Change the monitor input device live (reopens only the input queue; the output engine
     /// and its transport keep running). macOS CoreAudio engine only; no-op elsewhere.
     void setInputDeviceLive(const std::string& deviceId);
@@ -167,14 +204,36 @@ public:
     bool loadAudioFile(const std::string& path, std::string& error);
     bool loadProject(const ProjectDocument& project, std::string& error);
     bool updateProject(const ProjectDocument& project, std::string& error);
+    // Wrap a structural change (add track/bus/send, send pre-post, clip-gain commit) with these to
+    // fade the monitor to silence for the swap and back in after — no click. See NeuracoustDspEngine.
+    void beginGraphChangeDeclick();
+    void endGraphChangeDeclick();
+    // PDC applied to a track/bus route (by name), in samples. 0 when off or the route has no latency.
+    int routeDelayCompensationSamplesFor(const std::string& routeName);
     void updateMonitorEq(const std::vector<MonitorEqBandState>& bands);
+    // Nonlinear interface modeling (Chebyshev waveshaper from measured H2–H7). Empty/zero → bypass.
+    void updateInterfaceModeler(const std::vector<double>& harmonics, double mix);
+    void updateMonitorFir(const ResponseCurve& curveDb, int numTaps);
+    int monitorFirLatencySamples() const;
+    double monitorEqMagnitudeDb(double frequencyHz) const;
     void updateTrackSendGain(const std::string& trackName, int slot, float gainDb);
     void startMeasurement(int channel, std::vector<float> signal);
+    void setMeasurementChannels(int outputChannel, int inputChannel);   // loopback DAC/ADC channel
+    int selectedInputChannelCount() const;   // native input width of the selected device (uncapped)
+    void setMeasurementLevelCheck(bool on);  // live-meter the loopback input for gain setup
+    float measurementInputPeak() const;      // peak of the chosen ADC channel, 0..1
+    float measurementSweepPeak() const;      // undecayed max during the last sweep (clip check)
+    void  setTalkbackInputChannel(int oneBased);   // which input channel the talkback mic is on
+    int   inputChannelActivityCount() const;       // physical input channels currently metered
+    float inputChannelActivity(int oneBased) const;// decayed peak of that input channel, 0..1
     void cancelMeasurement();
     bool measurementActive() const;
     double measurementProgress() const;
     std::vector<float> takeMeasurementCapture();
     bool updateClipGain(const std::string& clipId, float gainDb);
+    bool updateClipStart(const std::string& clipId, double startSeconds);
+    bool updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds,
+                          double sourceOffsetSeconds);
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);
     bool updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send);

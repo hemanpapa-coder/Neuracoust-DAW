@@ -119,4 +119,64 @@ std::vector<double> impulseResponseMagnitudeDb(const std::vector<float>& impulse
     return out;
 }
 
+HarmonicSeparation separateHarmonics(const std::vector<float>& recorded,
+                                     const SweepParams& params, int maxHarmonic) {
+    HarmonicSeparation result;
+    if (recorded.empty() || maxHarmonic < 2) return result;
+    const std::vector<float> ir = deconvolveSweep(recorded, params);
+    if (ir.empty()) return result;
+    const std::ptrdiff_t N = static_cast<std::ptrdiff_t>(ir.size());
+    const double sr = std::max(1.0, params.sampleRate);
+    const double f1 = std::max(1.0, std::min(params.startHz, sr * 0.49));
+    const double f2 = std::max(f1 + 1.0, std::min(params.endHz, sr * 0.5));
+    const double L = std::max(0.05, params.durationSeconds) / std::log(f2 / f1);
+
+    // Locate the LINEAR impulse: the largest peak in the causal half. Each harmonic order
+    // lives in the wrapped tail, Δt_k = L·ln(k) seconds BEFORE this peak, so restricting the
+    // search to the first half never mistakes a harmonic response for the fundamental.
+    std::ptrdiff_t linIdx = 0;
+    double linPeak = 0.0;
+    const std::ptrdiff_t causalLimit = N / 2;
+    for (std::ptrdiff_t i = 0; i < causalLimit; ++i) {
+        const double a = std::abs(static_cast<double>(ir[static_cast<std::size_t>(i)]));
+        if (a > linPeak) { linPeak = a; linIdx = i; }
+    }
+    if (linPeak < 1e-9) return result;   // no usable fundamental — treat as unmeasured
+
+    // Window radius: comfortably under the tightest harmonic spacing (smallest at the top
+    // order, Δt_{k+1}-Δt_k = L·ln(1+1/k)), capped at 10 ms so windows never overlap.
+    const double minSpacing = L * std::log(1.0 + 1.0 / static_cast<double>(maxHarmonic));
+    const auto radius = static_cast<std::ptrdiff_t>(
+        std::max(4.0, std::min(minSpacing * 0.4, 0.010) * sr));
+
+    // Each order's separated response is a near-delta at its Δt_k, so the peak in the window
+    // (not the summed energy, which over-counts the deconvolution's time spread) is the honest
+    // amplitude. Peak ratio harmonic/fundamental = the coefficient directly, no calibration.
+    auto windowPeak = [&](std::ptrdiff_t center) {
+        double peak = 0.0;
+        for (std::ptrdiff_t d = -radius; d <= radius; ++d) {
+            const std::ptrdiff_t idx = ((center + d) % N + N) % N;   // circular
+            peak = std::max(peak, std::abs(static_cast<double>(ir[static_cast<std::size_t>(idx)])));
+        }
+        return peak;
+    };
+
+    const double linRef = windowPeak(linIdx);
+    if (linRef < 1e-9) return result;
+
+    double sumSq = 0.0;
+    result.coefficients.reserve(static_cast<std::size_t>(maxHarmonic - 1));
+    for (int k = 2; k <= maxHarmonic; ++k) {
+        const double dt = L * std::log(static_cast<double>(k));   // advance before the linear IR
+        const std::ptrdiff_t shift = static_cast<std::ptrdiff_t>(std::llround(dt * sr));
+        const std::ptrdiff_t center = ((linIdx - shift) % N + N) % N;
+        const double ratio = std::min(1.0, windowPeak(center) / linRef);
+        result.coefficients.push_back(ratio);
+        sumSq += ratio * ratio;
+    }
+    result.thdPercent = std::sqrt(sumSq) * 100.0;
+    result.valid = true;
+    return result;
+}
+
 } // namespace neuracoust::daw

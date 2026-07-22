@@ -9,7 +9,8 @@ import SwiftUI
 struct GlobalTracksBar: View {
     @EnvironmentObject private var engine: EngineController
 
-    private static let headerWidth: CGFloat = 152
+    private static let headerWidth: CGFloat = 150   // must match TimelineNSView.headerWidth so the
+                                                    // conductor grid lines up with the playhead/grid
     private static let minRow: CGFloat = 16
     private static let maxRow: CGFloat = 72
     private static let sepHeight: CGFloat = 1
@@ -335,7 +336,9 @@ struct GlobalTracksBar: View {
         let startT = dragSeconds["sf\(e.timeSeconds)"] ?? e.timeSeconds
         let startX = x(startT, laneWidth)
         let endX = x(endSeconds, laneWidth)
-        let clippedStart = max(Self.headerWidth, startX)
+        // Anchor to the section's true time position (scrolls with the timeline, like markers) rather
+        // than sticking the label to the visible-left edge.
+        let clippedStart = startX
         let clippedEnd = min(Self.headerWidth + laneWidth, endX)
         let width = max(0, clippedEnd - clippedStart)
         let color = EngineController.songSectionColor(e.label)

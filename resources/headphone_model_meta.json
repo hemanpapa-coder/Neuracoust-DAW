@@ -1,0 +1,861 @@
+[
+ {
+  "name": "Sennheiser HD 600",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Sennheiser%20HD%20600.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 7,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Filk",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 650",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Sennheiser%20HD%20650.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 800S",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Sennheiser%20HD%20800%20S.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "HypetheSonics",
+   "Innerfidelity",
+   "Rtings",
+   "kr0mka",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 25",
+  "source": "Rtings",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Rtings/data/over-ear/Bruel%20%26%20Kjaer%205128/Sennheiser%20HD%2025.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 1,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 280 Pro",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Sennheiser%20HD%20280%20Pro.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Filk",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 560S",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Sennheiser%20HD%20560S.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "HypetheSonics",
+   "Kuulokenurkka",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 660 S",
+  "source": "HypetheSonics",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/HypetheSonics/data/over-ear/Sennheiser%20HD%20660%20S.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "HypetheSonics",
+   "Innerfidelity",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 660S2",
+  "source": "Filk",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Filk/data/over-ear/Sennheiser%20HD%20660S2.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Filk",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 620S",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Sennheiser%20HD%20620S.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 800",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/Sennheiser%20HD%20800.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sennheiser HD 820",
+  "source": "HypetheSonics",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/HypetheSonics/data/over-ear/Sennheiser%20HD%20820.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "HypetheSonics",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 770 Pro",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Beyerdynamic%20DT%20770%20Pro.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 880 Pro",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Beyerdynamic%20DT%20880%20%28250%20Ohm%29.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 990 Pro",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Beyerdynamic%20DT%20990%20Pro.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 1990 Pro",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Beyerdynamic%20DT%201990%20%28analytic%20earpads%29.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 700 Pro X",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Beyerdynamic%20DT%20700%20Pro%20X.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Beyerdynamic DT 900 Pro X",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Beyerdynamic%20DT%20900%20Pro%20X.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K240 Studio",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/AKG%20K240%20Studio.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 1,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K271 MkII",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/AKG%20K271%20MKII.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K361",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/AKG%20K361.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K371",
+  "source": "Filk",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Filk/data/over-ear/AKG%20K371.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Filk",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K701",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/AKG%20K701.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K702",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/AKG%20K702.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "AKG K712 Pro",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/AKG%20K712.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-M20x",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Audio-Technica%20ATH-M20x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-M40x",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Audio-Technica%20ATH-M40x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-M50x",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Audio-Technica%20ATH-M50x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-M60x",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Audio-Technica%20ATH-M60x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-M70x",
+  "source": "Innerfidelity",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Innerfidelity/data/over-ear/Audio-Technica%20ATH-M70x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Innerfidelity",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audio-Technica ATH-R70x",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Audio-Technica%20ATH-R70x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sony MDR-7506",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/Sony%20MDR-7506.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sony MDR-CD900ST",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Sony%20MDR-CD900ST.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sony MDR-MV1",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Sony%20MDR-MV1.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Focal Listen Pro",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Focal%20Listen%20Professional.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 1,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina"
+  ]
+ },
+ {
+  "name": "Focal Clear",
+  "source": "HypetheSonics",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/HypetheSonics/data/over-ear/Focal%20Clear.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "HypetheSonics",
+   "Innerfidelity",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Focal Clear Mg",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Focal%20Clear%20Mg.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Focal Utopia",
+  "source": "HypetheSonics",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/HypetheSonics/data/over-ear/Focal%20Utopia.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "HypetheSonics",
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audeze LCD-2 Classic",
+  "source": "Innerfidelity",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Innerfidelity/data/over-ear/Audeze%20LCD-2%20Classic.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Innerfidelity",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audeze LCD-X",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Audeze%20LCD-X.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "HypetheSonics",
+   "Innerfidelity",
+   "Kuulokenurkka"
+  ]
+ },
+ {
+  "name": "Audeze LCD-XC",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/Audeze%20LCD-XC.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audeze MM-100",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Audeze%20MM-100.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Audeze MM-500",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Audeze%20MM-500.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "HIFIMAN Sundara",
+  "source": "Super Review",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Super%20Review/data/over-ear/HIFIMAN%20Sundara.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 1,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Super Review"
+  ]
+ },
+ {
+  "name": "HIFIMAN Ananda",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/HIFIMAN%20Ananda.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 5,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Filk",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "HIFIMAN Edition XS",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/HIFIMAN%20Edition%20XS.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "HIFIMAN HE400se",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/HIFIMAN%20HE400se.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Kuulokenurkka",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Shure SRH440",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Shure%20SRH440.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 6,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Filk",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Shure SRH840A",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Shure%20SRH840A.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 1,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Shure SRH1540",
+  "source": "Headphone.com Legacy",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Headphone.com%20Legacy/data/over-ear/Shure%20SRH1540.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Shure SRH1840",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Shure%20SRH1840.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "Headphone.com Legacy",
+   "Innerfidelity",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Austrian Audio Hi-X60",
+  "source": "Filk",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Filk/data/over-ear/Austrian%20Audio%20Hi-X60.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Filk",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Dan Clark Audio E3",
+  "source": "kr0mka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/kr0mka/data/over-ear/Dan%20Clark%20Audio%20E3.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 4,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Super Review",
+   "kr0mka",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Dan Clark Audio Stealth",
+  "source": "Kuulokenurkka",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Kuulokenurkka/data/over-ear/Dan%20Clark%20Audio%20Stealth.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Kuulokenurkka",
+   "Super Review",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Fostex TH900mk2",
+  "source": "Innerfidelity",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Innerfidelity/data/over-ear/Fostex%20TH900mk2.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Innerfidelity",
+   "kr0mka",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Grado SR325x",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Grado%20SR325x.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "kr0mka",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Neumann NDH 20",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Neumann%20NDH20.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Neumann NDH 30",
+  "source": "Auriculares Argentina",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/Auriculares%20Argentina/data/over-ear/Neumann%20NDH30.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Auriculares Argentina",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Apple AirPods Max",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Apple%20AirPods%20Max.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 2,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "oratory1990"
+  ]
+ },
+ {
+  "name": "Sony WH-1000XM5",
+  "source": "oratory1990",
+  "sourceUrl": "https://github.com/jaakkopasanen/AutoEq/blob/7ae0f56d53074872b028649617a22bbb4232feb7/measurements/oratory1990/data/over-ear/Sony%20WH-1000XM5.csv",
+  "formFactor": "오버이어",
+  "sourceCount": 3,
+  "pointCount": 695,
+  "status": "available",
+  "sources": [
+   "Rtings",
+   "Super Review",
+   "oratory1990"
+  ]
+ }
+]

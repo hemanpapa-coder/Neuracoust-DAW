@@ -1328,6 +1328,36 @@ std::vector<Vst3PluginDescriptor> expandWavesShellDescriptor(const Vst3PluginDes
 }
 #endif
 
+// VST3 bundles live at the root of a VST3 folder OR one level down in a vendor subfolder
+// (e.g. /Library/Audio/Plug-Ins/VST3/Waldorf/Microwave1.vst3, Yamaha/…vst3). The spec allows
+// this and several installers use it, so a flat scan silently misses those plug-ins. Collect
+// both levels: top-level .vst3 bundles, and .vst3 bundles one directory inside any plain
+// (non-bundle) subfolder. A .vst3 bundle is ITSELF a directory, so we must not recurse into it —
+// only descend into vendor folders, exactly one level.
+std::vector<std::filesystem::path> collectVst3BundlePaths(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> bundles;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+        if (ec) break;
+        std::error_code dec;
+        if (!entry.is_directory(dec)) continue;   // macOS .vst3 bundles (and vendor folders) are dirs
+        if (entry.path().extension() == ".vst3") {
+            bundles.push_back(entry.path());       // top-level bundle
+            continue;
+        }
+        // A plain vendor subfolder — look one level in for bundles.
+        std::error_code iec;
+        for (const auto& sub : std::filesystem::directory_iterator(entry.path(), iec)) {
+            if (iec) break;
+            std::error_code sdec;
+            if (sub.is_directory(sdec) && sub.path().extension() == ".vst3") {
+                bundles.push_back(sub.path());
+            }
+        }
+    }
+    return bundles;
+}
+
 std::vector<Vst3PluginDescriptor> scanVst3PluginBundlesUncached() {
     std::vector<Vst3PluginDescriptor> descriptors;
     std::set<std::string> seen;
@@ -1335,15 +1365,12 @@ std::vector<Vst3PluginDescriptor> scanVst3PluginBundlesUncached() {
         if (!std::filesystem::exists(root)) {
             continue;
         }
-        for (const auto& entry : std::filesystem::directory_iterator(root)) {
-            if (!entry.is_directory() || entry.path().extension() != ".vst3") {
-                continue;
-            }
-            const auto key = entry.path().string();
+        for (const auto& bundlePath : collectVst3BundlePaths(root)) {
+            const auto key = bundlePath.string();
             if (!seen.insert(key).second) {
                 continue;
             }
-            const auto described = describeBundle(entry.path());
+            const auto described = describeBundle(bundlePath);
 #if defined(__APPLE__)
             const auto wavesExpanded = expandWavesShellDescriptor(described);
             if (lowerCopy(described.name + " " + described.bundlePath).find("waveshell") != std::string::npos) {
@@ -1409,14 +1436,12 @@ std::string vst3BundleInventorySignature() {
     for (const auto& root : vst3Roots()) {
         std::error_code ec;
         if (!std::filesystem::exists(root, ec)) continue;
-        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-            if (ec) break;
-            if (entry.path().extension() != ".vst3") continue;
+        for (const auto& bundlePath : collectVst3BundlePaths(root)) {   // incl. vendor subfolders
             std::error_code tec;
-            const auto mtime = std::filesystem::last_write_time(entry.path(), tec);
+            const auto mtime = std::filesystem::last_write_time(bundlePath, tec);
             const auto ticks = tec ? 0LL
                 : static_cast<long long>(mtime.time_since_epoch().count());
-            entries.push_back(entry.path().string() + "|" + std::to_string(ticks));
+            entries.push_back(bundlePath.string() + "|" + std::to_string(ticks));
         }
     }
     std::sort(entries.begin(), entries.end());

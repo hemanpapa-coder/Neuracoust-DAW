@@ -151,8 +151,11 @@ struct PlaylistClipPlacementState {
     double fadeOutSeconds = 0.0;
     std::string fadeInCurve = "equal_power";
     std::string fadeOutCurve = "equal_power";
+    double fadeInCurvature = 0.0;
+    double fadeOutCurvature = 0.0;
     bool muted = false;
     bool polarityInverted = false;
+    bool reversed = false;
     bool locked = false;
     std::string colorHex;
     double timeScale = 1.0;
@@ -189,6 +192,12 @@ struct ProjectDocument {
     std::string panLaw = "-4.5dB";
     double grooveSwingAmount = 0.0;
     std::string metronomeSubdivision = "auto";
+    // Click level (linear gain over the built-in click, 0..2) and timbre.
+    double metronomeGain = 1.0;
+    std::string metronomeSound = "beep";   // beep / wood / rim / cowbell
+    bool metronomeAccentFirst = true;      // accent the bar's downbeat
+    std::string metronomeGenre = "straight";     // named groove preset (UI catalog)
+    std::vector<float> metronomeAccentPattern;   // per-step gains over a bar (empty = default)
     std::string detectedKey = "C";
     std::string detectedKeyMode = "major";
     std::string chordKeyModePreference = "auto";
@@ -222,6 +231,10 @@ struct ProjectDocument {
     // hint: when a connected node reports its own core_count that report wins, so this
     // is the value used before/without a report and the count the DAW requests.
     int externalDspCoreCount = 4;
+    // The "use this node" master switch — whether the external DSP node participates at all.
+    // Off gates it out of the monitor/DAW/plugin core plan regardless of the reserve above.
+    // Default on preserves the prior always-available behaviour.
+    bool externalDspEnabled = true;
     // The remote DSP node the engine streams monitor audio to (host or IPv4). Empty
     // falls back to "studio.local". This is what makes External/NDS reach a real node
     // instead of the hardcoded default.
@@ -235,6 +248,19 @@ struct ProjectDocument {
     // The power amp and speaker cable driving a PASSIVE speaker; ignored for active monitors.
     std::string physicalPowerAmpModel;
     std::string physicalSpeakerCableModel;
+    // AC feed and termination definitions. They are catalog/status metadata and intentionally
+    // have no tone model: competent power leads/connectors are not audio transfer elements.
+    std::string physicalPowerCableModel;
+    std::string physicalConnectorModel;
+    // The audio interface's D/A output-stage model (catalog/definition only — no audio effect yet).
+    std::string physicalAudioInterfaceModel;
+    // Purpose 2: render the physical interface AS this different model (A→B transform). Stored
+    // intent only — the transform stays inert until BOTH source and target have raw measured
+    // profiles (never synthesised from summary specs). Empty = no target (render as itself).
+    std::string physicalAudioInterfaceTargetModel;
+    // Optional 2단계: apply the measured nonlinear harmonic character (Chebyshev waveshaper) of the
+    // modeled interface. Off by default — a clean interface's harmonics are inaudible.
+    bool monitorInterfaceModelingEnabled = false;
     // Measurement microphone used for room measurement; drives whether absolute tone correction
     // is trustworthy (mic has a calibration file) or only L/R matching + relative correction.
     std::string measurementMicModel;
@@ -255,8 +281,9 @@ struct ProjectDocument {
     bool monitorStationTalkback = false;
     float monitorStationDimDb = -20.0f;
     std::string monitorStationTalkbackRoute = "listen_room";
+    int monitorStationTalkbackChannel = 1;   // input channel (1-based) the talkback mic is on
     float monitorInputTrimDb = -9.0f;
-    float monitorVolumeDb = -6.0f;
+    float monitorVolumeDb = -12.0f;
     bool listenRoomEnabled = false;
     std::string listenRoomSessionName = "mix";
     std::string listenRoomSource = "monitor";
@@ -279,6 +306,9 @@ struct ProjectDocument {
     std::vector<MarkerState> markers;
     std::vector<ChordEventState> chordEvents;
     std::vector<LyricEventState> lyricEvents;
+    // Song-form / arrangement sections (Intro, Verse, Chorus…). Per-project so they don't carry
+    // across projects; each entry's timeSeconds starts a section that runs until the next.
+    std::vector<ChordEventState> songSections;
     std::vector<MidiRegionState> midiRegions;
     std::vector<InsertState> masterInserts;
     std::vector<MonitorDspModule> monitorModules;

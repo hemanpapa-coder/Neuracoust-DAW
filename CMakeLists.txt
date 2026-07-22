@@ -73,6 +73,9 @@ add_library(neuracoust_daw_core
     src/audio/NeuracoustDspEngine.cpp
     src/audio/LoudnessMeter.cpp
     src/audio/MetronomeClick.cpp
+    src/audio/TestSignalGenerator.cpp
+    src/audio/TimePitchProcessor.cpp
+    src/audio/PitchEditor.cpp
     src/audio/MixMath.cpp
     src/audio/MixerGraph.cpp
     src/audio/MixerProcessorChain.cpp
@@ -87,7 +90,13 @@ add_library(neuracoust_daw_core
     src/audio/ParametricEq.cpp
     src/audio/SweepMeasurement.cpp
     src/audio/MonitorCorrection.cpp
+    src/audio/OutputChainModeling.cpp
+    src/audio/MonitorFirEq.cpp
     src/audio/SpeakerProfiles.generated.cpp
+    src/audio/HeadphoneProfiles.generated.cpp
+    src/audio/AudioInterfaceCatalog.generated.cpp
+    src/audio/AudioInterfaceProfiles.generated.cpp
+    src/audio/AudioInterfaceModeler.cpp
     src/audio/OfflineBounce.cpp
     src/license/LicenseAgentClient.cpp
     src/nuclust/NuclustDspManager.cpp
@@ -217,6 +226,7 @@ if(APPLE)
             "-framework CoreAudio"
             "-framework CoreMIDI"
             "-framework AudioToolbox"
+            "-framework Accelerate"
             "-framework ApplicationServices")
 elseif(WIN32)
     target_sources(neuracoust_daw_core PRIVATE src/audio/WindowsAudioBackend.cpp)
@@ -244,6 +254,7 @@ if(APPLE)
 
     target_link_libraries(NeuracoustAuEditorHost
         PRIVATE
+            neuracoust_daw_core
             "-framework Cocoa"
             "-framework AudioToolbox"
             "-framework CoreAudio")
@@ -287,6 +298,7 @@ endif()
 if(NEURACOUST_BUILD_SWIFT_APP)
     add_executable(NeuracoustDAW MACOSX_BUNDLE
         src/app/swift/NeuracoustApp.swift
+        src/app/swift/Diagnostics.swift
         src/app/swift/Theme.swift
         src/app/swift/TransportBar.swift
         src/app/swift/MonitorControls.swift
@@ -301,14 +313,18 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MixerView.swift
         src/app/swift/TrackInspector.swift
         src/app/swift/PianoRoll.swift
+        src/app/swift/PitchEditorPanel.swift
         src/app/swift/PluginEditor.swift
         src/app/swift/PluginBrowser.swift
         src/app/swift/TimelineView.swift
         src/app/swift/GlobalTracksBar.swift
+        src/app/swift/FadeCrossfadeEditor.swift
+        src/app/swift/MonitorStationShell.swift
         src/app/swift/SpectrumAnalyzer.swift
         src/app/swift/MetalSpectrumView.swift
         src/app/swift/MetalGridView.swift
         src/app/swift/AnalyzerWindow.swift
+        src/app/swift/GlobalKeypadCapture.swift
         src/app/swift/EngineController.swift
         resources/icons/NeuracoustDAW.icns)
 
@@ -367,6 +383,24 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/speaker_model_dataset.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/speaker_model_dataset.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/headphone_model_meta.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/headphone_model_meta.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/audio_interface_catalog.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/audio_interface_catalog.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/power_amp_catalog.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/power_amp_catalog.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/speaker_cable_catalog.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/speaker_cable_catalog.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/power_cable_catalog.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/power_cable_catalog.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/connector_catalog.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/connector_catalog.json"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/main.d")
 
@@ -404,15 +438,33 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         message(STATUS "Listen relay assets not found at ${NEURACOUST_LISTEN_SOURCE_DIR} — Listen Room will report a missing relay at runtime.")
     endif()
 
-    # Re-sign the finished bundle with a plain ad-hoc signature (codesign, not the linker's
+    # Re-sign the finished bundle with a proper code identity (codesign, not the linker's
     # auto-signature). The linker-signed flag makes macOS treat the app as a loose binary, so
     # the microphone privacy prompt never appears and input capture (BlackHole monitoring,
-    # recording) is silently denied. A real ad-hoc signature — same as the shipped Monitor DSP
-    # app — gives it a proper code identity, so the prompt appears and the grant persists.
+    # recording) is silently denied.
+    #
+    # Prefer a STABLE self-signed dev certificate over ad-hoc. Ad-hoc's designated requirement is
+    # the cdhash, which changes every build — so every rebuild is a "new app" to TCC and the user
+    # must re-grant Accessibility (global keypad) / Input Monitoring each time. A self-signed cert
+    # gives `identifier "com.neuracoust.daw" and certificate leaf = H"…"`, stable across rebuilds,
+    # so the grant persists. Create the cert once (see docs/dev-signing-cert.md) named below; if it
+    # is not present on this machine we fall back to ad-hoc "-".
+    set(NEURACOUST_DEV_SIGN_CERT_NAME "Neuracoust Dev Signing")
+    execute_process(
+        COMMAND security find-certificate -c "${NEURACOUST_DEV_SIGN_CERT_NAME}" -Z
+        OUTPUT_VARIABLE _nc_cert_dump ERROR_QUIET)
+    string(REGEX MATCH "SHA-1 hash: ([0-9A-F]+)" _nc_cert_match "${_nc_cert_dump}")
+    if(CMAKE_MATCH_1)
+        set(NEURACOUST_CODESIGN_IDENTITY "${CMAKE_MATCH_1}")
+        message(STATUS "Code-signing app with stable dev cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' (${CMAKE_MATCH_1}) — TCC grants persist across rebuilds.")
+    else()
+        set(NEURACOUST_CODESIGN_IDENTITY "-")
+        message(STATUS "Dev signing cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' not found — ad-hoc signing (TCC grants reset each rebuild). See docs/dev-signing-cert.md.")
+    endif()
     # Runs LAST (after the editor hosts are copied in) so the whole bundle is covered.
     add_custom_command(TARGET NeuracoustDAW POST_BUILD
-        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NeuracoustDAW>"
-        COMMENT "Ad-hoc code-signing Neuracoust DAW.app (microphone/TCC identity)")
+        COMMAND codesign --force --deep --sign "${NEURACOUST_CODESIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:NeuracoustDAW>"
+        COMMENT "Code-signing Neuracoust DAW.app (identity: ${NEURACOUST_CODESIGN_IDENTITY})")
 else()
     message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
 endif()
@@ -446,6 +498,9 @@ target_link_libraries(neuracoust_vst3_isolated_process_smoke PRIVATE neuracoust_
 
 add_executable(neuracoust_vst3_realtime_bridge_smoke tools/vst3_realtime_bridge_smoke.cpp)
 target_link_libraries(neuracoust_vst3_realtime_bridge_smoke PRIVATE neuracoust_daw_core)
+
+add_executable(neuracoust_meter_plugin_fixture_host tools/meter_plugin_fixture_host.cpp)
+target_link_libraries(neuracoust_meter_plugin_fixture_host PRIVATE neuracoust_daw_core)
 
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
@@ -543,6 +598,128 @@ endfunction()
 add_executable(neuracoust_interchange_roundtrip_fixture tools/interchange_roundtrip_fixture.cpp)
 neuracoust_link_core(neuracoust_interchange_roundtrip_fixture)
 
+# --- Stem separation helper (LibTorch / htdemucs), bundled as a SUBPROCESS -----------------------
+# Deliberately kept OUT of neuracoust_daw_core: only this one helper links LibTorch, so the ~300 MB
+# dependency AND any inference OOM/crash stay out of the main DAW process (spawned like the VST3
+# editor host). Guarded on libtorch being present so a checkout without it still builds everything.
+set(NEURACOUST_LIBTORCH_DIR "" CACHE PATH "Path to a libtorch distribution for stem separation")
+if(NOT NEURACOUST_LIBTORCH_DIR)
+    foreach(candidate
+            "${CMAKE_SOURCE_DIR}/../Neuracoust Stem Magic/libtorch"
+            "${CMAKE_SOURCE_DIR}/third_party/libtorch")
+        if(EXISTS "${candidate}/share/cmake/Torch/TorchConfig.cmake")
+            set(NEURACOUST_LIBTORCH_DIR "${candidate}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(NEURACOUST_LIBTORCH_DIR AND EXISTS "${NEURACOUST_LIBTORCH_DIR}/share/cmake/Torch/TorchConfig.cmake")
+    list(APPEND CMAKE_PREFIX_PATH "${NEURACOUST_LIBTORCH_DIR}")
+    find_package(Torch QUIET)
+endif()
+if(Torch_FOUND)
+    add_executable(neuracoust_stem_separator tools/neuracoust_stem_separator.cpp)
+    neuracoust_link_core(neuracoust_stem_separator)
+    target_link_libraries(neuracoust_stem_separator PRIVATE ${TORCH_LIBRARIES})
+    target_compile_options(neuracoust_stem_separator PRIVATE ${TORCH_CXX_FLAGS})
+    set_property(TARGET neuracoust_stem_separator PROPERTY CXX_STANDARD 17)
+    if(APPLE)
+        # ADD @executable_path/../Frameworks to the build RPATH (CMake keeps the auto libtorch/lib
+        # path too), so the SAME binary runs both from build/ and once copied into the app bundle.
+        set_property(TARGET neuracoust_stem_separator APPEND PROPERTY
+            BUILD_RPATH "@executable_path/../Frameworks")
+    endif()
+    # CREPE neural pitch detector — same libtorch, its own subprocess helper.
+    add_executable(neuracoust_pitch_detector tools/neuracoust_pitch_detector.cpp)
+    neuracoust_link_core(neuracoust_pitch_detector)
+    target_link_libraries(neuracoust_pitch_detector PRIVATE ${TORCH_LIBRARIES})
+    target_compile_options(neuracoust_pitch_detector PRIVATE ${TORCH_CXX_FLAGS})
+    set_property(TARGET neuracoust_pitch_detector PROPERTY CXX_STANDARD 17)
+    if(APPLE)
+        set_property(TARGET neuracoust_pitch_detector APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
+    endif()
+    # Neural noise-floor denoiser — same libtorch, its own subprocess helper.
+    add_executable(neuracoust_denoiser tools/neuracoust_denoiser.cpp)
+    neuracoust_link_core(neuracoust_denoiser)
+    target_include_directories(neuracoust_denoiser PRIVATE tools)
+    target_link_libraries(neuracoust_denoiser PRIVATE ${TORCH_LIBRARIES})
+    target_compile_options(neuracoust_denoiser PRIVATE ${TORCH_CXX_FLAGS})
+    set_property(TARGET neuracoust_denoiser PROPERTY CXX_STANDARD 17)
+    if(APPLE)
+        set_property(TARGET neuracoust_denoiser APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
+    endif()
+
+    # The htdemucs + CREPE models ship next to the libtorch distribution (in the Stem Magic folder).
+    get_filename_component(NEURACOUST_STEM_MODEL_DIR "${NEURACOUST_LIBTORCH_DIR}" DIRECTORY)
+    set(NEURACOUST_STEM_MODEL "${NEURACOUST_STEM_MODEL_DIR}/demucs.pt")
+    set(NEURACOUST_CREPE_MODEL "${NEURACOUST_STEM_MODEL_DIR}/crepe_full.pt")
+    set(NEURACOUST_CREPE_TINY_MODEL "${NEURACOUST_STEM_MODEL_DIR}/crepe_tiny.pt")
+    set(NEURACOUST_DENOISER_MODEL "${NEURACOUST_STEM_MODEL_DIR}/denoiser.pt")
+    message(STATUS "Stem separation + CREPE + denoiser ENABLED (libtorch: ${NEURACOUST_LIBTORCH_DIR})")
+
+    # Bundle the helper + the torch dylibs it needs + the model into DW.app (only under a Swift-capable
+    # generator, where NeuracoustDAW exists). The helper is spawned as a subprocess at runtime.
+    if(TARGET NeuracoustDAW)
+        set(_torch_lib "${NEURACOUST_LIBTORCH_DIR}/lib")
+        add_custom_command(TARGET NeuracoustDAW POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:neuracoust_stem_separator>"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/neuracoust_stem_separator"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:neuracoust_pitch_detector>"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/neuracoust_pitch_detector"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:neuracoust_denoiser>"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/neuracoust_denoiser"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_torch_lib}/libtorch.dylib" "${_torch_lib}/libtorch_cpu.dylib"
+                "${_torch_lib}/libc10.dylib" "${_torch_lib}/libomp.dylib"
+                "${_torch_lib}/libtorch_global_deps.dylib"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Frameworks/"
+            COMMENT "Bundling stem separator + libtorch dylibs")
+        if(EXISTS "${NEURACOUST_STEM_MODEL}")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_STEM_MODEL}"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/demucs.pt"
+                COMMENT "Bundling demucs.pt model")
+        else()
+            message(WARNING "demucs.pt not found at ${NEURACOUST_STEM_MODEL}; stem separation will fail at runtime until it is bundled")
+        endif()
+        if(EXISTS "${NEURACOUST_CREPE_MODEL}")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_CREPE_MODEL}"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/crepe_full.pt"
+                COMMENT "Bundling crepe_full.pt model")
+        else()
+            message(STATUS "crepe_full.pt not found — CREPE pitch detection unavailable until it is exported (tools/export_crepe_torchscript.py)")
+        endif()
+        if(EXISTS "${NEURACOUST_CREPE_TINY_MODEL}")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_CREPE_TINY_MODEL}"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/crepe_tiny.pt"
+                COMMENT "Bundling crepe_tiny.pt model (fast detection option)")
+        else()
+            message(STATUS "crepe_tiny.pt not found — the fast CREPE option will fall back to the full model")
+        endif()
+        if(EXISTS "${NEURACOUST_DENOISER_MODEL}")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_DENOISER_MODEL}"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/denoiser.pt"
+                COMMENT "Bundling denoiser.pt model")
+        else()
+            message(STATUS "denoiser.pt not found — 노이즈 제거 unavailable until it is exported (tools/export_denoiser_torchscript.py)")
+        endif()
+    endif()
+else()
+    message(STATUS "Stem separation disabled (no libtorch found)")
+endif()
+
 add_executable(neuracoust_daw_core_tests tests/CoreSmokeTest.cpp)
 neuracoust_link_core(neuracoust_daw_core_tests)
 neuracoust_enable_release_asserts(neuracoust_daw_core_tests)
@@ -582,6 +759,21 @@ add_executable(neuracoust_loudness_meter_tests tests/LoudnessMeterSmokeTest.cpp)
 neuracoust_link_core(neuracoust_loudness_meter_tests)
 neuracoust_enable_release_asserts(neuracoust_loudness_meter_tests)
 add_test(NAME loudness_meter_smoke COMMAND neuracoust_loudness_meter_tests)
+
+add_executable(neuracoust_test_signal_generator_tests tests/TestSignalGeneratorSmokeTest.cpp)
+neuracoust_link_core(neuracoust_test_signal_generator_tests)
+neuracoust_enable_release_asserts(neuracoust_test_signal_generator_tests)
+add_test(NAME test_signal_generator_smoke COMMAND neuracoust_test_signal_generator_tests)
+
+add_executable(neuracoust_time_pitch_tests tests/TimePitchSmokeTest.cpp)
+neuracoust_link_core(neuracoust_time_pitch_tests)
+neuracoust_enable_release_asserts(neuracoust_time_pitch_tests)
+add_test(NAME time_pitch_smoke COMMAND neuracoust_time_pitch_tests)
+
+add_executable(neuracoust_pitch_editor_tests tests/PitchEditorSmokeTest.cpp)
+neuracoust_link_core(neuracoust_pitch_editor_tests)
+neuracoust_enable_release_asserts(neuracoust_pitch_editor_tests)
+add_test(NAME pitch_editor_smoke COMMAND neuracoust_pitch_editor_tests)
 
 add_executable(neuracoust_insert_dsp_policy_tests tests/InsertDspPolicyTest.cpp)
 neuracoust_link_core(neuracoust_insert_dsp_policy_tests)
@@ -658,6 +850,10 @@ add_executable(neuracoust_pan_law_smoke tests/PanLawSmoke.cpp)
 target_link_libraries(neuracoust_pan_law_smoke PRIVATE neuracoust_daw_core)
 add_test(NAME pan_law_smoke COMMAND neuracoust_pan_law_smoke)
 
+add_executable(neuracoust_metronome_smoke tests/MetronomeSmoke.cpp)
+target_link_libraries(neuracoust_metronome_smoke PRIVATE neuracoust_daw_core)
+add_test(NAME metronome_smoke COMMAND neuracoust_metronome_smoke)
+
 add_executable(neuracoust_parametric_eq_tests tests/ParametricEqTest.cpp)
 neuracoust_link_core(neuracoust_parametric_eq_tests)
 neuracoust_enable_release_asserts(neuracoust_parametric_eq_tests)
@@ -672,6 +868,22 @@ add_executable(neuracoust_monitor_correction_tests tests/MonitorCorrectionTest.c
 neuracoust_link_core(neuracoust_monitor_correction_tests)
 neuracoust_enable_release_asserts(neuracoust_monitor_correction_tests)
 add_test(NAME monitor_correction COMMAND neuracoust_monitor_correction_tests)
+
+# Denoiser band-split DSP (resampler + reconstruction) — pure, no libtorch, always runs.
+add_executable(neuracoust_denoiser_dsp_tests tests/DenoiserDspTest.cpp)
+target_include_directories(neuracoust_denoiser_dsp_tests PRIVATE tools)
+set_property(TARGET neuracoust_denoiser_dsp_tests PROPERTY CXX_STANDARD 17)
+add_test(NAME denoiser_dsp COMMAND neuracoust_denoiser_dsp_tests)
+
+add_executable(neuracoust_output_chain_modeling_tests tests/OutputChainModelingTest.cpp)
+neuracoust_link_core(neuracoust_output_chain_modeling_tests)
+neuracoust_enable_release_asserts(neuracoust_output_chain_modeling_tests)
+add_test(NAME output_chain_modeling COMMAND neuracoust_output_chain_modeling_tests)
+
+add_executable(neuracoust_monitor_fir_eq_tests tests/MonitorFirEqTest.cpp)
+neuracoust_link_core(neuracoust_monitor_fir_eq_tests)
+neuracoust_enable_release_asserts(neuracoust_monitor_fir_eq_tests)
+add_test(NAME monitor_fir_eq COMMAND neuracoust_monitor_fir_eq_tests)
 
 add_executable(neuracoust_automation_mode_bridge_smoke tests/AutomationModeBridgeSmoke.cpp)
 target_link_libraries(neuracoust_automation_mode_bridge_smoke PRIVATE neuracoust_daw_core)
