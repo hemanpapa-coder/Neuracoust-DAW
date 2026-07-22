@@ -1155,10 +1155,10 @@ final class EngineController: ObservableObject {
 
     /// VocAlign: time-warp a dub clip onto a reference (lead) clip's timing (MFCC-DTW), formant-preserving,
     /// offline print + repoint. Synchronous — bounded DSP, fast for phrase-length clips.
-    func alignClipToReference(_ dubId: String, referenceClipId refId: String, strength: Double = 1.0) {
+    func alignClipToReference(_ dubId: String, referenceClipId refId: String) {
         guard let handle else { return }
         var err = [CChar](repeating: 0, count: 256)
-        if nc_clip_align_to_reference(handle, dubId, refId, strength, formantPreserve ? 1 : 0, &err, err.count) {
+        if nc_clip_align_to_reference(handle, dubId, refId, alignStrength, formantPreserve ? 1 : 0, &err, err.count) {
             reloadClips(); refreshHistory()
             stemSeparationStatus = "리드에 정렬 완료"
         } else {
@@ -1208,6 +1208,7 @@ final class EngineController: ObservableObject {
     @Published var useCrepe: Bool = false   // CREPE neural detection (precise, async) vs built-in YIN
     @Published var useCrepeTiny: Bool = false  // tiny model: ~40x smaller, much faster, slightly less accurate
     @Published var formantPreserve: Bool = true   // keep timbre through a pitch shift (no chipmunk); off = raw shift
+    @Published var alignStrength: Double = 1.0   // VocAlign amount: 1 = fully snap to the lead, 0 = no change
 
     /// The CREPE helper + full model are bundled (export via tools/export_crepe_torchscript.py).
     var crepeAvailable: Bool {

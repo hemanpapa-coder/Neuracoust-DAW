@@ -147,7 +147,7 @@ int chooseHop(int samples, int maxFrames) {
 
 AlignmentAnchors alignVocals(const std::vector<float>& reference, int refChannels, double refRate,
                              const std::vector<float>& dub, int dubChannels, double dubRate,
-                             int maxAnchors, bool snapTransients) {
+                             int maxAnchors, bool snapTransients, bool gateSilence) {
     AlignmentAnchors result;
     if (reference.empty() || dub.empty() || refRate <= 0.0 || dubRate <= 0.0) return result;
 
@@ -201,12 +201,38 @@ AlignmentAnchors alignVocals(const std::vector<float>& reference, int refChannel
     // vocoder's window (short segments degrade). The gap widens when maxAnchors is small.
     const double minGap = std::max(0.035, 0.9 / (maxAnchors + 1));
 
+    // VAD: a voiced mask over the dub (short-window RMS above a floor relative to the peak), dilated so
+    // attack edges count as voiced. Warp anchors are kept out of silence, whose features are unreliable,
+    // so breaths/gaps stretch smoothly under their neighbours instead of being warped erratically.
+    std::vector<char> dubVoiced;
+    if (gateSilence && !dubMono.empty()) {
+        const int vhop = 512;
+        std::vector<double> env;
+        for (size_t i = 0; i + vhop <= dubMono.size(); i += vhop) {
+            double s = 0.0; for (int k = 0; k < vhop; ++k) { const float x = dubMono[i + k]; s += x * x; }
+            env.push_back(std::sqrt(s / vhop));
+        }
+        double peak = 0.0; for (double e : env) peak = std::max(peak, e);
+        const double thr = std::max(1e-4, peak * 0.06);   // ~ -24 dB below peak, or an absolute floor
+        std::vector<char> raw(env.size(), 0);
+        for (size_t i = 0; i < env.size(); ++i) raw[i] = env[i] >= thr ? 1 : 0;
+        dubVoiced.assign(env.size(), 0);
+        for (size_t i = 0; i < raw.size(); ++i)
+            for (int d = -2; d <= 2; ++d) { const long j = static_cast<long>(i) + d; if (j >= 0 && j < static_cast<long>(raw.size()) && raw[static_cast<size_t>(j)]) { dubVoiced[i] = 1; break; } }
+    }
+    auto voicedAtDub = [&](double dn) {
+        if (!gateSilence || dubVoiced.empty()) return true;
+        const int i = std::clamp(static_cast<int>(dn * dubVoiced.size()), 0, static_cast<int>(dubVoiced.size()) - 1);
+        return dubVoiced[static_cast<size_t>(i)] != 0;
+    };
+
     // Insert an anchor into the sorted-by-dub `accepted` list only if it keeps the min gap and strict
     // monotonicity against both neighbors. Earlier inserts win, so onset anchors (added first) take
     // priority over path-fill anchors that fall too close.
     std::vector<std::pair<double, double>> accepted;   // (dubNorm, refNorm), sorted by dubNorm
     auto tryInsert = [&](double dn, double rn) {
         if (dn <= minGap || dn >= 1.0 - minGap || rn <= minGap || rn >= 1.0 - minGap) return;
+        if (!voicedAtDub(dn)) return;   // never place a warp control point inside silence
         size_t idx = 0;
         while (idx < accepted.size() && accepted[idx].first < dn) ++idx;
         if (idx > 0) { const auto& L = accepted[idx - 1]; if (dn - L.first < minGap || rn - L.second < minGap) return; }

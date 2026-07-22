@@ -218,6 +218,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)?   // (clipId, timeRatio, semitones)
     var onDenoiseClip: ((String) -> Void)?   // neural noise-floor removal, repoints the clip
     var onAlignToReference: ((String, String) -> Void)?   // (dubId, refId) VocAlign time-align onto a lead
+    var alignStrength: Double = 1.0   // current VocAlign amount, for the strength submenu checkmarks
+    var onSetAlignStrength: ((Double) -> Void)?
     var onSeparateStems: ((String) -> Void)?   // Demucs 4-stem separation → new tracks
     var onOpenPitchEditor: ((String) -> Void)?   // Melodyne / Serato anchor pitch editor
     var onSetCrossfadeLength: ((String, String, Double) -> Void)?  // (leftId, rightId, seconds)
@@ -2008,6 +2010,34 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private final class AlignRef: NSObject { let dubId: String; let refId: String
         init(_ dubId: String, _ refId: String) { self.dubId = dubId; self.refId = refId } }
 
+    /// A live strength slider hosted inside the "리드에 정렬" submenu (0…100 %).
+    private final class AlignStrengthMenuView: NSView {
+        private let slider = NSSlider()
+        private let pctLabel = NSTextField(labelWithString: "")
+        private let onChange: (Double) -> Void
+        init(strength: Double, onChange: @escaping (Double) -> Void) {
+            self.onChange = onChange
+            super.init(frame: NSRect(x: 0, y: 0, width: 244, height: 30))
+            let title = NSTextField(labelWithString: "정렬 강도")
+            title.font = .systemFont(ofSize: 11); title.textColor = .secondaryLabelColor
+            title.frame = NSRect(x: 14, y: 7, width: 60, height: 16)
+            addSubview(title)
+            slider.minValue = 0; slider.maxValue = 1; slider.doubleValue = strength
+            slider.isContinuous = true; slider.target = self; slider.action = #selector(changed)
+            slider.frame = NSRect(x: 78, y: 5, width: 116, height: 20)
+            addSubview(slider)
+            pctLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            pctLabel.alignment = .right; pctLabel.frame = NSRect(x: 196, y: 7, width: 40, height: 16)
+            pctLabel.stringValue = "\(Int((strength * 100).rounded()))%"
+            addSubview(pctLabel)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        @objc private func changed() {
+            pctLabel.stringValue = "\(Int((slider.doubleValue * 100).rounded()))%"
+            onChange(slider.doubleValue)
+        }
+    }
+
     /// Right-click a clip → spot back to its original position, fade curves.
     private func showClipFadeMenu(_ clip: TimelineModel.Clip, event: NSEvent) {
         let menu = NSMenu()
@@ -2080,6 +2110,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             if !others.isEmpty {
                 let alignItem = NSMenuItem(title: "리드에 정렬 (VocAlign)", action: nil, keyEquivalent: "")
                 let sub = NSMenu()
+                // Alignment strength — a live slider (how far to snap toward the lead).
+                if let setStrength = onSetAlignStrength {
+                    let strItem = NSMenuItem()
+                    strItem.view = AlignStrengthMenuView(strength: alignStrength, onChange: setStrength)
+                    sub.addItem(strItem)
+                    sub.addItem(.separator())
+                }
                 for other in others {
                     let mm = Int(other.startSeconds) / 60, ss = Int(other.startSeconds) % 60
                     let nm = other.name.isEmpty ? "클립" : other.name
@@ -2925,6 +2962,8 @@ struct TimelineView: NSViewRepresentable {
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)? = nil
     var onDenoiseClip: ((String) -> Void)? = nil
     var onAlignToReference: ((String, String) -> Void)? = nil
+    var alignStrength: Double = 1.0
+    var onSetAlignStrength: ((Double) -> Void)? = nil
     var onSeparateStems: ((String) -> Void)? = nil
     var onOpenPitchEditor: ((String) -> Void)? = nil
     var onSetCrossfadeLength: ((String, String, Double) -> Void)? = nil
@@ -3044,6 +3083,8 @@ struct TimelineView: NSViewRepresentable {
         view.onApplyClipTimePitch = onApplyClipTimePitch
         view.onDenoiseClip = onDenoiseClip
         view.onAlignToReference = onAlignToReference
+        view.alignStrength = alignStrength
+        view.onSetAlignStrength = onSetAlignStrength
         view.onSeparateStems = onSeparateStems
         view.onOpenPitchEditor = onOpenPitchEditor
         view.onToggleClipMute = onToggleClipMute

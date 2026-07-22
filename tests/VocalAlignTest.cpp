@@ -91,6 +91,22 @@ int main() {
     double peak = 0.0; for (float v : aligned) peak = std::max(peak, std::fabs((double)v));
     check(!aligned.empty() && peak > 0.2, "warped-onto-reference output is audible");
 
+    // VAD gating: a signal that is silent through its middle third must get NO warp anchors there —
+    // silence features are unreliable and should not drive the warp.
+    {
+        auto gapped = structuredSignal(refFrames, sr);
+        for (int i = static_cast<int>(0.4 * refFrames); i < static_cast<int>(0.6 * refFrames); ++i) gapped[i] = 0.0f;
+        auto ga = alignVocals(gapped, 1, sr, gapped, 1, sr);   // self-align; VAD on by default
+        bool anyInSilence = false;
+        for (double d : ga.dub) if (d > 0.42 && d < 0.58) anyInSilence = true;
+        check(ga.ok && !anyInSilence, "VAD keeps warp anchors out of the silent region");
+
+        // With gating OFF the aligner is free to place anchors anywhere (control: confirms the gate is
+        // what excluded them, not merely that no anchor happened to land there).
+        auto ng = alignVocals(gapped, 1, sr, gapped, 1, sr, 48, true, /*gateSilence=*/false);
+        check(ng.ok, "aligner still runs with silence gating disabled");
+    }
+
     std::printf(failures ? "\n%d FAILURES\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

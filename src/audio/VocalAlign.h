@@ -22,9 +22,10 @@ struct AlignmentAnchors {
 // either input is too short to frame.
 // `snapTransients` refines the DTW warp so consonant/attack onsets in the dub land exactly on the
 // matching onsets in the reference (Phase 2) — the perceptually critical points. Set false for the
-// coarse DTW-only warp.
+// coarse DTW-only warp. `gateSilence` keeps warp anchors out of the dub's silent/breath regions, whose
+// features are unreliable, so gaps stretch smoothly instead of being warped erratically.
 AlignmentAnchors alignVocals(const std::vector<float>& reference, int refChannels, double refRate,
                              const std::vector<float>& dub, int dubChannels, double dubRate,
-                             int maxAnchors = 48, bool snapTransients = true);
+                             int maxAnchors = 48, bool snapTransients = true, bool gateSilence = true);
 
 } // namespace neuracoust::daw

@@ -488,6 +488,8 @@ private struct EditView: View {
                     onApplyClipTimePitch: { engine.applyClipTimePitch($0, timeRatio: $1, semitones: $2) },
                     onDenoiseClip: { engine.denoiseClip($0) },
                     onAlignToReference: { engine.alignClipToReference($0, referenceClipId: $1) },
+                    alignStrength: engine.alignStrength,
+                    onSetAlignStrength: { engine.alignStrength = $0 },
                     onSeparateStems: { engine.separateClipStems($0) },
                     onOpenPitchEditor: { engine.openPitchEditor($0) },
                     onSetCrossfadeLength: { engine.setCrossfadeLength($0, $1, to: $2) },
