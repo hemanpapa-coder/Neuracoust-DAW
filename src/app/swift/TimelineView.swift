@@ -217,6 +217,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onToggleClipPolarity: ((String) -> Void)?
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)?   // (clipId, timeRatio, semitones)
     var onDenoiseClip: ((String) -> Void)?   // neural noise-floor removal, repoints the clip
+    var onAlignToReference: ((String, String) -> Void)?   // (dubId, refId) VocAlign time-align onto a lead
     var onSeparateStems: ((String) -> Void)?   // Demucs 4-stem separation → new tracks
     var onOpenPitchEditor: ((String) -> Void)?   // Melodyne / Serato anchor pitch editor
     var onSetCrossfadeLength: ((String, String, Double) -> Void)?  // (leftId, rightId, seconds)
@@ -2004,6 +2005,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         init(_ clipIds: [String]) { self.clipIds = clipIds } }
     private final class TimePitchRef: NSObject { let clipId: String; let ratio: Double; let semis: Double
         init(_ clipId: String, _ ratio: Double, _ semis: Double) { self.clipId = clipId; self.ratio = ratio; self.semis = semis } }
+    private final class AlignRef: NSObject { let dubId: String; let refId: String
+        init(_ dubId: String, _ refId: String) { self.dubId = dubId; self.refId = refId } }
 
     /// Right-click a clip → spot back to its original position, fade curves.
     private func showClipFadeMenu(_ clip: TimelineModel.Clip, event: NSEvent) {
@@ -2071,6 +2074,25 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         if onOpenPitchEditor != nil {
             clipProc("피치 에디터 (멜로다인 / 세라토 앵커)", #selector(openPitchEditorMenu(_:)))
         }
+        // VocAlign: time-align this clip onto another (the lead) picked from the other clips.
+        if onAlignToReference != nil {
+            let others = model.clips.filter { $0.id != clip.id }
+            if !others.isEmpty {
+                let alignItem = NSMenuItem(title: "리드에 정렬 (VocAlign)", action: nil, keyEquivalent: "")
+                let sub = NSMenu()
+                for other in others {
+                    let mm = Int(other.startSeconds) / 60, ss = Int(other.startSeconds) % 60
+                    let nm = other.name.isEmpty ? "클립" : other.name
+                    let it = NSMenuItem(title: String(format: "%@ · 트랙 %d · %d:%02d", nm, other.laneIndex + 1, mm, ss),
+                                        action: #selector(alignToRefMenu(_:)), keyEquivalent: "")
+                    it.target = self
+                    it.representedObject = AlignRef(clip.id, other.id)
+                    sub.addItem(it)
+                }
+                alignItem.submenu = sub
+                menu.addItem(alignItem)
+            }
+        }
 
         let opts = onFadeCurveOptions?() ?? []
         if opts.isEmpty {
@@ -2118,6 +2140,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         if let r = s.representedObject as? TimePitchRef { onApplyClipTimePitch?(r.clipId, r.ratio, r.semis) }
     }
     @objc private func denoiseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onDenoiseClip?(id) } }
+    @objc private func alignToRefMenu(_ s: NSMenuItem) { if let r = s.representedObject as? AlignRef { onAlignToReference?(r.dubId, r.refId) } }
     @objc private func separateStemsMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onSeparateStems?(id) } }
     @objc private func openPitchEditorMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onOpenPitchEditor?(id) } }
     @objc private func muteClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onToggleClipMute?(id) } }
@@ -2901,6 +2924,7 @@ struct TimelineView: NSViewRepresentable {
     var onToggleClipPolarity: ((String) -> Void)? = nil
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)? = nil
     var onDenoiseClip: ((String) -> Void)? = nil
+    var onAlignToReference: ((String, String) -> Void)? = nil
     var onSeparateStems: ((String) -> Void)? = nil
     var onOpenPitchEditor: ((String) -> Void)? = nil
     var onSetCrossfadeLength: ((String, String, Double) -> Void)? = nil
@@ -3019,6 +3043,7 @@ struct TimelineView: NSViewRepresentable {
         view.onNormalizeClip = onNormalizeClip
         view.onApplyClipTimePitch = onApplyClipTimePitch
         view.onDenoiseClip = onDenoiseClip
+        view.onAlignToReference = onAlignToReference
         view.onSeparateStems = onSeparateStems
         view.onOpenPitchEditor = onOpenPitchEditor
         view.onToggleClipMute = onToggleClipMute

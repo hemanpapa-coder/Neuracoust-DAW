@@ -76,6 +76,7 @@ add_library(neuracoust_daw_core
     src/audio/TestSignalGenerator.cpp
     src/audio/TimePitchProcessor.cpp
     src/audio/PitchEditor.cpp
+    src/audio/VocalAlign.cpp
     src/audio/MixMath.cpp
     src/audio/MixerGraph.cpp
     src/audio/MixerProcessorChain.cpp
@@ -868,6 +869,11 @@ add_executable(neuracoust_monitor_correction_tests tests/MonitorCorrectionTest.c
 neuracoust_link_core(neuracoust_monitor_correction_tests)
 neuracoust_enable_release_asserts(neuracoust_monitor_correction_tests)
 add_test(NAME monitor_correction COMMAND neuracoust_monitor_correction_tests)
+
+# Vocal alignment (MFCC-DTW) — pure DSP, always runs.
+add_executable(neuracoust_vocal_align_tests tests/VocalAlignTest.cpp)
+neuracoust_link_core(neuracoust_vocal_align_tests)
+add_test(NAME vocal_align COMMAND neuracoust_vocal_align_tests)
 
 # Denoiser band-split DSP (resampler + reconstruction) — pure, no libtorch, always runs.
 add_executable(neuracoust_denoiser_dsp_tests tests/DenoiserDspTest.cpp)

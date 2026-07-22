@@ -1153,6 +1153,21 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// VocAlign: time-warp a dub clip onto a reference (lead) clip's timing (MFCC-DTW), formant-preserving,
+    /// offline print + repoint. Synchronous — bounded DSP, fast for phrase-length clips.
+    func alignClipToReference(_ dubId: String, referenceClipId refId: String, strength: Double = 1.0) {
+        guard let handle else { return }
+        var err = [CChar](repeating: 0, count: 256)
+        if nc_clip_align_to_reference(handle, dubId, refId, strength, formantPreserve ? 1 : 0, &err, err.count) {
+            reloadClips(); refreshHistory()
+            stemSeparationStatus = "리드에 정렬 완료"
+        } else {
+            let m = String(cString: err)
+            stemSeparationStatus = "정렬 실패: \(m)"
+            if !m.isEmpty { Diagnostics.shared.log("vocal align: \(m)") }
+        }
+    }
+
     private func finishDenoise(_ clipId: String, _ ok: Bool, _ error: String, _ outPath: String) {
         stemSeparationProgress = nil
         guard ok, let handle else {

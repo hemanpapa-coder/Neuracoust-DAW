@@ -548,6 +548,12 @@ bool nc_clip_apply_time_map(NCEngine* engine, const char* clipId, double timeRat
                             const double* sourceAnchors, const double* destAnchors, int anchorCount,
                             int formantPreserve, char* error, size_t errorLen);
 
+/// Vocal alignment PRINT (VocAlign-style): time-warp `dubClipId` onto `refClipId`'s timing via MFCC-DTW,
+/// then print+repoint (offline). strength 0..1 blends between no change (0) and full alignment (1).
+/// formantPreserve keeps the dub's timbre through the warp. One undo step. Returns false with `error`.
+bool nc_clip_align_to_reference(NCEngine* engine, const char* dubClipId, const char* refClipId,
+                                double strength, int formantPreserve, char* error, size_t errorLen);
+
 // Melodyne-mode pitch editing. detect runs YIN + note segmentation on the clip window and caches the
 // notes on the engine (returns the count). The editor reads each note, sets a per-note semitone offset,
 // then applies — rendering a new WAV and repointing the clip (length preserved). One undo step.

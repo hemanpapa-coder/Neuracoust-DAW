@@ -18,6 +18,7 @@
 #include "audio/RemoteDspServerClient.h"
 #include "audio/PitchEditor.h"
 #include "audio/TimePitchProcessor.h"
+#include "audio/VocalAlign.h"
 #include "audio/WavFile.h"
 #include "plugins/InsertDspPolicy.h"
 #include "plugins/MonitorDspModules.h"
@@ -2549,6 +2550,39 @@ bool nc_clip_export_raw_window(NCEngine* engine, const char* clipId, const char*
         copyText(error, errorLen, "write file: " + err); return false;
     }
     return true;
+}
+
+bool nc_clip_align_to_reference(NCEngine* engine, const char* dubClipId, const char* refClipId,
+                                double strength, int formantPreserve, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || dubClipId == nullptr || refClipId == nullptr) { copyText(error, errorLen, "invalid arguments"); return false; }
+    if (std::string(dubClipId) == refClipId) { copyText(error, errorLen, "리드와 대상이 같은 클립입니다"); return false; }
+
+    std::vector<float> dubWin, refWin; int dubCh = 0, refCh = 0; double dubRate = 0.0, refRate = 0.0; std::string e;
+    if (readClipWindow(engine, dubClipId, dubWin, dubCh, dubRate, e) == nullptr) { copyText(error, errorLen, "대상 클립 읽기: " + e); return false; }
+    if (readClipWindow(engine, refClipId, refWin, refCh, refRate, e) == nullptr) { copyText(error, errorLen, "리드 클립 읽기: " + e); return false; }
+
+    const auto anchors = neuracoust::daw::alignVocals(refWin, refCh, refRate, dubWin, dubCh, dubRate);
+    if (!anchors.ok) { copyText(error, errorLen, "정렬을 계산할 수 없습니다 (클립이 너무 짧거나 무음)"); return false; }
+
+    // Blend each matched anchor between the dub's own timing (strength 0) and the reference's (1). The
+    // output duration blends the same way; anchors are handed to the formant-preserving time-map print.
+    const double s = std::clamp(strength, 0.0, 1.0);
+    const double dubDur = static_cast<double>(dubWin.size()) / std::max(1, dubCh) / dubRate;
+    const double refDur = static_cast<double>(refWin.size()) / std::max(1, refCh) / refRate;
+    const double outDur = (1.0 - s) * dubDur + s * refDur;
+    const double timeRatio = (dubDur > 1e-9) ? outDur / dubDur : 1.0;
+
+    std::vector<double> src, dst;
+    src.reserve(anchors.dub.size()); dst.reserve(anchors.dub.size());
+    for (size_t k = 0; k < anchors.dub.size(); ++k) {
+        const double t = (1.0 - s) * (anchors.dub[k] * dubDur) + s * (anchors.ref[k] * refDur);
+        const double d = (outDur > 1e-9) ? t / outDur : anchors.dub[k];
+        if (d <= 0.0 || d >= 1.0) continue;
+        src.push_back(anchors.dub[k]);
+        dst.push_back(d);
+    }
+    return applyClipTimeTransform(engine, dubClipId, timeRatio, 0.0, src, dst, formantPreserve != 0, error, errorLen);
 }
 
 // Repoint a clip at an externally-processed WAV of its played window (same length): copy the file into
