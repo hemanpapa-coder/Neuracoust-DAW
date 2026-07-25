@@ -23,3 +23,11 @@ compile_commands.json
 *.dmg
 *.pkg
 *.zip
+
+# Downloaded model weights (multi-GB, fetched on demand)
+checkpoints/
+# Vendored third-party SDKs (ARA, libAAF) — carry their own git, kept out of tree
+third_party/
+# Python bytecode cache
+tools/__pycache__/
+__pycache__/

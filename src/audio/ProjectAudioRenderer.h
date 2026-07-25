@@ -2,6 +2,7 @@
 
 #include "audio/MixerGraph.h"
 #include "audio/MixerProcessorChain.h"
+#include "audio/ConsoleChannelProcessor.h"
 #include "audio/AsyncInsertChainPreparer.h"
 #include "audio/MasterInsertProcessor.h"
 #include "audio/MonitorDspProcessor.h"
@@ -53,6 +54,8 @@ struct ProjectAudioRenderPlan {
     bool loopEnabled = false;
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 0.0;
+    double preRollSeconds = 0.0;
+    double postRollSeconds = 0.0;
     bool hasActiveVst3Inserts = false;
     bool hasActiveTrackVst3Inserts = false;
     bool renderTrackVst3Inserts = true;
@@ -80,6 +83,8 @@ struct ProjectAudioBlockMeters {
     std::vector<std::string> trackNames;
     std::vector<float> trackPeakLeft;
     std::vector<float> trackPeakRight;
+    std::vector<float> trackConsoleGainReductionDb;
+    std::vector<float> trackConsoleGateGainReductionDb;
     std::vector<std::string> trackInsertMeterTrackNames;
     std::vector<int> trackInsertMeterSlotIndices;
     std::vector<float> trackInsertInputPeak;
@@ -88,6 +93,7 @@ struct ProjectAudioBlockMeters {
 
 struct ProjectAudioRenderState {
     std::map<std::string, std::deque<MixerStereoFrame>> routeDelayLines;
+    std::map<std::string, ConsoleChannelProcessor> consoleChannelProcessors;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;

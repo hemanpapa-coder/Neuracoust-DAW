@@ -25,6 +25,17 @@ std::vector<float> processTimePitchInterleaved(const std::vector<float>& interle
 std::vector<float> formantCorrect(const std::vector<float>& shifted, const std::vector<float>& original,
                                   int channels, double sampleRate);
 
+// Shift the spectral envelope (the formants) WITHOUT moving the harmonics — the complement of
+// formantCorrect. Positive semitones move the formants up (brighter/smaller-sounding source),
+// negative down, at an unchanged pitch. This is Melodyne's formant tool: it changes who is singing,
+// not what note they are singing.
+//
+// Same cepstral envelope as formantCorrect, warped along the frequency axis: the envelope wanted at
+// bin b is the original envelope at b / 2^(semitones/12), so the gain applied is that ratio.
+// 0 semitones returns the input unchanged.
+std::vector<float> formantShift(const std::vector<float>& signal, int channels, double sampleRate,
+                                double semitones);
+
 // Piecewise time remap (ported from Serato's processWithTimeMap). sourceAnchors/destAnchors are
 // matched NORMALIZED positions in [0,1]; each segment between anchors is stretched independently to
 // its destination span, all at the global pitch (params.semitones) and overall length (timeRatio).

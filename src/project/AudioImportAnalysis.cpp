@@ -303,9 +303,51 @@ std::array<double, 12> chromaForWindow(const WavAudioData& data, double startSec
                 phase = std::fmod(phase, kPi * 2.0);
             }
         }
-        chroma[static_cast<size_t>(midi % 12)] += std::sqrt(real * real + imag * imag);
+        // Log-compress each pitch's magnitude before folding it into its pitch class. Raw magnitude
+        // lets one loud bass fundamental outweigh a whole chord voicing, which skewed the key toward
+        // whatever the bass sat on; compression makes presence matter more than level.
+        const double magnitude = std::sqrt(real * real + imag * imag);
+        chroma[static_cast<size_t>(midi % 12)] += std::log1p(magnitude);
     }
     return chroma;
+}
+
+/// Chroma for key finding: many short windows, each normalised, then averaged.
+///
+/// A single window over the whole song (what this used to do) lets the loudest section decide the
+/// key — a big chorus outvotes everything else, and a modulation smears into an average that
+/// matches nothing. Normalising each window first gives every moment of the song one equal vote.
+std::array<double, 12> averagedChromaForKey(const WavAudioData& data, double durationSeconds) {
+    std::array<double, 12> total {};
+    if (durationSeconds <= 0.0) {
+        return total;
+    }
+    constexpr double kWindowSeconds = 2.0;
+    int windows = 0;
+    for (double start = 0.0; start + 0.5 < durationSeconds; start += kWindowSeconds) {
+        const double span = std::min(kWindowSeconds, durationSeconds - start);
+        if (span < 0.5) {
+            break;
+        }
+        auto window = chromaForWindow(data, start, span);
+        double sum = 0.0;
+        for (const double value : window) {
+            sum += value;
+        }
+        if (sum <= 1.0e-9) {
+            continue;   // silence contributes nothing rather than a flat vote
+        }
+        for (size_t pitchClass = 0; pitchClass < window.size(); ++pitchClass) {
+            total[pitchClass] += window[pitchClass] / sum;
+        }
+        ++windows;
+    }
+    if (windows > 0) {
+        for (double& value : total) {
+            value /= static_cast<double>(windows);
+        }
+    }
+    return total;
 }
 
 struct KeyEstimate {
@@ -316,8 +358,18 @@ struct KeyEstimate {
 };
 
 KeyEstimate estimateKeyFromChroma(const std::array<double, 12>& chroma) {
-    static constexpr std::array<int, 7> kMajorScale {0, 2, 4, 5, 7, 9, 11};
-    static constexpr std::array<int, 7> kMinorScale {0, 2, 3, 5, 7, 8, 10};
+    // Krumhansl–Schmuckler key finding: correlate the 12-bin chroma against all 24 major/minor key
+    // profiles (Krumhansl–Kessler tonal-hierarchy weights) and take the strongest. Pearson correlation
+    // makes the match robust to the chroma's overall level and DC offset — this is the standard method
+    // and is markedly more reliable than a flat diatonic-scale sum, which over-rewards busy chromas.
+    // Temperley's Kostka–Payne profiles rather than the original Krumhansl–Kessler weights. K–K came
+    // from probe-tone listening tests; these are derived from what actually occurs in scored music,
+    // and are the better-performing pair in published key-finding comparisons — notably less prone
+    // to confusing a key with its relative minor/major.
+    static constexpr std::array<double, 12> kMajorProfile {
+        5.00, 2.00, 3.50, 2.00, 4.50, 4.00, 2.00, 4.50, 2.00, 3.50, 1.50, 4.00};
+    static constexpr std::array<double, 12> kMinorProfile {
+        5.00, 2.00, 3.50, 4.50, 2.00, 4.00, 2.00, 4.50, 3.50, 2.00, 1.50, 4.00};
     double total = 0.0;
     for (double value : chroma) {
         total += value;
@@ -329,17 +381,28 @@ KeyEstimate estimateKeyFromChroma(const std::array<double, 12>& chroma) {
     auto sortedChroma = chroma;
     std::sort(sortedChroma.begin(), sortedChroma.end(), std::greater<double>());
     estimate.tonalShare = (sortedChroma[0] + sortedChroma[1] + sortedChroma[2] + sortedChroma[3]) / total;
-    double bestScore = -1.0;
-    double secondScore = -1.0;
+
+    const double chromaMean = total / 12.0;
+    const auto profileMean = [](const std::array<double, 12>& p) {
+        double s = 0.0; for (double v : p) s += v; return s / 12.0;
+    };
+    const double majMean = profileMean(kMajorProfile);
+    const double minMean = profileMean(kMinorProfile);
+    // Pearson correlation of the chroma against `profile` rotated so its tonic (index 0) sits at `root`.
+    const auto correlate = [&](const std::array<double, 12>& profile, double pMean, int root) {
+        double num = 0.0, denC = 0.0, denP = 0.0;
+        for (int i = 0; i < 12; ++i) {
+            const double c = chroma[static_cast<size_t>(i)] - chromaMean;
+            const double p = profile[static_cast<size_t>((i - root + 12) % 12)] - pMean;
+            num += c * p; denC += c * c; denP += p * p;
+        }
+        const double den = std::sqrt(denC * denP);
+        return den > 1.0e-12 ? num / den : 0.0;
+    };
+
+    double bestScore = -2.0;
+    double secondScore = -2.0;
     for (int root = 0; root < 12; ++root) {
-        double major = chroma[static_cast<size_t>(root)] * 1.35;
-        double minor = chroma[static_cast<size_t>(root)] * 1.25;
-        for (int interval : kMajorScale) {
-            major += chroma[static_cast<size_t>((root + interval) % 12)];
-        }
-        for (int interval : kMinorScale) {
-            minor += chroma[static_cast<size_t>((root + interval) % 12)];
-        }
         const auto consider = [&](double score, bool isMinor) {
             if (score > bestScore) {
                 secondScore = bestScore;
@@ -350,10 +413,11 @@ KeyEstimate estimateKeyFromChroma(const std::array<double, 12>& chroma) {
                 secondScore = score;
             }
         };
-        consider(major, false);
-        consider(minor, true);
+        consider(correlate(kMajorProfile, majMean, root), false);
+        consider(correlate(kMinorProfile, minMean, root), true);
     }
-    estimate.confidence = bestScore > 0.0 ? std::max(0.0, (bestScore - std::max(0.0, secondScore)) / bestScore) : 0.0;
+    // Confidence = how far the winning key beats the runner-up (correlation margin), clamped ≥ 0.
+    estimate.confidence = std::max(0.0, bestScore - std::max(0.0, secondScore));
     return estimate;
 }
 
@@ -558,7 +622,7 @@ std::string analyzeImportedAudioIntoProject(ProjectDocument& project,
     // committed to the timeline. Only the project writes below are gated on applyToTimeline.
     const int numerator = meterGroove.numerator;
     const int denominator = meterGroove.denominator;
-    const auto songChroma = chromaForWindow(data, 0.0, std::min(clipDurationSeconds, 180.0));
+    const auto songChroma = averagedChromaForKey(data, std::min(clipDurationSeconds, 180.0));
     const KeyEstimate key = estimateKeyFromChroma(songChroma);
     const bool keyKnown = key.confidence >= 0.018 && key.tonalShare >= 0.36 &&
         tonalContinuityForWindow(data, 0.0, std::min(clipDurationSeconds, 180.0)) >= 0.08;

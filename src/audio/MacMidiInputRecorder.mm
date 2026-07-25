@@ -109,7 +109,13 @@ public:
         std::string ignoredError;
         stop(ignoredEvents, ignoredError);
 
-        const OSStatus clientStatus = MIDIClientCreate(CFSTR("Neuracoust DAW MIDI Input"), nullptr, nullptr, &client_);
+        preferredInputId_ = preferredInputId;
+        // notifyProc fires on every CoreMIDI setup change — a device plugged or unplugged, and
+        // crucially the re-enumeration a USB MIDI interface goes through when the Mac wakes from
+        // sleep. Without it a connection that died overnight stays dead: the endpoint is still
+        // listed so nothing looks wrong, but no notes arrive until the app is relaunched.
+        const OSStatus clientStatus = MIDIClientCreate(CFSTR("Neuracoust DAW MIDI Input"),
+                                                       &Impl::notifyProc, this, &client_);
         if (clientStatus != noErr || client_ == 0) {
             setStoppedStatus("Could not create CoreMIDI client.", 0.0);
             return false;
@@ -121,22 +127,8 @@ public:
             return false;
         }
 
-        const ItemCount count = MIDIGetNumberOfSources();
-        for (ItemCount index = 0; index < count; ++index) {
-            MIDIEndpointRef source = MIDIGetSource(index);
-            if (source == 0) {
-                continue;
-            }
-            const std::string sourceId = sourceIdForEndpoint(source, index);
-            if (!preferredInputId.empty() && sourceId != preferredInputId) {
-                continue;
-            }
-            if (MIDIPortConnectSource(port_, source, nullptr) == noErr) {
-                connectedSources_.push_back(source);
-            }
-        }
-
-        if (connectedSources_.empty()) {
+        const size_t connected = connectPreferredSources();
+        if (connected == 0) {
             cleanupCoreMidi();
             setStoppedStatus("No CoreMIDI input source is available.", 0.0);
             return false;
@@ -151,8 +143,8 @@ public:
             firstHostSeconds_ = 0.0;
             status_ = {};
             status_.recording = true;
-            status_.sourceCount = connectedSources_.size();
-            status_.message = connectedSources_.size() == 1 ? "Recording MIDI input." : "Recording all MIDI inputs.";
+            status_.sourceCount = connected;
+            status_.message = connected == 1 ? "Recording MIDI input." : "Recording all MIDI inputs.";
         }
         return true;
     }
@@ -297,24 +289,93 @@ private:
         recording_ = false;
     }
 
-    void cleanupCoreMidi() {
-        if (port_ != 0) {
-            for (MIDIEndpointRef source : connectedSources_) {
-                MIDIPortDisconnectSource(port_, source);
-            }
-            MIDIPortDispose(port_);
-            port_ = 0;
+    /// (Re)connect the port to the preferred source, or to every source when no preference is
+    /// set. Disconnects whatever it held first, so it is safe to call on a live port to recover
+    /// from a wake-from-sleep. Returns how many sources ended up connected. Runs under
+    /// connectionMutex_ so a setup-changed notification cannot race a start/stop.
+    size_t connectPreferredSources() {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        if (port_ == 0) {
+            return 0;
+        }
+        for (MIDIEndpointRef source : connectedSources_) {
+            MIDIPortDisconnectSource(port_, source);
         }
         connectedSources_.clear();
-        if (client_ != 0) {
-            MIDIClientDispose(client_);
+
+        const ItemCount count = MIDIGetNumberOfSources();
+        for (ItemCount index = 0; index < count; ++index) {
+            MIDIEndpointRef source = MIDIGetSource(index);
+            if (source == 0) {
+                continue;
+            }
+            const std::string sourceId = sourceIdForEndpoint(source, index);
+            if (!preferredInputId_.empty() && sourceId != preferredInputId_) {
+                continue;
+            }
+            if (MIDIPortConnectSource(port_, source, nullptr) == noErr) {
+                connectedSources_.push_back(source);
+            }
+        }
+        return connectedSources_.size();
+    }
+
+    /// CoreMIDI setup changed — a device came or went, or the bus re-enumerated on wake. Re-run
+    /// the connection so the keyboard keeps working without a relaunch. Only a real change to the
+    /// set of sources matters; ignore the property-changed chatter CoreMIDI also sends.
+    static void notifyProc(const MIDINotification* message, void* context) {
+        if (message == nullptr || context == nullptr) {
+            return;
+        }
+        if (message->messageID != kMIDIMsgSetupChanged &&
+            message->messageID != kMIDIMsgObjectAdded &&
+            message->messageID != kMIDIMsgObjectRemoved) {
+            return;
+        }
+        auto* impl = static_cast<Impl*>(context);
+        if (!impl->recording_) {
+            return;
+        }
+        const size_t connected = impl->connectPreferredSources();
+        std::lock_guard<std::mutex> lock(impl->mutex_);
+        impl->status_.sourceCount = connected;
+    }
+
+    void cleanupCoreMidi() {
+        // Take the connection lock, detach everything, then dispose OUTSIDE the lock: a
+        // setup-changed notification can fire during MIDIClientDispose, and its notifyProc also
+        // wants connectionMutex_ — holding it across dispose could deadlock. Nulling the members
+        // first makes any in-flight notify a no-op.
+        MIDIPortRef port = 0;
+        MIDIClientRef client = 0;
+        std::vector<MIDIEndpointRef> sources;
+        {
+            std::lock_guard<std::mutex> lock(connectionMutex_);
+            port = port_;
+            client = client_;
+            sources = std::move(connectedSources_);
+            connectedSources_.clear();
+            port_ = 0;
             client_ = 0;
+        }
+        if (port != 0) {
+            for (MIDIEndpointRef source : sources) {
+                MIDIPortDisconnectSource(port, source);
+            }
+            MIDIPortDispose(port);
+        }
+        if (client != 0) {
+            MIDIClientDispose(client);
         }
     }
 
     MIDIClientRef client_ = 0;
     MIDIPortRef port_ = 0;
     std::vector<MIDIEndpointRef> connectedSources_;
+    std::string preferredInputId_;
+    // Guards the CoreMIDI connection (client_/port_/connectedSources_/preferredInputId_) so the
+    // setup-changed notifyProc, which runs on CoreMIDI's thread, cannot race start/stop.
+    std::mutex connectionMutex_;
     std::vector<RecordedMidiEvent> events_;
     std::vector<RecordedMidiEvent> pendingEvents_;
     std::chrono::steady_clock::time_point startSteady_ = std::chrono::steady_clock::now();

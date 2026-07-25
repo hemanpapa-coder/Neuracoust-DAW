@@ -65,13 +65,34 @@ final class PluginEditorHost: ObservableObject {
         if sessions[slot] == nil { open(slot) }
     }
 
+    /// -1 addresses the primary instrument, -2 the first rack layer, and so on.
+    private func instrumentSlotIndex(for slot: Slot) -> Int { -1 - slot.insertIndex }
+
     func close(_ slot: Slot) {
         guard let session = sessions.removeValue(forKey: slot) else { return }
         openSlots.remove(slot)
-        // The host closes its window and exits on EOF; terminate is the backstop.
+        // Ask the host to leave through its own window-close path, which is where it
+        // captures the plug-in's patch. A bare terminate() is a SIGTERM and would take
+        // the patch with it — the editor's program selection would be lost exactly as if
+        // the DAW had never asked for it.
+        var askedToQuit = false
+        do {
+            try session.input.write(contentsOf: Data("QUIT\n".utf8))
+            askedToQuit = true
+        } catch {
+            askedToQuit = false
+        }
         try? session.input.close()
         if session.process.isRunning {
-            session.process.terminate()
+            if askedToQuit {
+                // Backstop for an editor that hangs on the way out.
+                let process = session.process
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    if process.isRunning { process.terminate() }
+                }
+            } else {
+                session.process.terminate()
+            }
         }
         if slot.insertIndex == -1 {
             // Tear the reverse monitor ring down and give the live-MIDI path back to
@@ -101,7 +122,9 @@ final class PluginEditorHost: ObservableObject {
 
     /// Called on quit. Editors are child processes; orphaning them leaves windows behind.
     func closeAll() {
-        for slot in sessions.keys {
+        // Array() first: close() removes from `sessions`, and the other close-many helpers
+        // already snapshot the keys for that reason.
+        for slot in Array(sessions.keys) {
             close(slot)
         }
     }
@@ -141,6 +164,16 @@ final class PluginEditorHost: ObservableObject {
             // ("MIDI <status> <d1> <d2>") so the editor's own instance animates its GUI
             // keyboard/wheels.
             arguments += ["--instrument"]
+            // Patch handoff both ways through one file: the host restores what the project
+            // stored, and overwrites it with the program the user picks before it exits.
+            // A workstation instrument's program lives in this blob and in no parameter, so
+            // without it the editor's browser selection dies with the editor window.
+            let stateURL = engine.instrumentStateFileURL(trackId: slot.trackId,
+                                                         slotIndex: instrumentSlotIndex(for: slot))
+            engine.exportInstrumentState(trackId: slot.trackId,
+                                         slotIndex: instrumentSlotIndex(for: slot),
+                                         to: stateURL)
+            arguments += ["--state-file", stateURL.path]
             // Primary slot only: the reverse monitor ring makes the editor instance the
             // track's live voice (GUI keyboard clicks become audible). A layer editor
             // (insertIndex < -1) renders just its own layer, so handing it the whole
@@ -181,15 +214,47 @@ final class PluginEditorHost: ObservableObject {
         }
 
         process.terminationHandler = { [weak self] finished in
+            // The helper may emit its final preset/program snapshot while handling
+            // NSWindowWillClose. Drain the pipe before the main actor removes the
+            // session; otherwise consume() sees no session and silently drops the
+            // patch that must be transferred to the render instance.
+            output.fileHandleForReading.readabilityHandler = nil
+            let finalOutput = output.fileHandleForReading.readDataToEndOfFile()
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                output.fileHandleForReading.readabilityHandler = nil
+                if !finalOutput.isEmpty {
+                    self.consume(finalOutput, from: slot)
+                }
+                // A final line is normally newline-terminated. Be defensive about
+                // abrupt vendor exits and consume any complete UTF-8 tail as well.
+                if let session = self.sessions[slot], !session.stdoutTail.isEmpty,
+                   let tail = String(data: session.stdoutTail, encoding: .utf8) {
+                    session.stdoutTail.removeAll()
+                    self.handle(line: tail.trimmingCharacters(in: .whitespacesAndNewlines),
+                                slot: slot, session: session)
+                }
                 // A crash is normal for a bad plug-in; the DAW keeps running.
                 if self.sessions[slot] != nil, finished.terminationReason == .uncaughtSignal {
                     self.lastError = "\(descriptor.name) 에디터가 예기치 않게 종료되었습니다."
                 }
                 self.sessions.removeValue(forKey: slot)
                 self.openSlots.remove(slot)
+                // Patch first, voice second — and in that order for a reason. Taking the
+                // patch rebuilds the render instance; handing the live-MIDI path back makes
+                // that instance audible. Done the other way round the render instance became
+                // the voice while it still held the program it was loaded with, so the first
+                // notes after closing the editor sounded the OLD instrument before the new
+                // one arrived.
+                if slot.insertIndex < 0 {
+                    // Nothing was written if the editor died before it could capture, and
+                    // the project keeps what it had.
+                    let slotIndex = self.instrumentSlotIndex(for: slot)
+                    let stateURL = self.engine.instrumentStateFileURL(trackId: slot.trackId,
+                                                                     slotIndex: slotIndex)
+                    self.engine.importInstrumentState(trackId: slot.trackId,
+                                                      slotIndex: slotIndex,
+                                                      from: stateURL)
+                }
                 if slot.insertIndex == -1 {
                     // Crash or window-close exit: give the live path back to the render
                     // instance so the keyboard keeps sounding without its editor.
@@ -273,6 +338,11 @@ final class PluginEditorHost: ObservableObject {
     func forwardLiveMidi(trackIds: Set<Int>, events: [NCMidiLiveEvent]) {
         guard !events.isEmpty, !openSlots.isEmpty else { return }
         var payload: String?
+        // Collect the sessions whose pipe broke and close them AFTER the loop: close() removes
+        // from `sessions`, and mutating the dictionary while iterating it traps. With SIGPIPE now
+        // ignored, a write to a just-closed editor actually reaches this catch (before, the signal
+        // killed the app first), so the in-loop close became a live crash.
+        var dead: [Slot] = []
         for (slot, session) in sessions
         where slot.insertIndex < 0 && session.ready && trackIds.contains(slot.trackId) {
             if payload == nil {
@@ -282,9 +352,10 @@ final class PluginEditorHost: ObservableObject {
             do {
                 try session.input.write(contentsOf: data)
             } catch {
-                close(slot)
+                dead.append(slot)
             }
         }
+        for slot in dead { close(slot) }
     }
 
     /// Restores what the project saved, so reopening an editor shows the mix, not the defaults.

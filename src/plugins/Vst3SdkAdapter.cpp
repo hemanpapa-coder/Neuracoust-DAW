@@ -2,10 +2,13 @@
 #include "plugins/Vst3RealtimeBridge.h"
 #include "plugins/Vst3RealtimeBridgeProtocol.h"
 #include "plugins/Vst3ModuleRuntime.h"
+#include "core/Base64.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
+#include <cstdio>
 #include <filesystem>
 #include <iomanip>
 #include <limits>
@@ -30,6 +33,7 @@
 #endif
 
 #if defined(NEURACOUST_HAS_VST3_SDK)
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -429,6 +433,91 @@ Steinberg::Vst::IEditController* createEditControllerForAudioComponent(Steinberg
     return static_cast<Steinberg::Vst::IEditController*>(object);
 }
 
+// A read-only IBStream over a byte buffer, so a stored component state can be handed
+// back to the plug-in. Only the read path matters here: we never ask a render instance
+// for its state — the editor host is what produces one.
+class ReadOnlyMemoryStream final : public Steinberg::IBStream {
+public:
+    explicit ReadOnlyMemoryStream(std::vector<uint8_t> bytes) : bytes_(std::move(bytes)) { FUNKNOWN_CTOR }
+    ~ReadOnlyMemoryStream() noexcept { FUNKNOWN_DTOR }
+
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override {
+        QUERY_INTERFACE(iid, obj, Steinberg::FUnknown::iid, Steinberg::IBStream)
+        QUERY_INTERFACE(iid, obj, Steinberg::IBStream::iid, Steinberg::IBStream)
+        *obj = nullptr;
+        return Steinberg::kNoInterface;
+    }
+
+    Steinberg::uint32 PLUGIN_API addRef() override {
+        return Steinberg::FUnknownPrivate::atomicAdd(__funknownRefCount, 1);
+    }
+
+    Steinberg::uint32 PLUGIN_API release() override {
+        if (Steinberg::FUnknownPrivate::atomicAdd(__funknownRefCount, -1) == 0) {
+            delete this;
+            return 0;
+        }
+        return __funknownRefCount;
+    }
+
+    Steinberg::tresult PLUGIN_API read(void* buffer, Steinberg::int32 numBytes, Steinberg::int32* numBytesRead) override {
+        if (buffer == nullptr || numBytes < 0) {
+            return Steinberg::kInvalidArgument;
+        }
+        const size_t available = position_ < bytes_.size() ? bytes_.size() - position_ : 0;
+        const size_t count = std::min<size_t>(available, static_cast<size_t>(numBytes));
+        if (count > 0) {
+            std::memcpy(buffer, bytes_.data() + position_, count);
+            position_ += count;
+        }
+        if (numBytesRead != nullptr) {
+            *numBytesRead = static_cast<Steinberg::int32>(count);
+        }
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::tresult PLUGIN_API write(void*, Steinberg::int32, Steinberg::int32* numBytesWritten) override {
+        if (numBytesWritten != nullptr) {
+            *numBytesWritten = 0;
+        }
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API seek(Steinberg::int64 pos, Steinberg::int32 mode, Steinberg::int64* result) override {
+        Steinberg::int64 next = 0;
+        if (mode == Steinberg::IBStream::kIBSeekSet) {
+            next = pos;
+        } else if (mode == Steinberg::IBStream::kIBSeekCur) {
+            next = static_cast<Steinberg::int64>(position_) + pos;
+        } else if (mode == Steinberg::IBStream::kIBSeekEnd) {
+            next = static_cast<Steinberg::int64>(bytes_.size()) + pos;
+        } else {
+            return Steinberg::kInvalidArgument;
+        }
+        if (next < 0) {
+            return Steinberg::kInvalidArgument;
+        }
+        position_ = static_cast<size_t>(next);
+        if (result != nullptr) {
+            *result = static_cast<Steinberg::int64>(position_);
+        }
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::tresult PLUGIN_API tell(Steinberg::int64* pos) override {
+        if (pos == nullptr) {
+            return Steinberg::kInvalidArgument;
+        }
+        *pos = static_cast<Steinberg::int64>(position_);
+        return Steinberg::kResultOk;
+    }
+
+private:
+    Steinberg::int32 __funknownRefCount = 1;
+    std::vector<uint8_t> bytes_;
+    size_t position_ = 0;
+};
+
 struct PreparedProcessor {
     Steinberg::Vst::IComponent* component = nullptr;
     Steinberg::Vst::IAudioProcessor* processor = nullptr;
@@ -520,13 +609,55 @@ void releasePreparedProcessor(PreparedProcessor& prepared) {
     }
 }
 
+/// Hands a stored patch back to a freshly created plug-in, the way a host restores a
+/// saved project. Must run after initialize() and before setActive(true) — that is the
+/// order every plug-in is written against, and the only point where a sampler is
+/// willing to reload its instrument. Returns false when there is nothing to apply or
+/// the plug-in rejected it; the caller carries on with the defaults either way.
+bool applyStoredComponentState(PreparedProcessor& prepared, const std::string& componentStateBase64) {
+    if (componentStateBase64.empty() || prepared.component == nullptr) {
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (!decodeBase64(componentStateBase64, bytes) || bytes.empty()) {
+        return false;
+    }
+    auto* componentStream = new ReadOnlyMemoryStream(bytes);
+    Steinberg::tresult result = Steinberg::kInternalError;
+    try {
+        result = prepared.component->setState(componentStream);
+    } catch (...) {
+        result = Steinberg::kInternalError;
+    }
+    componentStream->release();
+    if (std::getenv("NEURACOUST_LOG_VST3_STATE") != nullptr) {
+        std::fprintf(stderr, "[vst3-state] setState bytes=%zu result=%d controller=%s\n", bytes.size(),
+                     static_cast<int>(result),
+                     prepared.controller == nullptr ? "none"
+                         : (prepared.controllerFromComponent ? "from-component" : "separate"));
+    }
+    // The controller is a separate object with its own copy of the patch; without this
+    // it would keep reporting the values the processor no longer has.
+    if (prepared.controller != nullptr && !prepared.controllerFromComponent) {
+        auto* controllerStream = new ReadOnlyMemoryStream(std::move(bytes));
+        try {
+            prepared.controller->setComponentState(controllerStream);
+        } catch (...) {
+        }
+        controllerStream->release();
+    }
+    return result == Steinberg::kResultOk;
+}
+
 bool prepareAudioProcessor(Steinberg::IPluginFactory* factory,
                            const Vst3PluginDescriptor& descriptor,
                            double sampleRate,
                            int maxBlockSize,
                            PreparedProcessor& prepared,
                            std::string& message,
-                           bool realtime = false) {
+                           bool realtime = false,
+                           const std::string& componentStateBase64 = {},
+                           bool* appliedComponentState = nullptr) {
     prepared.component = createAudioComponent(factory, descriptor, prepared.className);
     if (prepared.component == nullptr) {
         message = "No audio component class could be instantiated.";
@@ -601,6 +732,13 @@ bool prepareAudioProcessor(Steinberg::IPluginFactory* factory,
         prepared.controllerConnection != nullptr) {
         prepared.componentConnection->connect(prepared.controllerConnection);
         prepared.controllerConnection->connect(prepared.componentConnection);
+    }
+
+    // Before any bus or processing setup: a workstation instrument can change its bus
+    // layout and its latency with the patch it loads.
+    const bool stateApplied = applyStoredComponentState(prepared, componentStateBase64);
+    if (appliedComponentState != nullptr) {
+        *appliedComponentState = stateApplied;
     }
 
     prepared.inputBusCount = prepared.component->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput);
@@ -1031,6 +1169,78 @@ GetPluginFactoryFn findFactorySymbol(void* moduleHandle) {
 #endif
 
 } // namespace
+
+bool vst3AdvertisesAraFactory(const Vst3PluginDescriptor& descriptor) {
+#if !defined(NEURACOUST_HAS_VST3_SDK)
+    (void)descriptor;
+    return false;
+#else
+    // An ARA plug-in advertises an EXTRA class in its VST3 factory whose category is
+    // "ARA Main Factory Class" (ARA's kARAMainFactoryClass) — that is where a host obtains the
+    // ARAFactory from. Verified against the installed Melodyne, whose factory reports exactly two
+    // classes: "Audio Module Class" and "ARA Main Factory Class". Reading the factory is how you
+    // actually know a plug-in is ARA — far better than matching product names, which only knows the
+    // plug-ins someone thought to list.
+    if (descriptor.executablePath.empty() || !std::filesystem::exists(descriptor.executablePath)) {
+        return false;
+    }
+    ScopedPluginResourceDirectory resourceDirectory(descriptor);
+    std::string openError;
+    void* module = openModuleHandle(descriptor, openError);
+    if (module == nullptr) {
+        return false;
+    }
+    auto* symbol = findFactorySymbol(module);
+    if (symbol == nullptr) {
+        closeModuleHandle(module);
+        return false;
+    }
+    Steinberg::IPluginFactory* factory = symbol();
+    if (factory == nullptr) {
+        closeModuleHandle(module);
+        return false;
+    }
+    bool found = false;
+    const int classCount = factory->countClasses();
+    for (int index = 0; index < classCount && !found; ++index) {
+        Steinberg::PClassInfo classInfo;
+        if (factory->getClassInfo(index, &classInfo) == Steinberg::kResultOk) {
+            const std::string category = classInfo.category;
+            found = category.rfind("ARA Main Factory", 0) == 0;
+        }
+    }
+    closeModuleHandle(module);
+    return found;
+#endif
+}
+
+bool requiresAraHost(const Vst3PluginDescriptor& descriptor) {
+    // ARA plug-ins are not realtime effects. Without an ARA host they fall back to their own
+    // "transfer" mode: an independent transport that keeps running while the DAW is stopped, and
+    // audio you must explicitly transfer in. Hosting one as a plain realtime insert wedges it —
+    // Melodyne loaded this way left the DAW unresponsive. Refuse until ARA2 is supported.
+    // Ask the plug-in first: a factory that advertises an ARA Main Factory IS an ARA plug-in.
+    if (vst3AdvertisesAraFactory(descriptor)) {
+        return true;
+    }
+    // Fallback for the ones we already know by name, so this still catches a plug-in whose factory
+    // could not be opened here.
+    const auto text = lowerAscii(descriptor.brand + " " + descriptor.vendor + " " +
+                                     descriptor.name + " " + descriptor.componentClassName + " " +
+                                     descriptor.bundlePath);
+    return text.find("melodyne") != std::string::npos ||
+           text.find("celemony") != std::string::npos ||
+           text.find("spectralayers") != std::string::npos ||
+           text.find("revoice") != std::string::npos;
+}
+
+std::string araRequiredMessage(const Vst3PluginDescriptor& descriptor) {
+    const std::string name = descriptor.name.empty() ? std::string("이 플러그인") : descriptor.name;
+    return name + "은(는) ARA 플러그인입니다. ARA 없이 일반 인서트로 걸면 자체 트랜스포트로 따로 돌아가고 "
+                  "DAW가 멈출 수 있어 실시간 체인에 넣지 않았습니다. 보컬 피치 편집은 내장 '노트 편집 / "
+                  "타임 워프' 에디터를 사용하세요. (ARA2 지원은 준비 중입니다.)";
+}
+
 
 struct Vst3RealtimeProcessor::Impl {
     Vst3PluginDescriptor descriptor;
@@ -1747,7 +1957,8 @@ Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& desc
                                                 const std::vector<Vst3MidiEvent>& midiEvents,
                                                 WavAudioData& outputAudio,
                                                 int maxBlockSize,
-                                                const std::vector<Vst3ParameterValueState>& parameters) {
+                                                const std::vector<Vst3ParameterValueState>& parameters,
+                                                const std::string& componentStateBase64) {
     Vst3ProcessResult result;
 
 #if !defined(NEURACOUST_HAS_VST3_SDK)
@@ -1794,7 +2005,8 @@ Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& desc
 
     PreparedProcessor prepared;
     std::string prepareMessage;
-    if (!prepareAudioProcessor(factory, descriptor, outputAudio.sampleRate, maxBlockSize, prepared, prepareMessage)) {
+    if (!prepareAudioProcessor(factory, descriptor, outputAudio.sampleRate, maxBlockSize, prepared,
+                               prepareMessage, false, componentStateBase64)) {
         result.message = prepareMessage;
         closeModuleHandle(module);
         return result;
@@ -1883,7 +2095,8 @@ bool Vst3RealtimeProcessor::prepare(const Vst3PluginDescriptor& descriptor,
                                     int maxBlockSize,
                                     std::string& message,
                                     const std::string& bridgeShmKey,
-                                    bool forceOutOfProcess) {
+                                    bool forceOutOfProcess,
+                                    const std::string& componentStateBase64) {
     reset();
     message.clear();
     impl_->descriptor = descriptor;
@@ -1895,6 +2108,13 @@ bool Vst3RealtimeProcessor::prepare(const Vst3PluginDescriptor& descriptor,
     return false;
 #else
     impl_->preparedProbe.sdkAvailable = true;
+    // An ARA plug-in is not a realtime effect. Refuse before anything is instantiated: hosting one
+    // in the realtime chain is what left the DAW unresponsive.
+    if (requiresAraHost(descriptor)) {
+        impl_->preparedProbe.message = araRequiredMessage(descriptor);
+        message = impl_->preparedProbe.message;
+        return false;
+    }
     // Host out-of-process (sandbox bridge) when the plugin is either unsafe to
     // load inside the DAW process, or explicitly designated Internal DSP
     // (forceOutOfProcess) so third-party plugins run on the isolated core.
@@ -1973,7 +2193,9 @@ bool Vst3RealtimeProcessor::prepare(const Vst3PluginDescriptor& descriptor,
     }
 
     std::string prepareMessage;
-    if (!prepareAudioProcessor(factory, descriptor, sampleRate, impl_->maxBlockSize, impl_->prepared, prepareMessage, true)) {
+    bool appliedComponentState = false;
+    if (!prepareAudioProcessor(factory, descriptor, sampleRate, impl_->maxBlockSize, impl_->prepared,
+                               prepareMessage, true, componentStateBase64, &appliedComponentState)) {
         impl_->preparedProbe.message = prepareMessage;
         reset();
         message = prepareMessage;
@@ -2014,7 +2236,15 @@ bool Vst3RealtimeProcessor::prepare(const Vst3PluginDescriptor& descriptor,
     impl_->preparedProbe.latencySamples = impl_->prepared.latencySamples;
     impl_->preparedProbe.tailSamples = impl_->prepared.tailSamples;
     impl_->preparedProbe.className = impl_->prepared.className;
-    impl_->collectInitialParameters();
+    // The controller snapshot exists to cover plug-ins that come up with values the
+    // processor was never told about (FabFilter). A restored patch is a complete
+    // description of the plug-in's condition, and not every controller reflects one — so
+    // when a patch was applied, injecting the snapshot would push the OLD program's values
+    // straight back over it. The patch wins; the project's own stored parameters are still
+    // applied on top of it.
+    if (!appliedComponentState) {
+        impl_->collectInitialParameters();
+    }
     impl_->preparedProbe.message = "VST3 realtime processor prepared.";
     message = impl_->preparedProbe.message;
     return true;
@@ -2266,6 +2496,94 @@ std::vector<Vst3ParameterValueState> Vst3RealtimeProcessor::drainOutputParameter
     std::vector<Vst3ParameterValueState> changes;
     changes.swap(impl_->outputParameterChanges);
     return changes;
+#endif
+}
+
+bool Vst3RealtimeProcessor::applyComponentState(const std::string& componentStateBase64,
+                                                std::string& message) {
+    message.clear();
+    if (componentStateBase64.empty()) {
+        message = "No component state to apply.";
+        return false;
+    }
+    // Out-of-process (sandbox bridge) inserts have no in-process component to talk to. Instruments
+    // are always in-process, so this only bites if it is ever called on a bridged insert.
+    if (impl_ && impl_->bridge) {
+        message = "Component state cannot be applied to an out-of-process plug-in.";
+        return false;
+    }
+#if !defined(NEURACOUST_HAS_VST3_SDK)
+    message = "Steinberg VST3 SDK headers are not configured.";
+    return false;
+#else
+    if (!impl_ || impl_->prepared.component == nullptr || impl_->prepared.processor == nullptr) {
+        message = "Instrument is not prepared.";
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (!decodeBase64(componentStateBase64, bytes) || bytes.empty()) {
+        message = "Component state is not valid base64.";
+        return false;
+    }
+    auto& prepared = impl_->prepared;
+    // A VST3 component only accepts a new state while it is inactive — the same order a host uses
+    // to load a preset. Stop processing, deactivate, swap the state, then bring it back. Held
+    // voices are cut, exactly as loading a preset always does; nothing is torn down or reloaded.
+    try {
+        prepared.processor->setProcessing(false);
+    } catch (...) {
+    }
+    try {
+        prepared.component->setActive(false);
+    } catch (...) {
+    }
+
+    bool ok = false;
+    {
+        auto* componentStream = new ReadOnlyMemoryStream(bytes);
+        Steinberg::tresult result = Steinberg::kInternalError;
+        try {
+            result = prepared.component->setState(componentStream);
+        } catch (...) {
+            result = Steinberg::kInternalError;
+        }
+        componentStream->release();
+        ok = result == Steinberg::kResultOk;
+    }
+    if (prepared.controller != nullptr && !prepared.controllerFromComponent) {
+        auto* controllerStream = new ReadOnlyMemoryStream(std::move(bytes));
+        try {
+            prepared.controller->setComponentState(controllerStream);
+        } catch (...) {
+        }
+        controllerStream->release();
+    }
+
+    // Reactivate whatever happened — a failed setState must not leave the instrument dead.
+    bool reactivated = false;
+    try {
+        reactivated = prepared.component->setActive(true) == Steinberg::kResultOk;
+    } catch (...) {
+        reactivated = false;
+    }
+    try {
+        prepared.processor->setProcessing(true);
+    } catch (...) {
+    }
+    // The controller's live values changed with the patch; refresh the snapshot the first block
+    // sends so the processor and controller agree on the new program.
+    impl_->collectInitialParameters();
+
+    if (!reactivated) {
+        message = "Instrument did not reactivate after loading the patch.";
+        return false;
+    }
+    if (!ok) {
+        message = "Plug-in rejected the patch.";
+        return false;
+    }
+    message = "Patch applied.";
+    return true;
 #endif
 }
 

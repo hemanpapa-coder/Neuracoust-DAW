@@ -537,6 +537,8 @@ public:
         copy.trackMeterNames = dspStatus.trackMeterNames;
         copy.trackPeakLeft = dspStatus.trackPeakLeft;
         copy.trackPeakRight = dspStatus.trackPeakRight;
+        copy.trackConsoleGainReductionDb = dspStatus.trackConsoleGainReductionDb;
+        copy.trackConsoleGateGainReductionDb = dspStatus.trackConsoleGateGainReductionDb;
         copy.trackInsertMeterTrackNames = dspStatus.trackInsertMeterTrackNames;
         copy.trackInsertMeterSlotIndices = dspStatus.trackInsertMeterSlotIndices;
         copy.trackInsertInputPeak = dspStatus.trackInsertInputPeak;
@@ -957,6 +959,12 @@ public:
         if (updated) {
             status_.message = dspEngine_.lastMessage();
         }
+        return updated;
+    }
+
+    bool updateInstrumentComponentState(const std::string& trackName, size_t slotIndex, const std::string& componentStateBase64) {
+        const bool updated = dspEngine_.updateInstrumentComponentState(trackName, slotIndex, componentStateBase64);
+        status_.message = dspEngine_.lastMessage();
         return updated;
     }
 
@@ -1593,6 +1601,7 @@ bool RealtimeAudioEngine::updateTrackRealtimeState(const std::string& trackName,
 bool RealtimeAudioEngine::updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateInstrumentComponentState(const std::string& trackName, size_t slotIndex, const std::string& componentStateBase64) { return impl_->updateInstrumentComponentState(trackName, slotIndex, componentStateBase64); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
 void RealtimeAudioEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) { impl_->setEditorInstrumentMonitor(active, trackName); }

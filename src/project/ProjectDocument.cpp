@@ -458,11 +458,18 @@ bool boolAfterKey(const std::string& text, const std::string& key, bool fallback
     if (colon == std::string::npos) {
         return fallback;
     }
-    const auto token = trim(text.substr(colon + 1, 5));
-    if (token.rfind("true", 0) == 0) {
+    // Skip the whitespace first, then read. Taking a fixed 5-character window from after the
+    // colon and trimming it cut " false" down to "fals", so every value written as
+    // `"key": false` — which is how this file writes them — matched neither literal and fell
+    // back. Any flag whose fallback is true could not be saved as false.
+    auto valuePos = colon + 1;
+    while (valuePos < text.size() && std::isspace(static_cast<unsigned char>(text[valuePos]))) {
+        ++valuePos;
+    }
+    if (text.compare(valuePos, 4, "true") == 0) {
         return true;
     }
-    if (token.rfind("false", 0) == 0) {
+    if (text.compare(valuePos, 5, "false") == 0) {
         return false;
     }
     return fallback;
@@ -727,6 +734,9 @@ InstrumentSlotState instrumentSlotAfterKey(const std::string& text, const std::s
     slot.midiChannel = finiteIntRange(numberAfterKey(body, "midiChannel", 0.0), 0, 0, 16);
     slot.reportedLatencySamples = static_cast<unsigned int>(std::max(0.0, numberAfterKey(body, "reportedLatencySamples", 0.0)));
     slot.parameters = vst3ParametersAfterKey(body, "parameters");
+    // The plug-in's own patch. Base64 carries no quotes or braces, so it is safe for
+    // this parser to read as a plain string value.
+    slot.pluginStateBase64 = trim(stringAfterKey(body, "pluginState"));
     if (slot.pluginName.empty()) {
         slot.pluginName = "No Instrument";
     }
@@ -929,7 +939,8 @@ void writeInstrumentSlot(std::ostream& out, const InstrumentSlotState& slot) {
         << ",\"midiInput\":\"" << escapeJsonString(slot.midiInput.empty() ? "MIDI Input" : slot.midiInput)
         << "\",\"midiChannel\":" << std::max(0, std::min(16, slot.midiChannel))
         << ",\"reportedLatencySamples\":" << slot.reportedLatencySamples
-        << ",\"parameters\":";
+        << ",\"pluginState\":\"" << escapeJsonString(slot.pluginStateBase64)
+        << "\",\"parameters\":";
     writeVst3Parameters(out, slot.parameters);
     out << "}";
 }
@@ -1522,6 +1533,10 @@ void rebuildProjectEditModelFromClips(ProjectDocument& project) {
         placement.muted = clip.muted;
         placement.polarityInverted = clip.polarityInverted;
         placement.reversed = clip.reversed;
+        placement.araPluginName = clip.araPluginName;
+        placement.araPluginPath = clip.araPluginPath;
+        placement.araSourcePath = clip.araSourcePath;
+        placement.araArchiveBase64 = clip.araArchiveBase64;
         placement.locked = clip.locked;
         placement.colorHex = clip.colorHex;
         placement.timeScale = clip.timeScale;
@@ -1655,6 +1670,10 @@ void mergeOrphanClipsIntoActivePlaylists(ProjectDocument& project) {
         placement.muted = clip.muted;
         placement.polarityInverted = clip.polarityInverted;
         placement.reversed = clip.reversed;
+        placement.araPluginName = clip.araPluginName;
+        placement.araPluginPath = clip.araPluginPath;
+        placement.araSourcePath = clip.araSourcePath;
+        placement.araArchiveBase64 = clip.araArchiveBase64;
         placement.locked = clip.locked;
         placement.colorHex = clip.colorHex;
         placement.timeScale = clip.timeScale;
@@ -1739,6 +1758,10 @@ bool rebuildProjectClipsFromActivePlaylists(ProjectDocument& project) {
             clip.muted = placement.muted;
             clip.polarityInverted = placement.polarityInverted;
             clip.reversed = placement.reversed;
+            clip.araPluginName = placement.araPluginName;
+            clip.araPluginPath = placement.araPluginPath;
+            clip.araSourcePath = placement.araSourcePath;
+            clip.araArchiveBase64 = placement.araArchiveBase64;
             clip.locked = placement.locked;
             clip.colorHex = placement.colorHex;
             clip.timeScale = placement.timeScale;
@@ -1946,6 +1969,13 @@ std::string serializeProject(const ProjectDocument& inputProject) {
         out << project.metronomeAccentPattern[i];
     }
     out << "],\n";
+    out << "  \"midiRecordControllers\": [";
+    for (size_t i = 0; i < project.midiRecordControllers.size(); ++i) {
+        if (i != 0) { out << ","; }
+        out << project.midiRecordControllers[i];
+    }
+    out << "],\n";
+    out << "  \"midiRecordPitchBend\": " << (project.midiRecordPitchBend ? "true" : "false") << ",\n";
     out << "  \"detectedKey\": \"" << escapeJsonString(project.detectedKey.empty() ? "C" : project.detectedKey) << "\",\n";
     out << "  \"detectedKeyMode\": \"" << escapeJsonString(project.detectedKeyMode.empty() ? "major" : project.detectedKeyMode) << "\",\n";
     out << "  \"chordKeyModePreference\": \"" << escapeJsonString(project.chordKeyModePreference.empty() ? "auto" : project.chordKeyModePreference) << "\",\n";
@@ -2063,6 +2093,54 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"mixGroupName\":\"" << escapeJsonString(track.mixGroupName) << "\""
             << ",\"controlMasterTrackName\":\"" << escapeJsonString(track.controlMasterTrackName) << "\""
             << ",\"notes\":\"" << escapeJsonString(track.notes) << "\""
+            << ",\"consoleModel\":\"" << escapeJsonString(track.consoleChannel.model) << "\""
+            << ",\"consoleModuleOrder\":\"" << escapeJsonString(track.consoleChannel.moduleOrder) << "\""
+            << ",\"consoleFilterEnabled\":" << (track.consoleChannel.filterEnabled ? "true" : "false")
+            << ",\"consoleFilterCircuitMode\":" << (track.consoleChannel.filterCircuitMode ? "true" : "false")
+            << ",\"consoleHighPassEnabled\":" << (track.consoleChannel.highPassEnabled ? "true" : "false")
+            << ",\"consoleLowPassEnabled\":" << (track.consoleChannel.lowPassEnabled ? "true" : "false")
+            << ",\"consoleHighPassHz\":" << track.consoleChannel.highPassHz
+            << ",\"consoleLowPassHz\":" << track.consoleChannel.lowPassHz
+            << ",\"consoleEqEnabled\":" << (track.consoleChannel.eqEnabled ? "true" : "false")
+            << ",\"consoleEqCircuitMode\":" << (track.consoleChannel.eqCircuitMode ? "true" : "false")
+            << ",\"consoleCompEnabled\":" << (track.consoleChannel.compEnabled ? "true" : "false")
+            << ",\"consoleCompCircuitMode\":" << (track.consoleChannel.compCircuitMode ? "true" : "false")
+            << ",\"consoleGateEnabled\":" << (track.consoleChannel.gateEnabled ? "true" : "false")
+            << ",\"consoleGateCircuitMode\":" << (track.consoleChannel.gateCircuitMode ? "true" : "false")
+            << ",\"consoleSaturatorEnabled\":" << (track.consoleChannel.saturatorEnabled ? "true" : "false")
+            << ",\"consoleSaturatorCircuitMode\":" << (track.consoleChannel.saturatorCircuitMode ? "true" : "false")
+            << ",\"consoleSaturatorDriveDb\":" << track.consoleChannel.saturatorDriveDb
+            << ",\"consoleSaturatorMix\":" << track.consoleChannel.saturatorMix
+            << ",\"consoleExpanderMode\":" << (track.consoleChannel.expanderMode ? "true" : "false")
+            << ",\"consoleCompThresholdDb\":" << track.consoleChannel.compThresholdDb
+            << ",\"consoleCompRatio\":" << track.consoleChannel.compRatio
+            << ",\"consoleCompAttackMs\":" << track.consoleChannel.compAttackMs
+            << ",\"consoleCompReleaseMs\":" << track.consoleChannel.compReleaseMs
+            << ",\"consoleCompMix\":" << track.consoleChannel.compMix
+            << ",\"consoleCompFastAttack\":" << (track.consoleChannel.compFastAttack ? "true" : "false")
+            << ",\"consoleCompPeakMode\":" << (track.consoleChannel.compPeakMode ? "true" : "false")
+            << ",\"consoleCompType\":\"" << escapeJsonString(track.consoleChannel.compType) << "\""
+            << ",\"consoleGateThresholdDb\":" << track.consoleChannel.gateThresholdDb
+            << ",\"consoleGateRangeDb\":" << track.consoleChannel.gateRangeDb
+            << ",\"consoleGateAttackMs\":" << track.consoleChannel.gateAttackMs
+            << ",\"consoleGateHoldMs\":" << track.consoleChannel.gateHoldMs
+            << ",\"consoleGateReleaseMs\":" << track.consoleChannel.gateReleaseMs
+            << ",\"consoleGateFastAttack\":" << (track.consoleChannel.gateFastAttack ? "true" : "false")
+            << ",\"consoleGateType\":\"" << escapeJsonString(track.consoleChannel.gateType) << "\""
+            << ",\"consoleEqHfGainDb\":" << track.consoleChannel.eqHfGainDb
+            << ",\"consoleEqHfHz\":" << track.consoleChannel.eqHfHz
+            << ",\"consoleEqHfBell\":" << (track.consoleChannel.eqHfBell ? "true" : "false")
+            << ",\"consoleEqHmfGainDb\":" << track.consoleChannel.eqHmfGainDb
+            << ",\"consoleEqHmfHz\":" << track.consoleChannel.eqHmfHz
+            << ",\"consoleEqHmfQ\":" << track.consoleChannel.eqHmfQ
+            << ",\"consoleEqLmfGainDb\":" << track.consoleChannel.eqLmfGainDb
+            << ",\"consoleEqLmfHz\":" << track.consoleChannel.eqLmfHz
+            << ",\"consoleEqLmfQ\":" << track.consoleChannel.eqLmfQ
+            << ",\"consoleEqLfGainDb\":" << track.consoleChannel.eqLfGainDb
+            << ",\"consoleEqLfHz\":" << track.consoleChannel.eqLfHz
+            << ",\"consoleEqLfBell\":" << (track.consoleChannel.eqLfBell ? "true" : "false")
+            << ",\"consoleEqEPattern\":" << (track.consoleChannel.eqEMode ? "true" : "false")
+            << ",\"consoleEqType\":\"" << escapeJsonString(track.consoleChannel.eqType) << "\""
             << ",\"channelFormat\":\"" << escapeJsonString(track.channelFormat == "mono" ? "mono" : "stereo") << "\""
             << ",\"pan\":" << track.pan << ",\"muted\":" << (track.muted ? "true" : "false")
             << ",\"solo\":" << (track.solo ? "true" : "false")
@@ -2105,6 +2183,10 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"sourceTimeSignatureDenominator\":" << clip.sourceTimeSignatureDenominator
             << ",\"sourceGrooveFeel\":\"" << escapeJsonString(clip.sourceGrooveFeel) << "\""
             << ",\"sourceGrooveSwingAmount\":" << clip.sourceGrooveSwingAmount
+            << ",\"araPluginName\":\"" << escapeJsonString(clip.araPluginName) << "\""
+            << ",\"araPluginPath\":\"" << escapeJsonString(clip.araPluginPath) << "\""
+            << ",\"araSourcePath\":\"" << escapeJsonString(clip.araSourcePath) << "\""
+            << ",\"araArchiveBase64\":\"" << escapeJsonString(clip.araArchiveBase64) << "\""
             << ",\"timeScale\":" << clip.timeScale
             << ",\"tempoSyncPolicy\":\"" << escapeJsonString(clip.tempoSyncPolicy.empty() ? "project-tempo" : clip.tempoSyncPolicy) << "\""
             << ",\"pendingTimeStretchToProject\":" << (clip.pendingTimeStretchToProject ? "true" : "false")
@@ -2212,6 +2294,10 @@ std::string serializeProject(const ProjectDocument& inputProject) {
                 << ",\"muted\":" << (placement.muted ? "true" : "false")
                 << ",\"polarityInverted\":" << (placement.polarityInverted ? "true" : "false")
                 << ",\"reversed\":" << (placement.reversed ? "true" : "false")
+                << ",\"araPluginName\":\"" << escapeJsonString(placement.araPluginName) << "\""
+                << ",\"araPluginPath\":\"" << escapeJsonString(placement.araPluginPath) << "\""
+                << ",\"araSourcePath\":\"" << escapeJsonString(placement.araSourcePath) << "\""
+                << ",\"araArchiveBase64\":\"" << escapeJsonString(placement.araArchiveBase64) << "\""
                 << ",\"locked\":" << (placement.locked ? "true" : "false")
                 << ",\"colorHex\":\"" << escapeJsonString(placement.colorHex)
                 << "\",\"timeScale\":" << placement.timeScale
@@ -2486,6 +2572,33 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
             pos = comma + 1;
         }
     }
+    // Absent key = a project saved before the filter existed. Those takes were recorded
+    // with no controllers at all, but the useful default for them going forward is the
+    // same as a new project's, so fall back to it rather than to "record nothing".
+    if (text.find("\"midiRecordControllers\"") != std::string::npos) {
+        parsed.midiRecordControllers.clear();
+        const std::string controllerBody = arrayBodyAfterKey(text, "midiRecordControllers");
+        size_t pos = 0;
+        while (pos < controllerBody.size()) {
+            const size_t comma = controllerBody.find(',', pos);
+            const std::string token = trim(controllerBody.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos));
+            if (!token.empty()) {
+                try {
+                    const int controller = std::stoi(token);
+                    if (controller >= 0 && controller <= 127 &&
+                        std::find(parsed.midiRecordControllers.begin(), parsed.midiRecordControllers.end(),
+                                  controller) == parsed.midiRecordControllers.end()) {
+                        parsed.midiRecordControllers.push_back(controller);
+                    }
+                } catch (const std::exception&) {
+                    // skip a malformed entry
+                }
+            }
+            if (comma == std::string::npos) { break; }
+            pos = comma + 1;
+        }
+    }
+    parsed.midiRecordPitchBend = boolAfterKey(text, "midiRecordPitchBend", true);
     parsed.detectedKey = trim(stringAfterKey(text, "detectedKey"));
     if (parsed.detectedKey.empty()) {
         parsed.detectedKey = "C";
@@ -2713,6 +2826,65 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.mixGroupName = trim(stringAfterKey(body, "mixGroupName"));
         track.controlMasterTrackName = trim(stringAfterKey(body, "controlMasterTrackName"));
         track.notes = stringAfterKey(body, "notes");
+        track.consoleChannel.model = trim(stringAfterKey(body, "consoleModel"));
+        if (track.consoleChannel.model.empty() || track.consoleChannel.model == "4001e")
+            track.consoleChannel.model = "4000e";
+        track.consoleChannel.moduleOrder = trim(stringAfterKey(body, "consoleModuleOrder"));
+        if (track.consoleChannel.moduleOrder.empty()) track.consoleChannel.moduleOrder = "filter,eq,gate,comp,saturator";
+        else if (track.consoleChannel.moduleOrder == "filter,eq,comp,gate,saturator")
+            track.consoleChannel.moduleOrder = "filter,eq,gate,comp,saturator";
+        else if (track.consoleChannel.moduleOrder.find("saturator") == std::string::npos)
+            track.consoleChannel.moduleOrder += ",saturator";
+        track.consoleChannel.filterEnabled = boolAfterKey(body, "consoleFilterEnabled", false);
+        track.consoleChannel.filterCircuitMode = boolAfterKey(body, "consoleFilterCircuitMode", false);
+        track.consoleChannel.highPassEnabled = boolAfterKey(body, "consoleHighPassEnabled", track.consoleChannel.filterEnabled);
+        track.consoleChannel.lowPassEnabled = boolAfterKey(body, "consoleLowPassEnabled", track.consoleChannel.filterEnabled);
+        track.consoleChannel.highPassHz = finiteRange((float)numberAfterKey(body, "consoleHighPassHz", 20), 20.0f, 20.0f, 350.0f);
+        track.consoleChannel.lowPassHz = finiteRange((float)numberAfterKey(body, "consoleLowPassHz", 12000), 12000.0f, 3000.0f, 12000.0f);
+        track.consoleChannel.eqEnabled = boolAfterKey(body, "consoleEqEnabled", false);
+        track.consoleChannel.eqCircuitMode = boolAfterKey(body, "consoleEqCircuitMode", false);
+        track.consoleChannel.compEnabled = boolAfterKey(body, "consoleCompEnabled", false);
+        track.consoleChannel.compCircuitMode = boolAfterKey(body, "consoleCompCircuitMode", false);
+        track.consoleChannel.gateEnabled = boolAfterKey(body, "consoleGateEnabled", false);
+        track.consoleChannel.gateCircuitMode = boolAfterKey(body, "consoleGateCircuitMode", false);
+        track.consoleChannel.saturatorEnabled = boolAfterKey(body, "consoleSaturatorEnabled", false);
+        track.consoleChannel.saturatorCircuitMode = boolAfterKey(body, "consoleSaturatorCircuitMode", false);
+        track.consoleChannel.saturatorDriveDb = finiteRange((float)numberAfterKey(body, "consoleSaturatorDriveDb", 6), 6.0f, 0.0f, 24.0f);
+        track.consoleChannel.saturatorMix = finiteRange((float)numberAfterKey(body, "consoleSaturatorMix", 1), 1.0f, 0.0f, 1.0f);
+        track.consoleChannel.expanderMode = boolAfterKey(body, "consoleExpanderMode", true);
+        track.consoleChannel.compThresholdDb = finiteRange((float)numberAfterKey(body, "consoleCompThresholdDb", -18), -18.0f, -40.0f, 0.0f);
+        track.consoleChannel.compRatio = finiteRange((float)numberAfterKey(body, "consoleCompRatio", 4), 4.0f, 1.0f, 20.0f);
+        track.consoleChannel.compAttackMs = finiteRange((float)numberAfterKey(body, "consoleCompAttackMs", 30), 30.0f, 0.1f, 100.0f);
+        track.consoleChannel.compReleaseMs = finiteRange((float)numberAfterKey(body, "consoleCompReleaseMs", 360), 360.0f, 40.0f, 1500.0f);
+        track.consoleChannel.compMix = finiteRange((float)numberAfterKey(body, "consoleCompMix", 1), 1.0f, 0.0f, 1.0f);
+        track.consoleChannel.compFastAttack = boolAfterKey(body, "consoleCompFastAttack", false);
+        track.consoleChannel.compPeakMode = boolAfterKey(body, "consoleCompPeakMode", false);
+        track.consoleChannel.compType = trim(stringAfterKey(body, "consoleCompType"));
+        if (track.consoleChannel.compType.empty()) track.consoleChannel.compType = "ssl";
+        track.consoleChannel.gateThresholdDb = finiteRange((float)numberAfterKey(body, "consoleGateThresholdDb", -36), -36.0f, -60.0f, 0.0f);
+        track.consoleChannel.gateRangeDb = finiteRange((float)numberAfterKey(body, "consoleGateRangeDb", 20), 20.0f, 0.0f, 40.0f);
+        track.consoleChannel.gateAttackMs = finiteRange((float)numberAfterKey(body, "consoleGateAttackMs", 1), 1.0f, 0.05f, 20.0f);
+        track.consoleChannel.gateHoldMs = finiteRange((float)numberAfterKey(body, "consoleGateHoldMs", 0), 0.0f, 0.0f, 800.0f);
+        track.consoleChannel.gateReleaseMs = finiteRange((float)numberAfterKey(body, "consoleGateReleaseMs", 360), 360.0f, 40.0f, 1500.0f);
+        track.consoleChannel.gateFastAttack = boolAfterKey(body, "consoleGateFastAttack", false);
+        track.consoleChannel.gateType = trim(stringAfterKey(body, "consoleGateType"));
+        if (track.consoleChannel.gateType.empty()) track.consoleChannel.gateType = "ssl";
+        track.consoleChannel.eqHfGainDb = finiteRange((float)numberAfterKey(body, "consoleEqHfGainDb", 0), 0.0f, -18.0f, 18.0f);
+        track.consoleChannel.eqHfHz = finiteRange((float)numberAfterKey(body, "consoleEqHfHz", 8000), 8000.0f, 4000.0f, 16000.0f);
+        track.consoleChannel.eqHfBell = boolAfterKey(body, "consoleEqHfBell", false);
+        track.consoleChannel.eqHmfGainDb = finiteRange((float)numberAfterKey(body, "consoleEqHmfGainDb", 0), 0.0f, -18.0f, 18.0f);
+        track.consoleChannel.eqHmfHz = finiteRange((float)numberAfterKey(body, "consoleEqHmfHz", 3000), 3000.0f, 1200.0f, 7500.0f);
+        track.consoleChannel.eqHmfQ = finiteRange((float)numberAfterKey(body, "consoleEqHmfQ", 1), 1.0f, 0.2f, 10.0f);
+        track.consoleChannel.eqLmfGainDb = finiteRange((float)numberAfterKey(body, "consoleEqLmfGainDb", 0), 0.0f, -18.0f, 18.0f);
+        track.consoleChannel.eqLmfHz = finiteRange((float)numberAfterKey(body, "consoleEqLmfHz", 1000), 1000.0f, 400.0f, 2500.0f);
+        track.consoleChannel.eqLmfQ = finiteRange((float)numberAfterKey(body, "consoleEqLmfQ", 1), 1.0f, 0.2f, 10.0f);
+        track.consoleChannel.eqLfGainDb = finiteRange((float)numberAfterKey(body, "consoleEqLfGainDb", 0), 0.0f, -18.0f, 18.0f);
+        track.consoleChannel.eqLfHz = finiteRange((float)numberAfterKey(body, "consoleEqLfHz", 200), 200.0f, 90.0f, 450.0f);
+        track.consoleChannel.eqLfBell = boolAfterKey(body, "consoleEqLfBell", false);
+        track.consoleChannel.eqEMode = boolAfterKey(body, "consoleEqEPattern", true);
+        track.consoleChannel.eqType = trim(stringAfterKey(body, "consoleEqType"));
+        if (track.consoleChannel.eqType.empty() || track.consoleChannel.eqType == "ssl_4001e")
+            track.consoleChannel.eqType = "ssl_4000e";
         track.channelFormat = trim(stringAfterKey(body, "channelFormat"));
         if (track.channelFormat != "mono" && track.channelFormat != "stereo") {
             track.channelFormat = "stereo";
@@ -2877,6 +3049,12 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
             clip.sourceGrooveFeel.clear();
         }
         clip.sourceGrooveSwingAmount = finiteRange(numberAfterKey(body, "sourceGrooveSwingAmount", 0.0), 0.0, 0.0, 1.0);
+        clip.araPluginName = trim(stringAfterKey(body, "araPluginName"));
+        clip.araPluginPath = trim(stringAfterKey(body, "araPluginPath"));
+        clip.araSourcePath = trim(stringAfterKey(body, "araSourcePath"));
+        // Not trimmed: base64 has no leading/trailing whitespace to begin with, and the archive can
+        // be tens of kilobytes — no reason to copy it twice.
+        clip.araArchiveBase64 = stringAfterKey(body, "araArchiveBase64");
         clip.timeScale = finiteRange(numberAfterKey(body, "timeScale", 1.0), 1.0, 0.05, 20.0);
         clip.tempoSyncPolicy = trim(stringAfterKey(body, "tempoSyncPolicy"));
         if (clip.tempoSyncPolicy != "tempo-master" &&
@@ -3057,6 +3235,10 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
             placement.muted = boolAfterKey(placementBody, "muted", false);
             placement.polarityInverted = boolAfterKey(placementBody, "polarityInverted", false);
             placement.reversed = boolAfterKey(placementBody, "reversed", false);
+            placement.araPluginName = trim(stringAfterKey(placementBody, "araPluginName"));
+            placement.araPluginPath = trim(stringAfterKey(placementBody, "araPluginPath"));
+            placement.araSourcePath = trim(stringAfterKey(placementBody, "araSourcePath"));
+            placement.araArchiveBase64 = stringAfterKey(placementBody, "araArchiveBase64");
             placement.locked = boolAfterKey(placementBody, "locked", false);
             placement.colorHex = trim(stringAfterKey(placementBody, "colorHex"));
             placement.timeScale = finiteRange(numberAfterKey(placementBody, "timeScale", 1.0), 1.0, 0.05, 20.0);

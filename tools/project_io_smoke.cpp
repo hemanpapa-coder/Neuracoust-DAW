@@ -827,7 +827,13 @@ int main() {
 
             check(nc_automation_parameter_supported("track.volume"), "volume is automatable");
             check(nc_automation_parameter_supported("track.pan"), "pan is automatable");
-            check(!nc_automation_parameter_supported("track.mute"),
+            // The renderer since honours mute, trim and send levels as automation lanes, so these
+            // are genuinely automatable now — the guard's job is to refuse what the renderer would
+            // silently ignore, and the set of those has shrunk.
+            check(nc_automation_parameter_supported("track.mute"), "mute is automatable");
+            check(nc_automation_parameter_supported("track.volume.trim"), "trim is automatable");
+            check(nc_automation_parameter_supported("send.0.level"), "send level is automatable");
+            check(!nc_automation_parameter_supported("track.nonsense"),
                   "a parameter the renderer ignores is refused");
 
             // What the clip sounds like before any automation touches it.
@@ -857,7 +863,7 @@ int main() {
             check(nc_track_automation_count(engine, 0, "track.volume") == 2, "two points");
             check(std::abs(nc_track_automation_time(engine, 0, "track.volume", 0)) < 0.001,
                   "the points came back sorted by time");
-            check(!nc_track_automation_add(engine, 0, "track.mute", 0.0, 1.0f),
+            check(!nc_track_automation_add(engine, 0, "track.nonsense", 0.0, 1.0f),
                   "an unsupported parameter stores nothing");
 
             char autoProject[256] = "/tmp/neuracoust-io-smoke/Automated.ndaw";

@@ -141,7 +141,10 @@ struct SendSlotRow: View {
                     .padding(.horizontal, 4)
                 }
                 .contentShape(Rectangle())
-                .gesture(
+                // This row lives inside the mixer's two-axis ScrollView. The control must win
+                // the drag arena or the scroll view consumes the gesture and the send appears
+                // completely inert.
+                .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
                             if dragStart == nil { dragStart = gainDb }
@@ -231,7 +234,8 @@ struct ChannelFader: View {
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
-            .gesture(
+            // Fader drags take precedence over the enclosing mixer ScrollView.
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let start = dragStartDb ?? volumeDb
@@ -312,7 +316,8 @@ struct PanSlider: View {
                     .position(x: x, y: geo.size.height / 2)
             }
             .contentShape(Rectangle())
-            .gesture(
+            // Pan drags take precedence over the enclosing mixer ScrollView.
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         if !dragging { dragging = true; onBegin() }

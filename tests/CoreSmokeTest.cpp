@@ -1,3 +1,4 @@
+#include "core/Base64.h"
 #include "core/DawState.h"
 #include "audio/AsioRuntimeAdapter.h"
 #include "audio/MasterInsertProcessor.h"
@@ -13,6 +14,7 @@
 #include "plugins/Vst3ModuleRuntime.h"
 #include "plugins/PluginScanner.h"
 #include "plugins/Vst3SdkAdapter.h"
+#include "project/AafImport.h"
 #include "project/AudioImportAnalysis.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
@@ -111,6 +113,33 @@ neuracoust::daw::WavAudioData makeAnalyzableImportWav() {
         const float accent = beat % 4 == 0 ? 0.95f : 0.45f;
         for (int offset = 0; offset < 64 && startFrame + offset < frames; ++offset) {
             wav.interleavedSamples[static_cast<size_t>(startFrame + offset)] += accent * static_cast<float>(1.0 - static_cast<double>(offset) / 64.0);
+        }
+    }
+    return wav;
+}
+
+/// A four-chord progression in one key, for testing key detection with something that actually has
+/// a key. A single sustained triad (what makeAnalyzableImportWav gives) cannot distinguish a major
+/// key from its relative minor — a cadence can.
+neuracoust::daw::WavAudioData makeKeyProgressionWav(const std::array<std::array<int, 3>, 4>& chords) {
+    neuracoust::daw::WavAudioData wav;
+    wav.channels = 1;
+    wav.sampleRate = 8000;
+    wav.bitsPerSample = 32;
+    wav.floatingPoint = true;
+    const double chordSeconds = 2.0;
+    const int framesPerChord = static_cast<int>(chordSeconds * wav.sampleRate);
+    wav.interleavedSamples.assign(static_cast<size_t>(framesPerChord) * chords.size(), 0.0f);
+    for (size_t chordIndex = 0; chordIndex < chords.size(); ++chordIndex) {
+        for (int frame = 0; frame < framesPerChord; ++frame) {
+            const double t = static_cast<double>(frame) / wav.sampleRate;
+            double sample = 0.0;
+            for (const int midi : chords[chordIndex]) {
+                const double frequency = 440.0 * std::pow(2.0, (static_cast<double>(midi) - 69.0) / 12.0);
+                sample += std::sin(2.0 * kPi * frequency * t) * 0.12;
+            }
+            const size_t index = chordIndex * static_cast<size_t>(framesPerChord) + static_cast<size_t>(frame);
+            wav.interleavedSamples[index] = static_cast<float>(sample);
         }
     }
     return wav;
@@ -791,6 +820,51 @@ int main() {
     project.videoFrameRate = 23.976;
     project.videoSources.push_back({"vid-main", "/tmp/picture-lock.mov", "Picture Lock", 23.976, 92.5, 1920, 1080, true});
     project.videoClips.push_back({"vclip-main", "vid-main", "Scene 01", 0.5, 60.0, 10.0, 3600.0, false, true});
+    // --- ARA (Melodyne) clip state survives a document round trip ------------------------------
+    //
+    // This is not a formality. The clip array is NOT what a reload reads: the playlist placement is,
+    // and rebuildProjectEditModelFromClips regenerates the clips from it. ARA state written only on
+    // the ClipState therefore came back empty — the archive was silently lost on every save, which
+    // is exactly what this asserts against.
+    {
+        neuracoust::daw::ProjectDocument araProject = neuracoust::daw::defaultProject();
+        neuracoust::daw::ClipState araClip;
+        araClip.id = "clip-ara-1";
+        araClip.trackName = araProject.tracks.front().name;
+        araClip.sourcePath = "/tmp/neuracoust-ara-test.wav";
+        araClip.startSeconds = 1.0;
+        araClip.durationSeconds = 2.0;
+        araClip.araPluginName = "Melodyne";
+        araClip.araPluginPath = "/Library/Audio/Plug-Ins/VST3/Melodyne.vst3";
+        araClip.araSourcePath = "/tmp/neuracoust-ara-test_arasrc_clip-ara-1.wav";
+        araClip.araArchiveBase64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=";
+        araProject.clips.push_back(araClip);
+        neuracoust::daw::rebuildProjectEditModelFromClips(araProject);
+
+        const auto araJson = neuracoust::daw::serializeProject(araProject);
+        neuracoust::daw::ProjectDocument araRoundTrip;
+        std::string araParseError;
+        assert(neuracoust::daw::deserializeProject(araJson, araRoundTrip, araParseError));
+        assert(araRoundTrip.clips.size() == 1);
+        const auto& reloaded = araRoundTrip.clips.front();
+        assert(reloaded.araPluginName == "Melodyne");
+        assert(reloaded.araSourcePath == araClip.araSourcePath);
+        assert(reloaded.araArchiveBase64 == araClip.araArchiveBase64);
+
+        // And through the path a real reload takes: the playlist is the render source of truth, so
+        // the clips are regenerated from it. State carried only on the ClipState dies here.
+        neuracoust::daw::ProjectDocument fromPlaylist = araRoundTrip;
+        assert(neuracoust::daw::rebuildProjectClipsFromActivePlaylists(fromPlaylist));
+        assert(fromPlaylist.clips.size() == 1);
+        const auto& rebuilt = fromPlaylist.clips.front();
+        assert(rebuilt.araPluginName == "Melodyne");
+        assert(rebuilt.araSourcePath == araClip.araSourcePath);
+        assert(rebuilt.araArchiveBase64 == araClip.araArchiveBase64);
+        // And a clip that never met an ARA plug-in stays empty rather than inheriting a neighbour's.
+        assert(neuracoust::daw::defaultProject().clips.empty() ||
+               neuracoust::daw::defaultProject().clips.front().araArchiveBase64.empty());
+    }
+
     auto json = neuracoust::daw::serializeProject(project);
     assert(json.find("neuracoust-daw-project-v1") != std::string::npos);
     assert(json.find("\"sampleRate\": 96000") != std::string::npos);
@@ -1182,6 +1256,32 @@ int main() {
            analyzedImportProject.grooveFeel == "triplet");
     assert(!analyzedImportProject.detectedKey.empty());
     assert(analyzedImportProject.detectedKeyMode == "major" || analyzedImportProject.detectedKeyMode == "minor");
+
+    // --- key detection actually identifies the key -------------------------------
+    //
+    // A I–IV–V–I in D major and a i–iv–V–i in A minor. The V chord's leading tone (C# / G#) is what
+    // separates a key from its relative, which a single sustained triad cannot test at all.
+    {
+        auto keyProject = neuracoust::daw::defaultProject();
+        // D F# A / G B D / A C# E / D F# A
+        const std::array<std::array<int, 3>, 4> dMajor {{{62, 66, 69}, {67, 71, 74}, {69, 73, 76}, {62, 66, 69}}};
+        const auto dMajorWav = makeKeyProgressionWav(dMajor);
+        neuracoust::daw::analyzeImportedAudioIntoProject(
+            keyProject, dMajorWav, 0.0,
+            static_cast<double>(dMajorWav.frameCount()) / dMajorWav.sampleRate, true);
+        assert(keyProject.detectedKey == "D");
+        assert(keyProject.detectedKeyMode == "major");
+
+        auto minorProject = neuracoust::daw::defaultProject();
+        // A C E / D F A / E G# B / A C E
+        const std::array<std::array<int, 3>, 4> aMinor {{{69, 72, 76}, {62, 65, 69}, {64, 68, 71}, {69, 72, 76}}};
+        const auto aMinorWav = makeKeyProgressionWav(aMinor);
+        neuracoust::daw::analyzeImportedAudioIntoProject(
+            minorProject, aMinorWav, 0.0,
+            static_cast<double>(aMinorWav.frameCount()) / aMinorWav.sampleRate, true);
+        assert(minorProject.detectedKey == "A");
+        assert(minorProject.detectedKeyMode == "minor");
+    }
     assert(analyzedImportProject.tempoMap.size() >= 3);
     assert(!analyzedImportProject.chordEvents.empty());
     assert(analyzedImportProject.chordEvents.size() == 1);
@@ -5183,6 +5283,18 @@ int main() {
     assert(renderBlock[12] > 0.39f && renderBlock[12] < 0.41f);
     assert(renderBlock[14] > 0.49f && renderBlock[14] < 0.51f);
 
+    // Pre/post-roll extends the repeated audition window on both sides of the marked loop.
+    loopProject.preRollSeconds = 0.1;
+    loopProject.postRollSeconds = 0.2;
+    assert(neuracoust::daw::makeProjectAudioRenderPlan(loopProject, renderPlan, error));
+    assert(renderPlan.preRollSeconds == 0.1);
+    assert(renderPlan.postRollSeconds == 0.2);
+    neuracoust::daw::renderProjectAudioBlock(renderPlan, 0, 9, renderBlock);
+    assert(renderBlock.size() == 18);
+    assert(renderBlock[12] > 0.69f && renderBlock[12] < 0.71f);
+    assert(renderBlock[14] > 0.19f && renderBlock[14] < 0.21f);
+    assert(renderBlock[16] > 0.29f && renderBlock[16] < 0.31f);
+
     auto slipProject = neuracoust::daw::defaultProject();
     slipProject.sampleRate = 10.0;
     slipProject.tracks[0].pan = -1.0f;
@@ -6790,6 +6902,124 @@ int main() {
         assert(clearTrackInstrumentSlot(project, trackName, 1));
         t = trackByName(trackName);
         assert(t->instrument.pluginName == "Alpha");
+    }
+
+    // --- a plug-in's own patch survives base64 and the document ------------------
+    //
+    // A workstation instrument keeps its selected program in its VST3 component state,
+    // not in its parameters (KORG TRITON publishes 2,573 parameters and none of them
+    // selects the program). If the blob does not round-trip byte-for-byte, the project
+    // reopens on whatever the plug-in calls its startup default.
+    {
+        using namespace neuracoust::daw;
+
+        // Every byte value, at every length remainder — base64 pads in three shapes and
+        // a state blob is arbitrary binary, not text.
+        for (size_t length = 0; length <= 259; ++length) {
+            std::vector<uint8_t> original(length);
+            for (size_t index = 0; index < length; ++index) {
+                original[index] = static_cast<uint8_t>((index * 37 + length) & 0xFF);
+            }
+            const std::string encoded = encodeBase64(original);
+            std::vector<uint8_t> decoded;
+            assert(decodeBase64(encoded, decoded));
+            assert(decoded == original);
+        }
+        // Garbage must fail loudly rather than hand a plug-in a truncated state.
+        std::vector<uint8_t> rejected;
+        assert(!decodeBase64("not valid base64!", rejected));
+        assert(rejected.empty());
+        assert(decodeBase64("QQ", rejected) && rejected.size() == 1);   // unpadded is legal
+
+        ProjectDocument project = defaultProject();
+        const std::string trackName = addInstrumentTrack(project);
+        assert(!trackName.empty());
+
+        InstrumentSlotState instrument;
+        instrument.pluginName = "TRITON";
+        instrument.pluginFormat = "VST3";
+        instrument.pluginPath = "/Library/Audio/Plug-Ins/VST3/TRITON.vst3";
+        instrument.enabled = true;
+        // Binary with the bytes a naive text path would eat: NUL, quote, backslash, DEL.
+        const std::vector<uint8_t> patch {0x00, 0x22, 0x5C, 0x7F, 0xFF, 0x0A, 0x0D, 0x01};
+        instrument.pluginStateBase64 = encodeBase64(patch);
+        assert(setTrackInstrumentSlot(project, trackName, instrument));
+
+        std::string error;
+        ProjectDocument reloaded;
+        assert(deserializeProject(serializeProject(project), reloaded, error));
+
+        const TrackState* reloadedTrack = nullptr;
+        for (const auto& track : reloaded.tracks) {
+            if (track.name == trackName) reloadedTrack = &track;
+        }
+        assert(reloadedTrack != nullptr);
+        assert(!reloadedTrack->instrumentSlots.empty());
+        std::vector<uint8_t> reloadedPatch;
+        assert(decodeBase64(reloadedTrack->instrumentSlots[0].pluginStateBase64, reloadedPatch));
+        assert(reloadedPatch == patch);
+        // The legacy single-slot mirror carries it too, since the renderer falls back to it.
+        assert(reloadedTrack->instrument.pluginStateBase64 ==
+               reloadedTrack->instrumentSlots[0].pluginStateBase64);
+    }
+
+    // --- recorded-controller whitelist ------------------------------------------
+    //
+    // A take used to capture notes and nothing else, so the sustain pedal — the thing that
+    // makes a piano performance sound like one — was thrown away.
+    {
+        using namespace neuracoust::daw;
+        ProjectDocument project = defaultProject();
+        // Sustain and modulation on by default, and pitch bend with them.
+        assert(std::find(project.midiRecordControllers.begin(), project.midiRecordControllers.end(), 64)
+               != project.midiRecordControllers.end());
+        assert(std::find(project.midiRecordControllers.begin(), project.midiRecordControllers.end(), 1)
+               != project.midiRecordControllers.end());
+        assert(project.midiRecordPitchBend);
+
+        project.midiRecordControllers = {11, 64};
+        project.midiRecordPitchBend = false;
+        std::string error;
+        ProjectDocument reloaded;
+        assert(deserializeProject(serializeProject(project), reloaded, error));
+        assert(reloaded.midiRecordControllers == std::vector<int>({11, 64}));
+        assert(!reloaded.midiRecordPitchBend);
+
+        // An empty whitelist is a real choice ("record no controllers") and must survive as
+        // one, rather than being read back as "the key was missing, use the defaults".
+        project.midiRecordControllers.clear();
+        ProjectDocument none;
+        assert(deserializeProject(serializeProject(project), none, error));
+        assert(none.midiRecordControllers.empty());
+    }
+
+    // --- AAF import: available, and fails safely on things that are not AAF ------
+    //
+    // No AAF file to import here, so this pins the parts that can be checked without one: that the
+    // reader is compiled in, and that garbage input is refused rather than crashing or half-loading.
+    {
+        using namespace neuracoust::daw;
+        assert(aafImportAvailable());
+
+        ProjectDocument target = defaultProject();
+        const auto before = target.tracks.size();
+
+        auto missing = importAafSession("/definitely/not/here.aaf", target);
+        assert(!missing.ok);
+        assert(!missing.message.empty());
+        assert(target.tracks.size() == before);   // a failed import must not touch the document
+
+        // A real file that is not an AAF.
+        const auto notAaf = std::filesystem::temp_directory_path() / "neuracoust-not-an.aaf";
+        {
+            std::ofstream out(notAaf, std::ios::binary | std::ios::trunc);
+            out << "this is plainly not a structured storage container";
+        }
+        auto garbage = importAafSession(notAaf, target);
+        assert(!garbage.ok);
+        assert(target.tracks.size() == before);
+        std::error_code ec;
+        std::filesystem::remove(notAaf, ec);
     }
 
     std::cout << "Core smoke test passed\n";

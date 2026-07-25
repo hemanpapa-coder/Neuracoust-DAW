@@ -69,8 +69,9 @@ final class GlobalKeypadCapture {
                 }
                 guard type == .keyDown || type == .keyUp, let refcon else { return Unmanaged.passUnretained(event) }
                 let me = Unmanaged<GlobalKeypadCapture>.fromOpaque(refcon).takeUnretainedValue()
-                // Only the numeric keypad — the flag distinguishes kp keys from the top row.
-                guard event.flags.contains(.maskNumericPad) else { return Unmanaged.passUnretained(event) }
+                // The virtual key code already distinguishes the keypad from the top number row.
+                // Some external USB keypads do not set maskNumericPad consistently, so requiring
+                // both made a genuine keypad silently pass through without ever reaching the DAW.
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 guard GlobalKeypadCapture.capturedKeyCodes.contains(keyCode) else { return Unmanaged.passUnretained(event) }
                 let isDown = (type == .keyDown)

@@ -2098,6 +2098,7 @@ public:
                 }
                 controllerInitialized_ = true;
             }
+            restoreComponentStateFromFile();
             transferComponentStateToController();
             if (shouldSkipComponentConnectionForEditor(descriptor)) {
                 logHostStage("connection.skipped.vendor");
@@ -2278,11 +2279,22 @@ public:
         installFlexibleWavesResizeMonitorIfNeeded();
         installTransportKeyMonitor();
         closeObserver_ = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
-                                                                           object:panel_
-                                                                            queue:[NSOperationQueue mainQueue]
-                                                                       usingBlock:^(NSNotification*) {
-                                                                           [NSApp terminate:nil];
-                                                                       }];
+                                                                       object:panel_
+                                                                        queue:[NSOperationQueue mainQueue]
+                                                                   usingBlock:^(NSNotification*) {
+                                                                       // A preset browser can commit its program only as the
+                                                                       // native window is closing. Snapshot every persistent
+                                                                       // controller value before process teardown so the DAW
+                                                                       // receives the final patch, not the opening default.
+                                                                       if (weakSession != nullptr) {
+                                                                           weakSession->pollControllerParameterChanges(true);
+                                                                           // …and the patch itself, which no parameter
+                                                                           // carries on a workstation instrument.
+                                                                           weakSession->captureComponentStateToFile();
+                                                                           std::cout << std::flush;
+                                                                       }
+                                                                       [NSApp terminate:nil];
+                                                                   }];
         resizeObserver_ = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResizeNotification
                                                                             object:panel_
                                                                              queue:[NSOperationQueue mainQueue]
@@ -2429,6 +2441,47 @@ public:
                                                                              postPluginEditorTransportToggle();
                                                                              return nil;
                                                                          }];
+        }
+
+        /// Restores the patch the project stored, before the editor view exists — the only
+        /// point at which a plug-in will reload a program without fighting its own GUI.
+        void restoreComponentStateFromFile() {
+            if (stateFilePath_.empty() || component_ == nullptr) {
+                return;
+            }
+            std::ifstream file(stateFilePath_, std::ios::binary);
+            if (!file) {
+                logHostStage("restore.state.absent");
+                return;
+            }
+            const std::vector<char> bytes((std::istreambuf_iterator<char>(file)),
+                                          std::istreambuf_iterator<char>());
+            if (bytes.empty()) {
+                logHostStage("restore.state.empty");
+                return;
+            }
+            auto* componentStream = new MemoryVst3Stream();
+            componentStream->setData(bytes);
+            Steinberg::tresult setStateResult = Steinberg::kInternalError;
+            try {
+                setStateResult = component_->setState(componentStream);
+            } catch (...) {
+                setStateResult = Steinberg::kInternalError;
+            }
+            componentStream->release();
+            if (controller_ != nullptr && !controllerFromComponent_) {
+                auto* controllerStream = new MemoryVst3Stream();
+                controllerStream->setData(bytes);
+                try {
+                    controller_->setComponentState(controllerStream);
+                } catch (...) {
+                }
+                controllerStream->release();
+            }
+            std::ostringstream stage;
+            stage << (setStateResult == Steinberg::kResultOk ? "restore.state.ok" : "restore.state.failed")
+                  << " bytes=" << bytes.size();
+            logHostStage(stage.str());
         }
 
         void transferComponentStateToController() {
@@ -2667,6 +2720,40 @@ public:
         }
 
     public:
+        void setStateFilePath(const std::string& path) { stateFilePath_ = path; }
+
+        /// Writes the plug-in's current patch back to the handoff file and tells the DAW.
+        /// Called as the window closes: for a workstation instrument this — not the
+        /// parameter stream — is the only thing that carries the selected program.
+        void captureComponentStateToFile() {
+            if (stateFilePath_.empty() || component_ == nullptr || stateCaptured_) {
+                return;
+            }
+            auto* stream = new MemoryVst3Stream();
+            Steinberg::tresult getStateResult = Steinberg::kInternalError;
+            try {
+                getStateResult = component_->getState(stream);
+            } catch (...) {
+                getStateResult = Steinberg::kInternalError;
+            }
+            const std::vector<char> bytes = getStateResult == Steinberg::kResultOk ? stream->data()
+                                                                                   : std::vector<char>();
+            stream->release();
+            if (bytes.empty()) {
+                logHostStage("capture.state.none");
+                return;
+            }
+            std::ofstream file(stateFilePath_, std::ios::binary | std::ios::trunc);
+            if (!file) {
+                logHostStage("capture.state.unwritable");
+                return;
+            }
+            file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            file.close();
+            stateCaptured_ = true;
+            std::cout << "STATE_SAVED " << bytes.size() << std::endl;
+        }
+
         void setExternalMeterLevels(double inputLeft, double inputRight, double outputLeft, double outputRight) {
             latestMeterInputLeft_ = std::clamp(inputLeft, 0.0, 1.0);
             latestMeterInputRight_ = std::clamp(inputRight, 0.0, 1.0);
@@ -2841,14 +2928,14 @@ public:
             // redraw (the Korg TRITON editor is heavy). The OLD code emitted exactly one block
             // per real block period, so the monitor ring rode empty and a redraw burst that
             // delayed the timer instantly starved it — a held note dropped to silence while the
-            // key still showed down. Instead, keep a ~20 ms CUSHION of audio queued AHEAD of
-            // real-time: the reliable off-main bridge pump (NeuracoustEngineBridge, a plain
-            // std::thread) drains that cushion through a stall so the note keeps sounding. A
-            // while-loop refills after a stall; maxPerFire bounds the catch-up burst so the
-            // plug-in's internal time can't lurch far forward at once.
-            const double cushionSamples = instrumentSampleRate_ * 0.040;   // ~40 ms queued ahead
-            const double maxDebtSamples = instrumentSampleRate_ * 0.120;   // cap a long stall's catch-up
-            const int    maxPerFire     = 12;
+            // key still showed down. The previous fix kept 40 ms queued ahead, but that made every
+            // newly played MIDI note wait behind 40 ms of old audio. Keep exactly ONE device block
+            // ahead in steady state instead: at 48 kHz / 256 this is ~5.3 ms and restores the
+            // original low-latency feel. The while-loop still catches up after a GUI stall, while
+            // maxPerFire prevents a large burst from racing the synth's clock far ahead.
+            const double cushionSamples = std::max(0, blk - 1);
+            const double maxDebtSamples = instrumentSampleRate_ * 0.040;   // bounded stall recovery
+            const int    maxPerFire     = 8;
             if (instrumentPumpSampleDebt_ > maxDebtSamples) {
                 instrumentPumpSampleDebt_ = maxDebtSamples;
             }
@@ -3108,8 +3195,15 @@ public:
                     if ((info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0) {
                         continue;
                     }
-                    if (!wavesEditor_ &&
-                        (info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) == 0) {
+                    // A synth's preset/program selector is commonly marked
+                    // kIsProgramChange rather than kCanAutomate (Korg TRITON is one).
+                    // It still has to cross the editor-process boundary: otherwise the
+                    // editor shows the selected patch while the render instance keeps
+                    // its startup program and appears to reset as soon as playback starts.
+                    const bool persistentControl =
+                        (info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) != 0 ||
+                        (info.flags & Steinberg::Vst::ParameterInfo::kIsProgramChange) != 0;
+                    if (!wavesEditor_ && !persistentControl) {
                         continue;
                     }
                     lastPolledParameterValues_[static_cast<uint32_t>(info.id)] = controller_->getParamNormalized(info.id);
@@ -3136,8 +3230,12 @@ public:
                     if ((info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0) {
                         continue;
                     }
-                    if (!wavesEditor_ &&
-                        (info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) == 0) {
+                    // Program-list selections are writable project state even when the
+                    // plug-in deliberately does not expose them as automation.
+                    const bool persistentControl =
+                        (info.flags & Steinberg::Vst::ParameterInfo::kCanAutomate) != 0 ||
+                        (info.flags & Steinberg::Vst::ParameterInfo::kIsProgramChange) != 0;
+                    if (!wavesEditor_ && !persistentControl) {
                         continue;
                     }
 	                    forwardParameterValueToDaw(static_cast<uint32_t>(info.id),
@@ -3877,6 +3975,12 @@ public:
         bool viewCanResize_ = false;
         bool trustRequestedResize_ = false;
         bool allowComponentStateTransfer_ = false;
+        // Patch handoff file (--state-file). Read on open to restore the program the
+        // project stored; rewritten on close so the DAW's render instance can be given
+        // whatever the user picked in the plug-in's own browser. A file rather than a
+        // pipe line: a sampler's state runs to megabytes.
+        std::string stateFilePath_;
+        bool stateCaptured_ = false;
 	        bool suppressWindowResizeCallback_ = false;
 	        bool hasCurrentSize_ = false;
 	        bool flexibleInitialSizeCapActive_ = false;
@@ -3987,6 +4091,9 @@ int main(int argc, const char* argv[]) {
             // the rendered audio is published BACK to the DAW's monitor (GUI clicks become
             // audible); without it the audio is discarded.
             const bool instrumentMode = hasArgument(argc, argv, "--instrument");
+            // Patch handoff: the DAW writes the stored VST3 component state here before
+            // launching us, and reads back whatever we write when the window closes.
+            const std::string stateFilePath = argumentValue(argc, argv, "--state-file");
             const std::string instrumentMonitorShm = argumentValue(argc, argv, "--monitor-shm");
             const int instrumentMonitorMaxBlock = instrumentMonitorShm.empty()
                 ? 256
@@ -4102,6 +4209,7 @@ int main(int argc, const char* argv[]) {
                 deferredSession->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
                 deferredSession->setInstrumentMode(instrumentMode);
                 deferredSession->configureInstrumentMonitor(instrumentMonitorShm, instrumentMonitorMaxBlock, instrumentMonitorSampleRate);
+                deferredSession->setStateFilePath(stateFilePath);
                 @try {
                     try {
                         if (!deferredSession->open(descriptor, nsTitle, meterOverlayEnabled, deferredError)) {
@@ -4147,6 +4255,7 @@ int main(int argc, const char* argv[]) {
         session->configureAudioBridge(audioBridgeShm, audioBridgeMaxBlock, audioBridgeSampleRate, bridgeObserver);
         session->setInstrumentMode(instrumentMode);
         session->configureInstrumentMonitor(instrumentMonitorShm, instrumentMonitorMaxBlock, instrumentMonitorSampleRate);
+        session->setStateFilePath(stateFilePath);
         NSString* nsTitle = title.empty()
             ? [NSString stringWithFormat:@"%s", pluginName.empty() ? "VST3 Plug-in" : pluginName.c_str()]
             : [NSString stringWithUTF8String:title.c_str()];
@@ -4222,6 +4331,20 @@ int main(int argc, const char* argv[]) {
                             }
                             continue;
                         }
+                        if ([line isEqualToString:@"QUIT"]) {
+                            // The DAW closed this editor from its own UI. Exit the same way
+                            // the window's close button does, so the patch is captured
+                            // instead of being lost to a SIGTERM.
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                if (sessionForMeters != nullptr) {
+                                    sessionForMeters->pollControllerParameterChanges(true);
+                                    sessionForMeters->captureComponentStateToFile();
+                                    std::cout << std::flush;
+                                }
+                                [NSApp terminate:nil];
+                            });
+                            continue;
+                        }
                         if ([line hasPrefix:@"PARAM_SET "]) {
                             NSArray<NSString*>* parts = [line componentsSeparatedByString:@" "];
                             if (parts.count >= 3) {
@@ -4266,6 +4389,13 @@ int main(int argc, const char* argv[]) {
 		        [NSApp activateIgnoringOtherApps:YES];
         [NSApp run];
         logHostStage("app.run.returned");
+        if (sessionForParameterPolling != nullptr) {
+            // Last-chance state handoff for vendors that commit a preset from
+            // NSWindowWillClose rather than from performEdit.
+            sessionForParameterPolling->pollControllerParameterChanges(true);
+            sessionForParameterPolling->captureComponentStateToFile();
+            std::cout << std::flush;
+        }
         sessionForParameterPolling = nullptr;
         [parameterPollTimer invalidate];
         meterInput.readabilityHandler = nil;

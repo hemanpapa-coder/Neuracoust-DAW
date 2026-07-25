@@ -118,11 +118,24 @@ Vst3ProcessResult processStereoBufferWithVst3(const Vst3PluginDescriptor& descri
 // True when this plugin is hosted out-of-process (sandbox bridge) for realtime
 // inserts, so its editor should observe the bridge to drive its own meters.
 bool isVst3HostedOutOfProcess(const Vst3PluginDescriptor& descriptor);
+
+/// True when the plug-in's VST3 factory advertises an "ARA Main Factory" class — the real,
+/// name-independent test for ARA support, and where a host would obtain the ARAFactory once an
+/// ARA SDK is available. Opens the module, so it is a scan-time call, not a per-block one.
+bool vst3AdvertisesAraFactory(const Vst3PluginDescriptor& descriptor);
+
+/// True for ARA plug-ins (Melodyne and friends). They are not realtime effects: without an ARA
+/// host they run their own transport in "transfer" mode and wedge the DAW when hosted as a plain
+/// insert. Until ARA2 is supported, these are kept out of the realtime chain.
+bool requiresAraHost(const Vst3PluginDescriptor& descriptor);
+/// The user-facing explanation for why an ARA plug-in was not inserted.
+std::string araRequiredMessage(const Vst3PluginDescriptor& descriptor);
 Vst3ProcessResult processMidiInstrumentWithVst3(const Vst3PluginDescriptor& descriptor,
                                                 const std::vector<Vst3MidiEvent>& midiEvents,
                                                 WavAudioData& outputAudio,
                                                 int maxBlockSize = 256,
-                                                const std::vector<Vst3ParameterValueState>& parameters = {});
+                                                const std::vector<Vst3ParameterValueState>& parameters = {},
+                                                const std::string& componentStateBase64 = {});
 
 class Vst3RealtimeProcessor {
 public:
@@ -138,7 +151,12 @@ public:
                  int maxBlockSize,
                  std::string& message,
                  const std::string& bridgeShmKey = {},
-                 bool forceOutOfProcess = false);
+                 bool forceOutOfProcess = false,
+                 // The plug-in's own saved patch (base64 of its VST3 component state).
+                 // Applied before the component is activated, so a sampler/workstation
+                 // instrument comes up on the program the project stored instead of its
+                 // startup default. Ignored by the out-of-process bridge path.
+                 const std::string& componentStateBase64 = {});
     void reset();
     bool isPrepared() const;
     // True when the last process produced this insert's real (wet) output. In-process hosting is
@@ -153,6 +171,13 @@ public:
                                                int frameCount,
                                                const std::vector<Vst3ParameterValueState>& parameters,
                                                std::string& message);
+    /// Loads a new patch (VST3 component state, base64) into the ALREADY-PREPARED instance —
+    /// deactivate, setState, reactivate — without reloading the module or re-instantiating. This
+    /// is how a workstation instrument changes program without the heavy teardown that a full
+    /// re-prepare costs, and it is safe to call from the main thread (never the audio thread).
+    /// A no-op returning false when not prepared, hosted out-of-process, or the blob is empty.
+    bool applyComponentState(const std::string& componentStateBase64, std::string& message);
+
     std::vector<Vst3ParameterValueState> drainOutputParameterChanges();
     Vst3ProcessResult processMidiInstrument(float* interleavedStereo,
                                             int frameCount,

@@ -89,11 +89,61 @@ struct MonitorDock: View {
                     .foregroundStyle(Theme.Palette.textFaint)
             }
             Spacer()
+            Button {
+                launchVocalConverter()
+            } label: {
+                Image(systemName: "waveform.and.mic")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.purpleLight)
+                    .frame(width: 30, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Theme.Palette.purple.opacity(0.2))
+                            .overlay(RoundedRectangle(cornerRadius: 7)
+                                .stroke(Theme.Palette.purple.opacity(0.45), lineWidth: 1))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("AI 보컬 변환기 열기 · Suno 보컬을 새 가수 음색으로 오프라인 렌더링합니다.")
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 46)
         .frame(maxWidth: .infinity)
         .background(Theme.Gradient.monitorHeader)
+    }
+
+    private func launchVocalConverter() {
+        let workspace = NSWorkspace.shared
+        let sibling = Bundle.main.bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("Neuracoust Vocal Converter.app", isDirectory: true)
+        let candidates = [
+            sibling,
+            URL(fileURLWithPath: "/Applications/Neuracoust Vocal Converter.app"),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications/Neuracoust Vocal Converter.app", isDirectory: true)
+        ]
+        guard let app = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
+            let alert = NSAlert()
+            alert.messageText = "AI 보컬 변환기를 찾지 못했습니다."
+            alert.informativeText = "Neuracoust Vocal Converter 앱을 먼저 빌드하거나 Applications 폴더에 설치해주세요."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        workspace.openApplication(at: app, configuration: configuration) { _, error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "AI 보컬 변환기를 열 수 없습니다."
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+        }
     }
 
     /// The dashboard: chips that show/hide each optional panel (the core monitor controls stay).
@@ -537,6 +587,22 @@ struct MonitorDock: View {
                     .labelsHidden().toggleStyle(.switch).controlSize(.mini)
             }
             .help("FIR 선형위상 — 전대역 정확 매칭(저역 급경사·고역 딥 포함), 대신 지연 추가. 믹스/마스터용.")
+
+            // The linear-phase EQ's delay is what makes a keyboard feel late. This is the
+            // switch that hands it back while you play, and says when it is doing so.
+            if engine.monitorEqLinearPhase {
+                HStack(spacing: 6) {
+                    Text("연주 시 저지연").font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
+                    Spacer(minLength: 0)
+                    if engine.monitorEqLowLatencyActive {
+                        Text("적용 중").font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.green)
+                    }
+                    Toggle("", isOn: Binding(get: { engine.monitorEqLowLatencyMonitoring },
+                                             set: { engine.setMonitorEqLowLatencyMonitoring($0) }))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                }
+                .help("녹음 대기·인풋 모니터 중인 트랙이 있으면 선형위상 대신 최소위상으로 — 같은 커브, 지연 0. 연주는 제때, 믹스는 정확하게.")
+            }
         }
     }
 
@@ -562,12 +628,12 @@ struct MonitorDock: View {
                       selected: (modelled && isHeadphone) ? bare : "",
                       measured: Set(engine.headphoneMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
         }
-        // A passive modeled speaker is driven by a power amp + cable, like a physical passive one —
-        // their name-heuristic tone colours this slot's simulation (until measured).
+        // A passive speaker model needs a modelled power amp + speaker cable in front of it.
+        // These belong to the virtual A/B/C chain; they do not describe the user's real hardware.
         if modelled && !isHeadphone && set.modelIsPassive {
-            modelMenu("실물 파워앰프 모델", catalog: engine.powerAmpModelCatalog,
+            modelMenu("모델링 파워앰프", catalog: engine.powerAmpModelCatalog,
                       selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
-            modelMenu("실물 스피커 케이블 모델", catalog: engine.speakerCableModelCatalog,
+            modelMenu("모델링 스피커 케이블", catalog: engine.speakerCableModelCatalog,
                       selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
         }
         // Physical output is a raw passthrough that bypasses the modelled path, so it is
@@ -677,8 +743,10 @@ struct MonitorDock: View {
             // but macOS hog mode does not actually block other apps from the device — verified — so
             // it was removed rather than mislead.)
             HStack(spacing: Theme.Space.sm) {
-                dimButton("키패드 독점", engine.keypadCaptureEnabled, Theme.Palette.teal) {
-                    engine.setKeypadCapture(!engine.keypadCaptureEnabled)
+                dimButton(engine.keypadCaptureRequested && !engine.keypadCaptureEnabled
+                              ? "키패드 권한 필요" : "키패드 독점",
+                          engine.keypadCaptureRequested, Theme.Palette.teal) {
+                    engine.setKeypadCapture(!engine.keypadCaptureRequested)
                 }
                 .help("켜면 다른 앱이 앞에 있어도 숫자 키패드로 모니터 볼륨(+/−)·Dim(0)·Mute(.)·Talk(Enter, 누르는 동안)·스피커 A/B/C(1/2/3) 등을 제어합니다. 바인딩은 키패드 단축키 설정을 따릅니다. 손쉬운 사용 권한 필요.")
                 Spacer(minLength: 0)
@@ -752,6 +820,14 @@ struct MonitorDock: View {
             MeterBar(fraction: engine.dspLoadFraction, gradient: Theme.Gradient.dspLoad)
 
             StatRow(label: "지터 (Jitter)", value: String(format: "%.0f µs", engine.wakeJitterUs))
+            // The jitter row above watches the OUTPUT render thread. A crackle while listening to
+            // another app comes from the TAP CAPTURE side, which that number can never see — so it
+            // gets its own row. Only shown once the tap has actually faulted.
+            if engine.referenceTapFaults > 0 {
+                StatRow(label: "레퍼런스 탭 결함",
+                        value: "\(engine.referenceTapFaults)회",
+                        valueColor: engine.referenceTapFaults < 5 ? Theme.Palette.amber : Theme.Palette.red)
+            }
             MeterBar(fraction: jitterFraction,
                      gradient: LinearGradient(colors: [Theme.Palette.green, Color(hex: 0x6fa6d0)],
                                               startPoint: .leading, endPoint: .trailing))

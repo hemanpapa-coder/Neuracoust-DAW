@@ -17,6 +17,9 @@ struct PluginCandidate {
     bool requiresHostRenderer = false;
     std::string pluginClassId;
     std::string pluginClassName;
+    /// The plug-in's VST3 factory advertises an ARA Main Factory. ARA plug-ins are not realtime
+    /// effects, so the browser marks them and the insert path refuses them until ARA is hosted.
+    bool araCapable = false;
 };
 
 struct PluginCandidateFilterOptions {

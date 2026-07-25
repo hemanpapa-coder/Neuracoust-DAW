@@ -59,8 +59,11 @@ endif()
 add_library(neuracoust_daw_core
     src/ai/AiAssistant.cpp
     src/core/AppIdentity.cpp
+    src/core/Base64.cpp
     src/core/DawState.cpp
     src/core/Localization.cpp
+    src/control/MackieHuiProtocol.cpp
+    src/control/ControlSurfaceMidi.cpp
     src/audio/AudioDeviceModel.cpp
     src/audio/AsioRuntimeAdapter.cpp
     src/audio/ListenRoom.cpp
@@ -80,6 +83,7 @@ add_library(neuracoust_daw_core
     src/audio/MixMath.cpp
     src/audio/MixerGraph.cpp
     src/audio/MixerProcessorChain.cpp
+    src/audio/ConsoleChannelProcessor.cpp
     src/audio/ProjectAudioRenderer.cpp
     src/audio/MasterInsertProcessor.cpp
     src/audio/AsyncInsertChainPreparer.cpp
@@ -116,10 +120,47 @@ add_library(neuracoust_daw_core
     src/project/ProjectDocument.cpp
     src/project/ProjectHistory.cpp
     src/project/AudioImport.cpp
+    src/project/AafImport.cpp
+    src/plugins/AraHost.cpp
     src/ui/common/DawUiModel.cpp
     src/bridge/NeuracoustEngineBridge.cpp)
 
+# libAAF (GPL v2+) — reads AAF sessions from other DAWs/NLEs. Vendored rather than referenced in
+# the sibling Ardour tree so this project does not gain another external-folder dependency.
+# NOTE: linking this makes the built DAW GPL. That is fine here (personal, non-distributed build);
+# if this ever ships commercially, this dependency has to go.
+file(GLOB NEURACOUST_LIBAAF_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libaaf/*.c")
+if(NEURACOUST_LIBAAF_SOURCES)
+    add_library(neuracoust_libaaf STATIC ${NEURACOUST_LIBAAF_SOURCES})
+    target_include_directories(neuracoust_libaaf SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libaaf")
+    # Third-party C: its warnings are not ours to fix.
+    target_compile_options(neuracoust_libaaf PRIVATE -w)
+    set(NEURACOUST_HAS_LIBAAF ON)
+else()
+    set(NEURACOUST_HAS_LIBAAF OFF)
+endif()
+
+# ARA SDK (Celemony, ARA license — permissive, unlike libAAF). Header-only for what we need: the
+# C API (ARA_API/ARAInterface.h) plus the VST3 binding (ARA_API/ARAVST3.h) that reaches an ARA
+# plug-in's factory through its VST3 factory.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ARA_SDK/ARA_API/ARAInterface.h")
+    set(NEURACOUST_HAS_ARA_SDK ON)
+else()
+    set(NEURACOUST_HAS_ARA_SDK OFF)
+endif()
+
 target_include_directories(neuracoust_daw_core PUBLIC src)
+if(NEURACOUST_HAS_ARA_SDK)
+    target_include_directories(neuracoust_daw_core SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ARA_SDK")
+    target_compile_definitions(neuracoust_daw_core PUBLIC NEURACOUST_HAS_ARA_SDK=1)
+    message(STATUS "ARA SDK found — ARA plug-in hosting is compiled in.")
+else()
+    message(STATUS "ARA SDK not found at third_party/ARA_SDK — ARA hosting disabled.")
+endif()
+if(NEURACOUST_HAS_LIBAAF)
+    target_link_libraries(neuracoust_daw_core PUBLIC neuracoust_libaaf)
+    target_compile_definitions(neuracoust_daw_core PUBLIC NEURACOUST_HAS_LIBAAF=1)
+endif()
 if(NOT NEURACOUST_OPUS_INCLUDE_DIR AND EXISTS "${NEURACOUST_LISTEN_SOURCE_DIR}/build/_deps/opus_lib-src/include/opus.h")
     set(NEURACOUST_OPUS_INCLUDE_DIR "${NEURACOUST_LISTEN_SOURCE_DIR}/build/_deps/opus_lib-src/include")
 endif()
@@ -218,7 +259,7 @@ else()
 endif()
 
 if(APPLE)
-    target_sources(neuracoust_daw_core PRIVATE src/audio/CoreAudioBackend.mm src/audio/CoreAudioRealtimeEngine.mm src/audio/MacAudioInputRecorder.mm src/audio/MacMidiInputRecorder.mm)
+    target_sources(neuracoust_daw_core PRIVATE src/audio/CoreAudioBackend.mm src/audio/CoreAudioRealtimeEngine.mm src/audio/MacAudioInputRecorder.mm src/audio/MacMidiInputRecorder.mm src/control/MacControlSurfaceMidi.mm)
     target_compile_definitions(neuracoust_daw_core PUBLIC NEURACOUST_DAW_MAC=1)
     target_link_libraries(neuracoust_daw_core
         PUBLIC
@@ -297,6 +338,48 @@ endif()
 # meters, VST3 editor windows) will be AppKit/Metal wrapped in NSViewRepresentable.
 # ---------------------------------------------------------------------------
 if(NEURACOUST_BUILD_SWIFT_APP)
+    add_executable(NeuracoustVocalConverter MACOSX_BUNDLE
+        src/app/swift/VocalConverterApp.swift
+        resources/icons/NeuracoustDAW.icns)
+
+    set_source_files_properties(resources/icons/NeuracoustDAW.icns
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    target_link_libraries(NeuracoustVocalConverter PRIVATE
+        "-framework AppKit"
+        "-framework AVFoundation")
+    target_compile_options(NeuracoustVocalConverter PRIVATE "-parse-as-library")
+
+    set_target_properties(NeuracoustVocalConverter PROPERTIES
+        OUTPUT_NAME "Neuracoust Vocal Converter"
+        MACOSX_BUNDLE TRUE
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.neuracoust.vocal-converter"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.neuracoust.vocal-converter"
+        MACOSX_BUNDLE_BUNDLE_NAME "Neuracoust Vocal Converter"
+        MACOSX_BUNDLE_DISPLAY_NAME "Neuracoust Vocal Converter"
+        MACOSX_BUNDLE_ICON_FILE "NeuracoustDAW.icns"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${NEURACOUST_DAW_VERSION}"
+        MACOSX_BUNDLE_COPYRIGHT "(C) 2026 Neuracoust"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
+
+    add_custom_command(TARGET NeuracoustVocalConverter POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/NeuracoustDAW.icns"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustVocalConverter>/Resources/NeuracoustDAW.icns"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vocal_converter_setup.sh"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustVocalConverter>/Resources/vocal_converter_setup.sh"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vocal_converter_pipeline.py"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustVocalConverter>/Resources/vocal_converter_pipeline.py"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vocal_converter_train.py"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustVocalConverter>/Resources/vocal_converter_train.py"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustVocalConverter>/MacOS/main.d")
+
     add_executable(NeuracoustDAW MACOSX_BUNDLE
         src/app/swift/NeuracoustApp.swift
         src/app/swift/Diagnostics.swift
@@ -314,9 +397,13 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MixerView.swift
         src/app/swift/TrackInspector.swift
         src/app/swift/PianoRoll.swift
+        src/app/swift/VirtualKeyboard.swift
+        src/app/swift/AraEditor.swift
         src/app/swift/PitchEditorPanel.swift
         src/app/swift/PluginEditor.swift
         src/app/swift/PluginBrowser.swift
+        src/app/swift/MidiLibrary.swift
+        src/app/swift/MidiLibraryBrowser.swift
         src/app/swift/TimelineView.swift
         src/app/swift/GlobalTracksBar.swift
         src/app/swift/FadeCrossfadeEditor.swift
@@ -451,10 +538,20 @@ if(NEURACOUST_BUILD_SWIFT_APP)
     # so the grant persists. Create the cert once (see docs/dev-signing-cert.md) named below; if it
     # is not present on this machine we fall back to ad-hoc "-".
     set(NEURACOUST_DEV_SIGN_CERT_NAME "Neuracoust Dev Signing")
+    # A certificate record can remain in Keychain after its private key has disappeared.
+    # `find-certificate` still reports that orphan, but codesign then waits/fails forever.
+    # `find-identity -p codesigning` lists only identities that currently have a usable key.
+    #
+    # Deliberately WITHOUT -v: that flag lists only identities the system considers *valid*, i.e.
+    # trusted, and a self-signed dev cert is reported CSSMERR_TP_NOT_TRUSTED unless it is explicitly
+    # trusted (which needs an admin password). codesign signs with it regardless — trust only affects
+    # *verification*. With -v the cert was silently skipped and every build fell back to ad-hoc, which
+    # is what kept resetting the Accessibility grant (global keypad) on each rebuild.
     execute_process(
-        COMMAND security find-certificate -c "${NEURACOUST_DEV_SIGN_CERT_NAME}" -Z
-        OUTPUT_VARIABLE _nc_cert_dump ERROR_QUIET)
-    string(REGEX MATCH "SHA-1 hash: ([0-9A-F]+)" _nc_cert_match "${_nc_cert_dump}")
+        COMMAND security find-identity -p codesigning
+        OUTPUT_VARIABLE _nc_identity_dump ERROR_QUIET)
+    string(REGEX MATCH "([0-9A-F]+) \"${NEURACOUST_DEV_SIGN_CERT_NAME}\""
+           _nc_cert_match "${_nc_identity_dump}")
     if(CMAKE_MATCH_1)
         set(NEURACOUST_CODESIGN_IDENTITY "${CMAKE_MATCH_1}")
         message(STATUS "Code-signing app with stable dev cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' (${CMAKE_MATCH_1}) — TCC grants persist across rebuilds.")
@@ -466,6 +563,9 @@ if(NEURACOUST_BUILD_SWIFT_APP)
     add_custom_command(TARGET NeuracoustDAW POST_BUILD
         COMMAND codesign --force --deep --sign "${NEURACOUST_CODESIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:NeuracoustDAW>"
         COMMENT "Code-signing Neuracoust DAW.app (identity: ${NEURACOUST_CODESIGN_IDENTITY})")
+    add_custom_command(TARGET NeuracoustVocalConverter POST_BUILD
+        COMMAND codesign --force --deep --sign "${NEURACOUST_CODESIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:NeuracoustVocalConverter>"
+        COMMENT "Code-signing Neuracoust Vocal Converter.app (identity: ${NEURACOUST_CODESIGN_IDENTITY})")
 else()
     message(STATUS "Swift app target skipped: generator '${CMAKE_GENERATOR}' does not support Swift. Use -G Xcode.")
 endif()
@@ -494,6 +594,26 @@ if(NEURACOUST_BUILD_SWIFT_APP AND TARGET NeuracoustDAW)
             "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/Neuracoust VST3 Process Worker")
 endif()
 
+# The MIDI library indexer is spawned by the app to classify the collection — bundle it (no libtorch).
+if(NEURACOUST_BUILD_SWIFT_APP AND TARGET NeuracoustDAW)
+    add_dependencies(NeuracoustDAW neuracoust_midi_indexer)
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:neuracoust_midi_indexer>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/MacOS/neuracoust_midi_indexer")
+    # Polyphonic audio→MIDI helper (basic-pitch, Python). Bundled as a Resource; runs via system python3.
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/neuracoust_basic_pitch.py"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/neuracoust_basic_pitch.py")
+    # Apple-Silicon stem path: native Demucs on Metal/MPS. The development runtime is resolved from
+    # Stem Magic; unlike the LibTorch helper this script refuses to silently fall back to CPU.
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/neuracoust_stem_mps.py"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/neuracoust_stem_mps.py")
+endif()
+
 add_executable(neuracoust_vst3_isolated_process_smoke tools/vst3_isolated_process_smoke.cpp)
 target_link_libraries(neuracoust_vst3_isolated_process_smoke PRIVATE neuracoust_daw_core)
 
@@ -512,11 +632,30 @@ target_link_libraries(neuracoust_vst3_engine_insert_probe PRIVATE neuracoust_daw
 add_executable(neuracoust_vst3_midi_instrument_smoke tools/vst3_midi_instrument_smoke.cpp)
 target_link_libraries(neuracoust_vst3_midi_instrument_smoke PRIVATE neuracoust_daw_core)
 
+# ARA document-controller probe. A Cocoa harness (NSApplication run loop) used to validate the ARA
+# bring-up against a real plug-in without risking the DAW — Melodyne blocks when driven from a bare
+# console process. Development only; never bundled into the app.
+if(APPLE AND NEURACOUST_HAS_ARA_SDK)
+    add_executable(neuracoust_ara_document_probe tools/ara_document_probe.mm)
+    target_link_libraries(neuracoust_ara_document_probe PRIVATE neuracoust_daw_core "-framework Cocoa")
+    # The same story one level up: drives the engine BRIDGE end to end (import → ARA → commit →
+    # save → reload) against a real plug-in. Dev-only, never bundled, never in ctest — it needs a
+    # licensed ARA plug-in installed.
+    add_executable(neuracoust_ara_bridge_probe tools/ara_bridge_probe.mm)
+    target_link_libraries(neuracoust_ara_bridge_probe PRIVATE neuracoust_daw_core "-framework Cocoa")
+endif()
+
 add_executable(neuracoust_remote_core_server tools/neuracoust_remote_core_server.cpp)
 target_link_libraries(neuracoust_remote_core_server PRIVATE neuracoust_daw_core)
 
 add_executable(neuracoust_daw_render tools/neuracoust_daw_render.cpp)
 target_link_libraries(neuracoust_daw_render PRIVATE neuracoust_daw_core)
+
+# MIDI library indexer: parses + classifies a folder tree of .mid files (drum vs melodic, instrument,
+# genre, mood) into a TSV the app's MIDI library loads. Bundled into the app so it can be spawned.
+add_executable(neuracoust_midi_indexer tools/neuracoust_midi_indexer.cpp)
+target_link_libraries(neuracoust_midi_indexer PRIVATE neuracoust_daw_core)
+set_property(TARGET neuracoust_midi_indexer PROPERTY CXX_STANDARD 17)
 
 add_executable(neuracoust_audio_measure_harness tools/audio_measure_harness.cpp)
 target_link_libraries(neuracoust_audio_measure_harness PRIVATE neuracoust_daw_core)
@@ -689,6 +828,39 @@ if(Torch_FOUND)
         else()
             message(WARNING "demucs.pt not found at ${NEURACOUST_STEM_MODEL}; stem separation will fail at runtime until it is bundled")
         endif()
+        # Optional 6-source model (guitar/piano too). Bundled only if present; the UI hides the 6-part
+        # option and the helper falls back to demucs.pt otherwise.
+        if(EXISTS "${NEURACOUST_STEM_MODEL_DIR}/htdemucs_6s.pt")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_STEM_MODEL_DIR}/htdemucs_6s.pt"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/htdemucs_6s.pt"
+                COMMENT "Bundling htdemucs_6s.pt model (6-part separation)")
+        else()
+            message(STATUS "htdemucs_6s.pt not found — 6-part separation unavailable until it is exported (tools/export_demucs_6s_torchscript.py)")
+        endif()
+        # Optional drum-split model (kick/snare/toms/cymbals, or +hihat). Same TorchScript contract; the
+        # helper is run with --kind drum so the sources are named as drums. UI hides the option otherwise.
+        if(EXISTS "${NEURACOUST_STEM_MODEL_DIR}/drumsep.pt")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_STEM_MODEL_DIR}/drumsep.pt"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/drumsep.pt"
+                COMMENT "Bundling drumsep.pt model (drum split: kick/snare/toms/cymbals)")
+        else()
+            message(STATUS "drumsep.pt not found — drum split unavailable until it is exported (tools/export_demucs_checkpoint_torchscript.py <drumsep.th> …/drumsep.pt)")
+        endif()
+        # Optional orchestra-family model (strings/brass/woodwinds/… — experimental). Run with
+        # --kind orchestra. No such model ships with Demucs; the option appears only if one is bundled.
+        if(EXISTS "${NEURACOUST_STEM_MODEL_DIR}/orchestra.pt")
+            add_custom_command(TARGET NeuracoustDAW POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NEURACOUST_STEM_MODEL_DIR}/orchestra.pt"
+                    "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/orchestra.pt"
+                COMMENT "Bundling orchestra.pt model (experimental family split)")
+        else()
+            message(STATUS "orchestra.pt not found — orchestra family split unavailable (needs a trained checkpoint; tools/export_demucs_checkpoint_torchscript.py)")
+        endif()
         if(EXISTS "${NEURACOUST_CREPE_MODEL}")
             add_custom_command(TARGET NeuracoustDAW POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -719,6 +891,15 @@ if(Torch_FOUND)
     endif()
 else()
     message(STATUS "Stem separation disabled (no libtorch found)")
+endif()
+
+# The optional stem helpers and LibTorch frameworks are appended after the main app's
+# original signing step. Re-sign once more after every bundle copy so deep validation
+# covers those late-added binaries and dylibs as well.
+if(TARGET NeuracoustDAW AND DEFINED NEURACOUST_CODESIGN_IDENTITY)
+    add_custom_command(TARGET NeuracoustDAW POST_BUILD
+        COMMAND codesign --force --deep --sign "${NEURACOUST_CODESIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:NeuracoustDAW>"
+        COMMENT "Final code-sign after all Neuracoust DAW bundle resources")
 endif()
 
 add_executable(neuracoust_daw_core_tests tests/CoreSmokeTest.cpp)
@@ -860,6 +1041,13 @@ neuracoust_link_core(neuracoust_parametric_eq_tests)
 neuracoust_enable_release_asserts(neuracoust_parametric_eq_tests)
 add_test(NAME parametric_eq COMMAND neuracoust_parametric_eq_tests)
 
+add_executable(neuracoust_console_channel_tests
+    tests/ConsoleChannelProcessorTest.cpp
+    src/audio/ConsoleChannelProcessor.cpp)
+target_include_directories(neuracoust_console_channel_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+neuracoust_enable_release_asserts(neuracoust_console_channel_tests)
+add_test(NAME console_channel_4000e COMMAND neuracoust_console_channel_tests)
+
 add_executable(neuracoust_sweep_measurement_tests tests/SweepMeasurementTest.cpp)
 neuracoust_link_core(neuracoust_sweep_measurement_tests)
 neuracoust_enable_release_asserts(neuracoust_sweep_measurement_tests)
@@ -894,3 +1082,7 @@ add_test(NAME monitor_fir_eq COMMAND neuracoust_monitor_fir_eq_tests)
 add_executable(neuracoust_automation_mode_bridge_smoke tests/AutomationModeBridgeSmoke.cpp)
 target_link_libraries(neuracoust_automation_mode_bridge_smoke PRIVATE neuracoust_daw_core)
 add_test(NAME automation_mode_bridge_smoke COMMAND neuracoust_automation_mode_bridge_smoke)
+
+add_executable(neuracoust_mackie_hui_tests tests/MackieHuiProtocolTest.cpp)
+target_link_libraries(neuracoust_mackie_hui_tests PRIVATE neuracoust_daw_core)
+add_test(NAME mackie_hui_protocol COMMAND neuracoust_mackie_hui_tests)

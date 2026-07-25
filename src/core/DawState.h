@@ -47,6 +47,12 @@ struct InstrumentSlotState {
     std::vector<Vst3ParameterValueState> parameters;
     std::string pluginClassId;
     std::string pluginClassName;
+    /// The plug-in's own component state, base64. A workstation instrument keeps its
+    /// program/patch selection here and NOT in its parameters — KORG TRITON exposes
+    /// 2,573 parameters and not one of them selects the program, so mirroring
+    /// parameters alone loses the patch the moment the editor closes. Empty until an
+    /// editor hands one over.
+    std::string pluginStateBase64;
 };
 
 struct TrackSendState {
@@ -67,6 +73,60 @@ struct AutomationLaneState {
     std::string parameterId;
     std::string displayName;
     std::vector<AutomationPointState> points;
+};
+
+/// Built-in console channel processing. `model` is deliberately data, rather
+/// than an enum, so additional Neuracoust console models can be registered
+/// without changing the project format. The first implementation is 4000E.
+struct ConsoleChannelState {
+    std::string model = "4000e";
+    std::string moduleOrder = "filter,eq,gate,comp,saturator";
+    bool filterEnabled = false;
+    bool eqEnabled = false;
+    bool compEnabled = false;
+    bool gateEnabled = false;
+    bool saturatorEnabled = false;
+    bool filterCircuitMode = false;
+    bool eqCircuitMode = false;
+    bool compCircuitMode = false;
+    bool gateCircuitMode = false;
+    bool saturatorCircuitMode = false;
+    float saturatorDriveDb = 6.0f;
+    float saturatorMix = 1.0f;
+    bool expanderMode = true;
+    bool highPassEnabled = false;
+    bool lowPassEnabled = false;
+    float highPassHz = 20.0f;
+    float lowPassHz = 12000.0f;
+    float compThresholdDb = -18.0f;
+    float compRatio = 4.0f;
+    float compAttackMs = 30.0f;
+    float compReleaseMs = 360.0f;
+    float compMix = 1.0f;
+    bool compFastAttack = false;
+    bool compPeakMode = false;
+    std::string compType = "ssl";
+    float gateThresholdDb = -36.0f;
+    float gateRangeDb = 20.0f;
+    float gateAttackMs = 1.0f;
+    float gateHoldMs = 0.0f;
+    float gateReleaseMs = 360.0f;
+    bool gateFastAttack = false;
+    std::string gateType = "ssl";
+    float eqHfGainDb = 0.0f;
+    float eqHfHz = 8000.0f;
+    bool eqHfBell = false;
+    float eqHmfGainDb = 0.0f;
+    float eqHmfHz = 3000.0f;
+    float eqHmfQ = 1.0f;
+    float eqLmfGainDb = 0.0f;
+    float eqLmfHz = 1000.0f;
+    float eqLmfQ = 1.0f;
+    float eqLfGainDb = 0.0f;
+    float eqLfHz = 200.0f;
+    bool eqLfBell = false;
+    bool eqEMode = true;
+    std::string eqType = "ssl_4000e";
 };
 
 struct TrackState {
@@ -101,6 +161,7 @@ struct TrackState {
     std::string mixGroupName;
     std::string controlMasterTrackName;
     std::string notes;   // free-text channel memo, shown in the mixer; no audio effect
+    ConsoleChannelState consoleChannel;
 };
 
 struct ClipState {
@@ -149,6 +210,17 @@ struct ClipState {
     // position by it so the drawn shape and the sound stay identical.
     double fadeInCurvature = 0.0;
     double fadeOutCurvature = 0.0;
+    /// ARA (Melodyne) edit state for this clip, and the audio those edits were made against.
+    ///
+    /// `araSourcePath` is the UNEDITED window written out when the ARA session first opened; once
+    /// an edit is committed, `sourcePath` points at the rendered result, so re-opening the editor
+    /// has to go back to this file or the archive would be applied a second time.
+    /// `araArchiveBase64` is opaque plug-in state — see AraDocumentController::storeArchive.
+    std::string araPluginName;
+    std::string araPluginPath;
+    std::string araSourcePath;
+    std::string araArchiveBase64;
+
     /// Where this clip FIRST landed on the timeline (import), the Pro-Tools
     /// "original time stamp". Moves and trims never touch it; splitting offsets
     /// the right half so spotting both re-forms the original layout.

@@ -39,6 +39,17 @@ final class PianoRollNSView: NSView {
     var onCommitEdit: ((String) -> Void)?
     var onSelect: ((Set<String>) -> Void)?                   // the highlighted note set
     var onCopyNote: ((String) -> String?)?                   // ⌥-drag: duplicate, return new id
+    /// Audition: (pitch, velocity, noteOn). The keyboard down the left edge plays the
+    /// track's instrument so a part can be found by ear, the way every other editor works.
+    var onPreviewNote: ((Int, Int, Bool) -> Void)?
+    var onPreviewAllNotesOff: (() -> Void)?
+
+    /// The pitch the mouse is currently holding on the keyboard, so a drag can glissando
+    /// (release the old note, sound the new one) and mouse-up always releases exactly one.
+    private var previewPitch: Int?
+    /// The pitch of the grid note currently being auditioned by a click/drag. Separate from
+    /// previewPitch so dragging a note is not treated as a keyboard glissando.
+    private var auditionPitch: Int?
 
     /// The selected notes, drawn in a distinct colour. Driven from the controller.
     var selectedIds: Set<String> = [] {
@@ -55,6 +66,9 @@ final class PianoRollNSView: NSView {
     private static let keyboardWidth: CGFloat = 44
     private static let rowHeight: CGFloat = 10
     private static let resizeHandleWidth: CGFloat = 6
+    /// How far the cursor must travel sideways before a vertical note move stops pinning the note's
+    /// start time — the dead zone that keeps small mouse wobble from smearing the attack.
+    private static let axisLockThreshold: CGFloat = 9
 
     /// New notes are one sixteenth long, and the grid snaps to sixteenths.
     private static let quantumBeats = 0.25
@@ -62,8 +76,11 @@ final class PianoRollNSView: NSView {
     private enum Drag {
         case none
         /// Moving one or several notes together: `origin` is every moved note's start pitch and
-        /// beat, so the whole selection shifts by the grabbed note's delta.
-        case moving(grabId: String, grabOffsetBeats: Double, origin: [String: (pitch: Int, start: Double)])
+        /// beat, so the whole selection shifts by the grabbed note's delta. `startX`/`axisUnlocked`
+        /// carry the axis-lock — until the cursor leaves a small dead zone horizontally, a note's
+        /// start time is pinned so a straight up/down move never nudges its attack off the beat.
+        case moving(grabId: String, grabOffsetBeats: Double, origin: [String: (pitch: Int, start: Double)],
+                    startX: CGFloat, axisUnlocked: Bool)
         case resizing(id: String)
         /// A press-drag over empty grid: a click (no movement) adds a note, a drag rubber-bands
         /// a selection rectangle.
@@ -73,6 +90,16 @@ final class PianoRollNSView: NSView {
     private var drag = Drag.none
 
     override var isFlipped: Bool { true }
+
+    /// The editor closing mid-press must not leave a note ringing forever.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil, previewPitch != nil || auditionPitch != nil {
+            previewPitch = nil
+            auditionPitch = nil
+            onPreviewAllNotesOff?()
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -165,6 +192,17 @@ final class PianoRollNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // The keyboard down the left edge is a playable instrument, not decoration.
+        if point.x < gridRect.minX {
+            let pitch = self.pitch(atY: point.y)
+            previewPitch = pitch
+            // Velocity from where the key was struck along its length, like a weighted
+            // keybed: near the front (right, by the grid) is loud, at the back is soft.
+            let across = max(0, min(1, point.x / max(1, Self.keyboardWidth)))
+            onPreviewNote?(pitch, Int(40 + across * 87), true)
+            needsDisplay = true
+            return
+        }
         guard point.x >= gridRect.minX else { return }
         let shift = event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
@@ -180,11 +218,18 @@ final class PianoRollNSView: NSView {
                 onDeleteNote?(hit.id)
                 return
             }
+            // Audition the note you grab, at its own velocity, so editing is by ear as well as by
+            // eye. Held until mouseUp; a move re-auditions as the pitch changes (below). Kept
+            // separate from the keyboard strip's previewPitch so a note drag is not mistaken for a
+            // keyboard glissando in mouseDragged.
+            auditionPitch = hit.pitch
+            onPreviewNote?(hit.pitch, hit.velocity, true)
             // ⌥-drag copies: duplicate in place, select the copy, and drag it — the original stays.
             if option, let newId = onCopyNote?(hit.id) {
                 onSelect?([newId])
                 drag = .moving(grabId: newId, grabOffsetBeats: beat(atX: point.x) - hit.startBeats,
-                               origin: [newId: (hit.pitch, hit.startBeats)])
+                               origin: [newId: (hit.pitch, hit.startBeats)],
+                               startX: point.x, axisUnlocked: false)
                 return
             }
             // Selection: ⇧/⌘ toggles a note in the set (and does not start a move); a plain click
@@ -207,7 +252,7 @@ final class PianoRollNSView: NSView {
                 origin[note.id] = (note.pitch, note.startBeats)
             }
             drag = .moving(grabId: hit.id, grabOffsetBeats: beat(atX: point.x) - hit.startBeats,
-                           origin: origin)
+                           origin: origin, startX: point.x, axisUnlocked: false)
             return
         }
 
@@ -237,17 +282,50 @@ final class PianoRollNSView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
 
+        // Sliding along the keyboard glissandos: release the key we were on, sound the new one.
+        if let holding = previewPitch {
+            let pitch = self.pitch(atY: point.y)
+            if pitch != holding {
+                onPreviewNote?(holding, 0, false)
+                let across = max(0, min(1, point.x / max(1, Self.keyboardWidth)))
+                onPreviewNote?(pitch, Int(40 + across * 87), true)
+                previewPitch = pitch
+                needsDisplay = true
+            }
+            return
+        }
+
         switch drag {
         case .none:
             break
-        case .moving(let grabId, let grabOffset, let origin):
+        case .moving(let grabId, let grabOffset, let origin, let startX, let axisUnlocked):
             guard let grab = origin[grabId] else { break }
-            let newStart = max(0, snapped(beat(atX: point.x) - grabOffset))
-            let beatDelta = newStart - grab.start
+            // Axis-lock: while the cursor stays within the dead zone horizontally, pin every note's
+            // start time (beatDelta = 0) so a straight up/down move can't nudge the attack off the
+            // beat from a little mouse wobble. Cross the zone and it re-baselines the grab and moves
+            // freely in both axes from then on.
+            if !axisUnlocked, abs(point.x - startX) > Self.axisLockThreshold {
+                drag = .moving(grabId: grabId, grabOffsetBeats: beat(atX: point.x) - grab.start,
+                               origin: origin, startX: startX, axisUnlocked: true)
+            }
+            let horizontallyFree = axisUnlocked || abs(point.x - startX) > Self.axisLockThreshold
+            let beatDelta = horizontallyFree
+                ? max(0, snapped(beat(atX: point.x) - grabOffset)) - grab.start
+                : 0
             let pitchDelta = pitch(atY: point.y) - grab.pitch
             for (id, o) in origin {
                 onMoveNote?(id, max(Self.lowestPitch, min(Self.highestPitch, o.pitch + pitchDelta)),
                             max(0, o.start + beatDelta))
+            }
+            // Re-audition ONLY when the grabbed note actually crosses to a new pitch — never on the
+            // horizontal wobble the axis-lock now absorbs — so a move plays the scale under the
+            // cursor without a burst of retriggers.
+            let movedPitch = max(Self.lowestPitch, min(Self.highestPitch, grab.pitch + pitchDelta))
+            if auditionPitch != movedPitch {
+                if let old = auditionPitch { onPreviewNote?(old, 0, false) }
+                let velocity = model.notes.first(where: { $0.id == grabId })?.velocity ?? 96
+                onPreviewNote?(movedPitch, velocity, true)
+                auditionPitch = movedPitch
             }
         case .resizing(let id):
             guard let note = model.notes.first(where: { $0.id == id }) else { break }
@@ -261,6 +339,17 @@ final class PianoRollNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let holding = previewPitch {
+            onPreviewNote?(holding, 0, false)
+            previewPitch = nil
+            needsDisplay = true
+            return
+        }
+        // Release the note we were auditioning (a plain click or the end of a move).
+        if let a = auditionPitch {
+            onPreviewNote?(a, 0, false)
+            auditionPitch = nil
+        }
         switch drag {
         case .moving: onCommitEdit?("Move note")
         case .resizing: onCommitEdit?("Resize note")
@@ -323,18 +412,47 @@ final class PianoRollNSView: NSView {
         }
     }
 
+    /// Velocity as hue, the way Cubase and Studio One colour a part: quiet notes sit cool and
+    /// recede, loud ones run warm and jump out. Brightness alone (all this used to do) is very
+    /// hard to read against a dark lane once notes are short — two notes a third apart in
+    /// velocity looked identical. The ramp stays inside the design's indigo→amber family
+    /// rather than becoming a rainbow.
+    private static let velocityRamp: [NSColor] = [
+        NSColor(hex: 0x4b62c8),   // ppp — indigo
+        NSColor(hex: 0x7b6fd0),   // p   — violet
+        NSColor(hex: 0xa96fc0),   // mf  — orchid
+        NSColor(hex: 0xd98a72),   // f   — coral
+        NSColor(hex: 0xe8623f),   // fff — red
+    ]
+
+    static func velocityColor(_ velocity: Int) -> NSColor {
+        let ramp = velocityRamp
+        let clamped = CGFloat(max(1, min(127, velocity)) - 1) / 126.0
+        let scaled = clamped * CGFloat(ramp.count - 1)
+        let lower = min(ramp.count - 1, Int(scaled))
+        let upper = min(ramp.count - 1, lower + 1)
+        let mix = scaled - CGFloat(lower)
+        guard let a = ramp[lower].usingColorSpace(.sRGB),
+              let b = ramp[upper].usingColorSpace(.sRGB) else { return ramp[lower] }
+        return NSColor(srgbRed: a.redComponent + (b.redComponent - a.redComponent) * mix,
+                       green: a.greenComponent + (b.greenComponent - a.greenComponent) * mix,
+                       blue: a.blueComponent + (b.blueComponent - a.blueComponent) * mix,
+                       alpha: 1.0)
+    }
+
     private func drawNotes() {
         for note in model.notes {
             let rect = noteRect(note)
             let selected = selectedIds.contains(note.id)
-            // Velocity reads as brightness — the one place it is visible at all.
-            let strength = 0.35 + 0.65 * CGFloat(note.velocity) / 127.0
-            // Selected notes switch to a warm amber so they stand apart from the purple field.
-            let fill = selected ? NSColor(hex: 0xffb15c) : NSColor(hex: 0x9b7fd4)
-            fill.withAlphaComponent(strength).setFill()
+            // Selected notes switch to a warm amber so they stand apart from the field; an
+            // unselected note carries its velocity as colour.
+            let fill = selected ? NSColor(hex: 0xffb15c) : Self.velocityColor(note.velocity)
+            // A touch of alpha still tracks velocity so the ramp reads even where two
+            // neighbouring stops are close in hue.
+            fill.withAlphaComponent(selected ? 1.0 : 0.72 + 0.28 * CGFloat(note.velocity) / 127.0).setFill()
             let body = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
             body.fill()
-            (selected ? NSColor.white : NSColor(hex: 0xd8c8ff)).setStroke()
+            (selected ? NSColor.white : NSColor(hex: 0xd8c8ff).withAlphaComponent(0.75)).setStroke()
             body.lineWidth = selected ? 1.5 : 1
             body.stroke()
         }
@@ -359,7 +477,12 @@ final class PianoRollNSView: NSView {
 
         for pitch in Self.lowestPitch...Self.highestPitch {
             let rect = NSRect(x: 0, y: y(forPitch: pitch), width: Self.keyboardWidth, height: Self.rowHeight)
-            NSColor(hex: isAccidental(pitch) ? 0x1d1917 : 0xd6cec1).setFill()
+            if previewPitch == pitch {
+                // The key the mouse is holding down, so a glissando is visible as well as audible.
+                NSColor(hex: 0xffb15c).setFill()
+            } else {
+                NSColor(hex: isAccidental(pitch) ? 0x1d1917 : 0xd6cec1).setFill()
+            }
             rect.insetBy(dx: 0, dy: 0.5).fill()
 
             if pitch % 12 == 0 {
@@ -466,8 +589,9 @@ final class VelocityLaneNSView: NSView {
             let barX = x(forBeat: note.startBeats)
             let top = laneRect.maxY - 4 - CGFloat(note.velocity) / 127.0 * (laneRect.height - 8)
             let selected = selectedIds.contains(note.id)
-            // Selected bars glow amber like their notes; the rest stay purple.
-            (selected ? NSColor(hex: 0xffb15c) : NSColor(hex: 0x9b7fd4)).setFill()
+            // Selected bars glow amber like their notes; the rest carry the same velocity
+            // colour as the note they belong to, so the two lanes read as one picture.
+            (selected ? NSColor(hex: 0xffb15c) : PianoRollNSView.velocityColor(note.velocity)).setFill()
             NSRect(x: barX - 1.5, y: top, width: 3, height: laneRect.maxY - 4 - top).fill()
             (selected ? NSColor.white : NSColor(hex: 0xd8c8ff)).setFill()
             NSRect(x: barX - 3, y: top - 1, width: 6, height: 2).fill()
@@ -682,6 +806,8 @@ struct PianoRoll: NSViewRepresentable {
     let onCommitEdit: (String) -> Void
     let onSelect: (Set<String>) -> Void
     let onCopyNote: (String) -> String?
+    let onPreviewNote: (Int, Int, Bool) -> Void
+    let onPreviewAllNotesOff: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let roll = PianoRollNSView(frame: .zero)
@@ -704,6 +830,8 @@ struct PianoRoll: NSViewRepresentable {
         roll.onCommitEdit = onCommitEdit
         roll.onSelect = onSelect
         roll.onCopyNote = onCopyNote
+        roll.onPreviewNote = onPreviewNote
+        roll.onPreviewAllNotesOff = onPreviewAllNotesOff
         roll.frame = NSRect(x: 0, y: 0,
                             width: scroll.contentSize.width,
                             height: roll.idealHeight)
@@ -720,8 +848,11 @@ struct PianoRoll: NSViewRepresentable {
 /// The panel the piano roll lives in, docked under the timeline.
 struct PianoRollPanel: View {
     @EnvironmentObject private var engine: EngineController
+    // Playhead lives on its own clock now — observe it so the roll's playhead keeps moving in playback.
+    @ObservedObject var clock: PlayheadClock
 
     @State private var dragStartHeight: CGFloat?
+    @State private var laneDragStartHeight: CGFloat?
 
     var body: some View {
         if let region = engine.editingRegion {
@@ -739,12 +870,14 @@ struct PianoRollPanel: View {
                     onDeleteNote: { engine.deleteNote($0) },
                     onCommitEdit: { engine.commitClipGesture($0) },
                     onSelect: { engine.setNoteSelection($0) },
-                    onCopyNote: { engine.copyNote($0) }
+                    onCopyNote: { engine.copyNote($0) },
+                    onPreviewNote: { engine.previewNote(pitch: $0, velocity: $1, on: $2) },
+                    onPreviewAllNotesOff: { engine.previewAllNotesOff() }
                 )
 
                 laneBar
                 laneView(region)
-                    .frame(height: 44)
+                    .frame(height: engine.editorLaneHeight)
             }
             .frame(height: engine.pianoRollHeight)
             .background(Theme.Palette.panel)
@@ -868,20 +1001,27 @@ struct PianoRollPanel: View {
                     Button {
                         engine.editorLane = lane
                     } label: {
-                        if engine.editorLane == lane {
-                            Label(lane.title, systemImage: "checkmark")
-                        } else {
-                            Text(lane.title)
-                        }
+                        // A filled dot marks a lane that actually holds recorded/drawn data, so a
+                        // recorded modulation or pitch bend is findable instead of hidden behind the
+                        // default velocity lane.
+                        let mark = engine.editorLane == lane ? "checkmark"
+                                 : (engine.laneHasData(lane) ? "circle.fill" : "")
+                        Label(lane.title, systemImage: mark)
                     }
                 }
             } label: {
-                Text("\(engine.editorLane.title) ▾")
-                    .font(Theme.Font.mono(8))
-                    .foregroundStyle(Theme.Palette.textDim)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(Theme.Palette.button))
+                HStack(spacing: 3) {
+                    Text("\(engine.editorLane.title) ▾")
+                        .font(Theme.Font.mono(8))
+                        .foregroundStyle(Theme.Palette.textDim)
+                    // A dot on the picker itself when another lane has data the user isn't seeing.
+                    if engine.hasHiddenLaneData {
+                        Circle().fill(Theme.Palette.amber).frame(width: 4, height: 4)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.pill).fill(Theme.Palette.button))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -897,6 +1037,25 @@ struct PianoRollPanel: View {
         .padding(.horizontal, Theme.Space.md)
         .padding(.vertical, 3)
         .background(Theme.Palette.toolbar)
+        // The bar doubles as the lane's grab handle: drag it up to give the velocities more
+        // room, down to hand it back to the keyboard. Same global-space measurement as the
+        // editor's own handle — a local translation would chase the handle's own movement.
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    let base = laneDragStartHeight ?? engine.editorLaneHeight
+                    if laneDragStartHeight == nil { laneDragStartHeight = base }
+                    // Dragging up (negative dy) grows the lane, and it can never eat the
+                    // whole editor.
+                    let maximum = max(44, engine.pianoRollHeight - 160)
+                    engine.editorLaneHeight = min(maximum, max(24, base - value.translation.height))
+                }
+                .onEnded { _ in laneDragStartHeight = nil }
+        )
     }
 
     @ViewBuilder
@@ -966,6 +1125,26 @@ struct PianoRollPanel: View {
             tool("휴머나이즈") { engine.humanizeRegion(region.id) }
             tool("복제") { engine.duplicateRegion(region.id) }
             tool("분할") { engine.splitRegionAtPlayhead(region.id) }
+            // Glue: joins the selected notes of each pitch into one. Disabled until the selection
+            // actually contains two notes that share a pitch, so it never silently does nothing.
+            tool("붙이기") { engine.glueSelectedNotes() }
+                .disabled(!engine.canGlueSelectedNotes)
+                .help("선택한 노트를 음정별로 하나로 붙입니다 (사이 간격은 흡수)")
+            // The rest of the Key Editor functions. With nothing selected they act on the whole
+            // region, which is how Cubase's Functions menu behaves.
+            tool("레가토") { engine.applyNoteLegato() }
+                .help("각 노트를 다음 노트 시작점까지 늘입니다 · 선택 없으면 리전 전체")
+            tool("겹침 제거") { engine.deleteNoteOverlaps() }
+                .help("같은 음정의 노트가 다음 노트를 침범하면 잘라냅니다 · 선택 없으면 리전 전체")
+            Menu("길이 고정") {
+                ForEach([("1/16", 0.25), ("1/8", 0.5), ("1/4", 1.0), ("1/2", 2.0), ("1마디", 4.0)],
+                        id: \.0) { label, beats in
+                    Button(label) { engine.setNoteLengths(beats: beats) }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("선택한 노트를 같은 길이로 · 선택 없으면 리전 전체")
 
             Spacer()
 

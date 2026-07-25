@@ -5457,6 +5457,106 @@ bool duplicateMidiRegion(ProjectDocument& project,
     return true;
 }
 
+std::string mergeMidiRegions(ProjectDocument& project,
+                             const std::vector<std::string>& regionIds) {
+    // Gather the requested regions, all of which must be on ONE track — merging across tracks has no
+    // meaning (a part belongs to a track). Locked regions block the merge, as they block every edit.
+    std::vector<MidiRegionState*> regions;
+    std::string trackName;
+    for (const auto& id : regionIds) {
+        MidiRegionState* region = findMidiRegion(project, id);
+        if (region == nullptr || region->locked) {
+            continue;
+        }
+        if (trackName.empty()) {
+            trackName = region->trackName;
+        } else if (region->trackName != trackName) {
+            return {};   // mixed tracks — refuse rather than silently dropping some
+        }
+        regions.push_back(region);
+    }
+    if (regions.size() < 2) {
+        return {};   // nothing to merge
+    }
+
+    // The merged part spans from the earliest start to the latest end. Notes are beats from a
+    // region's own start, so each source's events shift by the gap between its start and the merged
+    // start. One tempo (at the merged start) converts that gap to beats — the same simplification
+    // splitMidiRegion uses; exact under a constant tempo, and close enough through a tempo change.
+    double mergedStart = regions.front()->startSeconds;
+    double mergedEnd = regions.front()->startSeconds + regions.front()->durationSeconds;
+    for (const MidiRegionState* region : regions) {
+        mergedStart = std::min(mergedStart, region->startSeconds);
+        mergedEnd = std::max(mergedEnd, region->startSeconds + region->durationSeconds);
+    }
+    const double bpm = std::max(20.0, std::min(400.0, projectTempoAtSeconds(project, mergedStart)));
+    const double secondsPerBeat = 60.0 / bpm;
+
+    // Seed the merged region from the earliest one (name, colour, ppq, channel), then clear its
+    // events and refill from every source rebased onto the merged timeline.
+    MidiRegionState* earliest = regions.front();
+    for (MidiRegionState* region : regions) {
+        if (region->startSeconds < earliest->startSeconds) {
+            earliest = region;
+        }
+    }
+    MidiRegionState merged = *earliest;
+    merged.id = uniqueMidiRegionId(project);
+    merged.startSeconds = mergedStart;
+    merged.durationSeconds = std::max(0.05, mergedEnd - mergedStart);
+    merged.loopEnabled = false;   // a merged part is a single linear part, not a loop
+    merged.notes.clear();
+    merged.controllerEvents.clear();
+    merged.pitchBendEvents.clear();
+    merged.programChangeEvents.clear();
+
+    for (const MidiRegionState* region : regions) {
+        const double beatOffset = (region->startSeconds - mergedStart) / secondsPerBeat;
+        for (auto note : region->notes) {
+            note.startBeats = std::max(0.0, note.startBeats + beatOffset);
+            merged.notes.push_back(note);
+        }
+        for (auto event : region->controllerEvents) {
+            event.beat = std::max(0.0, event.beat + beatOffset);
+            merged.controllerEvents.push_back(event);
+        }
+        for (auto event : region->pitchBendEvents) {
+            event.beat = std::max(0.0, event.beat + beatOffset);
+            merged.pitchBendEvents.push_back(event);
+        }
+        for (auto event : region->programChangeEvents) {
+            event.beat = std::max(0.0, event.beat + beatOffset);
+            merged.programChangeEvents.push_back(event);
+        }
+    }
+
+    // Order events within the merged part so playback and the editor read them in time order.
+    std::sort(merged.notes.begin(), merged.notes.end(),
+              [](const MidiNoteState& a, const MidiNoteState& b) { return a.startBeats < b.startBeats; });
+    std::sort(merged.controllerEvents.begin(), merged.controllerEvents.end(),
+              [](const MidiControllerEventState& a, const MidiControllerEventState& b) { return a.beat < b.beat; });
+    std::sort(merged.pitchBendEvents.begin(), merged.pitchBendEvents.end(),
+              [](const MidiPitchBendEventState& a, const MidiPitchBendEventState& b) { return a.beat < b.beat; });
+    std::sort(merged.programChangeEvents.begin(), merged.programChangeEvents.end(),
+              [](const MidiProgramChangeEventState& a, const MidiProgramChangeEventState& b) { return a.beat < b.beat; });
+
+    // Drop the sources and add the merged part.
+    const std::vector<std::string> ids(regionIds.begin(), regionIds.end());
+    project.midiRegions.erase(std::remove_if(project.midiRegions.begin(), project.midiRegions.end(),
+                                             [&](const MidiRegionState& region) {
+                                                 return std::find(ids.begin(), ids.end(), region.id) != ids.end();
+                                             }),
+                              project.midiRegions.end());
+    project.midiRegions.push_back(merged);
+    std::sort(project.midiRegions.begin(), project.midiRegions.end(), [](const MidiRegionState& left, const MidiRegionState& right) {
+        if (left.startSeconds == right.startSeconds) {
+            return left.id < right.id;
+        }
+        return left.startSeconds < right.startSeconds;
+    });
+    return merged.id;
+}
+
 bool setMidiRegionName(ProjectDocument& project,
                        const std::string& regionId,
                        const std::string& name) {
@@ -6047,6 +6147,200 @@ bool deleteMidiNote(ProjectDocument& project,
         }),
         region->notes.end());
     return region->notes.size() != oldSize;
+}
+
+bool mergeMidiNotes(ProjectDocument& project,
+                    const std::string& regionId,
+                    const std::vector<std::string>& noteIds,
+                    std::vector<std::string>& survivingNoteIds) {
+    survivingNoteIds.clear();
+    MidiRegionState* region = findMidiRegion(project, regionId);
+    if (region == nullptr || region->locked || noteIds.size() < 2) {
+        return false;
+    }
+    std::set<std::string> wanted(noteIds.begin(), noteIds.end());
+    wanted.erase("");
+    if (wanted.size() < 2) {
+        return false;
+    }
+
+    // Glue joins notes OF THE SAME PITCH: two Cs become one long C, which is what "붙이기" means for
+    // a melody. Selecting a chord and gluing therefore joins each voice separately rather than
+    // collapsing the chord into one note.
+    std::map<int, std::vector<size_t>> byPitch;
+    for (size_t index = 0; index < region->notes.size(); ++index) {
+        if (wanted.count(region->notes[index].id) != 0) {
+            byPitch[region->notes[index].pitch].push_back(index);
+        }
+    }
+
+    std::set<std::string> removed;
+    bool merged = false;
+    for (const auto& [pitch, indices] : byPitch) {
+        (void)pitch;
+        if (indices.size() < 2) {
+            continue;
+        }
+        // The earliest note survives and is stretched to cover the last one's end; the rest go. Any
+        // gap between them is absorbed — gluing is how you close a gap, not just butt notes together.
+        size_t keep = indices.front();
+        double start = region->notes[keep].startBeats;
+        double end = start + region->notes[keep].durationBeats;
+        for (const size_t index : indices) {
+            const auto& note = region->notes[index];
+            if (note.startBeats < start) {
+                start = note.startBeats;
+                keep = index;
+            }
+            end = std::max(end, note.startBeats + note.durationBeats);
+        }
+        for (const size_t index : indices) {
+            if (index != keep) {
+                removed.insert(region->notes[index].id);
+            }
+        }
+        region->notes[keep].startBeats = std::max(0.0, start);
+        region->notes[keep].durationBeats = std::max(1.0 / 960.0, end - start);
+        survivingNoteIds.push_back(region->notes[keep].id);
+        merged = true;
+    }
+    if (!merged) {
+        return false;
+    }
+    region->notes.erase(std::remove_if(region->notes.begin(), region->notes.end(),
+                                       [&](const MidiNoteState& note) {
+                                           return removed.count(note.id) != 0;
+                                       }),
+                        region->notes.end());
+    std::sort(region->notes.begin(), region->notes.end(),
+              [](const MidiNoteState& a, const MidiNoteState& b) {
+                  if (a.startBeats == b.startBeats) return a.pitch < b.pitch;
+                  return a.startBeats < b.startBeats;
+              });
+    return true;
+}
+
+namespace {
+
+/// The notes an editor function should act on: the given ids, or the whole region when none were
+/// given. Cubase's Key Editor functions work that way — nothing selected means "all of it".
+std::vector<size_t> midiNoteTargets(const MidiRegionState& region,
+                                    const std::vector<std::string>& noteIds) {
+    std::vector<size_t> targets;
+    if (noteIds.empty()) {
+        targets.resize(region.notes.size());
+        for (size_t index = 0; index < region.notes.size(); ++index) {
+            targets[index] = index;
+        }
+        return targets;
+    }
+    const std::set<std::string> wanted(noteIds.begin(), noteIds.end());
+    for (size_t index = 0; index < region.notes.size(); ++index) {
+        if (wanted.count(region.notes[index].id) != 0) {
+            targets.push_back(index);
+        }
+    }
+    return targets;
+}
+
+} // namespace
+
+bool applyMidiLegato(ProjectDocument& project,
+                     const std::string& regionId,
+                     const std::vector<std::string>& noteIds,
+                     double gapBeats) {
+    MidiRegionState* region = findMidiRegion(project, regionId);
+    if (region == nullptr || region->locked) {
+        return false;
+    }
+    auto targets = midiNoteTargets(*region, noteIds);
+    if (targets.size() < 2) {
+        return false;
+    }
+    // Stretch each note to meet the next one that STARTS LATER, minus the gap. Ordering by start
+    // time is what makes this work on an unsorted region; ties keep their relative order.
+    std::sort(targets.begin(), targets.end(), [&](size_t a, size_t b) {
+        return region->notes[a].startBeats < region->notes[b].startBeats;
+    });
+    bool changed = false;
+    for (size_t i = 0; i + 1 < targets.size(); ++i) {
+        auto& note = region->notes[targets[i]];
+        double nextStart = -1.0;
+        for (size_t j = i + 1; j < targets.size(); ++j) {
+            const double candidate = region->notes[targets[j]].startBeats;
+            if (candidate > note.startBeats + 1.0e-9) {
+                nextStart = candidate;
+                break;
+            }
+        }
+        if (nextStart < 0.0) {
+            continue;   // nothing later (a chord's last voice) — leave its length alone
+        }
+        const double duration = std::max(1.0 / 960.0, nextStart - gapBeats - note.startBeats);
+        if (std::abs(duration - note.durationBeats) > 1.0e-9) {
+            note.durationBeats = duration;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+bool deleteMidiNoteOverlaps(ProjectDocument& project,
+                            const std::string& regionId,
+                            const std::vector<std::string>& noteIds) {
+    MidiRegionState* region = findMidiRegion(project, regionId);
+    if (region == nullptr || region->locked) {
+        return false;
+    }
+    const auto targets = midiNoteTargets(*region, noteIds);
+    if (targets.size() < 2) {
+        return false;
+    }
+    // Per pitch: whenever a note runs past the next one's start, shorten it to end there. Same
+    // pitch only — overlapping different pitches is a chord, not an overlap.
+    std::map<int, std::vector<size_t>> byPitch;
+    for (const size_t index : targets) {
+        byPitch[region->notes[index].pitch].push_back(index);
+    }
+    bool changed = false;
+    for (auto& [pitch, indices] : byPitch) {
+        (void)pitch;
+        std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+            return region->notes[a].startBeats < region->notes[b].startBeats;
+        });
+        for (size_t i = 0; i + 1 < indices.size(); ++i) {
+            auto& note = region->notes[indices[i]];
+            const double nextStart = region->notes[indices[i + 1]].startBeats;
+            if (note.startBeats + note.durationBeats > nextStart + 1.0e-9) {
+                note.durationBeats = std::max(1.0 / 960.0, nextStart - note.startBeats);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+bool setMidiNoteLengths(ProjectDocument& project,
+                        const std::string& regionId,
+                        const std::vector<std::string>& noteIds,
+                        double lengthBeats) {
+    MidiRegionState* region = findMidiRegion(project, regionId);
+    if (region == nullptr || region->locked || !(lengthBeats > 0.0)) {
+        return false;
+    }
+    const auto targets = midiNoteTargets(*region, noteIds);
+    if (targets.empty()) {
+        return false;
+    }
+    const double duration = std::max(1.0 / 960.0, lengthBeats);
+    bool changed = false;
+    for (const size_t index : targets) {
+        if (std::abs(region->notes[index].durationBeats - duration) > 1.0e-9) {
+            region->notes[index].durationBeats = duration;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 bool deleteMidiNotes(ProjectDocument& project,

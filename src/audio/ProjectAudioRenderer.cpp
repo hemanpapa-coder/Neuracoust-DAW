@@ -376,18 +376,41 @@ const TrackState* vcaControlMasterForTrack(const ProjectAudioRenderPlan& plan, c
     return controlMaster;
 }
 
-bool trackPlaybackMuted(const ProjectAudioRenderPlan& plan, const TrackState& track, bool soloMode) {
-    if (track.muted || (soloMode && !trackAllowedBySoloPlayback(plan, track))) {
+bool trackPlaybackMuted(const ProjectAudioRenderPlan& plan,
+                        const TrackState& track,
+                        bool soloMode,
+                        double timeSeconds = -1.0) {
+    const bool muted = timeSeconds >= 0.0
+        ? automationLaneValueAt(track, "track.mute", timeSeconds, track.muted ? 1.0f : 0.0f) >= 0.5f
+        : track.muted;
+    if (muted || (soloMode && !trackAllowedBySoloPlayback(plan, track))) {
         return true;
     }
     const TrackState* controlMaster = vcaControlMasterForTrack(plan, track);
     return controlMaster != nullptr && controlMaster->muted;
 }
 
+std::vector<TrackSendState> automatedTrackSends(const TrackState& track, double timeSeconds) {
+    auto sends = track.sends;
+    for (size_t slot = 0; slot < sends.size(); ++slot) {
+        const std::string prefix = "send." + std::to_string(slot);
+        auto& send = sends[slot];
+        send.gainDb = automationLaneValueAt(track, prefix + ".level", timeSeconds, send.gainDb);
+        send.pan = automationLaneValueAt(track, prefix + ".pan", timeSeconds, send.pan);
+        const float muted = automationLaneValueAt(track, prefix + ".mute", timeSeconds,
+                                                  send.enabled ? 0.0f : 1.0f);
+        send.enabled = muted < 0.5f;
+        send.preFader = automationLaneValueAt(track, prefix + ".pre_fader", timeSeconds,
+                                              send.preFader ? 1.0f : 0.0f) >= 0.5f;
+    }
+    return sends;
+}
+
 float effectiveTrackVolumeDb(const ProjectAudioRenderPlan& plan, const TrackState& track, double timeSeconds) {
     float volumeDb = track.automationMode == "off"
         ? track.volumeDb
         : automationValueAt(track.volumeAutomation, timeSeconds, track.volumeDb);
+    volumeDb += automationLaneValueAt(track, "track.volume.trim", timeSeconds, 0.0f);
     const TrackState* controlMaster = vcaControlMasterForTrack(plan, track);
     if (controlMaster != nullptr) {
         volumeDb += automationValueAt(controlMaster->volumeAutomation, timeSeconds, controlMaster->volumeDb);
@@ -525,11 +548,13 @@ bool hasValidLoopRange(const ProjectAudioRenderPlan& plan) {
 }
 
 int64_t loopStartFrame(const ProjectAudioRenderPlan& plan) {
-    return std::max<int64_t>(0, static_cast<int64_t>(std::round(plan.loopStartSeconds * plan.sampleRate)));
+    const double start = std::max(0.0, plan.loopStartSeconds - plan.preRollSeconds);
+    return std::max<int64_t>(0, static_cast<int64_t>(std::round(start * plan.sampleRate)));
 }
 
 int64_t loopEndFrame(const ProjectAudioRenderPlan& plan) {
-    return std::max<int64_t>(0, static_cast<int64_t>(std::round(plan.loopEndSeconds * plan.sampleRate)));
+    const double end = plan.loopEndSeconds + plan.postRollSeconds;
+    return std::max<int64_t>(0, static_cast<int64_t>(std::round(end * plan.sampleRate)));
 }
 
 int64_t timelineFrameForPlaybackFrame(const ProjectAudioRenderPlan& plan, int64_t playbackFrame) {
@@ -598,7 +623,7 @@ void mixTimelineFrame(const ProjectAudioRenderPlan& plan,
             continue;
         }
         const TrackState* track = findTrack(plan, route->name);
-        if (track != nullptr && trackPlaybackMuted(plan, *track, soloMode)) {
+        if (track != nullptr && trackPlaybackMuted(plan, *track, soloMode, timelineSeconds)) {
             continue;
         }
         const bool timelinePlaybackSuppressed = track != nullptr && trackInputMonitorOverridesTimelinePlayback(plan, *track);
@@ -647,7 +672,7 @@ void mixTimelineFrame(const ProjectAudioRenderPlan& plan,
             processorInput.pan = automationLaneValueAt(*track, "track.pan", timelineSeconds, track->pan);
             processorInput.panLaw = plan.panLaw;
             processorInput.isMonoTrack = track->channelFormat == "mono";
-            processorInput.sends = track->sends;
+            processorInput.sends = automatedTrackSends(*track, timelineSeconds);
         }
         const auto processedRoute = processMixerRouteProcessors(processorInput);
         auto postProcessorFrame = processedRoute.postFader;
@@ -1430,6 +1455,8 @@ bool makeProjectAudioRenderPlan(const ProjectDocument& project, ProjectAudioRend
     plan.loopEnabled = effectiveProject.loopEnabled;
     plan.loopStartSeconds = std::max(0.0, effectiveProject.loopStartSeconds);
     plan.loopEndSeconds = std::max(0.0, effectiveProject.loopEndSeconds);
+    plan.preRollSeconds = std::max(0.0, effectiveProject.preRollSeconds);
+    plan.postRollSeconds = std::max(0.0, effectiveProject.postRollSeconds);
     plan.delayCompensationEnabled = effectiveProject.delayCompensationEnabled;
     if (plan.loopEndSeconds <= plan.loopStartSeconds) {
         plan.loopEnabled = false;
@@ -1846,6 +1873,12 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                 // prepared size only when a bigger block actually arrives — the same approach
                 // the track-insert chain uses.
                 const int requestedBlock = static_cast<int>(std::max<int64_t>(1, frameCount));
+                // NOT keyed on the stored patch. A patch is applied at prepare time (below, for a
+                // fresh load) and, for a change while running, through the engine's
+                // updateInstrumentComponentState on the MAIN thread — never by re-instantiating the
+                // plug-in here. Re-instantiating a workstation instrument on the realtime audio
+                // thread stalls the render for hundreds of milliseconds (the sound drops out) and
+                // is unsafe. So a patch change must not change this key.
                 const std::string cacheKey = instrument.pluginName + "\n" +
                     instrument.pluginPath + "\n" +
                     std::to_string(static_cast<int>(std::round(plan.sampleRate)));
@@ -1863,7 +1896,8 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                     processorIt = inserted;
                     const int prepareBlock = std::max(requestedBlock, preparedMax);
                     std::string prepareMessage;
-                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, prepareBlock, prepareMessage)) {
+                    if (!processorIt->second.prepare(descriptor, plan.sampleRate, prepareBlock, prepareMessage,
+                                                     {}, false, instrument.pluginStateBase64)) {
                         state->instrumentLastErrors[processorKey] = prepareMessage;
                         state->instrumentProcessors.erase(processorKey);
                         continue;
@@ -1886,7 +1920,8 @@ std::map<std::string, std::vector<float>> renderInstrumentAudioBlocksForRenderBl
                                                                   slotEvents,
                                                                   outputAudio,
                                                                   256,
-                                                                  instrument.parameters);
+                                                                  instrument.parameters,
+                                                                  instrument.pluginStateBase64);
                 if (!result.processed || outputAudio.interleavedSamples.size() != static_cast<size_t>(frameCount) * 2) {
                     continue;
                 }
@@ -1921,6 +1956,7 @@ void renderProjectAudioBlockWithMeters(const ProjectAudioRenderPlan& plan,
 
 void ProjectAudioRenderState::reset() {
     routeDelayLines.clear();
+    consoleChannelProcessors.clear();
     masterInsertChain.reset();
     instrumentProcessors.clear();
     instrumentProcessorKeys.clear();
@@ -1947,6 +1983,7 @@ void ProjectAudioRenderState::reset() {
 
 void ProjectAudioRenderState::resetForSeek() {
     routeDelayLines.clear();
+    consoleChannelProcessors.clear();
     sourceGeneratorPhases.clear();
     for (auto& [name, gen] : sourceGenerators) gen.reset();
     liveMidiEvents.clear();
@@ -2012,6 +2049,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         meters->trackNames.clear();
         meters->trackPeakLeft.clear();
         meters->trackPeakRight.clear();
+        meters->trackConsoleGainReductionDb.clear();
+        meters->trackConsoleGateGainReductionDb.clear();
         meters->trackInsertMeterTrackNames.clear();
         meters->trackInsertMeterSlotIndices.clear();
         meters->trackInsertInputPeak.clear();
@@ -2024,6 +2063,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             meters->trackNames.push_back(track.name);
             meters->trackPeakLeft.push_back(0.0f);
             meters->trackPeakRight.push_back(0.0f);
+            meters->trackConsoleGainReductionDb.push_back(0.0f);
+            meters->trackConsoleGateGainReductionDb.push_back(0.0f);
         }
     }
     const bool soloMode = hasSoloedAudioTrack(plan);
@@ -2103,6 +2144,25 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             }
         }
         applyTrackChannelFormatToBlock(routeInput, track, route->kind);
+
+        // Built-in console channel is pre-insert, matching a physical console's
+        // EQ/dynamics position. The same render state is used by realtime and bounce.
+        if (track != nullptr && routeMayProcessInserts(route->kind)) {
+            auto& consoleProcessor = state.consoleChannelProcessors[route->name];
+            consoleProcessor.processInterleavedStereo(routeInput, track->consoleChannel, plan.sampleRate);
+            if (meters != nullptr) {
+                const auto meterIt = meterIndexByTrack.find(route->name);
+                if (meterIt != meterIndexByTrack.end() &&
+                    meterIt->second < meters->trackConsoleGainReductionDb.size()) {
+                    meters->trackConsoleGainReductionDb[meterIt->second] =
+                        consoleProcessor.compressorGainReductionDb();
+                    if (meterIt->second < meters->trackConsoleGateGainReductionDb.size()) {
+                        meters->trackConsoleGateGainReductionDb[meterIt->second] =
+                            consoleProcessor.gateGainReductionDb();
+                    }
+                }
+            }
+        }
 
         bool routeProcessedWet = false;   // did an insert actually run on this block (vs dry)?
         if (!routeInserts.empty()) {
@@ -2220,7 +2280,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 processorInput.pan = automationLaneValueAt(*track, "track.pan", timelineSeconds, track->pan);
                 processorInput.panLaw = plan.panLaw;
                 processorInput.isMonoTrack = track->channelFormat == "mono";
-                processorInput.sends = track->sends;
+                processorInput.sends = automatedTrackSends(*track, timelineSeconds);
             }
             const auto processedRoute = processMixerRouteProcessors(processorInput);
             auto postProcessorFrame = processedRoute.postFader;

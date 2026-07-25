@@ -198,6 +198,28 @@ struct TrackInspector: View {
             stateButton("M", on: track.muted, onColor: Theme.Palette.orange) { engine.toggleTrackMute(track.id) }
             if track.kind.hasSolo {
                 stateButton("S", on: track.solo, onColor: Theme.Palette.yellow) { engine.toggleTrackSolo(track.id) }
+                    .contextMenu {
+                        Button {
+                            engine.setSoloSelectMode(.additive)
+                        } label: {
+                            if engine.soloSelectMode == .additive {
+                                Label("추가 (Additive)", systemImage: "checkmark")
+                            } else {
+                                Text("추가 (Additive)")
+                            }
+                        }
+                        Button {
+                            engine.setSoloSelectMode(.exclusive)
+                        } label: {
+                            if engine.soloSelectMode == .exclusive {
+                                Label("배타 (Exclusive)", systemImage: "checkmark")
+                            } else {
+                                Text("배타 (Exclusive)")
+                            }
+                        }
+                        Divider()
+                        Button("모든 솔로 해제") { engine.clearAllSolos() }
+                    }
                 stateButton("●", on: track.recordArmed, onColor: Theme.Palette.red) { engine.toggleTrackArm(track.id) }
                 stateButton("I", on: track.inputMonitoring, onColor: Theme.Palette.accent) {
                     engine.toggleTrackInputMonitoring(track.id)

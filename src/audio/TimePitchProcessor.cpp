@@ -202,6 +202,78 @@ std::vector<float> formantCorrect(const std::vector<float>& shifted, const std::
     return out;
 }
 
+
+std::vector<float> formantShift(const std::vector<float>& signal, int channels, double sampleRate,
+                                double semitones) {
+    if (channels < 1 || signal.empty() || std::abs(semitones) < 0.01) return signal;
+    const int64_t frames = static_cast<int64_t>(signal.size()) / channels;
+    if (frames < 4) return signal;
+    const double sr = sampleRate > 1000.0 ? sampleRate : 48000.0;
+    constexpr int N = 2048, hop = 512;
+    if (frames < N) return signal;
+    const int lifterQ = std::max(16, static_cast<int>(N * 600.0 / sr));
+    const double ratio = std::pow(2.0, std::clamp(semitones, -24.0, 24.0) / 12.0);
+
+    std::vector<float> window(N);
+    for (int i = 0; i < N; ++i) window[i] = 0.5f * (1.0f - std::cos(kTwoPi * i / (N - 1)));
+
+    std::vector<float> out(static_cast<size_t>(frames) * channels, 0.0f);
+    std::vector<float> norm(static_cast<size_t>(frames), 0.0f);
+    std::vector<std::complex<float>> sp(N);
+
+    for (int ch = 0; ch < channels; ++ch) {
+        std::fill(norm.begin(), norm.end(), 0.0f);
+        for (int64_t base = 0; base + N <= frames; base += hop) {
+            for (int i = 0; i < N; ++i) {
+                const int64_t idx = (base + i) * channels + ch;
+                sp[static_cast<size_t>(i)] =
+                    std::complex<float>(signal[static_cast<size_t>(idx)] * window[i], 0.0f);
+            }
+            fftRadix2(sp, -1);
+            const std::vector<float> env = cepstralEnvelope(sp, lifterQ);
+            // Only the lower half is meaningful; the upper half mirrors it, so warp the first half
+            // and mirror the gains back or the two halves would disagree and ring.
+            const int half = N / 2;
+            std::vector<float> gain(static_cast<size_t>(N), 1.0f);
+            for (int b = 0; b <= half; ++b) {
+                const double source = b / ratio;
+                float wanted;
+                if (source <= 0.0) {
+                    wanted = env[0];
+                } else if (source >= half) {
+                    // Above the top of the envelope there is nothing to move up from; fade the band
+                    // out rather than smearing the last bin across it.
+                    wanted = env[static_cast<size_t>(half)] * 0.25f;
+                } else {
+                    const int lo = static_cast<int>(source);
+                    const float frac = static_cast<float>(source - lo);
+                    wanted = env[static_cast<size_t>(lo)] * (1.0f - frac) +
+                             env[static_cast<size_t>(std::min(half, lo + 1))] * frac;
+                }
+                float g = wanted / (env[static_cast<size_t>(b)] + 1e-6f);
+                g = std::clamp(g, 0.0625f, 16.0f);   // ±24 dB
+                gain[static_cast<size_t>(b)] = g;
+                if (b > 0 && b < half) gain[static_cast<size_t>(N - b)] = g;
+            }
+            for (int b = 0; b < N; ++b) sp[static_cast<size_t>(b)] *= gain[static_cast<size_t>(b)];
+
+            fftRadix2(sp, +1);
+            const float invN = 1.0f / N;
+            for (int i = 0; i < N; ++i) {
+                const int64_t o = base + i;
+                out[static_cast<size_t>(o) * channels + ch] += sp[static_cast<size_t>(i)].real() * invN * window[i];
+                norm[static_cast<size_t>(o)] += window[i] * window[i];
+            }
+        }
+        for (int64_t i = 0; i < frames; ++i) {
+            const float w = norm[static_cast<size_t>(i)];
+            if (w > 1e-6f) out[static_cast<size_t>(i) * channels + ch] /= w;
+            else out[static_cast<size_t>(i) * channels + ch] = signal[static_cast<size_t>(i) * channels + ch];
+        }
+    }
+    return out;
+}
+
 std::vector<float> processTimeMapInterleaved(const std::vector<float>& interleaved, int channels,
                                              const TimePitchParams& params,
                                              const std::vector<double>& sourceAnchors,

@@ -559,6 +559,8 @@ public:
         copy.trackMeterNames = projectMeters_.trackNames;
         copy.trackPeakLeft = projectMeters_.trackPeakLeft;
         copy.trackPeakRight = projectMeters_.trackPeakRight;
+        copy.trackConsoleGainReductionDb = projectMeters_.trackConsoleGainReductionDb;
+        copy.trackConsoleGateGainReductionDb = projectMeters_.trackConsoleGateGainReductionDb;
         copy.playbackSeconds = static_cast<double>(playbackFrameForStatus_.load()) / std::max(1.0, sampleRateForStatus_.load());
         copy.requestedPerformanceCoreCount = std::max(1, settings_.requestedPerformanceCoreCount);
         copy.realtimeCallbackCount = realtimeCallbackCount_.load();
@@ -1105,6 +1107,30 @@ public:
         return updated;
     }
 
+    bool updateInstrumentComponentState(const std::string& trackName, size_t slotIndex, const std::string& componentStateBase64) {
+        if (trackName.empty() || componentStateBase64.empty()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(playbackMutex_);
+        // Same key the renderer prepares its instruments under: "<track>#I<slot+1>". We are on the
+        // main thread holding playbackMutex_, so the audio render is not mid-block — applying the
+        // patch to the live instance here (deactivate/setState/reactivate, no module reload) is the
+        // safe way to change program. Re-instantiating a workstation instrument on the audio thread
+        // is what stalled the render and dropped the sound on editor close.
+        const std::string processorKey = trackName + "#I" + std::to_string(slotIndex + 1);
+        auto it = projectRenderState_.instrumentProcessors.find(processorKey);
+        if (it == projectRenderState_.instrumentProcessors.end()) {
+            // Not prepared yet (added but never rendered): the deferred prepare applies the patch
+            // from the project field, so nothing to do and nothing lost.
+            status_.message = "Instrument patch stored; applies on first render.";
+            return false;
+        }
+        std::string applyMessage;
+        const bool applied = it->second.applyComponentState(componentStateBase64, applyMessage);
+        status_.message = applied ? "Applied instrument patch to the live voice." : applyMessage;
+        return applied;
+    }
+
     bool updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) {
         std::lock_guard<std::mutex> lock(playbackMutex_);
         if (settings_.monitorModules.empty()) {
@@ -1297,6 +1323,10 @@ private:
             projectMeters_.trackNames.push_back(track.name);
             projectMeters_.trackPeakLeft.push_back(0.0f);
             projectMeters_.trackPeakRight.push_back(0.0f);
+            // Same length as the peaks: the bridge reports MIN(all meter arrays), so a short
+            // console array reports zero meters for every track.
+            projectMeters_.trackConsoleGainReductionDb.push_back(0.0f);
+            projectMeters_.trackConsoleGateGainReductionDb.push_back(0.0f);
         }
     }
 
@@ -1652,6 +1682,7 @@ bool RealtimeAudioEngine::updateTrackRealtimeState(const std::string& trackName,
 bool RealtimeAudioEngine::updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateInstrumentComponentState(const std::string& trackName, size_t slotIndex, const std::string& componentStateBase64) { return impl_->updateInstrumentComponentState(trackName, slotIndex, componentStateBase64); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
 void RealtimeAudioEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) { impl_->setEditorInstrumentMonitor(active, trackName); }
@@ -1796,6 +1827,7 @@ public:
     bool updateMasterVst3Parameter(size_t, uint32_t, const std::string&, double) { return false; }
     bool updateTrackVst3Parameter(const std::string&, size_t, uint32_t, const std::string&, double) { return false; }
     bool updateInstrumentVst3Parameter(const std::string&, size_t, uint32_t, const std::string&, double) { return false; }
+    bool updateInstrumentComponentState(const std::string&, size_t, const std::string&) { return false; }
     bool updateMonitorSpeakerVst3Parameter(int, size_t, uint32_t, const std::string&, double) { return false; }
     void queueLiveMidiEvents(const std::string&, const std::vector<Vst3MidiEvent>&) {}
     void setEditorInstrumentMonitor(bool, const std::string&) {}
@@ -1870,6 +1902,7 @@ bool RealtimeAudioEngine::updateTrackRealtimeState(const std::string& trackName,
 bool RealtimeAudioEngine::updateMasterVst3Parameter(size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMasterVst3Parameter(insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateTrackVst3Parameter(const std::string& trackName, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateTrackVst3Parameter(trackName, insertIndex, parameterId, displayName, normalizedValue); }
 bool RealtimeAudioEngine::updateInstrumentVst3Parameter(const std::string& trackName, size_t slotIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateInstrumentVst3Parameter(trackName, slotIndex, parameterId, displayName, normalizedValue); }
+bool RealtimeAudioEngine::updateInstrumentComponentState(const std::string& trackName, size_t slotIndex, const std::string& componentStateBase64) { return impl_->updateInstrumentComponentState(trackName, slotIndex, componentStateBase64); }
 bool RealtimeAudioEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot, size_t insertIndex, uint32_t parameterId, const std::string& displayName, double normalizedValue) { return impl_->updateMonitorSpeakerVst3Parameter(speakerSlot, insertIndex, parameterId, displayName, normalizedValue); }
 void RealtimeAudioEngine::queueLiveMidiEvents(const std::string& trackName, const std::vector<Vst3MidiEvent>& events) { impl_->queueLiveMidiEvents(trackName, events); }
 void RealtimeAudioEngine::setEditorInstrumentMonitor(bool active, const std::string& trackName) { impl_->setEditorInstrumentMonitor(active, trackName); }

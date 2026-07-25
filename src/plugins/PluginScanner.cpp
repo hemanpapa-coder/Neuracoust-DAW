@@ -1,5 +1,6 @@
 #include "plugins/PluginScanner.h"
 #include "plugins/Vst3HostFoundation.h"
+#include "plugins/Vst3SdkAdapter.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cctype>
@@ -74,6 +75,26 @@ bool containsAny(const std::string& haystack, std::initializer_list<const char*>
         }
     }
     return false;
+}
+
+/// Reads the plug-in's moduleinfo.json (VST3 3.7+) and looks for an ARA Main Factory class. A file
+/// read — no plug-in code runs, which is what makes this safe to do for every plug-in in a scan.
+bool vst3ModuleInfoMentionsAra(const Vst3PluginDescriptor& descriptor) {
+    if (descriptor.moduleInfoPath.empty()) {
+        return false;
+    }
+    std::ifstream file(descriptor.moduleInfoPath, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return text.find("ARA Main Factory") != std::string::npos;
+}
+
+/// The plug-ins we already know are ARA, for the ones that ship no moduleinfo.json (Melodyne is one).
+bool pluginNameLooksLikeAra(const std::string& name) {
+    const auto text = lowerCopy(name);
+    return containsAny(text, {"melodyne", "celemony", "spectralayers", "revoice"});
 }
 
 std::string normalizedSearchText(std::string value) {
@@ -397,6 +418,15 @@ std::string inferPluginCandidateBrand(const std::string& name,
     if (containsAny(text, {"native instruments", "kontakt", "guitar rig"})) {
         return "Native Instruments";
     }
+    if (containsAny(metadataText, {"celemony", "melodyne"})) {
+        return "Celemony";
+    }
+    if (containsAny(metadataText, {"antares", "auto-tune", "autotune"})) {
+        return "Antares";
+    }
+    if (containsAny(text, {"synchro arts", "revoice", "vocalign"})) {
+        return "Synchro Arts";
+    }
     if (text.find("valhalla") != std::string::npos) {
         return "Valhalla DSP";
     }
@@ -451,7 +481,9 @@ std::string inferPluginCandidateCategory(const std::string& name) {
     if (containsAny(text, {"delay", "echo", "slap", "repeat", "timeless"})) {
         return "Delay";
     }
-    if (containsAny(text, {"pitch", "tune", "vocal", "doubler", "adt", "shift", "ovox", "morphoder", "bender"})) {
+    if (containsAny(text, {"pitch", "tune", "vocal", "doubler", "adt", "shift", "ovox", "morphoder", "bender",
+                           "melodyne", "celemony", "auto-tune", "autotune", "antares", "revoice", "vocalign",
+                           "waves tune", "little alterboy", "metatune", "graillon", "nectar"})) {
         return "Pitch / Vocal";
     }
     if (containsAny(text, {"channel strip", "channelstrip", "ssl ev2", "sslchannel", "sslgchannel", "console"})) {
@@ -822,18 +854,40 @@ std::vector<PluginCandidate> scanKnownPluginLocations(bool forceRescan) {
         if (path.empty() || !seenPaths.insert(seenKey).second) {
             continue;
         }
+        // A plug-in's own declared brand/category is used when it's meaningful, but many declare
+        // nothing useful — Melodyne shows up as brand "Unknown", category "Utility". When the
+        // declared value is that weak, infer from the name/vendor so the browser's Brand and
+        // Category facets actually group it (Melodyne → Celemony, Pitch / Vocal).
+        const auto isWeak = [](const std::string& value) {
+            const auto v = lowerCopy(value);
+            return v.empty() || v == "unknown" || v == "utility" || v == "general" ||
+                   v == "other" || v == "fx" || v == "effect" || v == "-";
+        };
+        const std::string inferMetadata = plugin.name + " " + plugin.vendor + " " + plugin.componentClassName;
+        const std::string brand = isWeak(plugin.brand)
+            ? inferPluginCandidateBrand(plugin.name, path, inferMetadata) : plugin.brand;
+        const std::string category = isWeak(plugin.category)
+            ? inferPluginCandidateCategory(inferMetadata) : plugin.category;
+        // ARA capability for the browser badge, WITHOUT executing plug-in code. Opening every one of
+        // the ~900 installed VST3s during a scan is both slow and unsafe — several vendors crash when
+        // loaded in-process, which is why isKnownUnsafeForInProcessVst3Host exists. So the scan reads
+        // moduleinfo.json when the plug-in ships one, and otherwise falls back to the known-name list.
+        // The authoritative factory probe (vst3AdvertisesAraFactory) runs later, for the single
+        // plug-in the user actually tries to insert.
+        const bool araCapable = vst3ModuleInfoMentionsAra(plugin) || pluginNameLooksLikeAra(plugin.name);
         candidates.push_back({
             plugin.name,
             path,
             "VST3",
             pluginScopeForPath(path),
-            plugin.brand,
-            plugin.category,
+            brand,
+            category,
             plugin.loadableBundle || std::filesystem::exists(path),
             plugin.name,
             false,
             plugin.componentClassCid,
-            plugin.componentClassName
+            plugin.componentClassName,
+            araCapable
         });
     }
     appendWavesProductAliases(candidates, seenPaths, vst3Plugins);

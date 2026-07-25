@@ -448,6 +448,11 @@ bool humanizeMidiRegion(ProjectDocument& project,
                         unsigned int seed,
                         std::vector<std::string>& changedNoteIds);
 bool deleteMidiRegion(ProjectDocument& project, const std::string& regionId);
+// Cubase-style Glue: combine two or more MIDI regions on the SAME track into one part. Every
+// source's notes, CC, pitch bend and program changes are rebased onto the merged part's timeline
+// (which spans the earliest start to the latest end); overlaps are preserved, not trimmed. Returns
+// the new region's id, or empty if fewer than two mergeable regions were given or they span tracks.
+std::string mergeMidiRegions(ProjectDocument& project, const std::vector<std::string>& regionIds);
 std::string addMidiNote(ProjectDocument& project,
                         const std::string& regionId,
                         int pitch,
@@ -536,6 +541,27 @@ bool setMidiNoteMuted(ProjectDocument& project,
 bool deleteMidiNote(ProjectDocument& project,
                     const std::string& regionId,
                     const std::string& noteId);
+// Cubase Key Editor functions. Each acts on the given notes, or on the WHOLE region when no ids are
+// given — the convention those functions follow.
+//
+/// Legato: stretch each note to meet the next one that starts later, less `gapBeats`.
+bool applyMidiLegato(ProjectDocument& project, const std::string& regionId,
+                     const std::vector<std::string>& noteIds, double gapBeats);
+/// Delete Overlaps: shorten a note that runs past the next note OF THE SAME PITCH.
+bool deleteMidiNoteOverlaps(ProjectDocument& project, const std::string& regionId,
+                            const std::vector<std::string>& noteIds);
+/// Fixed Lengths: set every target note to one length in beats.
+bool setMidiNoteLengths(ProjectDocument& project, const std::string& regionId,
+                        const std::vector<std::string>& noteIds, double lengthBeats);
+
+/// Cubase Glue for notes: joins the selected notes OF EACH PITCH into one note spanning from the
+/// earliest start to the latest end (gaps between them are absorbed). A chord's voices are glued
+/// separately. `survivingNoteIds` receives the kept note per pitch. False when fewer than two
+/// notes of any one pitch were selected.
+bool mergeMidiNotes(ProjectDocument& project,
+                    const std::string& regionId,
+                    const std::vector<std::string>& noteIds,
+                    std::vector<std::string>& survivingNoteIds);
 bool deleteMidiNotes(ProjectDocument& project,
                      const std::string& regionId,
                      const std::vector<std::string>& noteIds,

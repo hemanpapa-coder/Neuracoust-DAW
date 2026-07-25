@@ -111,6 +111,9 @@ struct TitleBar: View {
 
 struct TransportBar: View {
     @EnvironmentObject private var engine: EngineController
+    // The playhead moved off the engine object; observe it here so the timecode / bars-beats readout
+    // still updates during playback (without re-rendering the heavy dock, which no longer sees it).
+    @ObservedObject var clock: PlayheadClock
     @State private var editingPod: String?
     @State private var podDraft = ""
     @State private var barWidth: CGFloat = 0
@@ -173,66 +176,159 @@ struct TransportBar: View {
             transportKey("backward.fill") { engine.seek(engine.playheadSeconds - 2) }
             transportKey("forward.fill") { engine.seek(engine.playheadSeconds + 2) }
             transportKey("forward.end.fill") {}
-            // A green PLAY key, Sony-recorder style: lit bright green while playing, an
-            // unlit dark-green key when stopped (still clearly the green button).
-            transportKey(engine.transportRunning ? "pause.fill" : "play.fill",
-                         tint: engine.transportRunning ? Color.black.opacity(0.85) : Theme.Palette.green,
-                         keyFill: engine.transportRunning ? Theme.Palette.green : Theme.Palette.green.opacity(0.16),
-                         badge: engine.loopEnabled ? ("repeat", engine.transportRunning ? Theme.Palette.green : Theme.Palette.green) : nil) {
-                engine.togglePlay()
+            // The small lower keys make each transport mode visible and editable without
+            // requiring the user to discover a right-click menu (Harrison-style mode shelf).
+            VStack(spacing: 2) {
+                transportKey("stop.fill") { engine.stop() }
+                    .contextMenu {
+                        Text("정지 위치")
+                        Picker("정지 위치", selection: Binding(
+                            get: { engine.stopBehavior },
+                            set: { engine.stopBehavior = $0 }
+                        )) {
+                            ForEach(EngineController.StopBehavior.allCases) { Text($0.label).tag($0) }
+                        }
+                        Divider()
+                        Text("정지 후 인서트 DSP (Pro Tools HD 방식)")
+                        Picker("인서트 DSP", selection: Binding(
+                            get: { engine.insertTailOnStopSeconds },
+                            set: { engine.setInsertTailOnStopSeconds($0) }
+                        )) {
+                            Text("항상 켜짐 (고정 · DSP 계속 구동)").tag(-1.0)
+                            Text("끔 (즉시 컷)").tag(0.0)
+                            Text("2초 링아웃").tag(2.0)
+                            Text("5초 링아웃").tag(5.0)
+                            Text("10초 링아웃").tag(10.0)
+                        }
+                    }
+                transportOptionButton("Return",
+                                      selected: engine.stopBehavior == .returnToStart,
+                                      tint: Theme.Palette.accent) {
+                    engine.stopBehavior = engine.stopBehavior == .returnToStart ? .inPlace : .returnToStart
+                }
+                .help("Auto Return — 정지하면 재생을 시작한 위치로 돌아갑니다")
             }
-            // Right-click for the playback mode, the way Pro Tools does. Loop playback
-            // is the loop toggle, so the two always agree.
-            .contextMenu {
-                Text("재생 모드").font(.caption)
-                transportModeItem("일반 재생", selected: !engine.loopEnabled) { engine.setLoop(false) }
-                transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
-            }
-            transportKey("stop.fill") { engine.stop() }
+            VStack(spacing: 2) {
+                // A green PLAY key, Sony-recorder style: lit bright green while playing, an
+                // unlit dark-green key when stopped (still clearly the green button).
+                transportKey(engine.transportRunning ? "pause.fill" : "play.fill",
+                             tint: engine.transportRunning ? Color.black.opacity(0.85) : Theme.Palette.green,
+                             keyFill: engine.transportRunning ? Theme.Palette.green : Theme.Palette.green.opacity(0.16),
+                             badge: engine.loopEnabled ? ("repeat", Theme.Palette.green) : nil) {
+                    engine.togglePlay()
+                }
+                // Right-click remains as a fast expert path; the lower mode shelf is the
+                // discoverable path and always shows the current state.
                 .contextMenu {
-                    Text("정지 위치")
-                    Picker("정지 위치", selection: Binding(
-                        get: { engine.stopBehavior },
-                        set: { engine.stopBehavior = $0 }
-                    )) {
-                        ForEach(EngineController.StopBehavior.allCases) { Text($0.label).tag($0) }
-                    }
+                    Text("재생 모드").font(.caption)
+                    transportModeItem("일반 재생", selected: !engine.loopEnabled) { engine.setLoop(false) }
+                    transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
                     Divider()
-                    Text("정지 후 인서트 DSP (Pro Tools HD 방식)")
-                    Picker("인서트 DSP", selection: Binding(
-                        get: { engine.insertTailOnStopSeconds },
-                        set: { engine.setInsertTailOnStopSeconds($0) }
-                    )) {
-                        Text("항상 켜짐 (고정 · DSP 계속 구동)").tag(-1.0)
-                        Text("끔 (즉시 컷)").tag(0.0)
-                        Text("2초 링아웃").tag(2.0)
-                        Text("5초 링아웃").tag(5.0)
-                        Text("10초 링아웃").tag(10.0)
-                    }
+                    Button("프리/포스트롤 설정…") { engine.presentLoopRollSettings() }
+                    Text(String(format: "Pre %.3fs · Post %.3fs",
+                                engine.preRollSeconds, engine.postRollSeconds))
                 }
-            // Not a take recorder yet: it arms the input monitor path. Drawn hollow so
-            // it does not read as a transport that captures audio. Right-click picks the
-            // record mode the capture engine will use once it exists.
-            // A red RECORD key: lit bright red while armed, an unlit dark-red key otherwise.
-            transportKey("circle",
-                         tint: engine.recording ? Color.black.opacity(0.85) : Theme.Palette.red,
-                         keyFill: engine.recording ? Theme.Palette.red : Theme.Palette.red.opacity(0.16),
-                         badge: recordBadge) {
-                engine.toggleRecording()
+                Menu {
+                    transportModeItem("일반 재생", selected: !engine.loopEnabled) { engine.setLoop(false) }
+                    transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
+                    Divider()
+                    Button("프리/포스트롤 설정…") { engine.presentLoopRollSettings() }
+                } label: {
+                    transportOptionLabel(engine.loopEnabled ? "Loop" : "Normal",
+                                         selected: engine.loopEnabled,
+                                         tint: Theme.Palette.green)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("재생 모드")
             }
-            .help("입력 모니터 경로 (녹음 아님) · 우클릭으로 레코드 모드")
-            .contextMenu {
-                Text("레코드 모드").font(.caption)
-                ForEach(EngineController.RecordMode.allCases) { mode in
-                    transportModeItem(mode.label, selected: engine.recordMode == mode) {
-                        engine.setRecordMode(mode)
-                    }
+            VStack(spacing: 2) {
+                // A red RECORD key: lit bright red while recording, dark red otherwise.
+                transportKey("circle",
+                             tint: engine.recording ? Color.black.opacity(0.85) : Theme.Palette.red,
+                             keyFill: engine.recording ? Theme.Palette.red : Theme.Palette.red.opacity(0.16),
+                             badge: recordBadge) {
+                    engine.toggleRecording()
                 }
-                Divider()
-                Text("펀치/루프 범위는 루프 구간을 사용합니다")
-                Text("입력 캡처는 아직 구현되지 않았습니다 — 모드만 설정됩니다")
+                .help("녹음 · 우클릭 또는 아래 버튼으로 레코드 모드 선택")
+                .contextMenu {
+                    recordModeMenuItems
+                }
+                Menu {
+                    recordModeMenuItems
+                } label: {
+                    transportOptionLabel(recordModeShortLabel,
+                                         selected: engine.recordMode != .newTake,
+                                         tint: Theme.Palette.red)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("레코드 모드 / 기록할 MIDI 컨트롤러")
             }
         }
+    }
+
+    private var recordModeShortLabel: String {
+        switch engine.recordMode {
+        case .newTake: return "Take"
+        case .loop: return "Loop"
+        case .punch: return "Punch"
+        }
+    }
+
+    @ViewBuilder
+    private var recordModeMenuItems: some View {
+        Text("레코드 모드").font(.caption)
+        ForEach(EngineController.RecordMode.allCases) { mode in
+            transportModeItem(mode.label, selected: engine.recordMode == mode) {
+                engine.setRecordMode(mode)
+            }
+        }
+        Divider()
+        Menu("기록할 컨트롤러") {
+            // A keyboard sends far more than a part needs. Only what is ticked here
+            // is written into the take; the rest is still heard while playing.
+            Button {
+                engine.setRecordPitchBendEnabled(!engine.recordPitchBendEnabled)
+            } label: {
+                Label("피치벤드", systemImage: engine.recordPitchBendEnabled ? "checkmark" : "")
+            }
+            ForEach(EngineController.recordableControllers, id: \.number) { controller in
+                Button {
+                    engine.setRecordControllerEnabled(controller.number,
+                                                      !engine.recordControllerEnabled(controller.number))
+                } label: {
+                    Label(controller.label,
+                          systemImage: engine.recordControllerEnabled(controller.number) ? "checkmark" : "")
+                }
+            }
+        }
+        Divider()
+        Text("펀치/루프 범위는 루프 구간을 사용합니다")
+    }
+
+    private func transportOptionButton(_ title: String, selected: Bool, tint: Color,
+                                       action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            transportOptionLabel(title, selected: selected, tint: tint)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func transportOptionLabel(_ title: String, selected: Bool, tint: Color) -> some View {
+        Text(title)
+            .font(.system(size: 7.5, weight: .semibold))
+            .foregroundStyle(selected ? Color.black.opacity(0.82) : Theme.Palette.textFaint)
+            .lineLimit(1)
+            .frame(width: 28, height: 11)
+            .background(
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(selected ? tint : Theme.Palette.recess)
+                    .overlay(RoundedRectangle(cornerRadius: 2.5)
+                        .stroke(Theme.Palette.border, lineWidth: 0.5))
+            )
     }
 
     /// A flat context-menu item that shows a checkmark when selected — the Pro Tools
@@ -304,6 +400,12 @@ struct TransportBar: View {
         HStack(spacing: Theme.Space.sm) {
             toggle("Loop", isOn: engine.loopEnabled, tint: Theme.Palette.green,
                    icon: "repeat") { engine.toggleLoop() }
+            rollControl("Pre", seconds: engine.preRollSeconds, tint: Theme.Palette.green) {
+                engine.setLoopRoll(pre: $0, post: engine.postRollSeconds)
+            }
+            rollControl("Post", seconds: engine.postRollSeconds, tint: Theme.Palette.green) {
+                engine.setLoopRoll(pre: engine.preRollSeconds, post: $0)
+            }
             toggle("Click", isOn: engine.clickEnabled, tint: Theme.Palette.amber,
                    icon: "metronome") { engine.toggleClick() }
                 // Right-click: click resolution + record count-in (Pro Tools / Cubase style).
@@ -360,6 +462,15 @@ struct TransportBar: View {
                     countInButton("없음", 0)
                     countInButton("1마디", 1)
                     countInButton("2마디", 2)
+                    Divider()
+                    Text("오디오로 프린트")
+                    Button("전체 세션을 새 Metronome 트랙으로") {
+                        engine.printMetronomeToTrack(loopRangeOnly: false)
+                    }
+                    Button("루프/편집 범위를 새 Metronome 트랙으로") {
+                        engine.printMetronomeToTrack(loopRangeOnly: true)
+                    }
+                    .disabled(!engine.loopEnabled || engine.loopEndSeconds <= engine.loopStartSeconds)
                 }
             // Shuffle / Slip / Spot / Grid are a separate group (edit modes), so a divider.
             Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 18)
@@ -375,6 +486,40 @@ struct TransportBar: View {
     private func subdivisionButton(_ label: String, _ value: String) -> some View {
         Button { engine.setMetronomeSubdivision(value) } label: {
             Text(engine.metronomeSubdivision == value ? "✓ \(label)" : "    \(label)")
+        }
+    }
+
+    /// Always-visible Pro Tools-style pre/post-roll control: the key enables/disables it and the
+    /// adjacent numeric field edits seconds directly. Zero means off; enabling starts at one second.
+    private func rollControl(_ title: String, seconds: Double, tint: Color,
+                             set: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 2) {
+            Button(title) { set(seconds > 0 ? 0 : 1.0) }
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(seconds > 0 ? Color.black.opacity(0.85) : Theme.Palette.textSecondary)
+                .frame(width: 28, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button)
+                        .fill(seconds > 0 ? tint : Theme.Palette.button)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.border, lineWidth: 1))
+                )
+                .buttonStyle(.plain)
+            TextField("", text: Binding(
+                get: { String(format: "%.2f", seconds) },
+                set: { if let value = Double($0.replacingOccurrences(of: ",", with: ".")) {
+                    set(min(3600, max(0, value)))
+                }}
+            ))
+            .textFieldStyle(.plain)
+            .font(Theme.Font.mono(8))
+            .multilineTextAlignment(.trailing)
+            .frame(width: 34, height: 18)
+            .padding(.horizontal, 3)
+            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.Palette.recess))
+            Text("s")
+                .font(Theme.Font.mono(7))
+                .foregroundStyle(Theme.Palette.textSecondary.opacity(0.7))
         }
     }
 

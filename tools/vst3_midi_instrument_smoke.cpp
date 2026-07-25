@@ -1,4 +1,5 @@
 #include "audio/WavFile.h"
+#include "core/Base64.h"
 #include "plugins/Vst3HostFoundation.h"
 #include "plugins/Vst3SdkAdapter.h"
 
@@ -6,6 +7,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -146,6 +149,27 @@ int main(int argc, char** argv) {
     const double seconds = std::max(0.25, std::min(30.0, doubleArg(argc, argv, "--seconds", 2.0)));
     const bool allowUnsafe = hasArg(argc, argv, "--allow-unsafe-inprocess");
     const bool includeControls = hasArg(argc, argv, "--include-controls");
+    // A saved patch (raw VST3 component state, as the editor host writes it). Workstation
+    // instruments keep their program here and in no parameter, so this is the only way to
+    // render one on anything but its startup default.
+    const std::string stateFilePath = argValue(argc, argv, "--state-file");
+    // --param <id>:<normalized>, repeatable — renders through the same parameter queues the
+    // project's stored instrument parameters use.
+    std::vector<neuracoust::daw::Vst3ParameterValueState> parameters;
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (argv[index] == nullptr || std::string("--param") != argv[index]) {
+            continue;
+        }
+        const std::string spec = argv[index + 1] != nullptr ? argv[index + 1] : "";
+        const auto colon = spec.find(':');
+        if (colon == std::string::npos) {
+            continue;
+        }
+        neuracoust::daw::Vst3ParameterValueState parameter;
+        parameter.parameterId = static_cast<uint32_t>(std::strtoul(spec.substr(0, colon).c_str(), nullptr, 10));
+        parameter.normalizedValue = std::strtod(spec.substr(colon + 1).c_str(), nullptr);
+        parameters.push_back(parameter);
+    }
 
     if (pluginPath.empty() || pluginName.empty()) {
         std::cerr << "Usage: " << (argc > 0 ? argv[0] : "neuracoust_vst3_midi_instrument_smoke")
@@ -170,7 +194,117 @@ int main(int argc, char** argv) {
 
     const auto descriptor = neuracoust::daw::resolveVst3PluginDescriptorForInsert(pluginName, pluginPath);
     const auto events = makeProbeChord(sampleRate, seconds, includeControls);
-    const auto result = neuracoust::daw::processMidiInstrumentWithVst3(descriptor, events, output, maxBlock);
+    std::string stateBase64;
+    if (!stateFilePath.empty()) {
+        std::ifstream stateFile(stateFilePath, std::ios::binary);
+        if (!stateFile) {
+            std::cerr << "VST3i smoke failed: state file is missing at " << stateFilePath << "\n";
+            return 69;
+        }
+        const std::vector<char> bytes((std::istreambuf_iterator<char>(stateFile)),
+                                      std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
+            std::cerr << "VST3i smoke failed: state file is empty at " << stateFilePath << "\n";
+            return 69;
+        }
+        stateBase64 = neuracoust::daw::encodeBase64(bytes.data(), bytes.size());
+    }
+    // --reprepare reproduces the editor-close path: prepare a realtime instrument, process a
+    // block, then tear it down and re-prepare it again (as the render's cacheKey change does)
+    // and process once more. This is the sequence that ran on the audio thread when a patch
+    // was applied on editor close.
+    // --apply-live reproduces the NEW editor-close path: prepare the instrument once (default
+    // patch), process, then apply a new patch to the SAME live instance via applyComponentState
+    // — no teardown, no re-instantiate — and process again. This must not crash and the second
+    // block must still produce sound.
+    if (hasArg(argc, argv, "--apply-live")) {
+        neuracoust::daw::Vst3RealtimeProcessor processor;
+        std::string msg;
+        if (!processor.prepare(descriptor, sampleRate, maxBlock, msg)) {
+            std::cerr << "VST3i smoke failed: prepare: " << msg << "\n";
+            return 66;
+        }
+        std::vector<neuracoust::daw::Vst3MidiEvent> ev;
+        ev.push_back({0, 60, 100, 1, true});
+        std::string pmsg;
+        processor.processMidiInstrument(output.interleavedSamples.data(), maxBlock, ev, parameters, pmsg);
+        std::string applyMsg;
+        const bool applied = processor.applyComponentState(stateBase64, applyMsg);
+        std::cerr << "[apply-live] applyComponentState -> " << (applied ? "ok" : "no")
+                  << " (" << applyMsg << ")\n";
+        std::fill(output.interleavedSamples.begin(), output.interleavedSamples.end(), 0.0f);
+        auto r = processor.processMidiInstrument(output.interleavedSamples.data(), maxBlock, ev, parameters, pmsg);
+        const float pk = peakAbs(output.interleavedSamples);
+        std::cerr << "[apply-live] post-apply block processed=" << r.processed << " peak=" << pk << "\n";
+        if (!applied) { std::cerr << "VST3i smoke failed: patch not applied\n"; return 67; }
+        std::cout << "VST3i smoke apply-live ok peak=" << pk << "\n";
+        return 0;
+    }
+
+    if (hasArg(argc, argv, "--reprepare")) {
+        neuracoust::daw::Vst3RealtimeProcessor processor;
+        std::string msg;
+        std::cerr << "[reprepare] first prepare\n";
+        if (!processor.prepare(descriptor, sampleRate, maxBlock, msg, {}, false, stateBase64)) {
+            std::cerr << "VST3i smoke failed: first prepare: " << msg << "\n";
+            return 66;
+        }
+        std::vector<neuracoust::daw::Vst3MidiEvent> ev;
+        ev.push_back({0, 60, 100, 1, true});
+        std::string pmsg;
+        processor.processMidiInstrument(output.interleavedSamples.data(), maxBlock, ev, parameters, pmsg);
+        std::cerr << "[reprepare] reset + second prepare (this is the audio-thread teardown)\n";
+        processor.reset();
+        if (!processor.prepare(descriptor, sampleRate, maxBlock, msg, {}, false, stateBase64)) {
+            std::cerr << "VST3i smoke failed: second prepare: " << msg << "\n";
+            return 66;
+        }
+        processor.processMidiInstrument(output.interleavedSamples.data(), maxBlock, ev, parameters, pmsg);
+        std::cerr << "[reprepare] survived\n";
+        std::cout << "VST3i smoke reprepare survived\n";
+        return 0;
+    }
+
+    // --realtime-processor renders through Vst3RealtimeProcessor, the class the DAW's
+    // realtime mixer actually uses. It differs from the one-shot offline entry point in
+    // one way that matters here: after preparing, it reads the controller's live values
+    // and sends them in with the first block, so a patch restored into the controller is
+    // what the processor hears.
+    neuracoust::daw::Vst3ProcessResult result;
+    if (hasArg(argc, argv, "--realtime-processor")) {
+        neuracoust::daw::Vst3RealtimeProcessor processor;
+        std::string prepareMessage;
+        if (!processor.prepare(descriptor, sampleRate, maxBlock, prepareMessage, {}, false, stateBase64)) {
+            std::cerr << "VST3i smoke failed: " << prepareMessage << "\n";
+            return 66;
+        }
+        // The processor accepts no more than its prepared block, so walk the buffer the way
+        // the mixer does, re-basing each event onto the block it falls in.
+        const int totalFrames = static_cast<int>(output.frameCount());
+        for (int start = 0; start < totalFrames; start += maxBlock) {
+            const int frames = std::min(maxBlock, totalFrames - start);
+            std::vector<neuracoust::daw::Vst3MidiEvent> blockEvents;
+            for (const auto& event : events) {
+                if (event.frameOffset >= start && event.frameOffset < start + frames) {
+                    auto shifted = event;
+                    shifted.frameOffset = event.frameOffset - start;
+                    blockEvents.push_back(shifted);
+                }
+            }
+            std::string processMessage;
+            result = processor.processMidiInstrument(
+                output.interleavedSamples.data() + static_cast<size_t>(start) * 2,
+                frames, blockEvents, parameters, processMessage);
+            if (!result.processed) {
+                std::cerr << "VST3i smoke failed: " << processMessage << "\n";
+                return 66;
+            }
+        }
+        result.framesProcessed = totalFrames;
+    } else {
+        result = neuracoust::daw::processMidiInstrumentWithVst3(descriptor, events, output, maxBlock,
+                                                               parameters, stateBase64);
+    }
     if (!result.processed) {
         std::cerr << "VST3i smoke failed: " << result.message << "\n";
         return 66;
@@ -198,6 +332,7 @@ int main(int argc, char** argv) {
               << " latency=" << result.latencySamples
               << " tail=" << result.tailSamples
               << " class=" << result.className
-              << " controls=" << (includeControls ? "yes" : "no") << "\n";
+              << " controls=" << (includeControls ? "yes" : "no")
+              << " state=" << (stateBase64.empty() ? "none" : std::to_string(stateBase64.size()) + "b64") << "\n";
     return 0;
 }

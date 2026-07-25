@@ -4,6 +4,13 @@ import Foundation
 import ServiceManagement
 import SwiftUI
 
+/// The moving playhead, split off the main EngineController so its 30 Hz updates re-render ONLY the
+/// views that draw it (timeline, transport, piano roll) instead of the whole engine-observing UI.
+@MainActor
+final class PlayheadClock: ObservableObject {
+    @Published var seconds: Double = 0
+}
+
 /// Owns the C++ engine and drives every live readout from a 30 Hz poll of its
 /// status snapshot. The engine pushes nothing — there are no callbacks, no KVO,
 /// no notifications (docs/legacy-ui-contract.md §1).
@@ -12,6 +19,10 @@ import SwiftUI
 /// main-thread-only.
 @MainActor
 final class EngineController: ObservableObject {
+    struct MidiSurfaceEndpoint: Identifiable, Hashable {
+        let id: String
+        let name: String
+    }
     enum ViewTab: String, CaseIterable, Identifiable {
         case edit = "Edit"
         case mix = "Mix"
@@ -53,12 +64,32 @@ final class EngineController: ObservableObject {
     func resetDropoutCount() { lateWakeBaseline = lateWakeCount }
     @Published private(set) var deviceName = ""
     @Published private(set) var startupError: String?
+    @Published private(set) var huiInputs: [MidiSurfaceEndpoint] = []
+    @Published private(set) var huiOutputs: [MidiSurfaceEndpoint] = []
+    @Published private(set) var huiConnected = false
+    @Published private(set) var huiStatus = "연결 안 됨"
+    @Published var huiInputId = ""
+    @Published var huiOutputId = ""
+    private var huiReconnectTicks = 0
 
     /// Smoothed playhead. Between polls it advances on the wall clock; it only
     /// snaps back to the engine when the two disagree by more than
     /// `resyncThreshold`. Reading `playbackSeconds` straight from the snapshot
     /// makes the playhead step at 30 Hz.
-    @Published private(set) var playheadSeconds: Double = 0
+    ///
+    /// NOT @Published: it advances every poll during playback, and if it lived on this (god)
+    /// ObservableObject, every SwiftUI view observing the engine — the heavy MonitorDock, the mixer,
+    /// the inspector, none of which show the playhead — would re-layout 30×/s, a measured ~70 % main-
+    /// thread storm that stutters the timeline. Instead the 30 Hz value is mirrored onto the tiny
+    /// `playheadClock`, which ONLY the timeline / transport / piano-roll observe. Internal reads use
+    /// this plain field unchanged; writes go through `setPlayhead` so both stay in sync.
+    private(set) var playheadSeconds: Double = 0
+    /// The 30 Hz playhead, isolated so it re-renders only the views that draw it (see `playheadSeconds`).
+    let playheadClock = PlayheadClock()
+    private func setPlayhead(_ value: Double) {
+        playheadSeconds = value
+        if playheadClock.seconds != value { playheadClock.seconds = value }
+    }
 
     // UI state the engine knows nothing about.
     @Published var viewTab: ViewTab = .edit
@@ -73,6 +104,8 @@ final class EngineController: ObservableObject {
     /// The loop range doubles as the edit range, the way the old UI used it.
     @Published private(set) var loopStartSeconds: Double = 0
     @Published private(set) var loopEndSeconds: Double = 4
+    @Published private(set) var preRollSeconds: Double = 0
+    @Published private(set) var postRollSeconds: Double = 0
     /// The track lane a lane-dragged edit range belongs to (Pro Tools selector), for the highlight.
     /// nil = a ruler range that spans all lanes.
     @Published var editRangeLane: Int? = nil
@@ -280,6 +313,29 @@ final class EngineController: ObservableObject {
         /// rest are layers), all fed the same MIDI and summed. Empty when there's no instrument.
         var instrumentLayers: [InstrumentLayer] = []
         var sends: [TrackSend]
+        var consoleModel: String = "4000e"
+        var consoleModuleOrder: String = "filter,eq,gate,comp,saturator"
+        var consoleFilterEnabled = false
+        var consoleFilterCircuitMode = false
+        var consoleHighPassEnabled = false
+        var consoleLowPassEnabled = false
+        var consoleEqEnabled = false
+        var consoleEqCircuitMode = false
+        var consoleEqHfBell = false
+        var consoleEqLfBell = false
+        var consoleEqEMode = true
+        var consoleCompEnabled = false
+        var consoleCompCircuitMode = false
+        var consoleCompFastAttack = false
+        var consoleCompPeakMode = false
+        var consoleCompGainReductionDb: Float = 0
+        var consoleGateEnabled = false
+        var consoleGateCircuitMode = false
+        var consoleSaturatorEnabled = false
+        var consoleSaturatorCircuitMode = false
+        var consoleExpanderMode = true
+        var consoleGateFastAttack = false
+        var consoleGateGainReductionDb: Float = 0
 
         /// Plugin delay compensation applied to this track/bus, in samples (0 = none). Shown per
         /// strip when the mixer's PDC readout is on.
@@ -357,6 +413,9 @@ final class EngineController: ObservableObject {
         let category: String
         let format: String
         let path: String
+        /// An ARA plug-in (Melodyne and the like). Not a realtime effect — badged in the browser
+        /// and refused by the insert path until ARA is hosted.
+        var isAra: Bool = false
     }
 
     struct Facet: Identifiable {
@@ -373,6 +432,9 @@ final class EngineController: ObservableObject {
     @Published private(set) var pluginTargetTrack: Int?
     /// Set when the user tried to add an instrument as an insert (FX only) — the browser hints.
     @Published var instrumentOnInsertRejected = false
+    /// Why an insert-add was refused, shown in the plug-in browser next to the click. Cleared by
+    /// the browser after it has been read.
+    @Published var insertRejectedReason: String?
     /// When set, the plugin browser loads the picked instrument into this rack slot (a layer)
     /// instead of the primary slot 0. Cleared after the pick.
     private var pluginTargetInstrumentSlot: Int?
@@ -389,12 +451,20 @@ final class EngineController: ObservableObject {
 
     var pluginBrowserOpen: Bool { pluginTargetTrack != nil }
 
+    /// The drum MIDI library (browse + drag/insert). Indexed once, cached to disk.
+    let midiLibrary = MidiLibrary()
+    @Published var midiLibraryOpen = false
+    func openMidiLibrary() { midiLibrary.loadCacheIfAvailable(); midiLibraryOpen = true }
+    func closeMidiLibrary() { midiLibraryOpen = false }
+    func toggleMidiLibrary() { if midiLibraryOpen { midiLibraryOpen = false } else { openMidiLibrary() } }
+
     /// The scan costs ~90 ms over a thousand plug-ins, so it runs once and is cached
     /// in the engine. Reopening the browser reuses it.
     func openPluginBrowser(forTrack trackId: Int) {
         guard let handle else { return }
         if totalPluginCount == 0 {
             totalPluginCount = Int(nc_plugin_scan(handle))
+            araPluginCache = nil   // a rescan can change what is ARA-capable
             reloadFacets()
         } else if nc_plugin_locations_changed(handle) {
             // A plug-in was installed/updated/removed since the last scan — refresh so it
@@ -466,7 +536,8 @@ final class EngineController: ObservableObject {
                 brand: readEngineString { nc_plugin_brand(handle, i, $0, $1) },
                 category: readEngineString { nc_plugin_category(handle, i, $0, $1) },
                 format: readEngineString { nc_plugin_format(handle, i, $0, $1) },
-                path: readEngineString { nc_plugin_path(handle, i, $0, $1) }
+                path: readEngineString { nc_plugin_path(handle, i, $0, $1) },
+                isAra: nc_plugin_is_ara(handle, i)
             )
         }
         pluginMatchCount = count
@@ -563,6 +634,16 @@ final class EngineController: ObservableObject {
         } else {
             changed = nc_track_add_insert(handle, Int32(trackId), Int32(pluginIndex))
             addedFxInsert = changed
+            if !changed {
+                // A refusal worth explaining — e.g. an ARA plug-in kept out of the realtime chain.
+                // Shown in the browser itself, where the click happened: a status-strip line alone
+                // reads as "nothing happened".
+                let reason = readEngineString { nc_last_plugin_message(handle, $0, $1) }
+                if !reason.isEmpty {
+                    lastError = reason
+                    insertRejectedReason = reason
+                }
+            }
         }
         if changed {
             reloadTracks()
@@ -1010,7 +1091,116 @@ final class EngineController: ObservableObject {
     /// Separate a clip into 4 stems (Drums/Bass/Other/Vocals) with the bundled Demucs helper, spawned
     /// as a SUBPROCESS so LibTorch (and any crash) stays out of the audio process. On success each stem
     /// becomes a new audio track at the clip's start. Runs off the main thread; progress is published.
-    func separateClipStems(_ clipId: String) {
+    /// True when the optional 6-source model (guitar/piano too) has been bundled.
+    var stem6sAvailable: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/Contents/Resources/htdemucs_6s.pt")
+    }
+    /// True when the drum-split model (kick/snare/toms/cymbals) has been bundled.
+    var drumSplitAvailable: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/Contents/Resources/drumsep.pt")
+    }
+    /// True when the experimental orchestra-family model (strings/brass/woodwinds/…) has been bundled.
+    var orchestraSeparationAvailable: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/Contents/Resources/orchestra.pt")
+    }
+
+    /// Dispatch a stem-separation preset. Keeps the plain "all 4 parts" as the default; the rest let the
+    /// user pick which stems (Stem Magic style) or auto-keep only the parts that are actually present.
+    func separateClipStemsPreset(_ clipId: String, _ preset: String) {
+        switch preset {
+        case "configure": presentStemSeparationSettings(clipId)
+        case "karaoke": separateClipStems(clipId, stems: ["vocals", "accompaniment"])       // voice / instrumental
+        case "vocals":  separateClipStems(clipId, stems: ["vocals"])
+        case "drums":   separateClipStems(clipId, stems: ["drums"])
+        case "bass":    separateClipStems(clipId, stems: ["bass"])
+        case "other":   separateClipStems(clipId, stems: ["other"])
+        case "6s":      separateClipStems(clipId, skipSilent: true, modelName: "htdemucs_6s.pt")
+        // Drum split (kick/snare/토 ...). Run the drumsep model with --kind drum; the toms variant also
+        // fans the Toms stem out into pitch bands so different-pitch toms land on different tracks.
+        case "drums-split":      separateClipStems(clipId, skipSilent: true, modelName: "drumsep.pt", kind: "drum")
+        case "drums-split-toms": separateClipStems(clipId, skipSilent: true, modelName: "drumsep.pt", kind: "drum", splitToms: 3)
+        case "orchestra":        separateClipStems(clipId, skipSilent: true, modelName: "orchestra.pt", kind: "orchestra")
+        default:        separateClipStems(clipId)                                           // all native stems
+        }
+    }
+
+    /// Stem Magic-style progressive selection. The four main families are operational now; finer
+    /// families stay visible but disabled until their dedicated model is actually connected.
+    func presentStemSeparationSettings(_ clipId: String) {
+        let alert = NSAlert()
+        alert.messageText = "스템 분리"
+        alert.informativeText = "분리할 파트만 선택하세요. 선택한 클립 구간만 Metal로 처리합니다."
+        alert.addButton(withTitle: "Metal로 분리")
+        alert.addButton(withTitle: "취소")
+
+        let mode = NSPopUpButton()
+        mode.addItems(withTitles: ["선택한 파트", "보컬 / 반주 (2파트)"])
+        let vocals = NSButton(checkboxWithTitle: "보컬", target: nil, action: nil)
+        let drums = NSButton(checkboxWithTitle: "드럼", target: nil, action: nil)
+        let bass = NSButton(checkboxWithTitle: "베이스", target: nil, action: nil)
+        let other = NSButton(checkboxWithTitle: "그 외 / 악기", target: nil, action: nil)
+        [vocals, drums, bass, other].forEach { $0.state = .on }
+
+        let kick = NSButton(checkboxWithTitle: "    Kick", target: nil, action: nil)
+        let snare = NSButton(checkboxWithTitle: "Snare", target: nil, action: nil)
+        let toms = NSButton(checkboxWithTitle: "Tom", target: nil, action: nil)
+        let cymbals = NSButton(checkboxWithTitle: "Cymbal", target: nil, action: nil)
+        let drumDetail = NSStackView(views: [kick, snare, toms, cymbals])
+        drumDetail.orientation = .horizontal; drumDetail.spacing = 10
+        let hiHat = NSTextField(labelWithString: "    Hi-Hat은 현재 Cymbal에 포함")
+        hiHat.textColor = .tertiaryLabelColor
+        let guitar = NSButton(checkboxWithTitle: "    Guitar", target: nil, action: nil)
+        let piano = NSButton(checkboxWithTitle: "Piano", target: nil, action: nil)
+        let otherDetail = NSStackView(views: [guitar, piano])
+        otherDetail.orientation = .horizontal; otherDetail.spacing = 10
+        let futureOther = NSTextField(labelWithString: "    Organ · Strings · Brass · Winds · Synth: 전용 모델 연결 예정")
+        futureOther.textColor = .tertiaryLabelColor
+        let note = NSTextField(wrappingLabelWithString:
+            "세부 파트는 전용 모델이 연결되는 항목부터 활성화됩니다. 현재 빌드는 메인 4파트와 2파트를 실제 출력합니다.")
+        note.textColor = .secondaryLabelColor
+        note.font = .systemFont(ofSize: 10)
+
+        let stack = NSStackView(views: [
+            NSTextField(labelWithString: "출력 구성"), mode,
+            vocals, drums, drumDetail, hiHat, bass, other, otherDetail, futureOther, note
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.frame = NSRect(x: 0, y: 0, width: 430, height: 285)
+        note.preferredMaxLayoutWidth = 380
+        alert.accessoryView = stack
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        if mode.indexOfSelectedItem == 1 {
+            separateClipStems(clipId, stems: ["vocals", "accompaniment"])
+            return
+        }
+        var selected: [String] = []
+        if drums.state == .on { selected.append("drums") }
+        if bass.state == .on { selected.append("bass") }
+        if other.state == .on { selected.append("other") }
+        if vocals.state == .on { selected.append("vocals") }
+        guard !selected.isEmpty else {
+            stemSeparationStatus = "스템 분리: 하나 이상의 파트를 선택하세요"
+            return
+        }
+        let selectedDrums = [
+            kick.state == .on ? "kick" : nil,
+            snare.state == .on ? "snare" : nil,
+            toms.state == .on ? "toms" : nil,
+            cymbals.state == .on ? "cymbals" : nil
+        ].compactMap { $0 }
+        let selectedOther = [
+            guitar.state == .on ? "guitar" : nil,
+            piano.state == .on ? "piano" : nil
+        ].compactMap { $0 }
+        separateClipStems(clipId, stems: selected, drumDetails: selectedDrums, otherDetails: selectedOther)
+    }
+
+    func separateClipStems(_ clipId: String, stems: [String] = [], skipSilent: Bool = false,
+                           modelName: String? = nil, kind: String = "music", splitToms: Int = 0,
+                           drumDetails: [String] = [], otherDetails: [String] = []) {
         guard let handle, stemSeparationProgress == nil else { return }
         // Resolve the clip's source file + start time by id.
         var idx = -1
@@ -1023,26 +1213,45 @@ final class EngineController: ObservableObject {
         guard idx >= 0 else { return }
         var srcBuf = [CChar](repeating: 0, count: 1024)
         nc_clip_source_path(handle, Int32(idx), &srcBuf, srcBuf.count)
-        let sourcePath = String(cString: srcBuf)
+        let originalSourcePath = String(cString: srcBuf)
         let startSeconds = nc_clip_start_seconds(handle, Int32(idx))
-        guard !sourcePath.isEmpty else { return }
+        guard !originalSourcePath.isEmpty else { return }
 
-        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_stem_separator"
-        guard FileManager.default.isExecutableFile(atPath: helper) else {
-            stemSeparationStatus = "스템 분리 도구가 번들에 없습니다"
-            Diagnostics.shared.log("stem separation: helper not bundled at \(helper)")
+        let helper = Bundle.main.bundlePath + "/Contents/Resources/neuracoust_stem_mps.py"
+        let metalPythonCandidates = [
+            "/Volumes/Program Dev/Neuracoust Stem Magic (Metal)/.venv/bin/python",
+            "/Volumes/Program Dev/Neuracoust Stem Magic/.venv/bin/python"
+        ]
+        guard let metalPython = metalPythonCandidates.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }), FileManager.default.fileExists(atPath: helper) else {
+            stemSeparationStatus = "Stem Magic Metal 런타임을 찾을 수 없습니다"
+            Diagnostics.shared.log("stem separation: Metal runtime or script missing")
             return
         }
-        let prefix = URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
-        let outDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-stems-\(UUID().uuidString)")
+        let prefix = URL(fileURLWithPath: originalSourcePath).deletingPathExtension().lastPathComponent
+        let jobDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-stems-\(UUID().uuidString)")
+        let sourcePath = (jobDir as NSString).appendingPathComponent("selected-clip.wav")
+        let outDir = (jobDir as NSString).appendingPathComponent("output")
+        try? FileManager.default.createDirectory(atPath: jobDir, withIntermediateDirectories: true)
+        var exportError = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, sourcePath, &exportError, exportError.count) else {
+            stemSeparationStatus = "선택한 클립 구간을 준비하지 못했습니다: \(String(cString: exportError))"
+            return
+        }
 
         stemSeparationProgress = 0
         stemSeparationStatus = "스템 분리 준비 중…"
 
         DispatchQueue.global(qos: .userInitiated).async {
             let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: helper)
-            proc.arguments = [sourcePath, outDir, "--stem-prefix", prefix]
+            proc.executableURL = URL(fileURLWithPath: metalPython)
+            var args = [helper, sourcePath, outDir, "--stem-prefix", prefix]
+            if !stems.isEmpty { args += ["--stems", stems.joined(separator: ",")] }
+            if !drumDetails.isEmpty { args += ["--drum-detail", drumDetails.joined(separator: ",")] }
+            if !otherDetails.isEmpty { args += ["--other-detail", otherDetails.joined(separator: ",")] }
+            _ = skipSilent; _ = modelName; _ = kind; _ = splitToms
+            proc.arguments = args
             let pipe = Pipe()
             proc.standardOutput = pipe
             var stems: [(String, String)] = []
@@ -1090,17 +1299,270 @@ final class EngineController: ObservableObject {
             if !error.isEmpty { stemSeparationStatus = "스템 분리 실패: \(error)"; Diagnostics.shared.log("stem separation: \(error)") }
             return
         }
-        let koLabel = ["Drums": "드럼", "Bass": "베이스", "Other": "기타", "Vocals": "보컬"]
+        // Word-level map so compound names ("Toms Low", "HiHat") localize too — each space-separated
+        // token is translated and rejoined; an unknown token (e.g. a raw model name) passes through.
+        let koWord = ["Drums": "드럼", "Bass": "베이스", "Other": "그외", "Vocals": "보컬",
+                      "Other-Remainder": "그 외 나머지",
+                      "Guitar": "기타", "Piano": "피아노", "Accompaniment": "반주",
+                      "Kick": "킥", "Snare": "스네어", "Toms": "텀", "Tom": "텀",
+                      "Cymbals": "심벌", "HiHat": "하이햇", "Hihat": "하이햇",
+                      "Strings": "스트링", "Brass": "브라스", "Woodwinds": "목관", "Percussion": "퍼커션",
+                      "Low": "로우", "Mid": "미드", "High": "하이"]
+        func localize(_ n: String) -> String {
+            n.split(separator: " ").map { koWord[String($0)] ?? String($0) }.joined(separator: " ")
+        }
         var made = 0
         for (name, path) in stems {
             let trackIndex = nc_track_add_audio(handle)
             guard trackIndex >= 0 else { continue }
-            _ = renameTrack(Int(trackIndex), to: koLabel[name] ?? name)
+            _ = renameTrack(Int(trackIndex), to: localize(name))
             var err = [CChar](repeating: 0, count: 512)
             if nc_audio_import(handle, trackIndex, path, startSeconds, &err, err.count) { made += 1 }
         }
         reloadTracks(); reloadClips(); refreshHistory()
         stemSeparationStatus = "스템 분리 완료 — \(made)개 트랙 생성"
+    }
+
+    // MARK: Audio → MIDI
+
+    /// Convert a (usually stem-separated) audio clip into MIDI on a NEW instrument track: detect the
+    /// clip's notes and lay them into a MIDI region at the clip's start, so a bass / vocal / wind line
+    /// becomes playable, editable MIDI. Monophonic — CREPE if bundled (best on stem artifacts), else the
+    /// engine's YIN. Dense polyphony (piano/guitar chords) is approximated by its dominant line until a
+    /// polyphonic transcription model is added. Runs off the main thread; progress is published.
+    func convertClipToMidi(_ clipId: String) {
+        guard let handle, stemSeparationProgress == nil else { return }
+        // Detection fills engine->pitchEditNotes, which the pitch editor also owns — clobbering it while
+        // an editor session is open would corrupt its apply. Ask the user to close it first.
+        if pitchEditorClipId != nil {
+            stemSeparationStatus = "MIDI 변환: 먼저 피치 에디터를 닫아주세요"; return
+        }
+        var idx = -1
+        let count = Int(nc_clip_count(handle))
+        for i in 0..<count {
+            var id = [CChar](repeating: 0, count: 128)
+            nc_clip_id(handle, Int32(i), &id, id.count)
+            if String(cString: id) == clipId { idx = i; break }
+        }
+        guard idx >= 0 else { return }
+        let startSeconds = nc_clip_start_seconds(handle, Int32(idx))
+        var nameBuf = [CChar](repeating: 0, count: 256)
+        nc_clip_name(handle, Int32(idx), &nameBuf, nameBuf.count)
+        let clipName = String(cString: nameBuf)
+
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-midi-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let rawPath = (tmpDir as NSString).appendingPathComponent("clip.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, rawPath, &err, err.count) else {
+            stemSeparationStatus = "MIDI 변환 실패: 클립을 내보낼 수 없습니다"; return
+        }
+
+        stemSeparationProgress = 0
+        stemSeparationStatus = "MIDI 변환 준비 중…"
+
+        // Engine-YIN path (synchronous, no model): detect straight from the exported window.
+        guard crepeAvailable else {
+            nc_detect_notes_reset(handle)
+            _ = nc_detect_notes_add_from_file(handle, rawPath, 0)   // 0 = melodic (monophonic)
+            finishConvertToMidi(startSeconds: startSeconds, name: clipName)
+            return
+        }
+
+        // CREPE path: run the neural detector subprocess, segment its pitch track into the note cache.
+        let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_pitch_detector"
+        let modelPath = crepeModelPath
+        stemSeparationStatus = "MIDI 변환: 정밀 검출 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: helper)
+            proc.arguments = [rawPath, "--model", modelPath]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            var times: [Double] = [], hzs: [Double] = [], confs: [Double] = []
+            var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let d = fh.availableData
+                guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+                carry += s
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
+                    let p = line.split(separator: " ").map(String.init)
+                    if p.first == "PITCH", p.count >= 4, let t = Double(p[1]), let hz = Double(p[2]), let c = Double(p[3]) {
+                        times.append(t); hzs.append(hz); confs.append(c)
+                    }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async {
+                    guard let h = self.handle else { self.stemSeparationProgress = nil; return }
+                    nc_detect_notes_reset(h); _ = nc_detect_notes_add_from_file(h, rawPath, 0)   // fall back to YIN
+                    self.finishConvertToMidi(startSeconds: startSeconds, name: clipName)
+                }
+                return
+            }
+            proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                guard let h = self.handle else { self.stemSeparationProgress = nil; return }
+                if times.isEmpty {
+                    nc_detect_notes_reset(h); _ = nc_detect_notes_add_from_file(h, rawPath, 0)
+                } else {
+                    _ = times.withUnsafeBufferPointer { tp in hzs.withUnsafeBufferPointer { hp in confs.withUnsafeBufferPointer { cp in
+                        nc_segment_pitch_track(h, tp.baseAddress, hp.baseAddress, cp.baseAddress, Int32(times.count))
+                    }}}
+                }
+                self.finishConvertToMidi(startSeconds: startSeconds, name: clipName)
+            }
+        }
+    }
+
+    struct DetectedMidiNote { let startSec: Double; let durSec: Double; let midi: Int; let vel: Int }
+
+    /// Build the instrument track + MIDI region from the note cache the detector just filled. Main thread.
+    private func finishConvertToMidi(startSeconds: Double, name: String) {
+        stemSeparationProgress = nil
+        guard let handle else { return }
+        let noteCount = Int(nc_clip_note_count(handle))
+        guard noteCount > 0 else { stemSeparationStatus = "MIDI 변환: 검출된 노트가 없습니다"; return }
+
+        // Read notes (start/duration in seconds relative to the clip window, detected MIDI, confidence).
+        var detected: [DetectedMidiNote] = []
+        for i in 0..<noteCount {
+            let s = nc_clip_note_start_seconds(handle, Int32(i))
+            let d = max(0.02, nc_clip_note_duration_seconds(handle, Int32(i)))
+            let m = Int(nc_clip_note_detected_midi(handle, Int32(i)).rounded())
+            let conf = nc_clip_note_confidence(handle, Int32(i))
+            guard m >= 0 && m <= 127 else { continue }
+            let vel = min(120, max(40, Int(64 + conf * 56)))   // confidence → a musical velocity range
+            detected.append(DetectedMidiNote(startSec: s, durSec: d, midi: m, vel: vel))
+        }
+        buildMidiTrack(from: detected, startSeconds: startSeconds, name: name)
+    }
+
+    /// Lay a set of detected notes onto a NEW instrument track as one MIDI region. Shared by the
+    /// monophonic (cache) and polyphonic (basic-pitch) paths. Main thread.
+    private func buildMidiTrack(from detected: [DetectedMidiNote], startSeconds: Double, name: String) {
+        stemSeparationProgress = nil
+        guard let handle else { return }
+        guard !detected.isEmpty else { stemSeparationStatus = "MIDI 변환: 유효한 노트가 없습니다"; return }
+
+        let trackIndex = nc_track_add_instrument(handle)
+        guard trackIndex >= 0 else { stemSeparationStatus = "MIDI 변환 실패: 트랙 생성 불가"; return }
+        _ = renameTrack(Int(trackIndex), to: name.isEmpty ? "MIDI" : "\(name) MIDI")
+
+        let spanSeconds = max(1.0, (detected.map { $0.startSec + $0.durSec }.max() ?? 4.0))
+        var regionBuf = [CChar](repeating: 0, count: 128)
+        guard nc_midi_region_add(handle, trackIndex, startSeconds, spanSeconds, &regionBuf, regionBuf.count) else {
+            stemSeparationStatus = "MIDI 변환 실패: 리전 생성 불가"; reloadTracks(); return
+        }
+        let regionId = String(cString: regionBuf)
+
+        // Seconds → beats at the project tempo (region note times are beats from the region start).
+        let bps = Double(max(1, Int(nc_project_tempo_bpm(handle)))) / 60.0
+        var added = 0
+        for n in detected {
+            var nb = [CChar](repeating: 0, count: 128)
+            if nc_midi_note_add(handle, regionId, Int32(n.midi), n.startSec * bps, n.durSec * bps,
+                                Int32(n.vel), &nb, nb.count) { added += 1 }
+        }
+        reloadTracks(); reloadClips(); reloadMidiRegions(); refreshHistory()
+        stemSeparationStatus = "MIDI 변환 완료 — \(added)개 노트 (악기 트랙 생성, 악기를 로드하세요)"
+    }
+
+    /// True when the polyphonic transcriber (basic-pitch, a Python helper) can run: the script is bundled
+    /// and a python3 is on PATH. Whether `basic_pitch` itself is importable is checked at run time.
+    var basicPitchAvailable: Bool {
+        let script = Bundle.main.bundlePath + "/Contents/Resources/neuracoust_basic_pitch.py"
+        return FileManager.default.fileExists(atPath: script)
+            && (FileManager.default.isExecutableFile(atPath: "/usr/bin/python3")
+                || FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/python3"))
+    }
+
+    private var python3Path: String {
+        FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/python3")
+            ? "/opt/homebrew/bin/python3" : "/usr/bin/python3"
+    }
+
+    /// Polyphonic audio → MIDI: transcribe chords/piano/guitar with basic-pitch (Spotify's lightweight
+    /// note transcription), then lay every detected note onto a new instrument track. Off the main thread.
+    func convertClipToMidiPolyphonic(_ clipId: String) {
+        guard let handle, stemSeparationProgress == nil else { return }
+        if pitchEditorClipId != nil { stemSeparationStatus = "MIDI 변환: 먼저 피치 에디터를 닫아주세요"; return }
+        var idx = -1
+        let count = Int(nc_clip_count(handle))
+        for i in 0..<count {
+            var id = [CChar](repeating: 0, count: 128)
+            nc_clip_id(handle, Int32(i), &id, id.count)
+            if String(cString: id) == clipId { idx = i; break }
+        }
+        guard idx >= 0 else { return }
+        let startSeconds = nc_clip_start_seconds(handle, Int32(idx))
+        var nameBuf = [CChar](repeating: 0, count: 256)
+        nc_clip_name(handle, Int32(idx), &nameBuf, nameBuf.count)
+        let clipName = String(cString: nameBuf)
+
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-poly-midi-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let rawPath = (tmpDir as NSString).appendingPathComponent("clip.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, rawPath, &err, err.count) else {
+            stemSeparationStatus = "MIDI 변환 실패: 클립을 내보낼 수 없습니다"; return
+        }
+
+        let script = Bundle.main.bundlePath + "/Contents/Resources/neuracoust_basic_pitch.py"
+        let py = python3Path
+        stemSeparationProgress = 0
+        stemSeparationStatus = "폴리포닉 MIDI 변환 중… (basic-pitch)"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: py)
+            proc.arguments = [script, rawPath]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            let errPipe = Pipe(); proc.standardError = errPipe
+            var notes: [DetectedMidiNote] = []
+            var errMsg = ""
+            var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let d = fh.availableData
+                guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+                carry += s
+                while let nl = carry.firstIndex(of: "\n") {
+                    let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
+                    let p = line.split(separator: " ").map(String.init)
+                    if p.first == "NOTE", p.count >= 5, let pitch = Int(p[1]), let st = Double(p[2]),
+                       let du = Double(p[3]), let vel = Int(p[4]), pitch >= 0, pitch <= 127 {
+                        notes.append(DetectedMidiNote(startSec: st, durSec: max(0.02, du), midi: pitch,
+                                                      vel: min(127, max(1, vel))))
+                    } else if p.first == "ERROR" {
+                        errMsg = line.replacingOccurrences(of: "ERROR ", with: "")
+                    }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async {
+                    self.stemSeparationProgress = nil
+                    self.stemSeparationStatus = "폴리포닉 변환 실행 실패: \(error.localizedDescription)"
+                }
+                return
+            }
+            proc.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            if errMsg.isEmpty {
+                let e = errPipe.fileHandleForReading.readDataToEndOfFile()
+                if proc.terminationStatus != 0, let s = String(data: e, encoding: .utf8), !s.isEmpty {
+                    errMsg = s.contains("basic_pitch") ? "basic-pitch 미설치 (pip install basic-pitch)" : String(s.prefix(120))
+                }
+            }
+            DispatchQueue.main.async {
+                self.stemSeparationProgress = nil
+                if notes.isEmpty {
+                    self.stemSeparationStatus = errMsg.isEmpty ? "폴리포닉 변환: 검출된 노트가 없습니다"
+                        : "폴리포닉 변환 실패: \(errMsg)"
+                    return
+                }
+                self.buildMidiTrack(from: notes, startSeconds: startSeconds, name: clipName)
+            }
+        }
     }
 
     /// Neural noise-floor removal (Facebook DNS denoiser, bundled helper). Exports the clip's played
@@ -1183,9 +1645,204 @@ final class EngineController: ObservableObject {
         }
     }
 
+    // MARK: - ARA (Melodyne 등)
+
+    /// The installed ARA-capable plug-ins, as (name, path). Read from the full catalog, so it does
+    /// not disturb whatever filter the plug-in browser is showing.
+    ///
+    /// CACHED, and that is not an optimisation detail: the timeline asks for this inside its view
+    /// body, which SwiftUI re-evaluates on every poll tick, and answering means walking all ~1,000
+    /// scanned plug-ins and marshalling strings out of the engine 30 times a second. The answer only
+    /// changes when the plug-in scan does.
+    private var araPluginCache: [(name: String, path: String)]? = nil
+
+    func araPlugins() -> [(name: String, path: String)] {
+        if let araPluginCache { return araPluginCache }
+        guard let handle else { return [] }
+        let count = Int(nc_ara_plugin_count(handle))
+        let list = (0..<count).map { index in
+            let i = Int32(index)
+            return (name: readEngineString { nc_ara_plugin_name(handle, i, $0, $1) },
+                    path: readEngineString { nc_ara_plugin_path(handle, i, $0, $1) })
+        }.filter { !$0.name.isEmpty && !$0.path.isEmpty }
+        araPluginCache = list
+        return list
+    }
+
+    /// True when this clip already carries committed ARA edits — the menu says 편집 rather than 열기,
+    /// and offers to drop them.
+    func clipHasAraEdits(_ clipId: String) -> Bool {
+        guard let handle else { return false }
+        return nc_clip_has_ara_edits(handle, clipId)
+    }
+
+    var araEditorOpen: Bool { araEditor != nil }
+
+    /// Opens the plug-in's own editor over a clip. In-process — see AraEditorWindowController.
+    func openAraEditor(clipId: String, pluginName: String, pluginPath: String) {
+        guard let handle else { return }
+        guard araEditor == nil else {
+            stemSeparationStatus = "ARA 편집 창이 이미 열려 있습니다"
+            return
+        }
+        var error = [CChar](repeating: 0, count: 512)
+        guard nc_ara_open(handle, clipId, pluginName, pluginPath, &error, error.count) else {
+            let message = String(cString: error)
+            stemSeparationStatus = "ARA 열기 실패: \(message.isEmpty ? "알 수 없는 오류" : message)"
+            Diagnostics.shared.log("ara open: \(message)")
+            return
+        }
+
+        let editor = AraEditorWindowController()
+        let clipName = clips.first(where: { $0.id == clipId })?.name ?? clipId
+        let shown = editor.present(
+            title: "\(pluginName) — \(clipName)",
+            attach: { [weak self] view in
+                guard let self, let handle = self.handle else { return nil }
+                var width: Int32 = 0
+                var height: Int32 = 0
+                var attachError = [CChar](repeating: 0, count: 512)
+                guard nc_ara_attach_editor(handle, Unmanaged.passUnretained(view).toOpaque(),
+                                           &width, &height, &attachError, attachError.count) else {
+                    self.stemSeparationStatus = "ARA 에디터를 열지 못했습니다: \(String(cString: attachError))"
+                    return nil
+                }
+                return NSSize(width: CGFloat(width), height: CGFloat(height))
+            },
+            onApply: { [weak self] in self?.commitAraEdits() },
+            onCancel: { [weak self] in self?.cancelAraEdits() })
+
+        if shown {
+            araEditor = editor
+        } else {
+            nc_ara_close(handle)
+        }
+    }
+
+    /// Archives the plug-in's edits onto the clip and prints them into its audio. Blocking — the
+    /// render runs the plug-in over the whole clip — so the status line is set before it starts.
+    private func commitAraEdits() {
+        araEditor = nil
+        guard let handle else { return }
+        stemSeparationStatus = "ARA 편집을 적용하는 중…"
+        // Detach the editor NOW, synchronously: the caller tears the window down as soon as this
+        // returns, and the plug-in must be off that NSView before it goes.
+        nc_ara_detach_editor(handle)
+        // The render runs the plug-in over the whole clip and ARA is main-thread-only, so this
+        // blocks — there is no background version of it. Hand the run loop one turn first so the
+        // status line above is actually on screen before everything stops.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            var error = [CChar](repeating: 0, count: 512)
+            if nc_ara_commit(handle, &error, error.count) {
+                self.reloadClips(); self.refreshHistory()
+                self.stemSeparationStatus = "ARA 편집을 적용했습니다"
+            } else {
+                let message = String(cString: error)
+                self.stemSeparationStatus = "ARA 적용 실패: \(message.isEmpty ? "알 수 없는 오류" : message)"
+            }
+            nc_ara_close(handle)
+        }
+    }
+
+    private func cancelAraEdits() {
+        araEditor = nil
+        guard let handle else { return }
+        nc_ara_close(handle)
+        stemSeparationStatus = ""
+    }
+
+    /// Points the clip back at the audio it had before any ARA edit, and forgets the archive.
+    func clearAraEdits(_ clipId: String) {
+        guard let handle else { return }
+        var error = [CChar](repeating: 0, count: 512)
+        if nc_clip_clear_ara_edits(handle, clipId, &error, error.count) {
+            reloadClips(); refreshHistory()
+            stemSeparationStatus = "ARA 편집을 제거했습니다"
+        } else {
+            stemSeparationStatus = "ARA 편집 제거 실패: \(String(cString: error))"
+        }
+    }
+
     // MARK: - Pitch editor (Melodyne note mode + Serato anchor time-map mode)
 
-    enum PitchEditorMode: String, CaseIterable { case melodyne = "멜로다인", anchor = "세라토 앵커" }
+    enum PitchEditorMode: String, CaseIterable {
+        case melodyne = "멜로다인", anchor = "세라토 앵커"
+        // rawValue stays as the internal key (persisted); `title` is what the UI shows. The old
+        // labels named other companies' products — a note-based pitch editor and an anchor-based
+        // time-warp are what these actually are.
+        var title: String {
+            switch self {
+            case .melodyne: return "노트 편집"
+            case .anchor: return "타임 워프"
+            }
+        }
+    }
+    /// Melodyne's tool palette, reproduced. Melodyne groups these into six buttons where a
+    /// click-and-hold opens a fly-out of related tools; the same grouping is kept here (`group`),
+    /// so the toolbar shows six buttons and the sub-tools live in each button's menu.
+    ///
+    /// Every tool here is one the offline print actually performs — nothing is a placeholder.
+    enum PitchEditTool: String, CaseIterable {
+        case main = "메인"
+        case pitch = "피치"
+        case modulation = "모듈레이션"
+        case drift = "드리프트"
+        case formant = "포먼트"
+        case amplitude = "레벨"
+        case mute = "음소거"
+        case time = "타임"
+        case attack = "어택"
+        case separate = "분리"
+
+        /// Which toolbar button this tool lives under.
+        enum Group: String, CaseIterable {
+            case main = "메인", pitch = "피치", formant = "포먼트"
+            case amplitude = "레벨", time = "타임", separate = "분리"
+        }
+
+        var group: Group {
+            switch self {
+            case .main: return .main
+            case .pitch, .modulation, .drift: return .pitch
+            case .formant: return .formant
+            case .amplitude, .mute: return .amplitude
+            case .time, .attack: return .time
+            case .separate: return .separate
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .main: return "arrow.up.and.down.and.arrow.left.and.right"
+            case .pitch: return "music.note"
+            case .modulation: return "waveform"
+            case .drift: return "arrow.up.forward"
+            case .formant: return "waveform.path.ecg"
+            case .amplitude: return "speaker.wave.2"
+            case .mute: return "speaker.slash"
+            case .time: return "arrow.left.and.right"
+            case .attack: return "bolt.horizontal"
+            case .separate: return "scissors"
+            }
+        }
+
+        /// What dragging does with this tool held — the toolbar's tooltip.
+        var hint: String {
+            switch self {
+            case .main: return "잡은 위치가 결정: 가운데=이동, 위아래=음정, 가장자리=길이"
+            case .pitch: return "위아래로 끌어 음정만 바꿉니다 (반음 스냅)"
+            case .modulation: return "위아래로 끌어 그 음의 비브라토를 깊게/얕게 (0 = 완전히 곧게)"
+            case .drift: return "위아래로 끌어 그 음의 느린 피치 이동(스쿱/처짐)을 키우거나 줄입니다"
+            case .formant: return "위아래로 끌어 음색(포먼트)만 옮깁니다 — 음정은 그대로"
+            case .amplitude: return "위아래로 끌어 그 음만 크게/작게 (±24 dB)"
+            case .mute: return "클릭해 그 음을 껐다 켭니다"
+            case .time: return "좌우로 끌어 위치를, 가장자리를 끌어 길이를 바꿉니다"
+            case .attack: return "좌우로 끌어 어택을 날카롭게/부드럽게 (1.0 = 원본 그대로)"
+            case .separate: return "더블클릭한 자리에서 음을 둘로 자릅니다"
+            }
+        }
+    }
 
     // Melodyne-style detection modes. rawValue matches nc_clip_detect_notes's `mode` argument.
     enum DetectionMode: Int, CaseIterable { case melodic = 0, polyphonic = 1, percussive = 2
@@ -1198,12 +1855,33 @@ final class EngineController: ObservableObject {
         var durationSeconds: Double
         var detectedMidi: Double
         var offsetSemitones: Double
+        var timeOffsetSeconds: Double
+        var durationScale: Double
         var confidence: Double
+        var gainDb: Double = 0
+        var muted: Bool = false
+        var formantSemitones: Double = 0
+        var attackSpeed: Double = 1
+        var modulationScale: Double = 1
+        var driftScale: Double = 1
+        /// True when anything on this note has been touched — the view dims untouched blobs.
+        var edited: Bool {
+            abs(offsetSemitones) > 0.001 || abs(timeOffsetSeconds) > 0.0001 ||
+            abs(durationScale - 1) > 0.001 || abs(gainDb) > 0.01 || muted ||
+            abs(formantSemitones) > 0.01 || abs(attackSpeed - 1) > 0.01 ||
+            abs(modulationScale - 1) > 0.01 || abs(driftScale - 1) > 0.01
+        }
         var editedMidi: Double { detectedMidi + offsetSemitones }
+        var editedStartSeconds: Double { startSeconds + timeOffsetSeconds }
+        var editedDurationSeconds: Double { durationSeconds * durationScale }
     }
 
     @Published var pitchEditorClipId: String? = nil
+    /// Waveform amplitude in the pitch editor. Scales the DRAWN signal only — the view zoom scales
+    /// the screen; this is for reading a quiet passage's shape while editing.
+    @Published var pitchWaveformGain: Double = 1.0
     @Published var pitchEditorMode: PitchEditorMode = .melodyne
+    @Published var pitchEditTool: PitchEditTool = .main
     @Published var detectionMode: DetectionMode = .melodic
     @Published var useCrepe: Bool = false   // CREPE neural detection (precise, async) vs built-in YIN
     @Published var useCrepeTiny: Bool = false  // tiny model: ~40x smaller, much faster, slightly less accurate
@@ -1226,7 +1904,11 @@ final class EngineController: ObservableObject {
         return (useCrepeTiny && crepeTinyAvailable) ? res + "crepe_tiny.pt" : res + "crepe_full.pt"
     }
     @Published private(set) var pitchEditorClipDuration: Double = 1.0
+    @Published private(set) var pitchEditorClipStartSeconds: Double = 0.0
+    @Published var pitchEditorTimelineSync: Bool = true
+    let pitchEditorClock = PlayheadClock()
     @Published private(set) var pitchNotes: [PitchNote] = []
+    private var pitchDetectionGeneration = 0
     @Published private(set) var pitchClipPeaks: [SIMD2<Float>] = []   // (min,max) per column, clip window
     // Percussive mode: transient index → its new (dragged) start time in seconds.
     @Published var percussiveTimeEdits: [Int: Double] = [:]
@@ -1238,6 +1920,9 @@ final class EngineController: ObservableObject {
     /// Open the editor for a clip: cache its detected notes (Melodyne) and clip length (both modes).
     func openPitchEditor(_ clipId: String) {
         guard let handle else { return }
+        // Opening from a clip's context menu establishes that clip as the editor
+        // owner. A previous track's asynchronous analysis must never remain visible.
+        selectedClipIds = [clipId]
         pitchEditorClipId = clipId
         timeMapAnchors = []
         pitchEditTimeRatio = 1.0
@@ -1249,6 +1934,7 @@ final class EngineController: ObservableObject {
             nc_clip_id(handle, Int32(i), &id, id.count)
             if String(cString: id) == clipId {
                 pitchEditorClipDuration = max(0.1, nc_clip_duration_seconds(handle, Int32(i)))
+                pitchEditorClipStartSeconds = nc_clip_start_seconds(handle, Int32(i))
                 loadClipWaveform(clipIndex: i)
                 break
             }
@@ -1295,6 +1981,10 @@ final class EngineController: ObservableObject {
 
     private func reloadDetectedNotes(_ clipId: String) {
         guard let handle else { return }
+        pitchDetectionGeneration &+= 1
+        nc_detect_notes_reset(handle)
+        nc_detect_notes_bind_clip(handle, clipId)
+        pitchNotes = []
         percussiveTimeEdits = [:]
         // Polyphonic = separate the clip (Demucs) then detect each part — async, off the main thread.
         if detectionMode == .polyphonic { redetectPolyphonic(clipId); return }
@@ -1308,6 +1998,7 @@ final class EngineController: ObservableObject {
     /// its pitch track, and segment it (same Viterbi + segmenter as YIN). Falls back to YIN on failure.
     private func redetectWithCrepe(_ clipId: String) {
         guard let handle else { return }
+        let generation = pitchDetectionGeneration
         let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_pitch_detector"
         let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-crepe-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
@@ -1340,11 +2031,15 @@ final class EngineController: ObservableObject {
                 }
             }
             do { try proc.run() } catch {
-                DispatchQueue.main.async { self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache() }
+                DispatchQueue.main.async {
+                    guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
+                    self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache()
+                }
                 return
             }
             proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
+                guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
                 self.stemSeparationProgress = nil
                 guard let h = self.handle, !times.isEmpty else {
                     if let h = self.handle { _ = nc_clip_detect_notes(h, clipId, 0); self.loadNotesFromCache() }
@@ -1370,19 +2065,99 @@ final class EngineController: ObservableObject {
                                    durationSeconds: nc_clip_note_duration_seconds(handle, Int32(i)),
                                    detectedMidi: nc_clip_note_detected_midi(handle, Int32(i)),
                                    offsetSemitones: nc_clip_note_offset_semitones(handle, Int32(i)),
-                                   confidence: nc_clip_note_confidence(handle, Int32(i))))
+                                   timeOffsetSeconds: nc_clip_note_time_offset_seconds(handle, Int32(i)),
+                                   durationScale: nc_clip_note_duration_scale(handle, Int32(i)),
+                                   confidence: nc_clip_note_confidence(handle, Int32(i)),
+                                   gainDb: nc_clip_note_gain_db(handle, Int32(i)),
+                                   muted: nc_clip_note_muted(handle, Int32(i)),
+                                   formantSemitones: nc_clip_note_formant_semitones(handle, Int32(i)),
+                                   attackSpeed: nc_clip_note_attack_speed(handle, Int32(i)),
+                                   modulationScale: nc_clip_note_modulation_scale(handle, Int32(i)),
+                                   driftScale: nc_clip_note_drift_scale(handle, Int32(i))))
         }
         pitchNotes = notes
     }
 
     /// True polyphonic detection: export the clip window, run the Demucs helper on it, then detect
-    /// melodic notes in each PITCHED stem (skip drums) and merge — so a chord shows every part's pitch.
-    /// Falls back to melodic-on-the-mix if the separator isn't bundled.
+    /// simultaneous pitches with Basic Pitch. If that optional model is unavailable, fall back to
+    /// Demucs-assisted per-part detection (better than mix-level YIN, but not chord-complete).
     private func redetectPolyphonic(_ clipId: String) {
         guard let handle else { return }
+        let generation = pitchDetectionGeneration
+        let script = Bundle.main.bundlePath + "/Contents/Resources/neuracoust_basic_pitch.py"
+        guard FileManager.default.fileExists(atPath: script) else {
+            redetectPolyphonicByStems(clipId); return
+        }
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-poly-pitch-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        let rawPath = (tmpDir as NSString).appendingPathComponent("clip.wav")
+        var err = [CChar](repeating: 0, count: 512)
+        guard nc_clip_export_raw_window(handle, clipId, rawPath, &err, err.count) else {
+            redetectPolyphonicByStems(clipId); return
+        }
+        stemSeparationProgress = 0
+        stemSeparationStatus = "폴리포닉 화음 분석 중…"
+        let py = python3Path
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: py)
+            proc.arguments = [script, rawPath]
+            let pipe = Pipe(); proc.standardOutput = pipe
+            var found: [DetectedMidiNote] = []
+            var carry = ""
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let data = fh.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                carry += text
+                while let newline = carry.firstIndex(of: "\n") {
+                    let line = String(carry[..<newline])
+                    carry = String(carry[carry.index(after: newline)...])
+                    let p = line.split(separator: " ").map(String.init)
+                    if p.first == "NOTE", p.count >= 5,
+                       let midi = Int(p[1]), let start = Double(p[2]),
+                       let duration = Double(p[3]), let velocity = Int(p[4]) {
+                        found.append(DetectedMidiNote(startSec: start, durSec: duration,
+                                                      midi: midi, vel: velocity))
+                    }
+                }
+            }
+            do { try proc.run() } catch {
+                DispatchQueue.main.async {
+                    guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
+                    self.redetectPolyphonicByStems(clipId)
+                }
+                return
+            }
+            proc.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
+                guard proc.terminationStatus == 0, !found.isEmpty, let h = self.handle else {
+                    self.redetectPolyphonicByStems(clipId); return
+                }
+                nc_detect_notes_reset(h)
+                for note in found {
+                    nc_detect_notes_add_note(h, note.startSec, note.durSec, Double(note.midi),
+                                             Double(note.vel) / 127.0)
+                }
+                nc_detect_notes_bind_clip(h, clipId)
+                self.stemSeparationProgress = nil
+                self.loadNotesFromCache()
+                self.stemSeparationStatus = "폴리포닉 화음 분석 완료 — \(self.pitchNotes.count)개 노트"
+            }
+        }
+    }
+
+    private func redetectPolyphonicByStems(_ clipId: String) {
+        guard let handle else { return }
+        let generation = pitchDetectionGeneration
         let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_stem_separator"
         guard FileManager.default.isExecutableFile(atPath: helper) else {
-            _ = nc_clip_detect_notes(handle, clipId, 0); loadNotesFromCache(); return
+            stemSeparationProgress = nil
+            _ = nc_clip_detect_notes(handle, clipId, 1)
+            loadNotesFromCache()
+            stemSeparationStatus = "내장 폴리포닉 분석 완료 — \(pitchNotes.count)개 노트"
+            return
         }
         let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-poly-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
@@ -1409,25 +2184,32 @@ final class EngineController: ObservableObject {
                     let line = String(carry[carry.startIndex..<nl]); carry = String(carry[carry.index(after: nl)...])
                     let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
                     if parts.first == "PROGRESS", parts.count > 1, let p = Double(parts[1]) {
-                        DispatchQueue.main.async { self.stemSeparationProgress = p; self.stemSeparationStatus = "폴리포닉 분석 중… \(Int(p * 100))%" }
+                        DispatchQueue.main.async {
+                            guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
+                            self.stemSeparationProgress = p; self.stemSeparationStatus = "폴리포닉 분석 중… \(Int(p * 100))%"
+                        }
                     } else if parts.first == "STEM", parts.count >= 3 { stems.append((parts[1], parts[2])) }
                 }
             }
             do { try proc.run() } catch {
-                DispatchQueue.main.async { self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache() }
+                DispatchQueue.main.async {
+                    guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
+                    self.stemSeparationProgress = nil; _ = nc_clip_detect_notes(handle, clipId, 0); self.loadNotesFromCache()
+                }
                 return
             }
             proc.waitUntilExit(); pipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
+                guard self.pitchEditorClipId == clipId, self.pitchDetectionGeneration == generation else { return }
                 self.stemSeparationProgress = nil
                 guard let h = self.handle else { return }
                 nc_detect_notes_reset(h)
-                for (name, path) in stems where name != "Drums" {   // detect pitch on the pitched parts
-                    _ = nc_detect_notes_add_from_file(h, path, 0)   // melodic per stem
+                for (name, path) in stems where name != "Drums" {
+                    _ = nc_detect_notes_add_from_file(h, path, 1)
                 }
                 nc_detect_notes_bind_clip(h, clipId)
                 self.loadNotesFromCache()
-                self.stemSeparationStatus = "폴리포닉 분석 완료 — \(self.pitchNotes.count)개 노트"
+                self.stemSeparationStatus = "폴리포닉 보조 분석 완료 — \(self.pitchNotes.count)개 노트"
             }
         }
     }
@@ -1438,6 +2220,90 @@ final class EngineController: ObservableObject {
         let snapped = semitones.rounded()
         nc_clip_note_set_offset(handle, Int32(index), snapped)
         pitchNotes[index].offsetSemitones = snapped
+    }
+
+    func setPitchNoteTimeOffset(_ index: Int, seconds: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let note = pitchNotes[index]
+        let clamped = min(pitchEditorClipDuration - note.startSeconds - note.durationSeconds,
+                          max(-note.startSeconds, seconds))
+        nc_clip_note_set_time_offset(handle, Int32(index), clamped)
+        pitchNotes[index].timeOffsetSeconds = clamped
+    }
+
+    func setPitchNoteDurationScale(_ index: Int, scale: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(4.0, max(0.25, scale))
+        nc_clip_note_set_duration_scale(handle, Int32(index), clamped)
+        pitchNotes[index].durationScale = clamped
+    }
+
+    func setPitchNoteGainDb(_ index: Int, gainDb: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(24.0, max(-24.0, gainDb))
+        nc_clip_note_set_gain_db(handle, Int32(index), clamped)
+        pitchNotes[index].gainDb = clamped
+    }
+
+    func setPitchNoteMuted(_ index: Int, muted: Bool) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        nc_clip_note_set_muted(handle, Int32(index), muted)
+        pitchNotes[index].muted = muted
+    }
+
+    func setPitchNoteFormant(_ index: Int, semitones: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(12.0, max(-12.0, semitones))
+        nc_clip_note_set_formant_semitones(handle, Int32(index), clamped)
+        pitchNotes[index].formantSemitones = clamped
+    }
+
+    func setPitchNoteAttackSpeed(_ index: Int, speed: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(4.0, max(0.25, speed))
+        nc_clip_note_set_attack_speed(handle, Int32(index), clamped)
+        pitchNotes[index].attackSpeed = clamped
+    }
+
+    func setPitchNoteModulation(_ index: Int, scale: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(4.0, max(0.0, scale))
+        nc_clip_note_set_modulation_scale(handle, Int32(index), clamped)
+        pitchNotes[index].modulationScale = clamped
+    }
+
+    func setPitchNoteDrift(_ index: Int, scale: Double) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        let clamped = min(4.0, max(0.0, scale))
+        nc_clip_note_set_drift_scale(handle, Int32(index), clamped)
+        pitchNotes[index].driftScale = clamped
+    }
+
+    /// Melodyne's per-blob reset: everything about this note back to as detected.
+    func resetPitchNote(_ index: Int) {
+        guard let handle, index >= 0, index < pitchNotes.count else { return }
+        nc_clip_note_reset(handle, Int32(index))
+        pitchNotes[index].offsetSemitones = 0
+        pitchNotes[index].timeOffsetSeconds = 0
+        pitchNotes[index].durationScale = 1
+        pitchNotes[index].gainDb = 0
+        pitchNotes[index].muted = false
+        pitchNotes[index].formantSemitones = 0
+        pitchNotes[index].attackSpeed = 1
+        pitchNotes[index].modulationScale = 1
+        pitchNotes[index].driftScale = 1
+    }
+
+    /// Every note back to as detected — the "다시 처음부터" the toolbar offers.
+    func resetAllPitchNotes() {
+        guard let handle else { return }
+        for index in pitchNotes.indices { nc_clip_note_reset(handle, Int32(index)) }
+        loadNotesFromCache()
+    }
+
+    func splitPitchNote(_ index: Int, at localSeconds: Double) {
+        guard let handle, nc_clip_note_split(handle, Int32(index), localSeconds) else { return }
+        loadNotesFromCache()
     }
 
     /// Apply the Melodyne per-note edits — renders a new WAV and repoints the clip.
@@ -1496,6 +2362,91 @@ final class EngineController: ObservableObject {
     }
 
     private var pitchPreviewSound: NSSound?
+    private var pitchPreviewEngine: AVAudioEngine?
+    private var pitchPreviewPlayer: AVAudioPlayerNode?
+    private var pitchPreviewTimer: Timer?
+
+    /// Play one region through the same physical CoreAudio device selected by the DAW.
+    /// NSSound always follows the macOS default output, which made note clicks appear
+    /// silent whenever the DAW was using an interface such as UNiTE-2.
+    /// The level a pitch-editor preview should play at, as a linear gain.
+    ///
+    /// Previews render to a temp WAV and play through their OWN AVAudioEngine, which bypasses the
+    /// mixer entirely — so at unity they came out far louder than the same audio during playback
+    /// (the monitor alone sits at -12 dB here). Re-apply what the signal would have passed through:
+    /// the clip's gain, its track's fader, and the monitor volume.
+    private var pitchPreviewGain: Float {
+        var db = monitorVolumeDb
+        if let clipId = pitchEditorClipId, let clip = clips.first(where: { $0.id == clipId }) {
+            db += clip.gainDb
+            if let track = tracks.first(where: { $0.name == clip.trackName }) {
+                db += track.volumeDb
+                if track.muted { return 0 }
+            }
+        }
+        return max(0, min(1, powf(10, db / 20)))
+    }
+
+    private func playPitchPreviewFile(_ path: String, start: Double, duration: Double) -> Bool {
+        do {
+            let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+            let format = file.processingFormat
+            let startFrame = max(0, min(file.length, AVAudioFramePosition(start * format.sampleRate)))
+            let available = max(0, file.length - startFrame)
+            let requested = AVAudioFrameCount(max(1, duration * format.sampleRate))
+            let frameCount = min(AVAudioFrameCount(clamping: available), requested)
+            guard frameCount > 0 else { return false }
+
+            let audioEngine = AVAudioEngine()
+            let player = AVAudioPlayerNode()
+            audioEngine.attach(player)
+            audioEngine.connect(player, to: audioEngine.mainMixerNode, format: format)
+
+            // The project stores CoreAudio's device UID. Translate it to AudioDeviceID
+            // and bind this short-lived preview engine before starting it.
+            if !currentOutputDeviceId.isEmpty, let unit = audioEngine.outputNode.audioUnit {
+                var uid: CFString = currentOutputDeviceId as CFString
+                var device: AudioDeviceID = 0
+                var address = AudioObjectPropertyAddress(
+                    mSelector: kAudioHardwarePropertyDeviceForUID,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain)
+                var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
+                let lookupStatus = withUnsafeMutablePointer(to: &uid) { uidPointer in
+                    withUnsafeMutablePointer(to: &device) { devicePointer in
+                        var translation = AudioValueTranslation(
+                            mInputData: UnsafeMutableRawPointer(uidPointer),
+                            mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+                            mOutputData: UnsafeMutableRawPointer(devicePointer),
+                            mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size))
+                        return AudioObjectGetPropertyData(
+                            AudioObjectID(kAudioObjectSystemObject), &address,
+                            0, nil, &size, &translation)
+                    }
+                }
+                if lookupStatus == noErr,
+                   device != 0 {
+                    var selected = device
+                    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                         kAudioUnitScope_Global, 0, &selected,
+                                         UInt32(MemoryLayout<AudioDeviceID>.size))
+                }
+            }
+
+            // Match playback level: this engine is outside the mixer, so the gain the signal would
+            // have seen there is applied here instead.
+            audioEngine.mainMixerNode.outputVolume = pitchPreviewGain
+            player.scheduleSegment(file, startingFrame: startFrame, frameCount: frameCount, at: nil)
+            try audioEngine.start()
+            player.play()
+            pitchPreviewEngine = audioEngine
+            pitchPreviewPlayer = player
+            return true
+        } catch {
+            Diagnostics.shared.log("pitch audition output: \(error.localizedDescription)")
+            return false
+        }
+    }
 
     /// Render the current pitch-editor result to a temp WAV and play it (system playback, not through
     /// the engine) so the user can hear the edit before committing. Works for both modes.
@@ -1516,10 +2467,73 @@ final class EngineController: ObservableObject {
         }
         guard ok else { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("preview: \(m)") }; return }
         pitchPreviewSound = NSSound(contentsOfFile: tmp, byReference: true)
+        pitchPreviewSound?.volume = pitchPreviewGain
         pitchPreviewSound?.play()
     }
 
     func stopPitchPreview() { pitchPreviewSound?.stop() }
+
+    /// Audition one detected event from the RENDERED edit result. In synced mode the main
+    /// timeline follows the preview, but the engine's original clip must not be played:
+    /// doing that made a moved blob still sound at its old pitch.
+    func auditionPitchEvent(localStart: Double, duration: Double) {
+        let start = min(pitchEditorClipDuration, max(0, localStart))
+        let length = max(0.08, min(max(0.08, duration), pitchEditorClipDuration - start))
+        pitchPreviewTimer?.invalidate(); pitchPreviewTimer = nil
+        pitchPreviewPlayer?.stop(); pitchPreviewEngine?.stop()
+        pitchPreviewPlayer = nil; pitchPreviewEngine = nil
+        pitchPreviewSound?.stop()
+        if pitchEditorTimelineSync {
+            auditionStopWork?.cancel()
+            // Stop any original-project playback before the rendered edit preview.
+            setTransport(running: false)
+            seek(pitchEditorClipStartSeconds + start)
+        }
+        guard let handle, let clipId = pitchEditorClipId else { return }
+        let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-event-preview-\(UUID().uuidString).wav")
+        var err = [CChar](repeating: 0, count: 512)
+        let ok = nc_clip_export_note_edits(handle, clipId, tmp, &err, err.count)
+        guard ok else {
+            Diagnostics.shared.log("pitch audition render: \(String(cString: err))")
+            return
+        }
+        if !playPitchPreviewFile(tmp, start: start, duration: length) {
+            // Last-resort fallback for machines where a second CoreAudio client cannot
+            // open the selected interface.
+            guard let sound = NSSound(contentsOfFile: tmp, byReference: true) else { return }
+            pitchPreviewSound = sound
+            sound.volume = pitchPreviewGain
+            sound.currentTime = start
+            sound.play()
+        }
+        let began = CACurrentMediaTime()
+        pitchEditorClock.seconds = start
+        pitchPreviewTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                let elapsed = CACurrentMediaTime() - began
+                let local = min(self.pitchEditorClipDuration, start + elapsed)
+                self.pitchEditorClock.seconds = local
+                if self.pitchEditorTimelineSync {
+                    // Keep the engine's stopped playhead (and therefore the main timeline)
+                    // aligned with the independently rendered preview.
+                    self.seek(self.pitchEditorClipStartSeconds + local)
+                }
+                if elapsed >= length {
+                    self.pitchPreviewPlayer?.stop(); self.pitchPreviewEngine?.stop()
+                    self.pitchPreviewPlayer = nil; self.pitchPreviewEngine = nil
+                    self.pitchPreviewSound?.stop()
+                    timer.invalidate(); self.pitchPreviewTimer = nil
+                }
+            }
+        }
+    }
+
+    func setPitchEditorPosition(_ localSeconds: Double) {
+        let local = min(pitchEditorClipDuration, max(0, localSeconds))
+        pitchEditorClock.seconds = local
+        if pitchEditorTimelineSync { seek(pitchEditorClipStartSeconds + local) }
+    }
 
     /// Percussive timing: record a transient's new position (dragged horizontally).
     func setTransientTime(_ index: Int, _ seconds: Double) {
@@ -1548,7 +2562,12 @@ final class EngineController: ObservableObject {
         else { let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("percussive timing: \(m)") } }
     }
 
-    func closePitchEditor() { pitchPreviewSound?.stop(); pitchEditorClipId = nil; pitchNotes = []; percussiveTimeEdits = [:] }
+    func closePitchEditor() {
+        pitchDetectionGeneration &+= 1
+        pitchPreviewTimer?.invalidate(); pitchPreviewTimer = nil
+        pitchPreviewSound?.stop()
+        pitchEditorClipId = nil; pitchNotes = []; percussiveTimeEdits = [:]
+    }
 
     /// The monitor listen state, mirroring the engine's `monitorStationListenMode`
     /// ("LR"/"L"/"R"/"M"/"S") plus mono and phase inverts. Not four exclusive modes:
@@ -1620,6 +2639,10 @@ final class EngineController: ObservableObject {
     /// System-wide keypad capture: drive monitor volume / transport from the numeric keypad even
     /// when another app is frontmost. Needs the Accessibility permission. Persisted per machine.
     @Published private(set) var keypadCaptureEnabled = false
+    /// The user's requested state is kept separately from the live event-tap state. A rebuilt app
+    /// can temporarily lose Accessibility permission; keeping this true lets the DAW re-arm the
+    /// tap automatically as soon as the user returns from System Settings.
+    @Published private(set) var keypadCaptureRequested = false
     private let keypadCapture = GlobalKeypadCapture()
     /// A/B *listening* state: false = hearing the DAW master, true = hearing the reference tap
     /// (other apps). Only meaningful while `referenceArmed` is on.
@@ -1699,6 +2722,10 @@ final class EngineController: ObservableObject {
     @Published private(set) var spectrumMid: Float = 0
     @Published private(set) var spectrumHigh: Float = 0
     @Published private(set) var wakeJitterUs: Double = 0
+    /// Reference-tap ("다른 앱") FIFO faults. The jitter figure above is the OUTPUT render thread
+    /// only — a tap capture that starves or overflows crackles while jitter reads clean. This is
+    /// that blind spot made visible.
+    @Published private(set) var referenceTapFaults: Int = 0
     @Published private(set) var remoteDspActive = false
 
     // DSP core allocation (a QoS hint the engine applies to its realtime thread).
@@ -1742,6 +2769,9 @@ final class EngineController: ObservableObject {
     /// `NCEngine` is opaque in C, so Swift imports the handle as an OpaquePointer.
     /// Marked nonisolated so `deinit` can free it; nothing else ever holds it.
     private nonisolated(unsafe) var handle: OpaquePointer?
+    /// The live ARA editor window, if one is open. Held so a second menu pick cannot open a rival
+    /// session over the same clip, and so the window survives the call that created it.
+    fileprivate var araEditor: AraEditorWindowController?
     private var timer: Timer?
     /// A held key must not wait a 33 ms UI tick to sound. This second timer only drains the
     /// live-MIDI queue into the instruments, ~240 Hz, so monitoring latency drops toward one
@@ -1832,13 +2862,17 @@ final class EngineController: ObservableObject {
         loopEnabled = nc_project_loop_enabled(handle)
         loopStartSeconds = nc_project_loop_start(handle)
         loopEndSeconds = nc_project_loop_end(handle)
+        preRollSeconds = nc_project_pre_roll(handle)
+        postRollSeconds = nc_project_post_roll(handle)
         reloadTracks()
         reloadClips()
         reloadMonitorState()
+        reloadRecordControllerState()
         nc_history_reset(handle)
         refreshHistory()
         installKeyMonitor()
         installMenuTrackingObserver()
+        installKeypadPermissionObserver()
         installPluginEditorTransportObserver()
 
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
@@ -1861,6 +2895,117 @@ final class EngineController: ObservableObject {
         self.midiPumpTimer = midiTimer
 
         restorePersistedSettings()
+        refreshHuiDevices()
+        restoreHuiConnection()
+    }
+
+    func refreshHuiDevices() {
+        guard let handle else { return }
+        huiInputs = (0..<Int(nc_hui_input_count(handle))).map { index in
+            MidiSurfaceEndpoint(
+                id: readEngineString { nc_hui_input_id(handle, Int32(index), $0, $1) },
+                name: readEngineString { nc_hui_input_name(handle, Int32(index), $0, $1) })
+        }
+        huiOutputs = (0..<Int(nc_hui_output_count(handle))).map { index in
+            MidiSurfaceEndpoint(
+                id: readEngineString { nc_hui_output_id(handle, Int32(index), $0, $1) },
+                name: readEngineString { nc_hui_output_name(handle, Int32(index), $0, $1) })
+        }
+    }
+
+    func selectHuiInput(_ id: String) {
+        huiInputId = id
+        UserDefaults.standard.set(id, forKey: "nc.hui.input")
+        reconnectHuiIfReady()
+    }
+
+    func selectHuiOutput(_ id: String) {
+        huiOutputId = id
+        UserDefaults.standard.set(id, forKey: "nc.hui.output")
+        reconnectHuiIfReady()
+    }
+
+    func connectHui() {
+        guard let handle, !huiInputId.isEmpty, !huiOutputId.isEmpty else {
+            huiStatus = "HUI 입력과 출력을 모두 선택하세요."
+            return
+        }
+        UserDefaults.standard.set(true, forKey: "nc.hui.enabled")
+        huiConnected = huiInputId.withCString { input in
+            huiOutputId.withCString { output in nc_hui_connect(handle, input, output) }
+        }
+        huiStatus = readEngineString { nc_hui_status(handle, $0, $1) }
+    }
+
+    func disconnectHui() {
+        guard let handle else { return }
+        nc_hui_disconnect(handle)
+        huiConnected = false
+        huiStatus = "연결 안 됨"
+        UserDefaults.standard.set(false, forKey: "nc.hui.enabled")
+    }
+
+    private func reconnectHuiIfReady() {
+        if !huiInputId.isEmpty, !huiOutputId.isEmpty { connectHui() }
+    }
+
+    private func restoreHuiConnection() {
+        let defaults = UserDefaults.standard
+        huiInputId = defaults.string(forKey: "nc.hui.input") ?? ""
+        huiOutputId = defaults.string(forKey: "nc.hui.output") ?? ""
+        if defaults.bool(forKey: "nc.hui.enabled") { connectHui() }
+    }
+
+    private func serviceHui(_ handle: OpaquePointer) {
+        let connected = nc_hui_connected(handle)
+        if connected != huiConnected {
+            huiConnected = connected
+            huiStatus = readEngineString { nc_hui_status(handle, $0, $1) }
+        }
+        guard connected else {
+            huiReconnectTicks += 1
+            if huiReconnectTicks >= 60, UserDefaults.standard.bool(forKey: "nc.hui.enabled") {
+                huiReconnectTicks = 0
+                refreshHuiDevices()
+                if huiInputs.contains(where: { $0.id == huiInputId }),
+                   huiOutputs.contains(where: { $0.id == huiOutputId }) {
+                    connectHui()
+                }
+            }
+            return
+        }
+        huiReconnectTicks = 0
+        var event = NCHuiEvent()
+        var changedMix = false
+        while nc_hui_next_event(handle, &event) {
+            let id = Int(event.trackIndex)
+            switch event.type {
+            case 1 where id >= 0:
+                setTrackVolume(id, max(-60, min(12, event.value * 72 - 60)))
+                changedMix = true
+            case 2 where id >= 0:
+                let current = tracks.first(where: { $0.id == id })?.pan ?? 0
+                setTrackPan(id, max(-1, min(1, current + event.value * 0.02)))
+                changedMix = true
+            case 3 where event.pressed && id >= 0:
+                selectedTrackId = id
+                selectedMixerTrackIds = [id]
+            case 4 where event.pressed && id >= 0:
+                if let track = tracks.first(where: { $0.id == id }) {
+                    applyTrackFlag([id], flag: 0, value: !track.muted)
+                }
+            case 5 where event.pressed && id >= 0: toggleTrackSolo(id)
+            case 6 where event.pressed && id >= 0: toggleTrackArm(id)
+            case 7 where event.pressed: setTransport(running: true)
+            case 8 where event.pressed: stop()
+            case 9 where event.pressed: toggleRecording()
+            case 10 where event.pressed: rewind()
+            case 11 where event.pressed: seek(playheadSeconds + 5)
+            default: break
+            }
+        }
+        if changedMix { recordGesture("Mackie HUI") }
+        nc_hui_sync(handle, transportRunning, recording)
     }
 
     /// The old UI drove every shortcut from an NSEvent monitor rather than menu key
@@ -1906,6 +3051,26 @@ final class EngineController: ObservableObject {
             }
         }
         menuTrackingObservers = [begin, end]
+    }
+
+    /// A development rebuild changes the app's code identity and macOS may ask for Accessibility
+    /// again. When the user comes back from System Settings, retry immediately instead of requiring
+    /// another click on the monitor dock.
+    private func installKeypadPermissionObserver() {
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self,
+                      self.keypadCaptureRequested,
+                      !self.keypadCaptureEnabled,
+                      GlobalKeypadCapture.accessibilityTrusted(prompt: false) else { return }
+                self.setKeypadCapture(true)
+            }
+        }
+        menuTrackingObservers.append(observer)
     }
 
     /// An out-of-process plugin editor's window steals key events, so its host process
@@ -2146,7 +3311,7 @@ final class EngineController: ObservableObject {
     func rewind() {
         guard let handle else { return }
         nc_engine_rewind(handle)
-        playheadSeconds = 0
+        setPlayhead(0)
         transportWallClockBase = 0
         transportWallClockStart = CACurrentMediaTime()
     }
@@ -2155,7 +3320,7 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         let clamped = max(0, seconds)
         nc_engine_seek(handle, clamped)
-        playheadSeconds = clamped
+        setPlayhead(clamped)
         transportWallClockBase = clamped
         transportWallClockStart = CACurrentMediaTime()
     }
@@ -2276,10 +3441,13 @@ final class EngineController: ObservableObject {
                 if recordingTapSource { nc_monitor_set_tap_input_monitor(handle, true) }
                 lastError = "녹음 (펀치 인)…"
             }
-            // Begin a MIDI take on the first armed instrument/MIDI track (or the selected one)
-            // and roll the transport so the playhead advances under the recorded notes.
+            // Begin a MIDI take on the first RECORD-ARMED instrument/MIDI track, and roll the
+            // transport so the playhead advances under the recorded notes. Recording requires the
+            // track's Record-arm (R), deliberately NOT falling back to the merely-selected track:
+            // selecting an instrument track lets you PLAY it (the live-MIDI monitor routes to the
+            // selected track), but capturing to a take is a separate, explicit choice — arming it.
+            // Recording onto a track the user only clicked to audition was a surprise capture.
             let target = tracks.first { $0.recordArmed && ($0.kind == .instrument || $0.kind == .midi) }
-                ?? tracks.first { $0.id == selectedTrackId && ($0.kind == .instrument || $0.kind == .midi) }
             if let target {
                 let recordAt = playheadSeconds
                 if countInBars > 0 {
@@ -2494,6 +3662,35 @@ final class EngineController: ObservableObject {
         nc_project_set_loop_enabled(handle, loopEnabled)
     }
 
+    func setLoopRoll(pre: Double, post: Double) {
+        guard let handle else { return }
+        nc_project_set_pre_post_roll(handle, pre, post)
+        preRollSeconds = nc_project_pre_roll(handle)
+        postRollSeconds = nc_project_post_roll(handle)
+        refreshHistory()
+    }
+
+    func presentLoopRollSettings() {
+        let alert = NSAlert()
+        alert.messageText = "루프 프리/포스트롤"
+        alert.informativeText = "루프 구간 앞뒤에 함께 반복할 시간을 초 단위로 입력하세요."
+        alert.addButton(withTitle: "적용")
+        alert.addButton(withTitle: "취소")
+        let form = NSGridView(views: [
+            [NSTextField(labelWithString: "프리롤"), NSTextField(string: String(format: "%.3f", preRollSeconds)),
+             NSTextField(labelWithString: "초")],
+            [NSTextField(labelWithString: "포스트롤"), NSTextField(string: String(format: "%.3f", postRollSeconds)),
+             NSTextField(labelWithString: "초")]
+        ])
+        form.column(at: 1).width = 100
+        form.rowSpacing = 8
+        alert.accessoryView = form
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let preField = form.cell(atColumnIndex: 1, rowIndex: 0).contentView as? NSTextField,
+              let postField = form.cell(atColumnIndex: 1, rowIndex: 1).contentView as? NSTextField else { return }
+        setLoopRoll(pre: max(0, preField.doubleValue), post: max(0, postField.doubleValue))
+    }
+
     /// Loop record needs the loop on; punch reads its range from the loop/edit range.
     /// Selecting loop record turns the loop on so the two agree.
     func setRecordMode(_ mode: RecordMode) {
@@ -2505,6 +3702,29 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         clickEnabled.toggle()
         nc_engine_set_metronome_enabled(handle, clickEnabled)
+    }
+
+    /// Commits the current click timbre, accents, tempo/signature maps and groove to a
+    /// real mono WAV clip on a newly-created Metronome audio track.
+    func printMetronomeToTrack(loopRangeOnly: Bool) {
+        guard let handle else { return }
+        var message = [CChar](repeating: 0, count: 512)
+        let ok = message.withUnsafeMutableBufferPointer {
+            nc_metronome_print_to_track(handle, loopRangeOnly, $0.baseAddress, $0.count)
+        }
+        let text = String(cString: message)
+        guard ok else {
+            lastError = text.isEmpty ? "메트로놈 트랙을 만들지 못했습니다." : text
+            return
+        }
+        reloadTracks()
+        reloadClips()
+        refreshHistory()
+        if let printed = tracks.last(where: { $0.name.hasPrefix("Metronome") }) {
+            selectedTrackId = printed.id
+            selectedMixerTrackIds = [printed.id]
+        }
+        lastError = text.isEmpty ? "메트로놈 오디오 트랙을 만들었습니다." : text
     }
 
     /// The click resolution (자동/♩/♪/♬). Re-asserts the enabled state so it takes effect live.
@@ -2717,7 +3937,28 @@ final class EngineController: ObservableObject {
                               gainDb: nc_track_send_gain_db(handle, i, Int32(slot)),
                               pan: nc_track_send_pan(handle, i, Int32(slot)),
                               preFader: nc_track_send_pre_fader(handle, i, Int32(slot)))
-                }
+                },
+                consoleModel: readEngineString { nc_track_console_model(handle, i, $0, $1) },
+                consoleModuleOrder: readEngineString { nc_track_console_module_order(handle, i, $0, $1) },
+                consoleFilterEnabled: "filterEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleFilterCircuitMode: "filterCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleHighPassEnabled: "highPassEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleLowPassEnabled: "lowPassEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleEqEnabled: "eqEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleEqCircuitMode: "eqCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleEqHfBell: "eqHfBell".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleEqLfBell: "eqLfBell".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleEqEMode: "eqEMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleCompEnabled: "compEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleCompCircuitMode: "compCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleCompFastAttack: "compFastAttack".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleCompPeakMode: "compPeakMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleGateEnabled: "gateEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleGateCircuitMode: "gateCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleSaturatorEnabled: "saturatorEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleSaturatorCircuitMode: "saturatorCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleExpanderMode: "expanderMode".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleGateFastAttack: "gateFastAttack".withCString { nc_track_console_bool(handle, i, $0) }
             )
         }
         // Per-track PDC (samples), so each strip can show how much it's delayed to stay aligned.
@@ -2748,6 +3989,28 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_track_set_pan(handle, Int32(id), pan)
         syncTrack(id)
+    }
+
+    func consoleValue(_ id: Int, _ parameter: String) -> Float {
+        guard let handle else { return 0 }
+        return parameter.withCString { nc_track_console_value(handle, Int32(id), $0) }
+    }
+
+    func setConsoleBool(_ id: Int, _ parameter: String, _ value: Bool) {
+        guard let handle else { return }
+        parameter.withCString { nc_track_set_console_bool(handle, Int32(id), $0, value) }
+        reloadTracks(); refreshHistory()
+    }
+
+    func setConsoleModuleOrder(_ id: Int, _ order: [String]) {
+        guard let handle else { return }
+        order.joined(separator: ",").withCString { nc_track_set_console_module_order(handle, Int32(id), $0) }
+        reloadTracks(); refreshHistory()
+    }
+
+    func setConsoleValue(_ id: Int, _ parameter: String, _ value: Float) {
+        guard let handle else { return }
+        parameter.withCString { nc_track_set_console_value(handle, Int32(id), $0, value) }
     }
 
     // MARK: Automation modes (Off / Read / Touch / Latch / Write)
@@ -2860,6 +4123,7 @@ final class EngineController: ObservableObject {
         reloadMarkers()
         reloadMidiRegions()
         reloadMonitorState()
+        reloadRecordControllerState()
         refreshHistory()
     }
 
@@ -2870,6 +4134,7 @@ final class EngineController: ObservableObject {
         reloadMarkers()
         reloadMidiRegions()
         reloadMonitorState()
+        reloadRecordControllerState()
         refreshHistory()
     }
 
@@ -3210,11 +4475,14 @@ final class EngineController: ObservableObject {
         loopEnabled = nc_project_loop_enabled(handle)
         loopStartSeconds = nc_project_loop_start(handle)
         loopEndSeconds = nc_project_loop_end(handle)
+        preRollSeconds = nc_project_pre_roll(handle)
+        postRollSeconds = nc_project_post_roll(handle)
         reloadTracks()
         reloadClips()
         reloadMarkers()
         reloadMidiRegions()
         reloadMonitorState()
+        reloadRecordControllerState()
         reloadMetronomeState()
         refreshHistory()
         // A new/opened engine project resets to its own default edit mode, so re-apply the
@@ -3447,6 +4715,7 @@ final class EngineController: ObservableObject {
                 if let parameter = automationLanes[track.id] {
                     let fallback: Float = parameter.isVolume ? track.volumeDb
                                         : parameter.isPan ? track.pan
+                                        : parameter.id == "track.mute" ? (track.muted ? 1 : 0)
                                         : (parameter.pluginFallback ?? 0.5)
                     automation = TimelineModel.Automation(
                         parameterId: parameter.id,
@@ -3780,17 +5049,70 @@ final class EngineController: ObservableObject {
         importAudio(intoTrack: trackId, at: start, from: audio)
     }
 
+    /// A .mid file (or several) dropped onto the timeline — from the MIDI library or Finder. Lands each
+    /// as a MIDI region on a MIDI-capable track (reuses the target lane if it's instrument/midi, else
+    /// makes a new instrument track). Load an instrument on the track to hear it.
+    func dropMidi(onLane laneIndex: Int, atSeconds seconds: Double, urls: [URL]) {
+        guard let handle else { return }
+        let midis = urls.filter { ["mid", "midi"].contains($0.pathExtension.lowercased()) }
+        guard !midis.isEmpty else { return }
+        let start = snap(seconds)
+        // A single-track loop lands on the target lane (if it can hold MIDI); a multi-track song splits
+        // into one instrument track per part. The bridge decides and creates tracks as needed, so pass
+        // the preferred lane only when it is MIDI-capable, else -1 (auto-create).
+        var preferred: Int32 = -1
+        if laneIndex < laneTracks.count, canHoldMidi(laneTracks[laneIndex]),
+           let tid = trackId(forLane: laneIndex) { preferred = Int32(tid) }
+        var made = 0
+        for url in midis {
+            var err = [CChar](repeating: 0, count: 256)
+            let n = Int(nc_midi_import_file_auto(handle, url.path, preferred, start, &err, err.count))
+            if n > 0 { made += n; preferred = -1 }   // later files auto-create their own tracks
+            else if made == 0 {
+                let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("midi import: \(m)") }
+            }
+        }
+        reloadTracks(); reloadClips(); reloadMidiRegions(); refreshHistory()
+        if made == 0 { lastError = "MIDI 파일을 가져올 수 없습니다." }
+    }
+
+    /// Insert a MIDI file onto the currently-selected (or a new) instrument track at the playhead — the
+    /// MIDI library's click-to-insert, an alternative to dragging onto a lane.
+    func insertMidiFileAtPlayhead(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        let lane = selectedLaneForMidiInsert()
+        dropMidi(onLane: lane, atSeconds: playheadSeconds, urls: [url])
+    }
+
+    /// Prefer a selected MIDI-capable lane; else the last instrument/midi lane; else one-past (new track).
+    private func selectedLaneForMidiInsert() -> Int {
+        if let selId = selectedTrackId,
+           let lane = laneTracks.firstIndex(where: { $0.id == selId }), canHoldMidi(laneTracks[lane]) {
+            return lane
+        }
+        if let last = laneTracks.lastIndex(where: { canHoldMidi($0) }) { return last }
+        return laneTracks.count
+    }
+
     /// One new audio track per file, all starting at the same time — the multitrack import layout.
     private func importAudioMultitrack(at start: Double, from urls: [URL]) {
         guard let handle else { return }
         let choice = askImportAnalysisChoice()          // one analysis decision for the whole batch
         let analyze = choice != .skip
         let applyToTimeline = choice == .apply
+        var usedTrackNames = Set(tracks.map(\.name))
         for url in urls {
             guard nc_audio_import_supported(url.path) else { continue }
-            guard nc_track_add_audio(handle) >= 0 else { return }
-            reloadTracks()
-            guard let trackId = trackId(forLane: laneTracks.count - 1) else { continue }
+            let trackId = Int(nc_track_add_audio(handle))
+            guard trackId >= 0 else { return }
+
+            // In a multitrack import each source file represents a channel/part, so use its
+            // filename as the channel name instead of leaving anonymous "Audio N" tracks.
+            // Keep the user's meaningful punctuation and language; only remove the extension
+            // and collapse whitespace. Duplicate stems receive a stable numeric suffix.
+            let trackName = uniqueImportedTrackName(for: url, usedNames: &usedTrackNames)
+            _ = trackName.withCString { nc_track_rename(handle, Int32(trackId), $0) }
+
             var buffer = [CChar](repeating: 0, count: 512)
             if !nc_audio_import_analyzed(handle, Int32(trackId), url.path, start, analyze, applyToTimeline,
                                          &buffer, buffer.count) {
@@ -3806,6 +5128,20 @@ final class EngineController: ObservableObject {
                              Int(nc_project_time_signature_denominator(handle)))
         }
         refreshHistory()
+    }
+
+    private func uniqueImportedTrackName(for url: URL, usedNames: inout Set<String>) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let cleaned = stem.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let base = cleaned.isEmpty ? "Audio" : cleaned
+        var candidate = base
+        var suffix = 2
+        while usedNames.contains(candidate) {
+            candidate = "\(base) \(suffix)"
+            suffix += 1
+        }
+        usedNames.insert(candidate)
+        return candidate
     }
 
     func moveClipToLane(_ clipId: String, laneIndex: Int, startSeconds: Double) {
@@ -3853,6 +5189,74 @@ final class EngineController: ObservableObject {
 
     @Published private(set) var bouncing = false
     @Published private(set) var bounceSummary: BounceSummary?
+
+    /// True when this build can read AAF (libAAF present), so the menu can hide the command.
+    var aafImportAvailable: Bool { nc_aaf_import_available() }
+
+    /// Imports an AAF session (Pro Tools / Media Composer / Resolve). Replaces the open document,
+    /// so it asks before discarding unsaved work, exactly like opening a project.
+    func importAafSession() {
+        guard let handle else { return }
+        guard confirmDiscardingChanges() else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.init(filenameExtension: "aaf")].compactMap { $0 }
+        panel.prompt = "가져오기"
+        panel.message = "가져올 AAF 세션을 고르세요"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var message = [CChar](repeating: 0, count: 512)
+        let ok = nc_import_aaf(handle, url.path, &message, message.count)
+        let text = String(cString: message)
+        if ok {
+            afterProjectReplaced()
+            lastError = text
+        } else {
+            lastError = text.isEmpty ? "AAF를 가져오지 못했습니다" : text
+        }
+    }
+
+    /// Exports one WAV per track — the session-interchange path every DAW accepts.
+    ///
+    /// Each stem runs the full session length from 00:00, so dropping them all at zero in the other
+    /// DAW reproduces the arrangement exactly. Unlike a mixdown this keeps the tracks separable, and
+    /// unlike AAF/OMF it needs no shared container format to be understood on the far side.
+    func exportStems() {
+        guard let handle, !bouncing else { return }
+        guard !clips.isEmpty || !midiRegions.isEmpty else {
+            lastError = "내보낼 내용이 없습니다"
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "스템 내보내기"
+        panel.message = "트랙별 WAV를 저장할 폴더를 고르세요"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // The stems folder is named after the project so several exports do not collide.
+        let folder = url.appendingPathComponent(
+            (projectName.isEmpty ? "Session" : projectName) + " Stems", isDirectory: true)
+
+        bouncing = true
+        let folderPath = folder.path
+        Task.detached(priority: .userInitiated) {
+            var error = [CChar](repeating: 0, count: 512)
+            let count = Int(nc_bounce_stems(handle, folderPath, &error, error.count))
+            let message = String(cString: error)
+            await MainActor.run {
+                self.bouncing = false
+                if count > 0 {
+                    self.lastError = "스템 \(count)개를 내보냈습니다 — \(folderPath)"
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folderPath)])
+                } else {
+                    self.lastError = message.isEmpty ? "스템을 내보내지 못했습니다" : message
+                }
+            }
+        }
+    }
 
     /// Renders off the main thread from a serialized snapshot, so editing stays
     /// live and nothing races the engine. Roughly 25x realtime without plug-ins.
@@ -4286,6 +5690,10 @@ final class EngineController: ObservableObject {
 
     /// The docked piano roll's height, dragged from its top edge.
     @Published var pianoRollHeight: CGFloat = 300
+    /// The controller/velocity lane's height, dragged from the bar above it. Independent of
+    /// the editor's own height: making room to shape velocities should not have to steal it
+    /// from the keyboard.
+    @Published var editorLaneHeight: CGFloat = 44
     /// Selecting a region is exclusive with selecting clips: one Delete key, one target.
     @Published private(set) var selectedRegionId: String?
 
@@ -4453,6 +5861,75 @@ final class EngineController: ObservableObject {
         selectedNoteIds = ids
     }
 
+    /// Cubase Glue: join the selected notes of each pitch into one long note. Two Cs become one C;
+    /// a selected chord glues each voice separately rather than collapsing into a single note.
+    func glueSelectedNotes() {
+        guard let handle, let regionId = editingRegionId, selectedNoteIds.count >= 2 else { return }
+        let ids = Array(selectedNoteIds)
+        let cStrings = ids.map { strdup($0) }
+        defer { cStrings.forEach { free($0) } }
+        var pointers = cStrings.map { UnsafePointer<CChar>($0) }
+        let ok = pointers.withUnsafeMutableBufferPointer { buf in
+            nc_midi_notes_merge(handle, regionId, buf.baseAddress, Int32(ids.count))
+        }
+        guard ok else {
+            lastError = "붙일 노트가 없습니다 — 같은 음정의 노트를 두 개 이상 선택하세요."
+            return
+        }
+        // The surviving note keeps its id, so the selection stays meaningful; the roll re-reads the
+        // region's notes from the engine on the next publish.
+        refreshHistory()
+        objectWillChange.send()
+    }
+
+    /// Runs one of the Key Editor note functions over the selection, or the whole region when
+    /// nothing is selected — the convention those functions follow.
+    private func runNoteFunction(_ body: (OpaquePointer, String, UnsafePointer<UnsafePointer<CChar>?>?, Int32) -> Bool) {
+        guard let handle, let regionId = editingRegionId else { return }
+        let ids = Array(selectedNoteIds)
+        if ids.isEmpty {
+            guard body(handle, regionId, nil, 0) else { return }
+        } else {
+            let cStrings = ids.map { strdup($0) }
+            defer { cStrings.forEach { free($0) } }
+            var pointers: [UnsafePointer<CChar>?] = cStrings.map { $0.map { UnsafePointer($0) } }
+            let ok = pointers.withUnsafeMutableBufferPointer { buf in
+                body(handle, regionId, buf.baseAddress, Int32(ids.count))
+            }
+            guard ok else { return }
+        }
+        refreshHistory()
+        objectWillChange.send()
+    }
+
+    /// Legato: stretch each note to meet the next one that starts later.
+    func applyNoteLegato() {
+        runNoteFunction { handle, regionId, ids, count in
+            nc_midi_notes_legato(handle, regionId, ids, count, 0)
+        }
+    }
+
+    /// Delete Overlaps: shorten a note that runs past the next note of the same pitch.
+    func deleteNoteOverlaps() {
+        runNoteFunction { handle, regionId, ids, count in
+            nc_midi_notes_delete_overlaps(handle, regionId, ids, count)
+        }
+    }
+
+    /// Fixed Lengths: set every target note to one length in beats.
+    func setNoteLengths(beats: Double) {
+        runNoteFunction { handle, regionId, ids, count in
+            nc_midi_notes_set_length(handle, regionId, ids, count, beats)
+        }
+    }
+
+    /// True when the selection could be glued: at least two selected notes share a pitch.
+    var canGlueSelectedNotes: Bool {
+        guard selectedNoteIds.count >= 2, let regionId = editingRegionId else { return false }
+        let selected = notes(inRegion: regionId).filter { selectedNoteIds.contains($0.id) }
+        return Dictionary(grouping: selected, by: \.pitch).values.contains { $0.count >= 2 }
+    }
+
     /// Duplicates a note in place and returns the new note's id, so an ⌥-drag can grab the
     /// copy and leave the original put — the piano-roll twin of the timeline's ⌥-drag copy.
     /// Bypasses `addNote`'s stacking guard on purpose: a copy starts exactly over its source.
@@ -4583,6 +6060,27 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// Whether a lane holds any data in the region open in the editor — so the lane picker can mark
+    /// the controllers that were actually recorded/drawn. Recorded modulation and pitch bend land on
+    /// their own lanes, invisible until picked; this is what tells the user where to look.
+    func laneHasData(_ lane: EditorLane) -> Bool {
+        guard let handle, let regionId = editingRegionId else { return false }
+        switch lane {
+        case .velocity:
+            return false   // velocity is always "present" (it rides the notes); never marked
+        case .controller(let cc):
+            return nc_midi_cc_count(handle, regionId, Int32(cc)) > 0
+        case .pitchBend:
+            return nc_midi_pb_count(handle, regionId) > 0
+        }
+    }
+
+    /// True when the region has recorded controller/pitch-bend data on a lane other than the one
+    /// showing — the cue to open the picker.
+    var hasHiddenLaneData: Bool {
+        EngineController.editorLanes.contains { $0 != editorLane && laneHasData($0) }
+    }
+
     /// Adds a point to the current lane and returns its id, so a place-and-drag gesture can grab it.
     @discardableResult
     func addLaneEvent(beat: Double, value: Int) -> String? {
@@ -4682,6 +6180,45 @@ final class EngineController: ObservableObject {
         guard nc_midi_region_duplicate(handle, regionId, &buffer, buffer.count) else { return }
         reloadMidiRegions()
         refreshHistory()
+    }
+
+    /// Merges the given MIDI regions into one part (Cubase Glue). Ids must be on one track.
+    @discardableResult
+    private func mergeRegions(_ ids: [String]) -> String? {
+        guard let handle, ids.count >= 2 else { return nil }
+        // Bridge to `const char* const*`: hold each C string, pass an array of their pointers.
+        let cStrings = ids.map { strdup($0) }
+        defer { cStrings.forEach { free($0) } }
+        var pointers = cStrings.map { UnsafePointer<CChar>($0) }
+        var out = [CChar](repeating: 0, count: 128)
+        let ok = pointers.withUnsafeMutableBufferPointer { buf in
+            nc_midi_regions_merge(handle, buf.baseAddress, Int32(ids.count), &out, out.count)
+        }
+        guard ok else { return nil }
+        reloadMidiRegions()
+        refreshHistory()
+        let merged = String(cString: out)
+        selectRegion(merged)
+        return merged
+    }
+
+    /// Cubase Glue: merge a region with the next part on its track.
+    func mergeRegionForward(_ regionId: String) {
+        guard let region = midiRegions.first(where: { $0.id == regionId }),
+              let next = midiRegions
+                .filter({ $0.trackName == region.trackName && $0.startSeconds > region.startSeconds })
+                .min(by: { $0.startSeconds < $1.startSeconds }) else { return }
+        mergeRegions([region.id, next.id])
+    }
+
+    /// Collapse every MIDI part on a region's track into one.
+    func mergeRegionsOnTrack(_ regionId: String) {
+        guard let region = midiRegions.first(where: { $0.id == regionId }) else { return }
+        let ids = midiRegions
+            .filter { $0.trackName == region.trackName }
+            .sorted { $0.startSeconds < $1.startSeconds }
+            .map(\.id)
+        mergeRegions(ids)
     }
 
     /// Splits at the playhead. A playhead outside the region does nothing.
@@ -5029,7 +6566,9 @@ final class EngineController: ObservableObject {
         var isPlugin: Bool { id.hasPrefix("insert.") }
 
         static let volume = AutomationParameter(id: "track.volume", displayName: "볼륨 (dB)", range: -60...12)
+        static let volumeTrim = AutomationParameter(id: "track.volume.trim", displayName: "볼륨 트림 (dB)", range: -24...24, pluginFallback: 0)
         static let pan = AutomationParameter(id: "track.pan", displayName: "팬", range: -1...1)
+        static let mute = AutomationParameter(id: "track.mute", displayName: "뮤트", range: 0...1)
     }
 
     /// Which lanes have their automation folded out, and on which parameter.
@@ -5047,8 +6586,27 @@ final class EngineController: ObservableObject {
 
     /// Volume, pan, then every parameter of the track's loaded inserts — the picker list.
     func automationParameterOptions(laneIndex: Int) -> [AutomationParameter] {
-        guard laneIndex < laneTracks.count else { return [.volume, .pan] }
-        return [.volume, .pan] + insertAutomationParameters(trackId: laneTracks[laneIndex].id)
+        guard laneIndex < laneTracks.count else { return [.volume, .pan, .mute] }
+        let track = laneTracks[laneIndex]
+        var options: [AutomationParameter] = [.volume, .volumeTrim, .pan, .mute]
+        for (slot, send) in track.sends.enumerated() {
+            let prefix = "센드 \(slot + 1) · \(send.bus)"
+            options.append(AutomationParameter(id: "send.\(slot).level",
+                                               displayName: "\(prefix) · 레벨", range: -60...12,
+                                               pluginFallback: send.gainDb))
+            options.append(AutomationParameter(id: "send.\(slot).pan",
+                                               displayName: "\(prefix) · 팬", range: -1...1,
+                                               pluginFallback: send.pan))
+            options.append(AutomationParameter(id: "send.\(slot).mute",
+                                               displayName: "\(prefix) · 뮤트", range: 0...1,
+                                               pluginFallback: 0))
+            options.append(AutomationParameter(id: "send.\(slot).pre_fader",
+                                               displayName: "\(prefix) · Pre/Post", range: 0...1,
+                                               pluginFallback: send.preFader ? 1 : 0))
+        }
+        options += insertAutomationParameters(trackId: track.id)
+        options += instrumentAutomationParameters(trackId: track.id)
+        return options
     }
 
     func insertAutomationParameters(trackId: Int) -> [AutomationParameter] {
@@ -5064,6 +6622,23 @@ final class EngineController: ObservableObject {
                 out.append(AutomationParameter(id: "insert.\(slot).\(pid)",
                                                displayName: "\(["A","B","C","D","E"][slot]): \(name)",
                                                range: 0...1, pluginFallback: val))
+            }
+        }
+        return out
+    }
+
+    func instrumentAutomationParameters(trackId: Int) -> [AutomationParameter] {
+        guard let handle else { return [] }
+        var out: [AutomationParameter] = []
+        for slot in 0..<8 {
+            let count = Int(nc_track_instrument_slot_param_count(handle, Int32(trackId), Int32(slot)))
+            guard count > 0 else { continue }
+            for p in 0..<count {
+                let pid = nc_track_instrument_slot_param_id(handle, Int32(trackId), Int32(slot), Int32(p))
+                let value = Float(nc_track_instrument_slot_param_value(handle, Int32(trackId), Int32(slot), Int32(p)))
+                out.append(AutomationParameter(id: "instrument.\(slot).\(pid)",
+                                               displayName: "악기 \(slot + 1) · Param \(pid)",
+                                               range: 0...1, pluginFallback: value))
             }
         }
         return out
@@ -5471,17 +7046,27 @@ final class EngineController: ObservableObject {
         if changed { reloadTracks(); refreshHistory() }
     }
 
+    func setSoloSelectMode(_ mode: SoloSelectMode) {
+        soloSelectMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: SettingsKey.soloSelect)
+    }
+
     func setSoloMonitorMode(_ mode: SoloMonitorMode) { soloMonitorMode = mode }
 
     func toggleTrackArm(_ id: Int) {
         guard let track = tracks.first(where: { $0.id == id }) else { return }
         applyTrackFlag(trackToggleGroup(id), flag: 2, value: !track.recordArmed)
+        // Arming is the signal that the user is about to play or record, which is when the
+        // linear-phase monitor EQ's delay stops being acceptable. Rebuild through whichever
+        // path that now selects.
+        syncMonitorEqToContext()
     }
 
     func toggleTrackInputMonitoring(_ id: Int) {
         guard let track = tracks.first(where: { $0.id == id }) else { return }
         applyTrackFlag(trackToggleGroup(id), flag: 3, value: !track.inputMonitoring)
         reconcileTapInputHold()
+        syncMonitorEqToContext()
     }
 
     /// Run + hear the tap continuously whenever any tap-input track's Input-Monitor toggle is on
@@ -5513,7 +7098,7 @@ final class EngineController: ObservableObject {
     private func applyTrackMeters(_ status: NCEngineStatus) {
         guard !tracks.isEmpty else { return }
 
-        var peaks: [String: (Float, Float)] = [:]
+        var peaks: [String: (Float, Float, Float, Float)] = [:]
         let count = min(Int(status.trackMeterCount), Int(NC_MAX_TRACK_METERS))
         withUnsafePointer(to: status.trackMeterNames) { namesPointer in
             namesPointer.withMemoryRebound(to: CChar.self,
@@ -5527,13 +7112,19 @@ final class EngineController: ObservableObject {
                     let right = withUnsafePointer(to: status.trackPeakRight) {
                         $0.withMemoryRebound(to: Float.self, capacity: Int(NC_MAX_TRACK_METERS)) { $0[index] }
                     }
-                    peaks[name] = (left, right)
+                    let gainReduction = withUnsafePointer(to: status.trackConsoleGainReductionDb) {
+                        $0.withMemoryRebound(to: Float.self, capacity: Int(NC_MAX_TRACK_METERS)) { $0[index] }
+                    }
+                    let gateGainReduction = withUnsafePointer(to: status.trackConsoleGateGainReductionDb) {
+                        $0.withMemoryRebound(to: Float.self, capacity: Int(NC_MAX_TRACK_METERS)) { $0[index] }
+                    }
+                    peaks[name] = (left, right, gainReduction, gateGainReduction)
                 }
             }
         }
 
         for index in tracks.indices {
-            let (left, right) = peaks[tracks[index].name] ?? (0, 0)
+            let (left, right, gainReduction, gateGainReduction) = peaks[tracks[index].name] ?? (0, 0, 0, 0)
             // Ballistic, so a track meter falls to silence on stop instead of freezing.
             // Assign only on change: an idle strip must not republish tracks every tick, or
             // every menu observing the controller flickers.
@@ -5541,6 +7132,14 @@ final class EngineController: ObservableObject {
             let nr = Self.decayedMeter(right, tracks[index].peakRight)
             if nl != tracks[index].peakLeft { tracks[index].peakLeft = nl }
             if nr != tracks[index].peakRight { tracks[index].peakRight = nr }
+            let ngr = Self.decayedMeter(gainReduction, tracks[index].consoleCompGainReductionDb)
+            if ngr != tracks[index].consoleCompGainReductionDb {
+                tracks[index].consoleCompGainReductionDb = ngr
+            }
+            let nggr = Self.decayedMeter(gateGainReduction, tracks[index].consoleGateGainReductionDb)
+            if nggr != tracks[index].consoleGateGainReductionDb {
+                tracks[index].consoleGateGainReductionDb = nggr
+            }
         }
     }
 
@@ -6053,10 +7652,14 @@ final class EngineController: ObservableObject {
     }
     /// Route a globally-captured keypad key through the SAME configurable monitor-shortcut bindings
     /// the in-app keypad uses — so the global pad and the dock's shortcut settings never disagree
-    /// (this fixes Dim/Mute landing on the wrong keys and 1–9 doing nothing). Returns true if the
-    /// key is bound (so it is consumed on both down and up); an unbound key passes through.
+    /// (this fixes Dim/Mute landing on the wrong keys and 1–9 doing nothing).
+    ///
+    /// Always returns true, i.e. the key is ALWAYS consumed. The feature is keypad *exclusivity*:
+    /// while it is on the keypad belongs to the DAW, so an unbound key must be swallowed too rather
+    /// than falling through and typing into whatever window happens to be in front. Passing unbound
+    /// keys on meant pressing keypad 0 over another app typed a 0 there — not exclusive at all.
     private func handleGlobalKeypad(_ keyCode: UInt16, isDown: Bool, isRepeat: Bool) -> Bool {
-        guard let action = monitorShortcutAction(forKeyCode: keyCode) else { return false }
+        guard let action = monitorShortcutAction(forKeyCode: keyCode) else { return true }
         if action == .talk {
             // Momentary console talkback: engaged while the key is held, released on key-up. Ignore
             // the OS auto-repeat key-downs so a held key does not flicker it on and off.
@@ -6071,6 +7674,10 @@ final class EngineController: ObservableObject {
     /// it (once) and surface a message so the user knows where to allow it.
     func setKeypadCapture(_ on: Bool) {
         if on {
+            keypadCaptureRequested = true
+            // The same keypad must also work while the DAW itself is frontmost. This used to be a
+            // second, easy-to-miss switch ("키패드 단축키"), which made "독점" appear broken.
+            if !monitorShortcutsEnabled { setMonitorShortcutsEnabled(true) }
             keypadCapture.onKey = { [weak self] keyCode, isDown, isRepeat in
                 self?.handleGlobalKeypad(keyCode, isDown: isDown, isRepeat: isRepeat) ?? false
             }
@@ -6079,16 +7686,27 @@ final class EngineController: ObservableObject {
             } else {
                 keypadCaptureEnabled = false
                 lastError = "키패드 전역 제어에는 손쉬운 사용(Accessibility) 권한이 필요합니다. 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Neuracoust DAW를 켠 뒤 다시 시도해 주세요."
+                let alert = NSAlert()
+                alert.messageText = "키패드 독점 권한이 필요합니다"
+                alert.informativeText = "시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 현재 Neuracoust DAW를 허용해 주세요. 허용 후 DAW로 돌아오면 자동으로 다시 연결합니다."
+                alert.addButton(withTitle: "시스템 설정 열기")
+                alert.addButton(withTitle: "나중에")
+                if alert.runModal() == .alertFirstButtonReturn,
+                   let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(settings)
+                }
             }
         } else {
+            keypadCaptureRequested = false
             keypadCapture.disable()
             keypadCaptureEnabled = false
         }
-        UserDefaults.standard.set(keypadCaptureEnabled, forKey: "nc.keypadCaptureEnabled")
+        UserDefaults.standard.set(keypadCaptureRequested, forKey: "nc.keypadCaptureEnabled")
     }
     /// Re-arm keypad capture at launch if it was on last time (and the permission still holds).
     func restoreKeypadCapture() {
-        guard UserDefaults.standard.bool(forKey: "nc.keypadCaptureEnabled") else { return }
+        keypadCaptureRequested = UserDefaults.standard.bool(forKey: "nc.keypadCaptureEnabled")
+        guard keypadCaptureRequested else { return }
         if GlobalKeypadCapture.accessibilityTrusted(prompt: false) {
             setKeypadCapture(true)
         }
@@ -6158,6 +7776,7 @@ final class EngineController: ObservableObject {
         static let remoteHost = "nc.remoteDspHost"
         static let monitorExclusive = "nc.monitorOutputExclusive"
         static let monitorEqLinear = "nc.monitorEqLinearPhase"
+        static let monitorEqLowLatency = "nc.monitorEqLowLatencyMonitoring"
         static let monitorEqOeTarget = "nc.monitorEqHeadphoneOeTarget"
         static let physSpeaker = "nc.physicalSpeakerModel"
         static let physHeadphone = "nc.physicalHeadphoneModel"
@@ -6192,6 +7811,7 @@ final class EngineController: ObservableObject {
         guard !blob.isEmpty else { return }
         if blob.withCString({ nc_apply_monitor_template(handle, $0) }) {
             reloadMonitorState()
+        reloadRecordControllerState()
         }
     }
 
@@ -6307,6 +7927,11 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.monitorEqLinear) != nil, d.bool(forKey: SettingsKey.monitorEqLinear) {
             if let handle { nc_monitor_eq_set_linear_phase(handle, true); monitorEqLinearPhase = true }
         }
+        if d.object(forKey: SettingsKey.monitorEqLowLatency) != nil {
+            let low = d.bool(forKey: SettingsKey.monitorEqLowLatency)
+            if let handle { nc_monitor_eq_set_low_latency_monitoring(handle, low) }
+            monitorEqLowLatencyMonitoring = low
+        }
         if d.object(forKey: SettingsKey.monitorEqOeTarget) != nil, d.bool(forKey: SettingsKey.monitorEqOeTarget) {
             if let handle { nc_monitor_eq_set_headphone_oe_target(handle, true); monitorEqHeadphoneOeTarget = true }
         }
@@ -6349,6 +7974,11 @@ final class EngineController: ObservableObject {
         if d.object(forKey: SettingsKey.monitorExclusive) != nil { setMonitorOutputExclusive(d.bool(forKey: SettingsKey.monitorExclusive)) }
         if d.object(forKey: SettingsKey.monitorEqLinear) != nil, d.bool(forKey: SettingsKey.monitorEqLinear) {
             if let handle { nc_monitor_eq_set_linear_phase(handle, true); monitorEqLinearPhase = true }
+        }
+        if d.object(forKey: SettingsKey.monitorEqLowLatency) != nil {
+            let low = d.bool(forKey: SettingsKey.monitorEqLowLatency)
+            if let handle { nc_monitor_eq_set_low_latency_monitoring(handle, low) }
+            monitorEqLowLatencyMonitoring = low
         }
         if d.object(forKey: SettingsKey.monitorEqOeTarget) != nil, d.bool(forKey: SettingsKey.monitorEqOeTarget) {
             if let handle { nc_monitor_eq_set_headphone_oe_target(handle, true); monitorEqHeadphoneOeTarget = true }
@@ -6598,9 +8228,11 @@ final class EngineController: ObservableObject {
         // active, so its row text goes stale unless the list is re-read. reloadMonitorState
         // also swaps the single EQ's band values to this slot's context.
         reloadMonitorState()
+        reloadRecordControllerState()
     }
 
-    /// The speaker-model catalog and physical-output routes, read once from the engine.
+    /// The speaker-model catalog is static; output routes are regenerated from the
+    /// currently opened CoreAudio device's real channel count.
     // These catalogs are static engine data (no handle needed). Computed, not lazy, so a
     // one-time access before the engine existed can never cache an empty list.
     // These catalogs are static (a fixed ~200-entry speaker list, etc.). They were computed
@@ -6611,8 +8243,16 @@ final class EngineController: ObservableObject {
     lazy var speakerModelCatalog: [String] = (0..<Int(nc_speaker_model_count())).map { i in
         readString { nc_speaker_model_name(Int32(i), $0, $1) }
     }
-    lazy var speakerOutputRoutes: [String] = (0..<Int(nc_speaker_output_route_count())).map { i in
-        readString { nc_speaker_output_route(Int32(i), $0, $1) }
+    @Published private(set) var speakerOutputRoutes: [String] = ["None", "Main 1-2"]
+    @Published private(set) var outputChannelCount = 2
+    private func reloadSpeakerOutputRoutes(_ channels: Int) {
+        guard let handle else { return }
+        let safeChannels = max(2, channels)
+        let routes = (0..<Int(nc_speaker_output_route_count(handle))).map { i in
+            readString { nc_speaker_output_route(handle, Int32(i), $0, $1) }
+        }
+        setIfChanged(\.outputChannelCount, safeChannels)
+        setIfChanged(\.speakerOutputRoutes, routes)
     }
     lazy var headphoneModelCatalog: [String] = (0..<Int(nc_headphone_model_count())).map { i in
         readString { nc_headphone_model_name(Int32(i), $0, $1) }
@@ -7224,12 +8864,27 @@ final class EngineController: ObservableObject {
         }}
         reloadMonitorEq()
         monitorEqLatencyMs = nc_monitor_eq_latency_ms(handle)
+        monitorEqLowLatencyActive = nc_monitor_eq_low_latency_active(handle)
     }
 
     /// Linear-phase (FIR) monitor EQ: matches the target across the whole band (no biquad ripple
     /// or treble cramping) at the cost of latency. Off = the low-latency biquad path.
     @Published var monitorEqLinearPhase = false
     @Published private(set) var monitorEqLatencyMs: Double = 0
+    /// While on (the default), an armed or input-monitoring track drops the linear-phase EQ's
+    /// delay by falling back to the minimum-phase fit of the same curve — you play in time and
+    /// still mix through the exact curve once nothing is armed.
+    @Published var monitorEqLowLatencyMonitoring = true
+    /// True while that fallback is actually engaged, so the dock can say why.
+    @Published private(set) var monitorEqLowLatencyActive = false
+
+    func setMonitorEqLowLatencyMonitoring(_ enabled: Bool) {
+        guard let handle else { return }
+        nc_monitor_eq_set_low_latency_monitoring(handle, enabled)
+        monitorEqLowLatencyMonitoring = enabled
+        UserDefaults.standard.set(enabled, forKey: SettingsKey.monitorEqLowLatency)
+        syncMonitorEqToContext()
+    }
     func setMonitorEqLinearPhase(_ on: Bool) {
         guard let handle else { return }
         nc_monitor_eq_set_linear_phase(handle, on)
@@ -7263,6 +8918,7 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         nc_monitor_set_speaker_output(handle, Int32(slot), route)
         reloadMonitorState()          // physical route drops the modeller → EQ re-derives
+        reloadRecordControllerState()
         refreshHistory()
     }
 
@@ -7277,6 +8933,7 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_speaker_cable(handle, Int32(slot), $0) }
         reloadMonitorState()
+        reloadRecordControllerState()
         refreshHistory()
     }
 
@@ -7350,6 +9007,39 @@ final class EngineController: ObservableObject {
         nc_track_instrument_editor_closed(handle, Int32(trackId))
     }
 
+    // MARK: Instrument patch handoff
+
+    /// Where an instrument editor and the DAW exchange the plug-in's own patch (its VST3
+    /// component state). A file, not a pipe line: a sampler's state runs to megabytes.
+    func instrumentStateFileURL(trackId: Int, slotIndex: Int) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("neuracoust-instrument-state-\(trackId)-\(slotIndex).vststate")
+    }
+
+    /// Writes the stored patch out for the editor host to restore, so reopening an editor
+    /// shows the program the project holds and not the plug-in's startup default.
+    /// Returns false when there is nothing stored — the host then starts on its own default.
+    @discardableResult
+    func exportInstrumentState(trackId: Int, slotIndex: Int, to url: URL) -> Bool {
+        guard let handle else { return false }
+        try? FileManager.default.removeItem(at: url)
+        return nc_track_instrument_slot_write_state_file(handle, Int32(trackId), Int32(slotIndex), url.path)
+    }
+
+    /// Takes the patch the closing editor left behind into the project and rebuilds the
+    /// render instance on it. Without this the picture (and the editor's own sound) said
+    /// one program while the track kept playing the one it was loaded with.
+    @discardableResult
+    func importInstrumentState(trackId: Int, slotIndex: Int, from url: URL) -> Bool {
+        guard let handle else { return false }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let changed = nc_track_instrument_slot_read_state_file(handle, Int32(trackId), Int32(slotIndex), url.path)
+        if changed {
+            projectDirty = nc_project_dirty(handle)
+        }
+        return changed
+    }
+
     /// Pumps pending keyboard input into the instruments and mirrors the drained batch to
     /// any open instrument editor, whose separate-process plug-in instance would otherwise
     /// never see it — this is what makes a plug-in GUI's keyboard/wheel move while playing.
@@ -7372,6 +9062,89 @@ final class EngineController: ObservableObject {
         }.map(\.id))
         guard !eligible.isEmpty else { return }
         pluginEditors.forwardLiveMidi(trackIds: eligible, events: Array(events.prefix(count)))
+    }
+
+    // MARK: Note audition
+
+    /// Sounds (or releases) a pitch on the track holding the region being edited, so the
+    /// piano roll's keyboard plays. No transport, no recording, nothing written down.
+    func previewNote(pitch: Int, velocity: Int, on: Bool) {
+        guard let handle, let trackId = editingRegionTrackId else { return }
+        nc_midi_preview_note(handle, Int32(trackId), Int32(pitch), Int32(velocity), on)
+    }
+
+    func previewAllNotesOff() {
+        guard let handle, let trackId = editingRegionTrackId else { return }
+        nc_midi_preview_all_notes_off(handle, Int32(trackId))
+    }
+
+    var selectedVirtualKeyboardTrack: Track? {
+        guard let selectedTrackId else { return nil }
+        return tracks.first { $0.id == selectedTrackId && $0.kind == .instrument }
+    }
+
+    func virtualKeyboardNote(pitch: Int, velocity: Int, on: Bool) {
+        guard let handle, let track = selectedVirtualKeyboardTrack else { return }
+        nc_midi_preview_note(handle, Int32(track.id), Int32(pitch), Int32(velocity), on)
+    }
+
+    func virtualKeyboardAllNotesOff() {
+        guard let handle, let track = selectedVirtualKeyboardTrack else { return }
+        nc_midi_preview_all_notes_off(handle, Int32(track.id))
+    }
+
+    /// The track index of the region currently open in the editor.
+    private var editingRegionTrackId: Int? {
+        guard let region = editingRegion else { return nil }
+        return tracks.first(where: { $0.name == region.trackName })?.id
+    }
+
+    // MARK: Recorded controllers
+
+    /// The controllers offered in the record menu. Not all 128: these are the ones a player
+    /// actually performs, in the order a keyboard's own panel tends to list them.
+    static let recordableControllers: [(number: Int, label: String)] = [
+        (64, "서스테인 페달 (CC64)"),
+        (1,  "모듈레이션 (CC1)"),
+        (11, "익스프레션 (CC11)"),
+        (2,  "브레스 (CC2)"),
+        (4,  "풋 컨트롤러 (CC4)"),
+        (7,  "볼륨 (CC7)"),
+        (10, "팬 (CC10)"),
+        (66, "소스테누토 (CC66)"),
+        (67, "소프트 페달 (CC67)"),
+        (71, "레조넌스 (CC71)"),
+        (74, "브라이트니스 (CC74)"),
+    ]
+
+    /// Republished so the menu redraws when a toggle changes; the project holds the truth.
+    @Published private(set) var recordControllerRevision = 0
+    @Published private(set) var recordPitchBendEnabled = true
+
+    func recordControllerEnabled(_ controller: Int) -> Bool {
+        guard let handle else { return false }
+        _ = recordControllerRevision   // read so SwiftUI tracks this menu against the toggles
+        return nc_midi_record_controller_enabled(handle, Int32(controller))
+    }
+
+    func setRecordControllerEnabled(_ controller: Int, _ enabled: Bool) {
+        guard let handle else { return }
+        nc_midi_record_set_controller_enabled(handle, Int32(controller), enabled)
+        recordControllerRevision &+= 1
+        projectDirty = nc_project_dirty(handle)
+    }
+
+    func setRecordPitchBendEnabled(_ enabled: Bool) {
+        guard let handle else { return }
+        nc_midi_record_set_pitch_bend_enabled(handle, enabled)
+        recordPitchBendEnabled = nc_midi_record_pitch_bend_enabled(handle)
+        projectDirty = nc_project_dirty(handle)
+    }
+
+    private func reloadRecordControllerState() {
+        guard let handle else { return }
+        recordPitchBendEnabled = nc_midi_record_pitch_bend_enabled(handle)
+        recordControllerRevision &+= 1
     }
 
     /// The available MIDI input sources (id, name), for a source picker.
@@ -7479,11 +9252,10 @@ final class EngineController: ObservableObject {
 
         var status = NCEngineStatus()
         nc_engine_status(handle, &status)
+        if Int(status.outputChannels) != outputChannelCount {
+            reloadSpeakerOutputRoutes(Int(status.outputChannels))
+        }
 
-        // The phase-correlation meter must move like a real correlation meter, so publish it
-        // every poll (~30 Hz). It only re-renders when the rounded value actually changes, and
-        // at idle the engine's ballistics settle it to a constant → no publish, no re-layout.
-        setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
         // The rest of the timing telemetry (jitter, render duration, DSP load) drifts a hair
         // every audio callback, so publishing it each poll re-laid-out the heavy MonitorDock
         // ~30×/s even at idle. Round it and refresh at ~6 Hz; a readout that ticks 6×/s is plenty.
@@ -7491,6 +9263,8 @@ final class EngineController: ObservableObject {
         if telemetrySlowCounter >= 5 {
             telemetrySlowCounter = 0
             setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs.rounded())
+            setIfChanged(\.referenceTapFaults,
+                         Int(status.referenceUnderrunBlocks) + Int(status.referenceOverrunDrops))
             setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
             setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
@@ -7498,9 +9272,6 @@ final class EngineController: ObservableObject {
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)
         }
         setIfChanged(\.delayCompensationSamples, Int(nc_delay_compensation_samples(handle)))
-        setIfChanged(\.spectrumLow, status.spectrumLow)
-        setIfChanged(\.spectrumMid, status.spectrumMid)
-        setIfChanged(\.spectrumHigh, status.spectrumHigh)
         setIfChanged(\.remoteDspActive, status.remoteDspMonitorActive)
         setIfChanged(\.activeInsertCount, Int(status.activeRealtimeVst3TrackInserts)
             + Int(status.activeRealtimeVst3MasterInserts)
@@ -7519,6 +9290,12 @@ final class EngineController: ObservableObject {
         // automation below still run every tick.
         visualTelemetryTick = visualTelemetryTick &+ 1
         if visualTelemetryTick & 1 == 0 {
+            // Phase correlation + the 3-band spectrum are meters too — publish them here (~15 Hz) rather
+            // than every tick, so they don't re-render the engine-observing UI 30×/s during playback.
+            setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
+            setIfChanged(\.spectrumLow, status.spectrumLow)
+            setIfChanged(\.spectrumMid, status.spectrumMid)
+            setIfChanged(\.spectrumHigh, status.spectrumHigh)
             // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
             setIfChanged(\.outputPeakLeft, Self.decayedMeter(status.outputPeakLeft, outputPeakLeft))
             setIfChanged(\.outputPeakRight, Self.decayedMeter(status.outputPeakRight, outputPeakRight))
@@ -7540,6 +9317,10 @@ final class EngineController: ObservableObject {
         })
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        if pitchEditorClipId != nil && pitchEditorTimelineSync {
+            pitchEditorClock.seconds = min(pitchEditorClipDuration,
+                                           max(0, playheadSeconds - pitchEditorClipStartSeconds))
+        }
         serviceCountIn(handle)
         serviceAudioRecordingWaveform(handle)
         // Drive any plugin-parameter automation lanes to the playhead, so a drawn plug-in
@@ -7562,6 +9343,7 @@ final class EngineController: ObservableObject {
 
         // Live MIDI: keep a keyboard open and drain its notes into armed instruments.
         pumpLiveMidi(handle)
+        serviceHui(handle)
         // The pump bumps the activity; read (which resets it) and decay for the meter.
         setIfChanged(\.midiActivity, max(nc_midi_input_activity(handle), midiActivity - 0.07))
 
@@ -7591,7 +9373,7 @@ final class EngineController: ObservableObject {
         guard transportRunning else {
             // Guarded so a stopped transport doesn't republish the playhead every tick
             // (which flickers open menus). While playing it genuinely moves each tick.
-            setIfChanged(\.playheadSeconds, engineSeconds)
+            setPlayhead(engineSeconds)
             transportWallClockBase = engineSeconds
             transportWallClockStart = CACurrentMediaTime()
             return
@@ -7600,16 +9382,16 @@ final class EngineController: ObservableObject {
         let elapsed = CACurrentMediaTime() - transportWallClockStart
         let predicted = transportWallClockBase + elapsed
 
-        // Guard the publish: if the transport is "running" but the engine playhead is wedged
-        // (frozen), the value doesn't change, so republishing it every tick would re-render
-        // the whole UI (the heavy MonitorDock re-lays-out) for nothing — a 70%-CPU layout
-        // storm. setIfChanged still publishes on every real advance during normal playback.
+        // The playhead now lives on `playheadClock` (not the engine object), so this 30 Hz update
+        // re-renders only the timeline / transport / piano roll — the heavy dock/mixer no longer
+        // re-lay-out. `setPlayhead` only touches the clock when the value actually changes, so a
+        // wedged transport still costs nothing.
         if abs(predicted - engineSeconds) > resyncThreshold {
-            setIfChanged(\.playheadSeconds, engineSeconds)
+            setPlayhead(engineSeconds)
             transportWallClockBase = engineSeconds
             transportWallClockStart = CACurrentMediaTime()
         } else {
-            setIfChanged(\.playheadSeconds, predicted)
+            setPlayhead(predicted)
         }
     }
 

@@ -592,9 +592,19 @@ int main(void) {
     {
         char buf[256];
         if (nc_speaker_model_count() < 100) { fprintf(stderr, "FAIL: model catalog too small (%d)\n", nc_speaker_model_count()); failures++; }
-        if (nc_speaker_output_route_count() != 18) { fprintf(stderr, "FAIL: output routes %d, expected 18\n", nc_speaker_output_route_count()); failures++; }
-        nc_speaker_output_route(0, buf, sizeof buf);
+        const int expectedRoutes = 1 + status.outputChannels / 2;
+        if (nc_speaker_output_route_count(engine) != expectedRoutes) {
+            fprintf(stderr, "FAIL: output routes %d, expected %d for %d hardware channels\n",
+                    nc_speaker_output_route_count(engine), expectedRoutes, status.outputChannels);
+            failures++;
+        }
+        nc_speaker_output_route(engine, 0, buf, sizeof buf);
         if (strcmp(buf, "None") != 0) { fprintf(stderr, "FAIL: route[0] '%s', expected None\n", buf); failures++; }
+        nc_speaker_output_route(engine, expectedRoutes - 1, buf, sizeof buf);
+        if (status.outputChannels == 4 && strcmp(buf, "Output 3-4") != 0) {
+            fprintf(stderr, "FAIL: last route '%s', expected Output 3-4 for four-channel hardware\n", buf);
+            failures++;
+        }
 
         // Assign a model to slot A: stored as "Speaker A: <name>", output stays None.
         nc_monitor_set_speaker_model(engine, 0, "Genelec 8040B (NF)");

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The timebases the ruler can show. Any subset may be visible at once.
@@ -159,6 +160,17 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         didSet { layoutPlayhead() }
     }
 
+    /// Subscribe the playhead layer straight to the 30 Hz clock, bypassing SwiftUI entirely: the sink
+    /// fires on the main thread and moves ONLY the CALayer. Routing this through the representable's
+    /// update path instead put a needsDisplay/layout invalidation inside SwiftUI's layout pass, which
+    /// fed a full-speed hosting-view re-layout loop (~100 % CPU at idle).
+    private var playheadSink: AnyCancellable?
+    func bindPlayheadClock(_ clock: PlayheadClock) {
+        guard playheadSink == nil else { return }
+        playheadSeconds = clock.seconds
+        playheadSink = clock.$seconds.sink { [weak self] s in self?.playheadSeconds = s }
+    }
+
     /// Play or record in progress — a click on empty lane space must NOT relocate the playhead
     /// (edit freely while it rolls, the Pro Tools way). Ruler clicks still scrub deliberately.
     var isTransportRunning = false
@@ -169,7 +181,11 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     /// Live audio-record clips: one growing/frozen red clip per punch region on the armed lane.
-    var recordingClips: [EngineController.RecordingClip] = [] { didSet { needsDisplay = true } }
+    /// Guarded — updateNSView reassigns this on every SwiftUI pass, and an unconditional repaint
+    /// there becomes a needsDisplay inside the layout pass (feedback-loop fuel).
+    var recordingClips: [EngineController.RecordingClip] = [] {
+        didSet { if recordingClips != oldValue { needsDisplay = true } }
+    }
     var recordingChannels: Int = 2
 
     var onSeek: ((Double) -> Void)?
@@ -192,10 +208,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onSetRangeLane: ((Int?) -> Void)?                // which lane the range belongs to (nil = all)
     var onSelectRegion: ((String?) -> Void)?
     var onOpenRegion: ((String) -> Void)?
+    /// Cubase Glue: merge this MIDI region with the next one on its track.
+    var onMergeRegionForward: ((String) -> Void)?
+    /// Merge every MIDI region on this region's track into one part.
+    var onMergeRegionsOnTrack: ((String) -> Void)?
     var onMoveRegion: ((String, Int, Double) -> Void)?   // (id, lane, start) — continuous
     var onResizeRegion: ((String, Double) -> Void)?      // (id, duration) — continuous
     var onAddRegion: ((Int, Double) -> Void)?            // (lane, start)
     var onDropAudio: ((Int, Double, [URL]) -> Void)?     // (lane, start, file urls)
+    var onDropMidi: ((Int, Double, [URL]) -> Void)?      // (lane, start, .mid urls) → MIDI regions
     var onMoveMarker: ((Double, Double) -> Void)?        // (from, to) — continuous
     var onDeleteMarker: ((Double) -> Void)?
     var onSelectBetweenMarkers: ((Double) -> Void)?
@@ -217,10 +238,23 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onToggleClipPolarity: ((String) -> Void)?
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)?   // (clipId, timeRatio, semitones)
     var onDenoiseClip: ((String) -> Void)?   // neural noise-floor removal, repoints the clip
+    /// (clipId, plug-in name, plug-in path) — opens the plug-in's own ARA editor over the clip.
+    var onOpenAraEditor: ((String, String, String) -> Void)?
+    var onClearAraEdits: ((String) -> Void)?
+    /// The installed ARA plug-ins, and whether this clip already carries committed edits.
+    var araPlugins: [(name: String, path: String)] = []
+    var clipHasAraEdits: ((String) -> Bool)?
     var onAlignToReference: ((String, String) -> Void)?   // (dubId, refId) VocAlign time-align onto a lead
     var alignStrength: Double = 1.0   // current VocAlign amount, for the strength submenu checkmarks
     var onSetAlignStrength: ((Double) -> Void)?
-    var onSeparateStems: ((String) -> Void)?   // Demucs 4-stem separation → new tracks
+    var onSeparateStems: ((String) -> Void)?   // Demucs 4-stem separation → new tracks (legacy default)
+    var onSeparateStemsPreset: ((String, String) -> Void)?   // (clipId, preset): auto/karaoke/vocals/…/6s
+    var stem6sAvailable: Bool = false   // show the 6-part option only when its model is bundled
+    var drumSplitAvailable: Bool = false      // show drum-split (kick/snare/toms/cymbals) when bundled
+    var orchestraSeparationAvailable: Bool = false   // show experimental orchestra-family split when bundled
+    var onConvertToMidi: ((String) -> Void)?   // audio → MIDI (monophonic) on a new instrument track
+    var onConvertToMidiPoly: ((String) -> Void)?   // polyphonic (basic-pitch) audio → MIDI
+    var convertToMidiPolyAvailable: Bool = false   // show the polyphonic option only when its helper is bundled
     var onOpenPitchEditor: ((String) -> Void)?   // Melodyne / Serato anchor pitch editor
     var onSetCrossfadeLength: ((String, String, Double) -> Void)?  // (leftId, rightId, seconds)
     var onSetFadeCurvature: ((String, Bool, Double) -> Void)?      // (clipId, isFadeIn, curvature)
@@ -267,6 +301,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     // Inline lane-header channel strip: no mixer trip to mute/solo/arm or set level.
     var onToggleMute: ((Int) -> Void)?                   // trackId
     var onToggleSolo: ((Int) -> Void)?                   // trackId
+    var soloSelectMode: String = "additive"
+    var onSetSoloSelectMode: ((String) -> Void)?
+    var onClearAllSolos: (() -> Void)?
     var onToggleArm: ((Int) -> Void)?                    // trackId
     var onToggleInputMonitor: ((Int) -> Void)?           // trackId
     var onRenameTrack: ((Int, String) -> Void)?          // (trackId, newName)
@@ -811,7 +848,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             window?.makeFirstResponder(self)
         }
 
-        // Clicking a lane header selects that track; the "A" chip folds automation out;
+        // Clicking a lane header selects that track; the bottom-left disclosure folds automation out;
         // the inline strip mutes/solos/arms or drags the volume fader.
         if point.x < Self.headerWidth {
             if let lane = laneIndex(at: point) {
@@ -822,7 +859,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                     drag = .resizingLane(startHeight: laneHeight(lane), startY: point.y, laneIndex: lane)
                 } else if event.clickCount >= 2 && nameRect(lane).contains(point) {
                     beginRenamingLane(lane)
-                } else if laneShowsButtons(lane) && automationToggleRect(lane).contains(point) {
+                } else if automationToggleRect(lane).contains(point) {
                     onToggleAutomation?(lane)
                 } else if laneShowsButtons(lane) && headerAutomationModeRect(lane).contains(point) {
                     onCycleAutomationMode?(trackId)
@@ -1440,6 +1477,15 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         return urls ?? []
     }
 
+    /// Standard MIDI files dragged from the MIDI library (or Finder). Read as plain file URLs and
+    /// filtered by extension — .mid UTIs are unreliable, but the extension is not.
+    private func midiURLs(from sender: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let urls = (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                          options: options) as? [URL]) ?? []
+        return urls.filter { ["mid", "midi"].contains($0.pathExtension.lowercased()) }
+    }
+
     private func hideDropTarget() {
         guard !dropBandLayer.isHidden else { return }
         dropLaneIndex = nil
@@ -1469,7 +1515,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     private func updateDropTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
         let point = convert(sender.draggingLocation, from: nil)
-        guard let target = dropTarget(at: point), !audioURLs(from: sender).isEmpty else {
+        guard let target = dropTarget(at: point),
+              !(audioURLs(from: sender).isEmpty && midiURLs(from: sender).isEmpty) else {
             hideDropTarget()
             return []
         }
@@ -1507,6 +1554,12 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let point = convert(sender.draggingLocation, from: nil)
         defer { hideDropTarget() }
         guard let target = dropTarget(at: point) else { return false }
+        // MIDI files take priority: a .mid drop becomes a MIDI region, not an audio import.
+        let midi = midiURLs(from: sender)
+        if !midi.isEmpty {
+            onDropMidi?(target.lane, target.seconds, midi)
+            return true
+        }
         let urls = audioURLs(from: sender)
         guard !urls.isEmpty else { return false }
         onDropAudio?(target.lane, target.seconds, urls)
@@ -1649,6 +1702,23 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     override func rightMouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if point.x < Self.headerWidth, let lane = laneIndex(at: point),
+           laneShowsButtons(lane), headerSoloRect(lane).contains(point) {
+            let menu = NSMenu()
+            for (title, mode) in [("추가 (Additive)", "additive"), ("배타 (Exclusive)", "exclusive")] {
+                let item = NSMenuItem(title: title, action: #selector(selectSoloModeMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = mode
+                item.state = soloSelectMode == mode ? .on : .off
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+            let clear = NSMenuItem(title: "모든 솔로 해제", action: #selector(clearAllSolosMenu(_:)), keyEquivalent: "")
+            clear.target = self
+            menu.addItem(clear)
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
+        if point.x < Self.headerWidth, let lane = laneIndex(at: point),
            let slot = headerInsertSlotHit(lane, point: point) {
             let inserts = model.lanes[lane].inserts
             let trackId = model.lanes[lane].trackId
@@ -1668,6 +1738,24 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
                 onBrowseInsert?(trackId); return
             }
         }
+        if point.x >= Self.headerWidth, point.y >= rulerHeight, let region = region(at: point) {
+            // A MIDI part's menu. Glue (merge with the next part on the track) is the Cubase move;
+            // "merge all on track" collapses a stack of takes into one part.
+            onSelectRegion?(region.id)
+            let menu = NSMenu()
+            let open = NSMenuItem(title: "에디터 열기", action: #selector(regionOpenMenu(_:)), keyEquivalent: "")
+            open.target = self; open.representedObject = region.id; menu.addItem(open)
+            menu.addItem(.separator())
+            let hasNext = model.midiRegions.contains {
+                $0.laneIndex == region.laneIndex && $0.startSeconds > region.startSeconds
+            }
+            let glue = NSMenuItem(title: "다음 파트와 합치기 (글루)", action: #selector(regionMergeForwardMenu(_:)), keyEquivalent: "")
+            glue.target = self; glue.representedObject = region.id; glue.isEnabled = hasNext; menu.addItem(glue)
+            let mergeAll = NSMenuItem(title: "트랙의 MIDI 파트 모두 합치기", action: #selector(regionMergeAllMenu(_:)), keyEquivalent: "")
+            mergeAll.target = self; mergeAll.representedObject = region.id; mergeAll.isEnabled = hasNext; menu.addItem(mergeAll)
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
         if point.x >= Self.headerWidth, point.y >= rulerHeight, let clip = clip(at: point) {
             showClipFadeMenu(clip, event: event)
             return
@@ -1683,6 +1771,16 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             menu.addItem(item)
         }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func selectSoloModeMenu(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        soloSelectMode = mode
+        onSetSoloSelectMode?(mode)
+    }
+
+    @objc private func clearAllSolosMenu(_ sender: NSMenuItem) {
+        onClearAllSolos?()
     }
 
     @objc private func toggleTimebaseMenu(_ sender: NSMenuItem) {
@@ -1797,21 +1895,33 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             (lane.name as NSString).draw(at: NSPoint(x: 30, y: rect.minY + 10),
                                          withAttributes: nameAttributes)
 
-            // Buttons + automation chips only above the buttons threshold; below it the
-            // header is name-only.
-            if laneShowsButtons(index) {
-                // The button that folds the automation row out from under the lane.
-                let toggle = automationToggleRect(index)
-                NSColor(hex: lane.automation != nil ? 0x5f9fd6 : 0x453d34).setFill()
-                NSBezierPath(roundedRect: toggle, xRadius: 3, yRadius: 3).fill()
-                ("A" as NSString).draw(
-                    at: NSPoint(x: toggle.minX + 5, y: toggle.minY + 1),
-                    withAttributes: [
-                        .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
-                        .foregroundColor: NSColor(hex: lane.automation != nil ? 0x101418 : 0x8c8175),
-                    ])
+            // Pro Tools-style automation disclosure stays pinned to the bottom-left at
+            // every track height. It is deliberately independent of the progressive
+            // disclosure tiers: shrinking a track may hide M/S/R/I, but must never hide
+            // the control that opens its automation lane.
+            let toggle = automationToggleRect(index)
+            NSColor(hex: lane.automation != nil ? 0x5f9fd6 : 0x302a24).setFill()
+            NSBezierPath(roundedRect: toggle, xRadius: 2, yRadius: 2).fill()
+            NSColor(hex: lane.automation != nil ? 0x86bde8 : 0x665c51).setStroke()
+            NSBezierPath(roundedRect: toggle.insetBy(dx: 0.5, dy: 0.5), xRadius: 2, yRadius: 2).stroke()
+            let chevron = NSBezierPath()
+            if lane.automation != nil {
+                chevron.move(to: NSPoint(x: toggle.minX + 3, y: toggle.minY + 5))
+                chevron.line(to: NSPoint(x: toggle.midX, y: toggle.maxY - 3))
+                chevron.line(to: NSPoint(x: toggle.maxX - 3, y: toggle.minY + 5))
+            } else {
+                chevron.move(to: NSPoint(x: toggle.minX + 5, y: toggle.minY + 3))
+                chevron.line(to: NSPoint(x: toggle.maxX - 3, y: toggle.midY))
+                chevron.line(to: NSPoint(x: toggle.minX + 5, y: toggle.maxY - 3))
+            }
+            chevron.lineWidth = 1.4
+            NSColor(hex: lane.automation != nil ? 0x101418 : 0xa79a8d).setStroke()
+            chevron.stroke()
 
-                // The automation-mode chip sits just left of the "A" toggle.
+            // Buttons + automation mode only above the buttons threshold; below it the
+            // disclosure remains alongside the name.
+            if laneShowsButtons(index) {
+                // The automation-mode chip remains in the M/S/R/I row.
                 drawHeaderAutomationMode(index: index, lane: lane)
             }
 
@@ -1979,7 +2089,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private final class AutoParamRef: NSObject { let lane: Int; let id: String
         init(_ lane: Int, _ id: String) { self.lane = lane; self.id = id } }
 
-    /// Pick what an automation lane targets: track volume / pan, or a plug-in parameter.
+    /// Pro Tools-style grouped picker for track, send, insert and instrument automation.
     private func showAutomationParamMenu(lane: Int, event: NSEvent) {
         let options = onAutomationParamOptions?(lane) ?? []
         guard !options.isEmpty else { onCycleAutomationParameter?(lane); return }
@@ -1987,12 +2097,38 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let header = NSMenuItem(title: "오토메이션 파라미터", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        for opt in options {
+
+        func addOption(_ opt: (id: String, name: String, on: Bool), to target: NSMenu) {
             let it = NSMenuItem(title: opt.name, action: #selector(pickAutomationParam(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = AutoParamRef(lane, opt.id)
             it.state = opt.on ? .on : .off
-            menu.addItem(it)
+            target.addItem(it)
+        }
+
+        let groups: [(title: String, matches: (String) -> Bool)] = [
+            ("트랙", { $0.hasPrefix("track.") }),
+            ("센드", { $0.hasPrefix("send.") }),
+            ("인서트", { $0.hasPrefix("insert.") }),
+            ("악기", { $0.hasPrefix("instrument.") })
+        ]
+        for group in groups {
+            let members = options.filter { group.matches($0.id) }
+            let submenu = NSMenu(title: group.title)
+            if members.isEmpty {
+                let empty = NSMenuItem(
+                    title: group.title == "센드" ? "활성 센드가 없습니다"
+                         : group.title == "인서트" ? "로드된 인서트가 없습니다"
+                         : "로드된 악기가 없습니다",
+                    action: nil, keyEquivalent: "")
+                empty.isEnabled = false
+                submenu.addItem(empty)
+            } else {
+                members.forEach { addOption($0, to: submenu) }
+            }
+            let root = NSMenuItem(title: group.title, action: nil, keyEquivalent: "")
+            root.submenu = submenu
+            menu.addItem(root)
         }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
@@ -2005,10 +2141,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         init(_ clipId: String, _ curve: String) { self.clipId = clipId; self.curve = curve } }
     private final class SpotMenuRef: NSObject { let clipIds: [String]
         init(_ clipIds: [String]) { self.clipIds = clipIds } }
-    private final class TimePitchRef: NSObject { let clipId: String; let ratio: Double; let semis: Double
-        init(_ clipId: String, _ ratio: Double, _ semis: Double) { self.clipId = clipId; self.ratio = ratio; self.semis = semis } }
     private final class AlignRef: NSObject { let dubId: String; let refId: String
         init(_ dubId: String, _ refId: String) { self.dubId = dubId; self.refId = refId } }
+    private final class StemPresetRef: NSObject { let clipId: String; let preset: String
+        init(_ clipId: String, _ preset: String) { self.clipId = clipId; self.preset = preset } }
+
+    private final class AraPluginRef: NSObject { let clipId: String; let pluginName: String; let pluginPath: String
+        init(_ clipId: String, _ pluginName: String, _ pluginPath: String) {
+            self.clipId = clipId; self.pluginName = pluginName; self.pluginPath = pluginPath } }
 
     /// A live strength slider hosted inside the "리드에 정렬" submenu (0…100 %).
     private final class AlignStrengthMenuView: NSView {
@@ -2074,32 +2214,64 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         clipProc("뮤트", #selector(muteClipMenu(_:)))
         clipProc("Ø 위상 반전", #selector(polarityClipMenu(_:)))
 
-        // Offline time/pitch print (Serato phase vocoder): common presets, applied to the clip window.
+        // Offline time/pitch print: open one manual editor instead of guessing from presets.
         if onApplyClipTimePitch != nil {
-            let tpItem = NSMenuItem(title: "타임/피치", action: nil, keyEquivalent: "")
-            let tp = NSMenu()
-            func tpEntry(_ title: String, _ ratio: Double, _ semis: Double) {
-                let it = NSMenuItem(title: title, action: #selector(applyTimePitchMenu(_:)), keyEquivalent: "")
-                it.target = self
-                it.representedObject = TimePitchRef(clip.id, ratio, semis)
-                tp.addItem(it)
-            }
-            tpEntry("길이 2배 (½ 속도)", 2.0, 0.0)
-            tpEntry("길이 절반 (2× 속도)", 0.5, 0.0)
-            tp.addItem(.separator())
-            tpEntry("피치 +12 반음 (옥타브 ↑)", 1.0, 12.0)
-            tpEntry("피치 +7 반음", 1.0, 7.0)
-            tpEntry("피치 +1 반음", 1.0, 1.0)
-            tpEntry("피치 −1 반음", 1.0, -1.0)
-            tpEntry("피치 −12 반음 (옥타브 ↓)", 1.0, -12.0)
-            tpItem.submenu = tp
+            let tpItem = NSMenuItem(title: "타임/피치 설정…", action: #selector(openTimePitchSettings(_:)), keyEquivalent: "")
+            tpItem.target = self
+            tpItem.representedObject = clip.id as NSString
             menu.addItem(tpItem)
         }
         if onDenoiseClip != nil {
             clipProc("노이즈 제거 (뉴럴 디노이저)", #selector(denoiseClipMenu(_:)))
         }
-        if onSeparateStems != nil {
+        // ARA: the plug-in's own editor, not ours. Only listed when one is actually installed —
+        // an empty submenu would suggest the feature is broken rather than absent.
+        if onOpenAraEditor != nil && !araPlugins.isEmpty {
+            let edited = clipHasAraEdits?(clip.id) ?? false
+            let araItem = NSMenuItem(title: edited ? "ARA 편집 계속…" : "ARA 편집 (플러그인 에디터)…",
+                                     action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for plugin in araPlugins {
+                let item = NSMenuItem(title: plugin.name, action: #selector(openAraEditorMenu(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = AraPluginRef(clip.id, plugin.name, plugin.path)
+                sub.addItem(item)
+            }
+            if edited {
+                sub.addItem(NSMenuItem.separator())
+                let clear = NSMenuItem(title: "ARA 편집 제거 (원본으로)",
+                                       action: #selector(clearAraEditsMenu(_:)), keyEquivalent: "")
+                clear.target = self
+                clear.representedObject = clip.id as NSString
+                sub.addItem(clear)
+            }
+            araItem.submenu = sub
+            menu.addItem(araItem)
+        }
+        if let sepPreset = onSeparateStemsPreset {
+            _ = sepPreset
+            let stemItem = NSMenuItem(title: "스템 분리 설정…",
+                                      action: #selector(separateStemPresetMenu(_:)), keyEquivalent: "")
+            stemItem.target = self
+            stemItem.representedObject = StemPresetRef(clip.id, "configure")
+            menu.addItem(stemItem)
+        } else if onSeparateStems != nil {
             clipProc("스템 분리 (드럼/베이스/보컬/기타)", #selector(separateStemsMenu(_:)))
+        }
+        if onConvertToMidi != nil {
+            if convertToMidiPolyAvailable && onConvertToMidiPoly != nil {
+                let midiItem = NSMenuItem(title: "MIDI로 변환", action: nil, keyEquivalent: "")
+                let sub = NSMenu()
+                let mono = NSMenuItem(title: "모노포닉 (베이스/보컬/리드)", action: #selector(convertToMidiMenu(_:)), keyEquivalent: "")
+                mono.target = self; mono.representedObject = clip.id as NSString; sub.addItem(mono)
+                let poly = NSMenuItem(title: "폴리포닉 (화음/피아노/기타)", action: #selector(convertToMidiPolyMenu(_:)), keyEquivalent: "")
+                poly.target = self; poly.representedObject = clip.id as NSString; sub.addItem(poly)
+                midiItem.submenu = sub
+                menu.addItem(midiItem)
+            } else {
+                clipProc("MIDI로 변환 (인스트루먼트 트랙 생성)", #selector(convertToMidiMenu(_:)))
+            }
         }
         if onOpenPitchEditor != nil {
             clipProc("피치 에디터 (멜로다인 / 세라토 앵커)", #selector(openPitchEditorMenu(_:)))
@@ -2171,14 +2343,46 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard let r = s.representedObject as? ClipCurveRef else { return }
         onSetClipFadeInCurve?(r.clipId, r.curve)
     }
+    @objc private func regionOpenMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onOpenRegion?(id) } }
+    @objc private func regionMergeForwardMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onMergeRegionForward?(id) } }
+    @objc private func regionMergeAllMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onMergeRegionsOnTrack?(id) } }
     @objc private func reverseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onReverseClip?(id) } }
     @objc private func normalizeClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onNormalizeClip?(id) } }
-    @objc private func applyTimePitchMenu(_ s: NSMenuItem) {
-        if let r = s.representedObject as? TimePitchRef { onApplyClipTimePitch?(r.clipId, r.ratio, r.semis) }
+    @objc private func openTimePitchSettings(_ s: NSMenuItem) {
+        guard let clipId = s.representedObject as? String else { return }
+        let alert = NSAlert()
+        alert.messageText = "타임/피치"
+        alert.informativeText = "길이와 음정을 각각 직접 설정합니다. 원본은 새 오디오 파일로 프린트됩니다."
+        alert.addButton(withTitle: "적용")
+        alert.addButton(withTitle: "취소")
+        let ratio = NSTextField(string: "1.000")
+        let semitones = NSTextField(string: "0.00")
+        let form = NSGridView(views: [
+            [NSTextField(labelWithString: "길이 비율"), ratio, NSTextField(labelWithString: "×")],
+            [NSTextField(labelWithString: "피치"), semitones, NSTextField(labelWithString: "반음")]
+        ])
+        form.column(at: 1).width = 110
+        form.rowSpacing = 8
+        alert.accessoryView = form
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let r = min(8.0, max(0.125, ratio.doubleValue))
+        let st = min(24.0, max(-24.0, semitones.doubleValue))
+        onApplyClipTimePitch?(clipId, r, st)
     }
     @objc private func denoiseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onDenoiseClip?(id) } }
+    @objc private func openAraEditorMenu(_ s: NSMenuItem) {
+        if let ref = s.representedObject as? AraPluginRef {
+            onOpenAraEditor?(ref.clipId, ref.pluginName, ref.pluginPath)
+        }
+    }
+    @objc private func clearAraEditsMenu(_ s: NSMenuItem) {
+        if let id = s.representedObject as? String { onClearAraEdits?(id) }
+    }
     @objc private func alignToRefMenu(_ s: NSMenuItem) { if let r = s.representedObject as? AlignRef { onAlignToReference?(r.dubId, r.refId) } }
     @objc private func separateStemsMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onSeparateStems?(id) } }
+    @objc private func convertToMidiMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onConvertToMidi?(id) } }
+    @objc private func convertToMidiPolyMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onConvertToMidiPoly?(id) } }
+    @objc private func separateStemPresetMenu(_ s: NSMenuItem) { if let r = s.representedObject as? StemPresetRef { onSeparateStemsPreset?(r.clipId, r.preset) } }
     @objc private func openPitchEditorMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onOpenPitchEditor?(id) } }
     @objc private func muteClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onToggleClipMute?(id) } }
     @objc private func polarityClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onToggleClipPolarity?(id) } }
@@ -2241,8 +2445,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     }
 
     private func automationToggleRect(_ index: Int) -> NSRect {
-        // Sits in the M/S/R/I button row, after the automation-mode chip.
-        NSRect(x: 125, y: laneTop(index) + 30, width: 18, height: Self.headerButtonHeight)
+        // Pro Tools-style disclosure in the track header's fixed bottom-left corner.
+        // Kept 5 pt above the resize edge so a click never starts a height drag.
+        NSRect(x: 3, y: laneTop(index) + laneHeight(index) - 20, width: 14, height: 14)
     }
 
     /// The track-name band in the header — double-click here to rename.
@@ -2924,7 +3129,9 @@ extension NSColor {
 /// never invalidates the waveform drawing.
 struct TimelineView: NSViewRepresentable {
     let model: TimelineModel
-    let playheadSeconds: Double
+    // NOT observed: the NSView subscribes to the clock itself (bindPlayheadClock) and moves only its
+    // playhead layer, so the 30 Hz playhead never touches SwiftUI at all.
+    let playheadClock: PlayheadClock
     var isTransportRunning: Bool = false
     let waveforms: [String: EngineController.WaveformData]
     // Live audio-record clips (empty = not recording / plain background pass).
@@ -2937,10 +3144,13 @@ struct TimelineView: NSViewRepresentable {
     let onSetRangeLane: (Int?) -> Void
     let onSelectRegion: (String?) -> Void
     let onOpenRegion: (String) -> Void
+    var onMergeRegionForward: (String) -> Void = { _ in }
+    var onMergeRegionsOnTrack: (String) -> Void = { _ in }
     let onMoveRegion: (String, Int, Double) -> Void
     let onResizeRegion: (String, Double) -> Void
     let onAddRegion: (Int, Double) -> Void
     let onDropAudio: (Int, Double, [URL]) -> Void
+    var onDropMidi: ((Int, Double, [URL]) -> Void)? = nil
     let onMoveMarker: (Double, Double) -> Void
     let onDeleteMarker: (Double) -> Void
     let onSelectBetweenMarkers: (Double) -> Void
@@ -2961,10 +3171,21 @@ struct TimelineView: NSViewRepresentable {
     var onToggleClipPolarity: ((String) -> Void)? = nil
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)? = nil
     var onDenoiseClip: ((String) -> Void)? = nil
+    var onOpenAraEditor: ((String, String, String) -> Void)? = nil
+    var onClearAraEdits: ((String) -> Void)? = nil
+    var araPlugins: [(name: String, path: String)] = []
+    var clipHasAraEdits: ((String) -> Bool)? = nil
     var onAlignToReference: ((String, String) -> Void)? = nil
     var alignStrength: Double = 1.0
     var onSetAlignStrength: ((Double) -> Void)? = nil
     var onSeparateStems: ((String) -> Void)? = nil
+    var onSeparateStemsPreset: ((String, String) -> Void)? = nil
+    var stem6sAvailable: Bool = false
+    var drumSplitAvailable: Bool = false
+    var orchestraSeparationAvailable: Bool = false
+    var onConvertToMidi: ((String) -> Void)? = nil
+    var onConvertToMidiPoly: ((String) -> Void)? = nil
+    var convertToMidiPolyAvailable: Bool = false
     var onOpenPitchEditor: ((String) -> Void)? = nil
     var onSetCrossfadeLength: ((String, String, Double) -> Void)? = nil
     var onSetFadeCurvature: ((String, Bool, Double) -> Void)? = nil
@@ -2999,6 +3220,9 @@ struct TimelineView: NSViewRepresentable {
     let snap: (Double) -> Double
     let onToggleMute: (Int) -> Void
     let onToggleSolo: (Int) -> Void
+    var soloSelectMode: String = "additive"
+    var onSetSoloSelectMode: ((String) -> Void)? = nil
+    var onClearAllSolos: (() -> Void)? = nil
     let onToggleArm: (Int) -> Void
     let onToggleInputMonitor: (Int) -> Void
     var onRenameTrack: ((Int, String) -> Void)? = nil
@@ -3022,6 +3246,7 @@ struct TimelineView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
+        view.bindPlayheadClock(playheadClock)
         wire(view)
         return view
     }
@@ -3032,7 +3257,6 @@ struct TimelineView: NSViewRepresentable {
             view.waveforms = waveforms
         }
         view.model = model
-        view.playheadSeconds = playheadSeconds
         view.isTransportRunning = isTransportRunning
         view.recordingChannels = recordingChannels
         view.recordingClips = recordingClips            // didSet repaints
@@ -3058,10 +3282,13 @@ struct TimelineView: NSViewRepresentable {
         view.onSetRangeLane = onSetRangeLane
         view.onSelectRegion = onSelectRegion
         view.onOpenRegion = onOpenRegion
+        view.onMergeRegionForward = onMergeRegionForward
+        view.onMergeRegionsOnTrack = onMergeRegionsOnTrack
         view.onMoveRegion = onMoveRegion
         view.onResizeRegion = onResizeRegion
         view.onAddRegion = onAddRegion
         view.onDropAudio = onDropAudio
+        view.onDropMidi = onDropMidi
         view.onMoveMarker = onMoveMarker
         view.onDeleteMarker = onDeleteMarker
         view.onSelectBetweenMarkers = onSelectBetweenMarkers
@@ -3082,10 +3309,21 @@ struct TimelineView: NSViewRepresentable {
         view.onNormalizeClip = onNormalizeClip
         view.onApplyClipTimePitch = onApplyClipTimePitch
         view.onDenoiseClip = onDenoiseClip
+        view.onOpenAraEditor = onOpenAraEditor
+        view.onClearAraEdits = onClearAraEdits
+        view.araPlugins = araPlugins
+        view.clipHasAraEdits = clipHasAraEdits
         view.onAlignToReference = onAlignToReference
         view.alignStrength = alignStrength
         view.onSetAlignStrength = onSetAlignStrength
         view.onSeparateStems = onSeparateStems
+        view.onSeparateStemsPreset = onSeparateStemsPreset
+        view.stem6sAvailable = stem6sAvailable
+        view.drumSplitAvailable = drumSplitAvailable
+        view.orchestraSeparationAvailable = orchestraSeparationAvailable
+        view.onConvertToMidi = onConvertToMidi
+        view.onConvertToMidiPoly = onConvertToMidiPoly
+        view.convertToMidiPolyAvailable = convertToMidiPolyAvailable
         view.onOpenPitchEditor = onOpenPitchEditor
         view.onToggleClipMute = onToggleClipMute
         view.onToggleClipPolarity = onToggleClipPolarity
@@ -3120,6 +3358,9 @@ struct TimelineView: NSViewRepresentable {
         view.snap = snap
         view.onToggleMute = onToggleMute
         view.onToggleSolo = onToggleSolo
+        view.soloSelectMode = soloSelectMode
+        view.onSetSoloSelectMode = onSetSoloSelectMode
+        view.onClearAllSolos = onClearAllSolos
         view.onToggleArm = onToggleArm
         view.onToggleInputMonitor = onToggleInputMonitor
         view.onRenameTrack = onRenameTrack

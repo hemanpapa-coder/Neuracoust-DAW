@@ -1,4 +1,5 @@
 import SwiftUI
+import Darwin
 
 /// Finder hands files to the app through the delegate, not through SwiftUI.
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -24,12 +25,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct NeuracoustApp: App {
+    /// A process-owned lock is stronger than LaunchServices' normal single-instance
+    /// behaviour: it also rejects `open -n` and direct executable launches. The file
+    /// may remain after a crash, but flock itself is released by the kernel.
+    private static let singleInstanceLock: Int32 = {
+        let path = NSTemporaryDirectory() + "com.neuracoust.daw.single-instance.lock"
+        let fd = Darwin.open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard fd >= 0, Darwin.lockf(fd, F_TLOCK, 0) == 0 else {
+            if fd >= 0 { Darwin.close(fd) }
+            NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.neuracoust.daw")
+                .first?
+                .activate(options: [.activateAllWindows])
+            Darwin.exit(0)
+        }
+        return fd
+    }()
+
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var engine: EngineController
     @StateObject private var listen: ListenRoomController
     @StateObject private var ai: AiAssistantController
 
     init() {
+        _ = Self.singleInstanceLock
+        // Ignore SIGPIPE process-wide. We talk to plug-in editor helpers over pipes; when an editor
+        // exits (a window close while the keyboard is playing, a crash), the next write to its now
+        // readerless pipe raises SIGPIPE, whose default action is to kill us instantly — with no
+        // crash report, which is exactly how "closed the editor and the app vanished" presented.
+        // Ignored, the write instead returns EPIPE, which the pipe writers already catch and handle
+        // by closing the dead session. This must run before any editor pipe exists.
+        signal(SIGPIPE, SIG_IGN)
         Diagnostics.shared.start()   // open the session log + capture stderr before anything else
         let engine = EngineController()
         let listen = ListenRoomController(engine: engine)
@@ -64,6 +90,7 @@ struct NeuracoustApp: App {
         // matches on key code. SwiftUI's keyboardShortcut matches on characters and
         // therefore never fires while a Korean input source is active.
         .commands {
+            VirtualKeyboardCommands()
             CommandGroup(replacing: .newItem) {
                 Button("새 프로젝트") { engine.newProject() }
                     .keyboardShortcut("n", modifiers: .command)
@@ -98,8 +125,15 @@ struct NeuracoustApp: App {
                 Divider()
                 Button("오디오 가져오기…") { engine.importAudio(intoTrack: 0) }
                     .keyboardShortcut("i", modifiers: [.command, .shift])   // Pro Tools
+                if engine.aafImportAvailable {
+                    Button("AAF 세션 가져오기…") { engine.importAafSession() }
+                        .help("프로툴즈·미디어컴포저·리졸브 AAF의 트랙·클립·마커를 가져옵니다 (현재 세션을 대체)")
+                }
                 Button("바운스…") { engine.bounceProject() }
                     .keyboardShortcut("b", modifiers: [.command, .option])  // Pro Tools
+                    .disabled(engine.bouncing)
+                Button("스템 내보내기 (트랙별 WAV)…") { engine.exportStems() }
+                    .help("트랙마다 WAV 하나 · 전부 00:00에서 시작하므로 다른 DAW에 0에 놓으면 그대로 맞습니다")
                     .disabled(engine.bouncing)
             }
             CommandGroup(replacing: .undoRedo) {
@@ -129,6 +163,12 @@ struct NeuracoustApp: App {
                 Button("MIDI 트랙 추가") { engine.addMidiTrack() }
                 Button("Aux(버스) 트랙 추가") { engine.addAuxTrack() }
                 Divider()
+                Menu("메트로놈 오디오 트랙 만들기") {
+                    Button("전체 세션") { engine.printMetronomeToTrack(loopRangeOnly: false) }
+                    Button("루프/편집 범위") { engine.printMetronomeToTrack(loopRangeOnly: true) }
+                        .disabled(!engine.loopEnabled || engine.loopEndSeconds <= engine.loopStartSeconds)
+                }
+                Divider()
                 Button("선택 트랙 복제…") {
                     if let id = engine.selectedTrackId { engine.duplicateTrackTarget = id }
                 }
@@ -136,6 +176,9 @@ struct NeuracoustApp: App {
                 .disabled(engine.selectedTrackId == nil)
                 Button("선택 트랙 삭제") { engine.deleteSelectedTrack() }
                     .disabled(engine.selectedTrackId == nil)
+                Divider()
+                Button("MIDI 라이브러리") { engine.toggleMidiLibrary() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandMenu("클립") {
                 // Consolidate the selection into one audio file (Pro Tools ⌥⇧3). Number-key shortcut,
@@ -144,10 +187,57 @@ struct NeuracoustApp: App {
                     .keyboardShortcut("3", modifiers: [.option, .shift])
                     .disabled(engine.selectedClipIds.isEmpty)
             }
-            CommandMenu("AI") {
+            CommandMenu("도구") {
                 // ⌥⌘A — ⇧⌘I now belongs to Import Audio (Pro Tools).
                 Button(ai.open ? "AI 어시스턴트 닫기" : "AI 어시스턴트 열기") { ai.toggle() }
                     .keyboardShortcut("a", modifiers: [.command, .option])
+                Divider()
+                Menu("컨트롤 서피스") {
+                    Menu("Mackie HUI 입력") {
+                        if engine.huiInputs.isEmpty {
+                            Button("MIDI 입력 없음") {}.disabled(true)
+                        } else {
+                            ForEach(engine.huiInputs) { endpoint in
+                                Button {
+                                    engine.selectHuiInput(endpoint.id)
+                                } label: {
+                                    if engine.huiInputId == endpoint.id {
+                                        Label(endpoint.name, systemImage: "checkmark")
+                                    } else {
+                                        Text(endpoint.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Menu("Mackie HUI 출력") {
+                        if engine.huiOutputs.isEmpty {
+                            Button("MIDI 출력 없음") {}.disabled(true)
+                        } else {
+                            ForEach(engine.huiOutputs) { endpoint in
+                                Button {
+                                    engine.selectHuiOutput(endpoint.id)
+                                } label: {
+                                    if engine.huiOutputId == endpoint.id {
+                                        Label(endpoint.name, systemImage: "checkmark")
+                                    } else {
+                                        Text(endpoint.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("MIDI 장치 다시 검색") { engine.refreshHuiDevices() }
+                    if engine.huiConnected {
+                        Button("Mackie HUI 연결 해제") { engine.disconnectHui() }
+                    } else {
+                        Button("Mackie HUI 연결") { engine.connectHui() }
+                            .disabled(engine.huiInputId.isEmpty || engine.huiOutputId.isEmpty)
+                    }
+                    Divider()
+                    Text(engine.huiStatus)
+                }
             }
             // FabFilter-style Help menu: a checkmarked toggle for the hover hints, the
             // same helpMode the toolbar "?" flips. A Toggle renders with the ✓ in a menu.
@@ -155,6 +245,13 @@ struct NeuracoustApp: App {
                 Toggle("대화형 도움말 표시", isOn: $engine.helpMode)
             }
         }
+
+        Window("가상 MIDI 키보드", id: "virtual-keyboard") {
+            VirtualKeyboardView()
+                .environmentObject(engine)
+        }
+        .defaultSize(width: 920, height: 250)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -178,7 +275,7 @@ struct RootView: View {
     private var fullDawView: some View {
         VStack(spacing: 0) {
             TitleBar()
-            TransportBar()
+            TransportBar(clock: engine.playheadClock)
             StatusStrip()
 
             HStack(spacing: 0) {
@@ -241,19 +338,44 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             BounceStatus()
         }
-        .overlay(alignment: .top) {
+        .overlay(alignment: .bottomTrailing) {
             if let p = engine.stemSeparationProgress {
-                HStack(spacing: Theme.Space.md) {
-                    ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text(engine.stemSeparationStatus).font(Theme.Font.ui(11, .medium))
-                        .foregroundStyle(Theme.Palette.text)
-                    ProgressView(value: p).frame(width: 120)
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "waveform.badge.magnifyingglass")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.accent)
+                        Text(engine.stemSeparationStatus)
+                            .font(Theme.Font.ui(11, .medium))
+                            .foregroundStyle(Theme.Palette.text)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text("\(Int(min(1, max(0, p)) * 100))%")
+                            .font(Theme.Font.mono(10, .semibold))
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                    ProgressView(value: p)
+                        .progressViewStyle(.linear)
+                        .tint(Theme.Palette.accent)
                 }
-                .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.md)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.panel))
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.panel).stroke(Theme.Palette.divider, lineWidth: 1))
-                .padding(.top, Theme.Space.lg)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .frame(width: 260)
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                        .fill(Theme.Palette.panel.opacity(0.97))
+                        .shadow(color: .black.opacity(0.42), radius: 10, y: 4)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.panel)
+                        .stroke(Theme.Palette.divider, lineWidth: 1)
+                )
+                // A background job belongs beside the work surface, never over the
+                // transport/time display. When the monitor dock is visible the card
+                // parks immediately to its left.
+                .padding(.trailing, engine.showMonitorDock ? Theme.monitorDockWidth + 14 : 14)
+                .padding(.bottom, 14)
+                .allowsHitTesting(false)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .sheet(isPresented: Binding(
@@ -443,7 +565,7 @@ private struct EditView: View {
 
                 TimelineView(
                     model: engine.timelineModel,
-                    playheadSeconds: engine.playheadSeconds,
+                    playheadClock: engine.playheadClock,
                     isTransportRunning: engine.transportRunning || engine.recording,
                     waveforms: engine.waveforms,
                     recordingClips: engine.recordingClips,
@@ -455,10 +577,13 @@ private struct EditView: View {
                     onSetRangeLane: { engine.editRangeLane = $0 },
                     onSelectRegion: { engine.selectRegion($0) },
                     onOpenRegion: { engine.editingRegionId = $0 },
+                    onMergeRegionForward: { engine.mergeRegionForward($0) },
+                    onMergeRegionsOnTrack: { engine.mergeRegionsOnTrack($0) },
                     onMoveRegion: { engine.moveMidiRegion($0, laneIndex: $1, startSeconds: $2) },
                     onResizeRegion: { engine.resizeMidiRegion($0, durationSeconds: $1) },
                     onAddRegion: { engine.addMidiRegion(laneIndex: $0, startSeconds: $1) },
                     onDropAudio: { engine.dropAudio(onLane: $0, atSeconds: $1, urls: $2) },
+                    onDropMidi: { engine.dropMidi(onLane: $0, atSeconds: $1, urls: $2) },
                     onMoveMarker: { engine.moveMarker(from: $0, to: $1) },
                     onDeleteMarker: { engine.deleteMarker(at: $0) },
                     onSelectBetweenMarkers: { engine.selectBetweenMarkers(around: $0) },
@@ -487,10 +612,21 @@ private struct EditView: View {
                     onToggleClipPolarity: { engine.toggleClipPolarity($0) },
                     onApplyClipTimePitch: { engine.applyClipTimePitch($0, timeRatio: $1, semitones: $2) },
                     onDenoiseClip: { engine.denoiseClip($0) },
+                    onOpenAraEditor: { engine.openAraEditor(clipId: $0, pluginName: $1, pluginPath: $2) },
+                    onClearAraEdits: { engine.clearAraEdits($0) },
+                    araPlugins: engine.araPlugins(),
+                    clipHasAraEdits: { engine.clipHasAraEdits($0) },
                     onAlignToReference: { engine.alignClipToReference($0, referenceClipId: $1) },
                     alignStrength: engine.alignStrength,
                     onSetAlignStrength: { engine.alignStrength = $0 },
                     onSeparateStems: { engine.separateClipStems($0) },
+                    onSeparateStemsPreset: { engine.separateClipStemsPreset($0, $1) },
+                    stem6sAvailable: engine.stem6sAvailable,
+                    drumSplitAvailable: engine.drumSplitAvailable,
+                    orchestraSeparationAvailable: engine.orchestraSeparationAvailable,
+                    onConvertToMidi: { engine.convertClipToMidi($0) },
+                    onConvertToMidiPoly: { engine.convertClipToMidiPolyphonic($0) },
+                    convertToMidiPolyAvailable: engine.basicPitchAvailable,
                     onOpenPitchEditor: { engine.openPitchEditor($0) },
                     onSetCrossfadeLength: { engine.setCrossfadeLength($0, $1, to: $2) },
                     onSetFadeCurvature: { engine.setClipFadeCurvature($0, fadeIn: $1, $2) },
@@ -525,6 +661,13 @@ private struct EditView: View {
                     snap: { engine.snap($0) },
                     onToggleMute: { engine.toggleTrackMute($0) },
                     onToggleSolo: { engine.toggleTrackSolo($0) },
+                    soloSelectMode: engine.soloSelectMode.rawValue,
+                    onSetSoloSelectMode: {
+                        if let mode = EngineController.SoloSelectMode(rawValue: $0) {
+                            engine.setSoloSelectMode(mode)
+                        }
+                    },
+                    onClearAllSolos: { engine.clearAllSolos() },
                     onToggleArm: { engine.toggleTrackArm($0) },
                     onToggleInputMonitor: { engine.toggleTrackInputMonitoring($0) },
                     onRenameTrack: { _ = engine.renameTrack($0, to: $1) },
@@ -547,8 +690,11 @@ private struct EditView: View {
                     onSendBusOptions: { engine.sendBusOptions($0) }
                 )
 
-                PianoRollPanel()
+                PianoRollPanel(clock: engine.playheadClock)
                 PitchEditorPanel()
+                if engine.midiLibraryOpen {
+                    MidiLibraryPanel(library: engine.midiLibrary)
+                }
             }
             }
             .frame(width: geo.size.width, height: geo.size.height)

@@ -220,6 +220,21 @@ struct PluginBrowser: View {
 
             Spacer(minLength: Theme.Space.lg)
 
+            // ARA plug-ins are not realtime effects. Badge them so it is obvious BEFORE clicking
+            // 추가 why they cannot go in an insert slot.
+            if plugin.isAra {
+                Text("ARA")
+                    .font(Theme.Font.mono(7.5, .semibold))
+                    .foregroundStyle(Theme.Palette.amber)
+                    .padding(.horizontal, Theme.Space.md)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.tag)
+                            .fill(Theme.Palette.amber.opacity(0.16))
+                    )
+                    .help("ARA 플러그인 — 실시간 인서트가 아닙니다. ARA 호스팅은 준비 중입니다.")
+            }
+
             Text(plugin.format)
                 .font(Theme.Font.mono(7.5, .semibold))
                 .foregroundStyle(Theme.Palette.teal)
@@ -288,6 +303,24 @@ struct PluginBrowser: View {
                         )
                 }
                 .buttonStyle(.plain)
+            }
+
+            if let reason = engine.insertRejectedReason {
+                // Stays until dismissed: this explains a deliberate refusal (an ARA plug-in that
+                // would wedge the DAW), which is too important to flash past.
+                HStack(alignment: .top, spacing: Theme.Space.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Theme.Palette.orange)
+                    Text(reason)
+                        .font(Theme.Font.ui(10)).foregroundStyle(Theme.Palette.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("확인") { engine.insertRejectedReason = nil }
+                        .font(Theme.Font.ui(10))
+                }
+                .padding(.horizontal, Theme.Space.md).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .fill(Theme.Palette.orange.opacity(0.14)))
             }
 
             if engine.instrumentOnInsertRejected {

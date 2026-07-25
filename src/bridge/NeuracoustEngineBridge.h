@@ -67,6 +67,11 @@ typedef struct {
     double realtimeMaxWakeJitterUs;
     double realtimeMaxRenderDurationUs;
     int realtimeLateWakeCount;
+    // Reference-tap ("다른 앱") FIFO faults. The wake-jitter figures above describe the OUTPUT
+    // render thread ONLY — a tap capture that starves or overflows crackles while the render
+    // reads perfectly clean. These are that blind spot, made visible.
+    uint64_t referenceUnderrunBlocks;
+    uint64_t referenceOverrunDrops;
 
     bool remoteDspMonitorActive;
     double remoteDspRoundTripMs;
@@ -83,6 +88,8 @@ typedef struct {
     char trackMeterNames[NC_MAX_TRACK_METERS][NC_NAME_LEN];
     float trackPeakLeft[NC_MAX_TRACK_METERS];
     float trackPeakRight[NC_MAX_TRACK_METERS];
+    float trackConsoleGainReductionDb[NC_MAX_TRACK_METERS];
+    float trackConsoleGateGainReductionDb[NC_MAX_TRACK_METERS];
 
     char deviceName[NC_TEXT_LEN];
     char dspEngineName[NC_TEXT_LEN];
@@ -92,6 +99,14 @@ typedef struct {
 
 typedef struct NCEngine NCEngine;
 
+typedef struct NCHuiEvent {
+    int type;       // 0 none, 1 fader, 2 pan, 3 select, 4 mute, 5 solo, 6 arm,
+                    // 7 play, 8 stop, 9 record, 10 rewind, 11 fast-forward
+    int trackIndex;
+    float value;
+    bool pressed;
+} NCHuiEvent;
+
 NCEngine* nc_engine_create(void);
 void nc_engine_destroy(NCEngine* engine);
 
@@ -99,6 +114,21 @@ void nc_engine_destroy(NCEngine* engine);
 // Returns false and fills `error` (up to `errorLen` bytes, NUL-terminated).
 bool nc_engine_start(NCEngine* engine, char* error, size_t errorLen);
 void nc_engine_stop(NCEngine* engine);
+
+// Mackie HUI control surface. Input and output are deliberately separate because
+// most HUI devices expose a matched pair of virtual CoreMIDI ports.
+int  nc_hui_input_count(NCEngine* engine);
+int  nc_hui_output_count(NCEngine* engine);
+void nc_hui_input_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_hui_input_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_hui_output_id(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_hui_output_name(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_hui_connect(NCEngine* engine, const char* inputId, const char* outputId);
+void nc_hui_disconnect(NCEngine* engine);
+bool nc_hui_connected(NCEngine* engine);
+void nc_hui_status(NCEngine* engine, char* out, size_t outLen);
+bool nc_hui_next_event(NCEngine* engine, NCHuiEvent* out);
+void nc_hui_sync(NCEngine* engine, bool transportRunning, bool recording);
 
 void nc_engine_status(NCEngine* engine, NCEngineStatus* out);
 
@@ -144,6 +174,11 @@ float nc_metronome_gain(NCEngine* engine);
 void  nc_metronome_sound(NCEngine* engine, char* out, size_t outLen);
 bool  nc_metronome_accent_first(NCEngine* engine);
 void  nc_metronome_genre(NCEngine* engine, char* out, size_t outLen);
+/// Renders the current metronome sound/groove into a new audio track. When
+/// `loopRangeOnly` is true the current loop/edit range is printed; otherwise the
+/// complete session extent is printed. The generated WAV is kept in Audio Files.
+bool nc_metronome_print_to_track(NCEngine* engine, bool loopRangeOnly,
+                                  char* error, size_t errorLen);
 void nc_engine_set_test_tone_enabled(NCEngine* engine, bool enabled);
 
 // Project readouts. `out` receives a NUL-terminated string.
@@ -164,6 +199,9 @@ bool nc_project_loop_enabled(NCEngine* engine);
 void nc_project_set_loop_enabled(NCEngine* engine, bool enabled);
 double nc_project_loop_start(NCEngine* engine);
 double nc_project_loop_end(NCEngine* engine);
+double nc_project_pre_roll(NCEngine* engine);
+double nc_project_post_roll(NCEngine* engine);
+void nc_project_set_pre_post_roll(NCEngine* engine, double preRollSeconds, double postRollSeconds);
 
 // ---------------------------------------------------------------------------
 // Tracks / mixer
@@ -210,6 +248,13 @@ void nc_track_set_muted(NCEngine* engine, int index, bool muted);
 void nc_track_set_solo(NCEngine* engine, int index, bool solo);
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
+void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_console_module_order(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_console_module_order(NCEngine* engine, int index, const char* order);
+bool nc_track_console_bool(NCEngine* engine, int index, const char* parameter);
+float nc_track_console_value(NCEngine* engine, int index, const char* parameter);
+void nc_track_set_console_bool(NCEngine* engine, int index, const char* parameter, bool value);
+void nc_track_set_console_value(NCEngine* engine, int index, const char* parameter, float value);
 // Apply one flag to several selected tracks in one undo step. flag: 0=mute 1=solo 2=armed 3=inputMon.
 bool nc_track_set_flag_many(NCEngine* engine, const int* indices, int count, int flag, bool value);
 
@@ -565,8 +610,32 @@ double nc_clip_note_start_seconds(NCEngine* engine, int index);
 double nc_clip_note_duration_seconds(NCEngine* engine, int index);
 double nc_clip_note_detected_midi(NCEngine* engine, int index);
 double nc_clip_note_offset_semitones(NCEngine* engine, int index);
+double nc_clip_note_time_offset_seconds(NCEngine* engine, int index);
+double nc_clip_note_duration_scale(NCEngine* engine, int index);
 double nc_clip_note_confidence(NCEngine* engine, int index);
 void nc_clip_note_set_offset(NCEngine* engine, int index, double semitones);
+void nc_clip_note_set_time_offset(NCEngine* engine, int index, double seconds);
+void nc_clip_note_set_duration_scale(NCEngine* engine, int index, double scale);
+/// The rest of the Melodyne palette, per note. Amplitude/mute are exact; the formant tool moves the
+/// spectral envelope without moving the pitch; attack speed time-warps the note's own attack envelope
+/// (1.0 is exactly transparent). All are applied by the same offline print as the pitch edits.
+double nc_clip_note_gain_db(NCEngine* engine, int index);
+bool nc_clip_note_muted(NCEngine* engine, int index);
+double nc_clip_note_formant_semitones(NCEngine* engine, int index);
+double nc_clip_note_attack_speed(NCEngine* engine, int index);
+void nc_clip_note_set_gain_db(NCEngine* engine, int index, double gainDb);
+void nc_clip_note_set_muted(NCEngine* engine, int index, bool muted);
+void nc_clip_note_set_formant_semitones(NCEngine* engine, int index, double semitones);
+void nc_clip_note_set_attack_speed(NCEngine* engine, int index, double speed);
+/// Pitch-modulation and pitch-drift tools: scale the note's own vibrato / slow pitch movement.
+/// 1 = as recorded, 0 = flat, 2 = twice as much.
+double nc_clip_note_modulation_scale(NCEngine* engine, int index);
+double nc_clip_note_drift_scale(NCEngine* engine, int index);
+void nc_clip_note_set_modulation_scale(NCEngine* engine, int index, double scale);
+void nc_clip_note_set_drift_scale(NCEngine* engine, int index, double scale);
+/// Puts one note back to untouched.
+void nc_clip_note_reset(NCEngine* engine, int index);
+bool nc_clip_note_split(NCEngine* engine, int index, double localSeconds);
 bool nc_clip_apply_note_edits(NCEngine* engine, const char* clipId, char* error, size_t errorLen);
 
 // Polyphonic detection helpers: write the clip window as-is (to feed the separator), then reset the
@@ -579,8 +648,41 @@ bool nc_clip_export_raw_window(NCEngine* engine, const char* clipId, const char*
 // denoiser (offline print): export the window → denoise it into a WAV → repoint here.
 bool nc_clip_repoint_to_window_wav(NCEngine* engine, const char* clipId, const char* wavPath,
                                    const char* label, char* error, size_t errorLen);
+// --- ARA (Melodyne 등) -----------------------------------------------------------------------
+// An ARA plug-in edits a clip's audio in place with full random access, so it is hosted OFFLINE and
+// IN-PROCESS: open a session on a clip, show the plug-in's own editor, then commit — which archives
+// the plug-in's edits onto the clip (so they stay re-editable) and prints the result to a new WAV the
+// clip points at. Nothing ARA ever touches the audio thread. One session at a time.
+//
+// The clip keeps the unedited window it was first opened against, so re-opening always edits the
+// original audio rather than stacking a second pass on the print.
+/// The installed ARA-capable plug-ins, independent of the plug-in browser's current filter.
+int nc_ara_plugin_count(NCEngine* engine);
+void nc_ara_plugin_name(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_ara_plugin_path(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_ara_open(NCEngine* engine, const char* clipId, const char* pluginName, const char* pluginPath,
+                 char* error, size_t errorLen);
+bool nc_ara_is_open(NCEngine* engine);
+void nc_ara_open_clip_id(NCEngine* engine, char* out, size_t outLen);
+/// Creates the plug-in's editor inside `nsView` and reports the size it wants. Main thread.
+bool nc_ara_attach_editor(NCEngine* engine, void* nsView, int* widthOut, int* heightOut,
+                          char* error, size_t errorLen);
+/// Takes the plug-in's editor down without ending the session. Must be called before the NSView it
+/// was attached to goes away — the plug-in is still drawing into it.
+void nc_ara_detach_editor(NCEngine* engine);
+/// Archives the edits onto the clip and prints them into its audio. One undo step. Blocking.
+bool nc_ara_commit(NCEngine* engine, char* error, size_t errorLen);
+/// Drops the session without committing anything.
+void nc_ara_close(NCEngine* engine);
+bool nc_clip_has_ara_edits(NCEngine* engine, const char* clipId);
+/// Points the clip back at its unedited window and forgets the archive. One undo step.
+bool nc_clip_clear_ara_edits(NCEngine* engine, const char* clipId, char* error, size_t errorLen);
+
 void nc_detect_notes_reset(NCEngine* engine);
 int nc_detect_notes_add_from_file(NCEngine* engine, const char* wavPath, int mode);
+/// Append one externally detected polyphonic note to the editor cache.
+void nc_detect_notes_add_note(NCEngine* engine, double startSeconds, double durationSeconds,
+                              double midiPitch, double confidence);
 void nc_detect_notes_bind_clip(NCEngine* engine, const char* clipId);
 // Segment an external pitch track (from the CREPE neural detector helper) into cached notes.
 int nc_segment_pitch_track(NCEngine* engine, const double* times, const double* hzs,
@@ -688,6 +790,16 @@ bool nc_midi_region_muted(NCEngine* engine, int index);
 
 bool nc_midi_region_add(NCEngine* engine, int trackIndex, double startSeconds,
                         double durationSeconds, char* out, size_t outLen);
+/// Import a Standard MIDI File onto an existing instrument/midi track as ONE region at startSeconds,
+/// flattening all its notes (relative beat timing preserved; plays at the host tempo). One undo step.
+/// Backs the drum MIDI library's drag-drop + insert. Returns the new region id via out.
+bool nc_midi_import_file_to_track(NCEngine* engine, const char* midiPath, int trackIndex,
+                                  double startSeconds, char* out, size_t outLen);
+/// Smart MIDI import: a single-track file (a loop) lands as one region on `preferredTrackIndex` (or a new
+/// instrument track if < 0); a MULTI-track song lands as one new instrument track PER source track, each
+/// named from the source track, so a full song splits into its parts. One undo step. Returns tracks made.
+int nc_midi_import_file_auto(NCEngine* engine, const char* midiPath, int preferredTrackIndex,
+                             double startSeconds, char* error, size_t errorLen);
 /// Continuous, like a clip drag: records nothing. Pass trackIndex < 0 to stay put.
 bool nc_midi_region_move(NCEngine* engine, const char* regionId, int trackIndex, double startSeconds);
 bool nc_midi_region_resize(NCEngine* engine, const char* regionId, double durationSeconds);
@@ -703,6 +815,11 @@ int nc_midi_region_humanize(NCEngine* engine, const char* regionId, double maxTi
 bool nc_midi_region_split(NCEngine* engine, const char* regionId, double splitSeconds,
                           char* out, size_t outLen);
 bool nc_midi_region_duplicate(NCEngine* engine, const char* regionId, char* out, size_t outLen);
+// Cubase Glue: merge two or more MIDI regions on the same track into one part (notes + CC + pitch
+// bend + program changes rebased onto the merged timeline). Writes the new region id to `out`.
+// Returns false for fewer than two mergeable regions or regions spanning different tracks.
+bool nc_midi_regions_merge(NCEngine* engine, const char* const* regionIds, int count,
+                           char* out, size_t outLen);
 
 int nc_midi_note_count(NCEngine* engine, const char* regionId);
 void nc_midi_note_id(NCEngine* engine, const char* regionId, int noteIndex, char* out, size_t outLen);
@@ -720,6 +837,21 @@ bool nc_midi_note_resize(NCEngine* engine, const char* regionId, const char* not
 /// Continuous: records nothing. Commit with nc_history_record_gesture.
 bool nc_midi_note_set_velocity(NCEngine* engine, const char* regionId, const char* noteId, int velocity);
 bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* noteId);
+// Cubase Key Editor functions. Pass no note ids (nullptr/0) to act on the whole region.
+/// Legato: stretch each note to meet the next that starts later, less gapBeats. One undo step.
+bool nc_midi_notes_legato(NCEngine* engine, const char* regionId,
+                          const char* const* noteIds, int count, double gapBeats);
+/// Delete Overlaps: shorten a note that runs past the next note of the SAME pitch.
+bool nc_midi_notes_delete_overlaps(NCEngine* engine, const char* regionId,
+                                   const char* const* noteIds, int count);
+/// Fixed Lengths: set every target note to one length in beats.
+bool nc_midi_notes_set_length(NCEngine* engine, const char* regionId,
+                              const char* const* noteIds, int count, double lengthBeats);
+
+/// Cubase Glue for notes: joins the given notes of each pitch into one long note (gaps absorbed).
+/// One undo step. False when fewer than two notes of any single pitch were given.
+bool nc_midi_notes_merge(NCEngine* engine, const char* regionId,
+                         const char* const* noteIds, int count);
 
 // Controller (CC) lanes. Counts/reads are filtered to one controller number (0-127); values
 // are 0-127. The engine already renders these to the instrument, so an edited curve is heard.
@@ -912,6 +1044,21 @@ bool nc_apply_monitor_template(NCEngine* engine, const char* serialized);
 /// background thread while the user keeps editing.
 bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out);
 
+// AAF session import (libAAF). Reads audio tracks, clips and markers from a Pro Tools / Media
+// Composer / Resolve AAF and REPLACES the open document with it — an AAF is a whole session.
+// Media is referenced where the AAF points; anything missing is reported in the message so it can
+// be relinked. Effects and automation are not imported: AAF's model does not map onto ours and
+// guessing would misrepresent the session.
+bool nc_import_aaf(NCEngine* engine, const char* path, char* msgOut, size_t msgLen);
+/// False when this build has no AAF reader, so the UI can hide the command.
+bool nc_aaf_import_available(void);
+
+/// Renders one WAV per track into `folderPath` — the session-interchange path that every DAW
+/// accepts. Each stem is the full session length starting at 00:00 (rendered with that track
+/// soloed), so dropping them at zero in another DAW lines the session up exactly. Returns how many
+/// stems were written; `errOut` explains a zero. Blocks, like the other bounces.
+int nc_bounce_stems(NCEngine* engine, const char* folderPath, char* errOut, size_t errLen);
+
 // ---------------------------------------------------------------------------
 // Waveform peaks
 //
@@ -972,6 +1119,12 @@ void nc_plugin_name(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_plugin_brand(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_plugin_category(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_plugin_format(NCEngine* engine, int index, char* out, size_t outLen);
+/// True when the filtered plug-in at `index` is an ARA plug-in (its VST3 factory advertises an ARA
+/// Main Factory). The browser badges these: they are not realtime effects and cannot be inserted.
+bool nc_plugin_is_ara(NCEngine* engine, int index);
+/// What the plug-in's own ARA factory reports (name, version, manufacturer, supported ARA
+/// generations) — opens the plug-in, so call it for ONE plug-in on demand, never across a scan.
+void nc_plugin_ara_info(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_plugin_path(NCEngine* engine, int index, char* out, size_t outLen);
 bool nc_plugin_exists(NCEngine* engine, int index);
 
@@ -991,6 +1144,9 @@ int nc_plugin_facet_tally(NCEngine* engine, int kind, int index);
 /// track, appending a slot if needed. The slot's DSP execution mode comes from
 /// InsertDspPolicy. Returns false when the track refuses inserts or is full.
 bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex);
+/// Why the last insert-add was refused, when it was refused for a reason worth showing (an ARA
+/// plug-in kept out of the realtime chain). Empty when there is nothing to say.
+void nc_last_plugin_message(NCEngine* engine, char* out, size_t outLen);
 bool nc_track_remove_insert(NCEngine* engine, int trackIndex, int slot);
 
 // Built-in high-accuracy test signal generator as a track SOURCE (band-limited sine/square/triangle/
@@ -1362,8 +1518,11 @@ void   nc_master_set_auto_fade_seconds(NCEngine* engine, double seconds);
 void   nc_master_auto_fade_curve(NCEngine* engine, char* out, size_t outLen);
 void   nc_master_set_auto_fade_curve(NCEngine* engine, const char* curve);
 float  nc_auto_fade_amplitude(const char* curve, double t);
-int  nc_speaker_output_route_count(void);
-void nc_speaker_output_route(int index, char* out, size_t outLen);
+// Physical output pairs exposed by the currently opened CoreAudio device. The list
+// contains the modelled path ("None"), Main 1-2, then only the additional pairs the
+// hardware actually reports (3-4, 5-6, ...). It is never padded to an arbitrary size.
+int  nc_speaker_output_route_count(NCEngine* engine);
+void nc_speaker_output_route(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
 void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
@@ -1406,6 +1565,36 @@ void nc_midi_record_feed(NCEngine* engine, const NCMidiLiveEvent* events, int co
 /// returns the new region id (empty if nothing was recorded).
 bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outRegionIdLen);
 
+// Low-latency monitoring. The linear-phase monitor EQ buys its exact curve with numTaps/2
+// samples of pure delay — 42.7 ms at the default 4096 taps and 48 kHz — on everything you
+// hear. Correct for judging a mix, unplayable for performing. With this on (the default) the
+// EQ falls back to the minimum-phase fit of the same curve whenever a track is record-armed
+// or input-monitoring, which adds no delay. Call nc_monitor_eq_sync afterwards to rebuild.
+bool nc_monitor_eq_low_latency_monitoring(NCEngine* engine);
+void nc_monitor_eq_set_low_latency_monitoring(NCEngine* engine, bool enabled);
+/// Whether the fallback is engaged right now, so the UI can say why the curve is not linear phase.
+bool nc_monitor_eq_low_latency_active(NCEngine* engine);
+/// What the monitor EQ is adding right now, in samples. 0 on the minimum-phase path.
+int nc_monitor_eq_latency_samples(NCEngine* engine);
+
+/// Sounds one note on a track's instrument without recording anything — the piano roll's
+/// keyboard, and any other place that auditions a pitch. Rides the same live-MIDI queue the
+/// keyboard uses, so it needs no transport and no region. Call again with noteOn=false to
+/// release; an un-released note sustains, exactly like a held key.
+void nc_midi_preview_note(NCEngine* engine, int trackIndex, int pitch, int velocity, bool noteOn);
+/// Releases every note this track's preview may still be holding — for a mouse-up that
+/// landed somewhere else, or a view going away mid-drag.
+void nc_midi_preview_all_notes_off(NCEngine* engine, int trackIndex);
+
+// Which controllers a MIDI take captures. A keyboard sends far more than a part needs, so
+// the region only receives the CC numbers switched on here; everything else is still heard
+// live and simply not written down. Defaults: sustain (64), modulation (1), pitch bend.
+// Project state, so a take records what the song was set up to record.
+bool nc_midi_record_controller_enabled(NCEngine* engine, int controller);
+void nc_midi_record_set_controller_enabled(NCEngine* engine, int controller, bool enabled);
+bool nc_midi_record_pitch_bend_enabled(NCEngine* engine);
+void nc_midi_record_set_pitch_bend_enabled(NCEngine* engine, bool enabled);
+
 /// Route the keyboard to the selected instrument track even when it is not record-armed
 /// (Logic/Live convention). Pass the track index, or -1 to clear. Transient, no undo.
 void nc_set_live_midi_target(NCEngine* engine, int trackIndex);
@@ -1421,6 +1610,25 @@ bool nc_track_instrument_editor_opened(NCEngine* engine, int index,
 /// Tears the ring down and returns the live-MIDI path to the render instance. Safe to
 /// call for an editor that never owned the monitor (a newer editor's ring survives).
 void nc_track_instrument_editor_closed(NCEngine* engine, int index);
+
+// Instrument patch handoff (the plug-in's own VST3 component state).
+//
+// A workstation instrument keeps its selected program in its component state, not in its
+// parameters — KORG TRITON publishes 2,573 parameters and not one of them selects the
+// program. Mirroring parameters alone therefore loses the patch the moment the editor
+// closes and the render instance takes the sound back. These two calls move the blob
+// between the project and the editor-host process through a file, because a sampler's
+// state is far too large for either an argv entry or a pipe line.
+//
+// Writes the slot's stored patch to `path` as raw bytes for the editor host's
+// --state-file. False when the slot has no stored patch (nothing was written).
+bool nc_track_instrument_slot_write_state_file(NCEngine* engine, int index, int slotIndex,
+                                               const char* path);
+/// Reads the patch the editor host left at `path` into the slot and rebuilds the render
+/// instance on it, so the sound the editor was making is the sound that remains. Records
+/// one undo step. False when the file is missing/empty or the patch is unchanged.
+bool nc_track_instrument_slot_read_state_file(NCEngine* engine, int index, int slotIndex,
+                                              const char* path);
 // Peak MIDI-input activity (0..1) since the last call; reading it resets it, so the UI
 // applies its own decay. Bump it by calling nc_midi_pump_live_input first each tick.
 float nc_midi_input_activity(NCEngine* engine);

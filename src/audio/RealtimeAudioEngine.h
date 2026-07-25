@@ -94,6 +94,8 @@ struct AudioEngineStatus {
     std::vector<std::string> trackMeterNames;
     std::vector<float> trackPeakLeft;
     std::vector<float> trackPeakRight;
+    std::vector<float> trackConsoleGainReductionDb;
+    std::vector<float> trackConsoleGateGainReductionDb;
     std::vector<std::string> trackInsertMeterTrackNames;
     std::vector<int> trackInsertMeterSlotIndices;
     std::vector<float> trackInsertInputPeak;
@@ -135,6 +137,11 @@ struct AudioEngineStatus {
     uint64_t realtimeCallbackCount = 0;
     double realtimeAverageWakeJitterUs = 0.0;
     double realtimeMaxWakeJitterUs = 0.0;
+    /// Reference-tap ("다른 앱") FIFO faults since the engine started. The wake-jitter figures above
+    /// describe the OUTPUT render thread only; these describe the tap CAPTURE side, which is where a
+    /// crackle comes from when the render is timing-clean.
+    unsigned long long referenceUnderrunBlocks = 0;
+    unsigned long long referenceOverrunDrops = 0;
     double realtimeMaxRenderDurationUs = 0.0;
     int realtimeLateWakeCount = 0;
     int activeRealtimeVst3MasterInsertCount = 0;
@@ -258,6 +265,14 @@ public:
                                        uint32_t parameterId,
                                        const std::string& displayName,
                                        double normalizedValue);
+
+    /// Loads a new patch (VST3 component state) into a track's live instrument voice by
+    /// deactivating, setState, reactivating the existing instance — no reconcile, no module
+    /// reload, no audio-thread re-instantiate. Main-thread only. False when the instrument is not
+    /// prepared yet (the patch then applies on first render from the project field).
+    bool updateInstrumentComponentState(const std::string& trackName,
+                                        size_t slotIndex,
+                                        const std::string& componentStateBase64);
     bool updateMonitorSpeakerVst3Parameter(int speakerSlot,
                                            size_t insertIndex,
                                            uint32_t parameterId,

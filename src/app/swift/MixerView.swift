@@ -1,6 +1,128 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct MixerPrePanHeightKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Small console knob for narrow mixer strips. Vertical drag changes the value;
+/// double-click restores the hardware-inspired default.
+private struct ConsoleMiniKnob: View {
+    let value: Float
+    let range: ClosedRange<Float>
+    let defaultValue: Float
+    let display: (Float) -> String
+    let onChange: (Float) -> Void
+    let onCommit: () -> Void
+    var tint: Color = Theme.Palette.textBright
+    var faceTint: Color? = nil
+    @State private var dragStart: Float?
+    @State private var liveValue: Float?
+
+    private var normalized: Double {
+        Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
+    }
+
+    var body: some View {
+        VStack(spacing: 1) {
+            ZStack {
+                // The 4000E controls use a restrained 270° hardware scale.  The
+                // alternating long/short ticks keep the control readable at mixer size.
+                ForEach(0..<11, id: \.self) { tick in
+                    Capsule()
+                        .fill(tick == 5 ? Color.white.opacity(0.72) : Color.white.opacity(0.28))
+                        .frame(width: tick == 5 ? 1.2 : 0.8,
+                               height: tick.isMultiple(of: 5) ? 3.5 : 2.2)
+                        .offset(y: -14)
+                        .rotationEffect(.degrees(-135 + Double(tick) * 27))
+                }
+                Circle()
+                    .fill(Color.black.opacity(0.38))
+                    .frame(width: 27, height: 27)
+                    .shadow(color: .black.opacity(0.75), radius: 1.5, x: 0, y: 1)
+                Circle()
+                    .fill(RadialGradient(colors: [
+                        faceTint?.opacity(0.98) ?? Color(hex: 0x5a5b58),
+                        faceTint?.opacity(0.72) ?? Color(hex: 0x252725),
+                        Color.black.opacity(0.96)
+                    ], center: .topLeading, startRadius: 1, endRadius: 18))
+                    .overlay(Circle().stroke(Color.white.opacity(0.23), lineWidth: 0.7))
+                    .frame(width: 23, height: 23)
+                Capsule()
+                    .fill(tint)
+                    .frame(width: 1.8, height: 8.5)
+                    .offset(y: -4.5)
+                    .rotationEffect(.degrees(-135 + normalized * 270))
+                    .shadow(color: .black.opacity(0.55), radius: 0.5, x: 0, y: 0.5)
+                Circle()
+                    .fill(Color.black.opacity(0.36))
+                    .frame(width: 5, height: 5)
+            }
+            .frame(width: 31, height: 31)
+            Text(display(liveValue ?? value))
+                .font(Theme.Font.mono(5.8, .semibold))
+                .foregroundStyle(Color(hex: 0xc9c7bd))
+                .lineLimit(1)
+        }
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 1)
+            .onChanged { drag in
+                let start = dragStart ?? value
+                if dragStart == nil { dragStart = start }
+                let span = range.upperBound - range.lowerBound
+                let next = min(range.upperBound,
+                               max(range.lowerBound, start + Float(-drag.translation.height / 90) * span))
+                liveValue = next
+                onChange(next)
+            }
+            .onEnded { _ in dragStart = nil; liveValue = nil; onCommit() })
+        .highPriorityGesture(TapGesture(count: 2).onEnded {
+            liveValue = defaultValue
+            onChange(defaultValue)
+            onCommit()
+            DispatchQueue.main.async { liveValue = nil }
+        })
+    }
+}
+
+/// Harrison-style channel-module focus. The engine currently exposes channel
+/// processors through the insert chain, so processor choices focus that real
+/// chain; routing choices focus their dedicated mixer sections.
+enum MixerModuleFocus: String, CaseIterable, Identifiable {
+    case filter, comp, gate, eq, saturator, deEss, insert, inRec, sends, denoise
+
+    static var allCases: [MixerModuleFocus] {
+        [.filter, .eq, .gate, .comp, .saturator, .insert, .sends]
+    }
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .filter: return "Hi/Lo Cut"
+        case .comp: return "Comp"
+        case .gate: return "Gate"
+        case .eq: return "EQ"
+        case .saturator: return "Saturator"
+        case .deEss: return "DeEss"
+        case .insert: return "Insert"
+        case .inRec: return "In/Rec"
+        case .sends: return "Sends"
+        case .denoise: return "Denoise"
+        }
+    }
+
+    var usesInsertChain: Bool {
+        switch self {
+        case .filter, .comp, .gate, .eq, .saturator, .deEss, .insert, .denoise: return true
+        case .inRec, .sends: return false
+        }
+    }
+}
+
 /// Drag a filled insert slot onto another to move it (reorder within a track, or across
 /// tracks); hold Option to copy. Payload is "trackId:slot" so the drop knows the source track.
 private struct InsertDragDrop: ViewModifier {
@@ -173,6 +295,9 @@ struct MixerView: View {
     @State private var showInserts = true
     @State private var showSends = true
     @State private var showMemo = false
+    @State private var globalModuleFocus: MixerModuleFocus = .comp
+    @State private var globalModuleFocusRevision = 0
+    @State private var prePanHeights: [Int: CGFloat] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -191,6 +316,7 @@ struct MixerView: View {
                 // Size the row to the tallest strip's content so the maxHeight strips
                 // equalize to that, not to the whole window.
                 .fixedSize(horizontal: false, vertical: true)
+                .onPreferenceChange(MixerPrePanHeightKey.self) { prePanHeights = $0 }
             }
             .scrollIndicators(.visible)
         }
@@ -222,11 +348,53 @@ struct MixerView: View {
                 chip("note.text", engine.tr("help.mixer_memo"), $showMemo)
             }
 
+            globalModuleMenu
             panLawMenu
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 34)
         .background(Theme.Palette.ruler)
+    }
+
+    private var globalModuleMenu: some View {
+        Menu {
+            Text("전체 믹서 모듈 표시")
+            ForEach(MixerModuleFocus.allCases) { module in
+                Button {
+                    globalModuleFocus = module
+                    // Selecting the already-active item must still re-apply it to
+                    // channels that were changed independently afterwards.
+                    globalModuleFocusRevision += 1
+                } label: {
+                    if globalModuleFocus == module {
+                        Label(module.label, systemImage: "checkmark")
+                    } else {
+                        Text(module.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.3.group")
+                Text("전체 · \(globalModuleFocus.label)")
+            }
+            .font(Theme.Font.ui(9, .semibold))
+            .foregroundStyle(Theme.Palette.textMuted)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .fill(Theme.Palette.button)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .stroke(Theme.Palette.divider, lineWidth: 1)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .helpTip("모든 채널 스트립에 같은 모듈 보기를 적용합니다.")
     }
 
     private static let panLaws: [(id: String, label: String)] = [
@@ -371,7 +539,10 @@ struct MixerView: View {
             showInserts: showInserts,
             showSends: showSends,
             showMemo: showMemo,
-            mixerHasInstrument: engine.tracks.contains { $0.kind == .instrument }
+            mixerHasInstrument: engine.tracks.contains { $0.kind == .instrument },
+            globalModuleFocus: globalModuleFocus,
+            globalModuleFocusRevision: globalModuleFocusRevision,
+            alignedPrePanHeight: prePanHeights.values.max()
         )
         // Every mixer strip shares the tallest one's height (Master included), so adding
         // inserts/sends to one channel grows them all together.
@@ -395,6 +566,8 @@ struct ChannelStrip: View {
     @State private var draftName = ""
     @State private var reorderDX: CGFloat = 0
     @State private var memoDraft = ""
+    @State private var moduleFocus: MixerModuleFocus = .comp
+    @State private var selectedModules: Set<MixerModuleFocus> = [.comp]
     @FocusState private var nameFieldFocused: Bool
     @FocusState private var memoFocused: Bool
 
@@ -433,6 +606,10 @@ struct ChannelStrip: View {
     /// sends / pan / fader stay aligned across strips — instead of the instrument strip alone
     /// growing taller. Logic-style: the slot exists on every strip.
     var mixerHasInstrument: Bool = false
+    /// Mixer-wide command. nil in the Inspector, where this strip remains fully independent.
+    var globalModuleFocus: MixerModuleFocus? = nil
+    var globalModuleFocusRevision: Int = 0
+    var alignedPrePanHeight: CGFloat? = nil
 
     private var accent: Color { track.kind.accent }
 
@@ -441,30 +618,10 @@ struct ChannelStrip: View {
             header
 
             VStack(spacing: Theme.Space.md) {
-                if showIO { inputSection }
-                // Horizontal input meter (L/R) right under the input, before the inserts.
-                HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
-                // The instrument slot is its own reserved row (Logic-style) so every strip's
-                // inserts/sends/pan/fader line up when a sibling carries an instrument.
-                if showInserts && (track.kind == .instrument || mixerHasInstrument) {
-                    instrumentSlotSection
-                }
-                if showInserts && track.kind.showsInserts { insertSection }
-                // Master has no sends. Reserve the EXACT sends-region height by rendering a HIDDEN,
-                // non-interactive sends block (the master's send list is empty → the same 10 blank
-                // slots a channel reserves), then draw the auto fade-out in that reserved space via
-                // an overlay. This makes the master's pan / buttons / fader / meter land on exactly
-                // the same rows as the channels' — no magic-number padding that drifts out of sync.
-                if track.kind == .master {
-                    sendSection
-                        .hidden()
-                        .allowsHitTesting(false)
-                        .overlay(alignment: .top) { autoFadeSection }
-                } else if showSends && track.kind.showsSends {
-                    sendSection
-                }
+                prePanSection
+                    .frame(minHeight: alignedPrePanHeight, alignment: .top)
                 panSection
-                buttonRow
+                if selectedModules.contains(.inRec) { buttonRow }
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
                 // Output (post-plugin) meter — horizontal, right above the fader. The one
                 // under the input is the incoming meter; this one is after the inserts.
@@ -512,6 +669,644 @@ struct ChannelStrip: View {
         // Lift and follow the cursor while its header is being dragged sideways to reorder.
         .offset(x: fixedWidth == nil ? reorderDX : 0)
         .zIndex(reorderDX != 0 ? 10 : 0)
+        .onChange(of: globalModuleFocusRevision) { _, _ in
+            if let globalModuleFocus {
+                moduleFocus = globalModuleFocus
+                selectedModules = [globalModuleFocus]
+            }
+        }
+    }
+
+    private var prePanSection: some View {
+        VStack(spacing: Theme.Space.md) {
+            if showIO && selectedModules.contains(.inRec) { inputSection }
+            HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
+            moduleFocusPanel
+            if showInserts && selectedModules.contains(.insert)
+                && (track.kind == .instrument || mixerHasInstrument) {
+                instrumentSlotSection
+            }
+            if showInserts && selectedModules.contains(.insert) && track.kind.showsInserts { insertSection }
+            if selectedModules.contains(.eq) { consoleEqSection }
+            if selectedModules.contains(.filter) { consoleFilterSection }
+            if selectedModules.contains(.comp) { consoleCompSection }
+            if selectedModules.contains(.gate) { consoleGateSection }
+            if selectedModules.contains(.saturator) { consoleSaturatorSection }
+            if (selectedModules.contains(.deEss) || selectedModules.contains(.denoise))
+                && showInserts && track.kind.showsInserts { insertSection }
+            if track.kind == .master && selectedModules.contains(.sends) {
+                sendSection.hidden().allowsHitTesting(false).overlay(alignment: .top) { autoFadeSection }
+            } else if showSends && selectedModules.contains(.sends) && track.kind.showsSends {
+                sendSection
+            }
+        }
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: MixerPrePanHeightKey.self,
+                                       value: [track.id: proxy.size.height])
+            }
+        )
+    }
+
+    /// Compact two-column selector inspired by Harrison's channel-strip module picker.
+    /// A normal click affects only this strip; the mixer's "전체" menu broadcasts the
+    /// same choice to every strip through `globalModuleFocusRevision`.
+    private var moduleFocusPanel: some View {
+        let order = moduleDisplayOrder
+        let leftCount = (order.count + 1) / 2
+        let left = Array(order.prefix(leftCount))
+        let right = Array(order.dropFirst(leftCount))
+        let rowCount = max(left.count, right.count)
+        let panelHeight = CGFloat(rowCount * 16 + 6)
+        return ZStack {
+            // Signal flow is deliberately a quiet background guide. It must not read as
+            // another control or consume vertical room when the mixer strip grows.
+            Canvas { context, size in
+                guard rowCount > 0 else { return }
+                let x = size.width / 2
+                var route = Path()
+                route.move(to: CGPoint(x: x, y: 4))
+                route.addLine(to: CGPoint(x: x, y: size.height - 4))
+                context.stroke(route, with: .color(accent.opacity(0.18)),
+                               style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            }
+            .allowsHitTesting(false)
+
+            HStack(alignment: .top, spacing: 2) {
+                VStack(spacing: 2) {
+                    ForEach(left) { module in moduleFocusButton(module) }
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 2) {
+                    ForEach(right) { module in moduleFocusButton(module) }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(height: panelHeight, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Theme.Palette.background.opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(Theme.Palette.coolDivider, lineWidth: 1)
+                )
+        )
+    }
+
+    private func moduleFocusButton(_ module: MixerModuleFocus) -> some View {
+        let enabled = moduleIsEnabled(module)
+        let focused = selectedModules.contains(module)
+        return Button {
+            moduleFocus = module
+            if NSEvent.modifierFlags.contains(.shift) {
+                if selectedModules.contains(module) {
+                    if selectedModules.count > 1 { selectedModules.remove(module) }
+                } else {
+                    selectedModules.insert(module)
+                }
+            } else {
+                selectedModules = [module]
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.45))
+                    .frame(width: 4, height: 4)
+                Text(module.label)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+                .font(Theme.Font.ui(7.5, enabled || focused ? .bold : .regular))
+                .foregroundStyle(enabled ? Theme.Palette.textBright
+                                         : (focused ? accent : Theme.Palette.textDim))
+                .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity)
+                .frame(height: 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(enabled
+                              ? accent.opacity(0.40)
+                              : Theme.Palette.background.opacity(0.88))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(focused ? accent.opacity(0.82) : Color.clear,
+                                        lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .onDrag { NSItemProvider(object: module.rawValue as NSString) }
+        .onDrop(of: [.plainText], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let raw = object as? String,
+                      let source = MixerModuleFocus(rawValue: raw) else { return }
+                DispatchQueue.main.async { moveModule(source, before: module) }
+            }
+            return true
+        }
+        .helpTip("\(module.label) 채널 영역을 표시합니다.")
+    }
+
+    private func moduleIsEnabled(_ module: MixerModuleFocus) -> Bool {
+        switch module {
+        case .filter:
+            return track.consoleFilterEnabled || track.consoleHighPassEnabled
+                || track.consoleLowPassEnabled
+        case .eq: return track.consoleEqEnabled
+        case .gate: return track.consoleGateEnabled
+        case .comp: return track.consoleCompEnabled
+        case .saturator: return track.consoleSaturatorEnabled
+        case .insert, .deEss, .denoise:
+            return track.inserts.contains { !$0.name.isEmpty }
+        case .sends: return !track.sends.isEmpty
+        case .inRec: return track.recordArmed || track.inputMonitoring
+        }
+    }
+
+    private var moduleDisplayOrder: [MixerModuleFocus] {
+        let visible = Set(MixerModuleFocus.allCases)
+        let saved = track.consoleModuleOrder.split(separator: ",")
+            .compactMap { MixerModuleFocus(rawValue: String($0)) }
+            .filter { visible.contains($0) }
+        return saved + MixerModuleFocus.allCases.filter { !saved.contains($0) }
+    }
+
+    private func moveModule(_ source: MixerModuleFocus, before target: MixerModuleFocus) {
+        guard source != target else { return }
+        var order = moduleDisplayOrder
+        guard let from = order.firstIndex(of: source), let to = order.firstIndex(of: target) else { return }
+        order.remove(at: from)
+        order.insert(source, at: from < to ? max(0, to - 1) : to)
+        engine.setConsoleModuleOrder(track.id, order.map(\.rawValue))
+    }
+
+    private func consoleToggle(_ title: String, parameter: String, enabled: Bool) -> some View {
+        Button { engine.setConsoleBool(track.id, parameter, !enabled) } label: {
+            HStack(spacing: 4) {
+                Circle().fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter)
+                    .frame(width: 5, height: 5)
+                Text(title)
+                Spacer(minLength: 0)
+                Text("4000E").foregroundStyle(accent)
+            }
+            .font(Theme.Font.mono(6.5, .semibold))
+            .foregroundStyle(Theme.Palette.textDim)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func consoleSlider(_ label: String, _ parameter: String,
+                               range: ClosedRange<Float>, format: String) -> some View {
+        let value = engine.consoleValue(track.id, parameter)
+        return VStack(spacing: 1) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text(String(format: format, value))
+            }
+            .font(Theme.Font.mono(6.5))
+            .foregroundStyle(Theme.Palette.textDim)
+            Slider(value: Binding(
+                get: { engine.consoleValue(track.id, parameter) },
+                set: { engine.setConsoleValue(track.id, parameter, $0) }
+            ), in: range, onEditingChanged: { editing in
+                if !editing { engine.recordGesture("4000E \(parameter)") }
+            })
+            .controlSize(.mini)
+        }
+    }
+
+    private var consoleCompSection: some View {
+        VStack(spacing: 3) {
+            HStack {
+                Text("COMPRESSOR")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textDim)
+                Spacer(minLength: 0)
+                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
+            }
+
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("MIX", parameter: "compMix", range: 0...1,
+                               defaultValue: 1, display: { String(format: "%.0f%%", $0 * 100) })
+                Spacer(minLength: 0)
+                compressorSwitch("FAST ATTK", parameter: "compFastAttack",
+                                 enabled: track.consoleCompFastAttack)
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("RATIO", parameter: "compRatio", range: 1...20,
+                               defaultValue: 4, display: { String(format: "%.1f:1", $0) })
+                Spacer(minLength: 0)
+                compressorSwitch("PEAK", parameter: "compPeakMode",
+                                 enabled: track.consoleCompPeakMode)
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("THRESH", parameter: "compThresholdDb", range: -40...0,
+                               defaultValue: -18, display: { String(format: "%.0f dB", $0) })
+                Spacer(minLength: 0)
+                compressorGainReductionMeter
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("RELEASE", parameter: "compReleaseMs", range: 40...1500,
+                               defaultValue: 360, display: {
+                                   $0 >= 1000 ? String(format: "%.1fs", $0 / 1000) : String(format: "%.0fms", $0)
+                               })
+                Spacer(minLength: 0)
+                compressorSwitch("COMP", parameter: "compEnabled",
+                                 enabled: track.consoleCompEnabled)
+            }
+
+            HStack(spacing: 3) {
+                Text("TYPE").font(Theme.Font.mono(6, .semibold))
+                Spacer(minLength: 0)
+                Menu("SSL 4000E") {
+                    Button("SSL 4000E") {}
+                }
+                .font(Theme.Font.mono(6.2, .semibold))
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            .foregroundStyle(Theme.Palette.textFaint)
+            circuitModeSwitch(parameter: "compCircuitMode", enabled: track.consoleCompCircuitMode)
+        }
+        .padding(4).background(consoleModuleBackground)
+    }
+
+    private func compressorKnob(_ title: String, parameter: String,
+                                range: ClosedRange<Float>, defaultValue: Float,
+                                tint: Color = Theme.Palette.textBright,
+                                faceTint: Color? = nil,
+                                display: @escaping (Float) -> String) -> some View {
+        let value = engine.consoleValue(track.id, parameter)
+        return VStack(spacing: 0) {
+            Text(title)
+                .font(Theme.Font.mono(5.8, .semibold))
+                .foregroundStyle(Theme.Palette.textDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            ConsoleMiniKnob(value: value, range: range, defaultValue: defaultValue,
+                            display: display,
+                            onChange: { engine.setConsoleValue(track.id, parameter, $0) },
+                            onCommit: { engine.recordGesture("4000E \(parameter)") },
+                            tint: tint, faceTint: faceTint)
+        }
+        .frame(width: 31)
+    }
+
+    private func compressorSwitch(_ title: String, parameter: String, enabled: Bool) -> some View {
+        Button { engine.setConsoleBool(track.id, parameter, !enabled) } label: {
+            VStack(spacing: 1) {
+                Circle()
+                    .fill(enabled ? Color(hex: 0xf0b54a) : Color(hex: 0x292d2c))
+                    .frame(width: 6, height: 6)
+                    .overlay(Circle().stroke(Color.black.opacity(0.8), lineWidth: 0.7))
+                    .shadow(color: enabled ? Color(hex: 0xf0b54a).opacity(0.7) : .clear, radius: 2)
+                Text(title)
+                    .font(Theme.Font.mono(5.6, .semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 4)
+                    .frame(minHeight: 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(enabled ? Color(hex: 0x51544f) : Color(hex: 0x282b29))
+                            .overlay(RoundedRectangle(cornerRadius: 2)
+                                .stroke(Color.white.opacity(enabled ? 0.28 : 0.12), lineWidth: 0.7))
+                    )
+            }
+            .foregroundStyle(enabled ? Color(hex: 0xf1eee4) : Color(hex: 0x8b8d87))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var compressorGainReductionMeter: some View {
+        gainReductionMeter(track.consoleCompGainReductionDb, title: "GR dB")
+    }
+
+    private func gainReductionMeter(_ value: Float, title: String) -> some View {
+        let gr = max(0, min(20, value))
+        let thresholds: [Float] = [20, 14, 8, 6, 3, 1]
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(Theme.Font.mono(5.6, .semibold))
+                .foregroundStyle(Theme.Palette.textFaint)
+            HStack(alignment: .bottom, spacing: 2) {
+                VStack(spacing: 1) {
+                    ForEach(thresholds, id: \.self) { threshold in
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(gr >= threshold
+                                  ? (threshold >= 14 ? Theme.Palette.red : Theme.Palette.amber)
+                                  : Theme.Palette.recess)
+                            .frame(width: 10, height: 3)
+                    }
+                }
+                Text(String(format: "%.1f", gr))
+                    .font(Theme.Font.mono(5.8, .semibold))
+                    .foregroundStyle(Theme.Palette.textNumeric)
+            }
+        }
+    }
+
+    private var consoleFilterSection: some View {
+        VStack(spacing: 3) {
+            HStack {
+                Text("FILTERS")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textDim)
+                Spacer(minLength: 0)
+                Text("4000E")
+                    .font(Theme.Font.mono(6, .semibold))
+                    .foregroundStyle(accent)
+            }
+            HStack(alignment: .top, spacing: 8) {
+                filterControl(title: "LOW CUT",
+                              parameter: "highPassHz",
+                              range: 20...350,
+                              defaultValue: 20,
+                              enabledParameter: "highPassEnabled",
+                              enabled: track.consoleHighPassEnabled,
+                              unit: "Hz",
+                              display: { String(format: "%.0f", $0) })
+                Spacer(minLength: 0)
+                filterControl(title: "HIGH CUT",
+                              parameter: "lowPassHz",
+                              range: 3000...12000,
+                              defaultValue: 12000,
+                              enabledParameter: "lowPassEnabled",
+                              enabled: track.consoleLowPassEnabled,
+                              unit: "kHz",
+                              display: { String(format: "%.1f", $0 / 1000) })
+            }
+            circuitModeSwitch(parameter: "filterCircuitMode", enabled: track.consoleFilterCircuitMode)
+        }
+        .padding(4).background(consoleModuleBackground)
+    }
+
+    private func filterControl(title: String, parameter: String,
+                               range: ClosedRange<Float>, defaultValue: Float,
+                               enabledParameter: String, enabled: Bool,
+                               unit: String,
+                               display: @escaping (Float) -> String) -> some View {
+        VStack(spacing: 1) {
+            Text(title)
+                .font(Theme.Font.mono(5.8, .semibold))
+                .foregroundStyle(Theme.Palette.textDim)
+            compressorKnob("FREQ", parameter: parameter, range: range,
+                           defaultValue: defaultValue, display: display)
+            Button {
+                engine.setConsoleBool(track.id, enabledParameter, !enabled)
+            } label: {
+                HStack(spacing: 2) {
+                    Text("OUT")
+                    Circle()
+                        .fill(enabled ? Theme.Palette.green : Theme.Palette.recess)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().stroke(Theme.Palette.coolDividerBright, lineWidth: 1))
+                    Text(unit)
+                }
+                .font(Theme.Font.mono(5.5, .semibold))
+                .foregroundStyle(enabled ? Theme.Palette.textBright : Theme.Palette.textFaint)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("\(title) \(enabled ? "끄기" : "켜기")")
+        }
+    }
+
+    private var consoleGateSection: some View {
+        VStack(spacing: 3) {
+            HStack {
+                Text("GATE / EXPANDER")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textDim)
+                Spacer(minLength: 0)
+                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("RANGE", parameter: "gateRangeDb", range: 0...40,
+                               defaultValue: 20, display: { String(format: "%.0f dB", $0) })
+                Spacer(minLength: 0)
+                compressorKnob("THRESH", parameter: "gateThresholdDb", range: -60...0,
+                               defaultValue: -36, display: { String(format: "%.0f dB", $0) })
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorKnob("RELEASE", parameter: "gateReleaseMs", range: 40...1500,
+                               defaultValue: 360, display: {
+                                   $0 >= 1000 ? String(format: "%.1fs", $0 / 1000) : String(format: "%.0fms", $0)
+                               })
+                Spacer(minLength: 0)
+                compressorKnob("HOLD", parameter: "gateHoldMs", range: 0...800,
+                               defaultValue: 0, display: { String(format: "%.0fms", $0) })
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorSwitch("EXPAND", parameter: "expanderMode",
+                                 enabled: track.consoleExpanderMode)
+                Spacer(minLength: 0)
+                compressorSwitch("FAST ATTK", parameter: "gateFastAttack",
+                                 enabled: track.consoleGateFastAttack)
+            }
+            HStack(alignment: .center, spacing: 5) {
+                compressorSwitch("GATE", parameter: "gateEnabled",
+                                 enabled: track.consoleGateEnabled)
+                Spacer(minLength: 0)
+                gainReductionMeter(track.consoleGateGainReductionDb, title: "GR dB")
+            }
+            HStack(spacing: 3) {
+                Text("TYPE").font(Theme.Font.mono(6, .semibold))
+                Spacer(minLength: 0)
+                Menu("SSL 4000E") { Button("SSL 4000E") {} }
+                    .font(Theme.Font.mono(6.2, .semibold))
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+            }
+            .foregroundStyle(Theme.Palette.textFaint)
+            circuitModeSwitch(parameter: "gateCircuitMode", enabled: track.consoleGateCircuitMode)
+        }
+        .padding(4).background(consoleModuleBackground)
+    }
+
+    private var consoleEqSection: some View {
+        let hf = Color(hex: 0xa92d22)
+        let hmf = Color(hex: 0x31913f)
+        let lmf = Color(hex: 0x36a6b8)
+        let lf = Color(hex: 0x242426)
+        let pointer = Color(hex: 0xf2eee5)
+        return VStack(spacing: 4) {
+            HStack {
+                Text("EQUALISER")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textDim)
+                Spacer(minLength: 0)
+                Button { engine.setConsoleBool(track.id, "eqEnabled", !track.consoleEqEnabled) } label: {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(track.consoleEqEnabled ? Theme.Palette.red : Theme.Palette.recess)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(Theme.Palette.coolDividerBright, lineWidth: 1))
+                        Text("4000E")
+                    }
+                    .font(Theme.Font.mono(6, .semibold))
+                    .foregroundStyle(track.consoleEqEnabled ? Theme.Palette.textBright : accent)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                compressorKnob("HF GAIN", parameter: "eqHfGainDb", range: -18...18,
+                               defaultValue: 0, tint: pointer, faceTint: hf,
+                               display: { String(format: "%+.0f dB", $0) })
+                Spacer(minLength: 0)
+                VStack(spacing: 4) {
+                    compressorSwitch("BELL", parameter: "eqHfBell", enabled: track.consoleEqHfBell)
+                    compressorKnob("HF FREQ", parameter: "eqHfHz", range: 4000...16000,
+                                   defaultValue: 8000, tint: pointer, faceTint: hf,
+                                   display: { String(format: "%.1f kHz", $0 / 1000) })
+                }
+            }
+            eqSectionDivider(hf)
+
+            HStack(alignment: .top, spacing: 3) {
+                compressorKnob("HMF GAIN", parameter: "eqHmfGainDb", range: -18...18,
+                               defaultValue: 0, tint: pointer, faceTint: hmf,
+                               display: { String(format: "%+.0f dB", $0) })
+                compressorKnob("HMF FREQ", parameter: "eqHmfHz", range: 1200...7500,
+                               defaultValue: 3000, tint: pointer, faceTint: hmf,
+                               display: { String(format: "%.1f kHz", $0 / 1000) })
+                compressorKnob("HMF Q", parameter: "eqHmfQ", range: 0.2...10,
+                               defaultValue: 1, tint: pointer, faceTint: hmf,
+                               display: { String(format: "%.1f", $0) })
+            }
+            .frame(maxWidth: .infinity)
+            eqSectionDivider(hmf)
+
+            HStack(alignment: .top, spacing: 3) {
+                compressorKnob("LMF GAIN", parameter: "eqLmfGainDb", range: -18...18,
+                               defaultValue: 0, tint: pointer, faceTint: lmf,
+                               display: { String(format: "%+.0f dB", $0) })
+                compressorKnob("LMF FREQ", parameter: "eqLmfHz", range: 400...2500,
+                               defaultValue: 1000, tint: pointer, faceTint: lmf,
+                               display: { String(format: "%.2f kHz", $0 / 1000) })
+                compressorKnob("LMF Q", parameter: "eqLmfQ", range: 0.2...10,
+                               defaultValue: 1, tint: pointer, faceTint: lmf,
+                               display: { String(format: "%.1f", $0) })
+            }
+            .frame(maxWidth: .infinity)
+            eqSectionDivider(lmf)
+
+            HStack(alignment: .center, spacing: 8) {
+                VStack(spacing: 3) {
+                    compressorKnob("LF FREQ", parameter: "eqLfHz", range: 90...450,
+                                   defaultValue: 200, tint: pointer, faceTint: lf,
+                                   display: { String(format: "%.0f Hz", $0) })
+                    compressorKnob("LF GAIN", parameter: "eqLfGainDb", range: -18...18,
+                                   defaultValue: 0, tint: pointer, faceTint: lf,
+                                   display: { String(format: "%+.0f dB", $0) })
+                }
+                Spacer(minLength: 0)
+                compressorSwitch("BELL", parameter: "eqLfBell", enabled: track.consoleEqLfBell)
+            }
+            circuitModeSwitch(parameter: "eqCircuitMode", enabled: track.consoleEqCircuitMode)
+        }
+        .padding(4).background(consoleModuleBackground)
+    }
+
+    private func eqSectionDivider(_ color: Color) -> some View {
+        Rectangle()
+            .fill(LinearGradient(colors: [color.opacity(0.08), color.opacity(0.62), color.opacity(0.08)],
+                                 startPoint: .leading, endPoint: .trailing))
+            .frame(height: 1)
+    }
+
+    private var consoleSaturatorSection: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("SATURATOR")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textDim)
+                Spacer(minLength: 0)
+                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
+            }
+            HStack(spacing: 6) {
+                compressorKnob("DRIVE", parameter: "saturatorDriveDb", range: 0...24,
+                               defaultValue: 6, tint: Theme.Palette.amber,
+                               display: { String(format: "%.1f dB", $0) })
+                Spacer(minLength: 0)
+                compressorKnob("MIX", parameter: "saturatorMix", range: 0...1,
+                               defaultValue: 1, tint: Theme.Palette.amber,
+                               display: { String(format: "%.0f%%", $0 * 100) })
+                Spacer(minLength: 0)
+                compressorSwitch("SAT IN", parameter: "saturatorEnabled",
+                                 enabled: track.consoleSaturatorEnabled)
+            }
+            circuitModeSwitch(parameter: "saturatorCircuitMode",
+                              enabled: track.consoleSaturatorCircuitMode)
+        }
+        .padding(4).background(consoleModuleBackground)
+    }
+
+    private func circuitModeSwitch(parameter: String, enabled: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text("MODE").font(Theme.Font.mono(5.8, .semibold))
+            Spacer(minLength: 0)
+            Button { engine.setConsoleBool(track.id, parameter, false) } label: {
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 9, weight: !enabled ? .bold : .regular))
+                    .foregroundStyle(!enabled ? accent : Theme.Palette.textFaint)
+                    .frame(width: 14, height: 13)
+            }
+            .helpTip("클린 모드 — 회로 컬러 없이 처리합니다.")
+            Button { engine.setConsoleBool(track.id, parameter, true) } label: {
+                Image(systemName: "memorychip")
+                    .font(.system(size: 9, weight: enabled ? .bold : .regular))
+                    .foregroundStyle(enabled ? Theme.Palette.amber : Theme.Palette.textFaint)
+                    .frame(width: 14, height: 13)
+            }
+            .helpTip("회로 모드 — 4000E 회로 특성과 컬러를 적용합니다.")
+        }
+        .font(Theme.Font.mono(5.8, .semibold))
+        .buttonStyle(.plain)
+    }
+
+    private func consoleEqBand<Content: View>(_ title: String,
+                                              @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 3) {
+            HStack {
+                Text(title)
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(accent)
+                Spacer(minLength: 0)
+            }
+            content()
+        }
+        .padding(.top, 3)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.Palette.coolDivider).frame(height: 1)
+        }
+    }
+
+    private var consoleModuleBackground: some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(
+                LinearGradient(colors: [
+                    Color(hex: 0x252a2a),
+                    Color(hex: 0x171b1b),
+                    Color(hex: 0x202423)
+                ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color(hex: 0xb6a978).opacity(0.42))
+                    .frame(width: 1)
+                    .padding(.vertical, 5)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color(hex: 0x77776f).opacity(0.52), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 1.5, x: 0, y: 1)
     }
 
     /// A corner toggle — click to switch this channel (and the whole mixer selection)
@@ -914,19 +1709,10 @@ struct ChannelStrip: View {
     @ViewBuilder private var soloModeMenu: some View {
         Picker("솔로 선택", selection: Binding(
             get: { engine.soloSelectMode },
-            set: { engine.soloSelectMode = $0 }
+            set: { engine.setSoloSelectMode($0) }
         )) {
             Text("추가 (Additive)").tag(EngineController.SoloSelectMode.additive)
             Text("배타 (Exclusive)").tag(EngineController.SoloSelectMode.exclusive)
-        }
-        Divider()
-        Picker("솔로 모니터", selection: Binding(
-            get: { engine.soloMonitorMode },
-            set: { engine.setSoloMonitorMode($0) }
-        )) {
-            Text("SIP · Solo In Place").tag(EngineController.SoloMonitorMode.sip)
-            Text("AFL · After Fader (준비 중)").tag(EngineController.SoloMonitorMode.afl)
-            Text("PFL · Pre Fader (준비 중)").tag(EngineController.SoloMonitorMode.pfl)
         }
         Divider()
         Button("모든 솔로 해제") { engine.clearAllSolos() }

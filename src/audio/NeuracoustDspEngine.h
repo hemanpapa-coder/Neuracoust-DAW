@@ -109,6 +109,9 @@ public:
                                        uint32_t parameterId,
                                        const std::string& displayName,
                                        double normalizedValue);
+    bool updateInstrumentComponentState(const std::string& trackName,
+                                        size_t slotIndex,
+                                        const std::string& componentStateBase64);
     bool updateMonitorSpeakerVst3Parameter(int speakerSlot,
                                            size_t insertIndex,
                                            uint32_t parameterId,
@@ -516,6 +519,11 @@ private:
     int64_t monitorDspSilentSamples_ = 0;
     double remoteDspRoundTripMs_ = 0.0;
     double remoteDspPreviousRoundTripMs_ = 0.0;
+    // Reference-tap (다른 앱) FIFO health. The render wake-jitter meter only watches the OUTPUT
+    // thread, so a starved or overflowing tap capture is invisible there even though it crackles.
+    // Counted here and published so the meter has no blind spot.
+    std::atomic<uint64_t> referenceUnderrunBlocks_ {0};
+    std::atomic<uint64_t> referenceOverrunDrops_ {0};
     double remoteDspAverageRoundTripJitterUs_ = 0.0;
     double remoteDspMaxRoundTripJitterUs_ = 0.0;
     bool remoteDspRoundTripInitialized_ = false;

@@ -304,8 +304,10 @@ int64_t wrappedPlaybackFrameForPlan(const ProjectAudioRenderPlan& plan, int64_t 
     if (!plan.loopEnabled || plan.loopEndSeconds <= plan.loopStartSeconds || plan.sampleRate <= 0.0) {
         return playbackFrame;
     }
-    const int64_t loopStart = std::max<int64_t>(0, static_cast<int64_t>(std::round(plan.loopStartSeconds * plan.sampleRate)));
-    const int64_t loopEnd = std::max<int64_t>(0, static_cast<int64_t>(std::round(plan.loopEndSeconds * plan.sampleRate)));
+    const double startSeconds = std::max(0.0, plan.loopStartSeconds - plan.preRollSeconds);
+    const double endSeconds = plan.loopEndSeconds + plan.postRollSeconds;
+    const int64_t loopStart = std::max<int64_t>(0, static_cast<int64_t>(std::round(startSeconds * plan.sampleRate)));
+    const int64_t loopEnd = std::max<int64_t>(0, static_cast<int64_t>(std::round(endSeconds * plan.sampleRate)));
     const int64_t loopLength = loopEnd - loopStart;
     if (loopLength <= 0 || playbackFrame < loopEnd) {
         return playbackFrame;
@@ -317,7 +319,8 @@ int64_t loopEndFrameForPlan(const ProjectAudioRenderPlan& plan) {
     if (!plan.loopEnabled || plan.loopEndSeconds <= plan.loopStartSeconds || plan.sampleRate <= 0.0) {
         return 0;
     }
-    return std::max<int64_t>(0, static_cast<int64_t>(std::round(plan.loopEndSeconds * plan.sampleRate)));
+    const double endSeconds = plan.loopEndSeconds + plan.postRollSeconds;
+    return std::max<int64_t>(0, static_cast<int64_t>(std::round(endSeconds * plan.sampleRate)));
 }
 
 void mergeBlockMeters(ProjectAudioBlockMeters& destination, const ProjectAudioBlockMeters& source) {
@@ -328,6 +331,12 @@ void mergeBlockMeters(ProjectAudioBlockMeters& destination, const ProjectAudioBl
             destination.trackNames.push_back(name);
             destination.trackPeakLeft.push_back(index < source.trackPeakLeft.size() ? source.trackPeakLeft[index] : 0.0f);
             destination.trackPeakRight.push_back(index < source.trackPeakRight.size() ? source.trackPeakRight[index] : 0.0f);
+            // The console-channel arrays are part of the same parallel set: the bridge takes the
+            // MIN over all of them, so leaving these short reports ZERO meters for every track.
+            destination.trackConsoleGainReductionDb.push_back(
+                index < source.trackConsoleGainReductionDb.size() ? source.trackConsoleGainReductionDb[index] : 0.0f);
+            destination.trackConsoleGateGainReductionDb.push_back(
+                index < source.trackConsoleGateGainReductionDb.size() ? source.trackConsoleGateGainReductionDb[index] : 0.0f);
             continue;
         }
         const size_t destinationIndex = static_cast<size_t>(std::distance(destination.trackNames.begin(), found));
@@ -1607,6 +1616,43 @@ bool NeuracoustDspEngine::updateInstrumentVst3Parameter(const std::string& track
     return true;
 }
 
+bool NeuracoustDspEngine::updateInstrumentComponentState(const std::string& trackName,
+                                                         size_t slotIndex,
+                                                         const std::string& componentStateBase64) {
+    if (trackName.empty() || componentStateBase64.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Patch the render PLAN first. The renderer reads instrument.pluginStateBase64 from the plan
+    // when it prepares an instrument, and while an editor is open the render instance for that track
+    // is dormant/torn down — so on editor close it is (re)prepared fresh, and it must read the NEW
+    // patch, not the one the plan was loaded with. Updating only the live processor missed this:
+    // the fresh prepare rebuilt the old preset, which is the "reverts on close" glitch returning.
+    auto trackIt = std::find_if(projectPlan_.tracks.begin(), projectPlan_.tracks.end(),
+                                [&](const TrackState& track) { return track.name == trackName; });
+    if (trackIt != projectPlan_.tracks.end()) {
+        if (slotIndex < trackIt->instrumentSlots.size()) {
+            trackIt->instrumentSlots[slotIndex].pluginStateBase64 = componentStateBase64;
+        }
+        if (slotIndex == 0) {
+            trackIt->instrument.pluginStateBase64 = componentStateBase64;   // legacy mirror
+        }
+    }
+    // Then, if the instrument is already prepared and playing, apply the patch to the live instance
+    // so there is no gap — deactivate/setState/reactivate, no re-instantiate. If it is not prepared,
+    // the plan patch above means the next prepare comes up on the new patch anyway.
+    const std::string processorKey = trackName + "#I" + std::to_string(slotIndex + 1);
+    auto processor = projectRenderState_.instrumentProcessors.find(processorKey);
+    if (processor == projectRenderState_.instrumentProcessors.end()) {
+        message_ = "Instrument patch stored in the plan; applies on next render.";
+        return true;   // not a failure: the plan carries the patch to the next prepare
+    }
+    std::string applyMessage;
+    const bool applied = processor->second.applyComponentState(componentStateBase64, applyMessage);
+    message_ = applied ? "Applied instrument patch to the live voice." : applyMessage;
+    return applied;
+}
+
 bool NeuracoustDspEngine::updateMonitorSpeakerVst3Parameter(int speakerSlot,
                                                             size_t insertIndex,
                                                             uint32_t parameterId,
@@ -1896,6 +1942,10 @@ void NeuracoustDspEngine::pushReferenceInterleaved(const float* interleavedStere
         const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
         const size_t maxSamples = static_cast<size_t>(blockFrames * 96) * 2u;
         if (referenceBuffer_.size() > maxSamples) {
+            // The FIFO overflowed: the tap is delivering faster than the render consumes and the
+            // oldest audio is discarded. Audible as a crackle, and just as invisible to the render
+            // jitter meter as an underrun.
+            referenceOverrunDrops_.fetch_add(1, std::memory_order_relaxed);
             referenceBuffer_.erase(referenceBuffer_.begin(),
                                    referenceBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
         }
@@ -1939,10 +1989,12 @@ void NeuracoustDspEngine::pushEditorInstrumentMonitorInterleaved(const float* sa
     std::lock_guard<std::mutex> lock(editorMonitorMutex_);
     editorMonitorBuffer_.insert(editorMonitorBuffer_.end(), samples,
                                 samples + static_cast<size_t>(frameCount) * 2u);
-    // Same discipline as the input-monitor FIFO: cap to a few render buffers so a
-    // pacing hiccup can't accumulate latency; older audio is dropped (skips ahead).
+    // The host now keeps one low-latency block ahead in steady state and may publish
+    // a short catch-up burst after a heavy editor redraw. Keep the full ring capacity
+    // so that recovery audio is not discarded, but do not manufacture a deep FIFO here.
+    // Sixteen blocks only bounds a rare accumulated burst; normal latency is one block.
     const int64_t blockFrames = std::max<int64_t>(16, maxBlockSize_);
-    const size_t maxSamples = static_cast<size_t>(blockFrames * 4) * 2u;
+    const size_t maxSamples = static_cast<size_t>(blockFrames * 16) * 2u;
     if (editorMonitorBuffer_.size() > maxSamples) {
         editorMonitorBuffer_.erase(editorMonitorBuffer_.begin(),
                                    editorMonitorBuffer_.end() - static_cast<std::ptrdiff_t>(maxSamples));
@@ -2309,6 +2361,8 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.trackMeterNames = projectMeters_.trackNames;
     status.trackPeakLeft = projectMeters_.trackPeakLeft;
     status.trackPeakRight = projectMeters_.trackPeakRight;
+    status.trackConsoleGainReductionDb = projectMeters_.trackConsoleGainReductionDb;
+    status.trackConsoleGateGainReductionDb = projectMeters_.trackConsoleGateGainReductionDb;
     status.trackInsertMeterTrackNames = trackInsertMeterTrackNames_;
     status.trackInsertMeterSlotIndices = trackInsertMeterSlotIndices_;
     status.trackInsertInputPeak = trackInsertInputPeaks_;
@@ -2339,6 +2393,8 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.monitorDspPathMode = settings_.monitorDspPathMode;
     status.remoteDspMonitorActive = remoteDspMonitorActive_;
     status.remoteDspRoundTripMs = remoteDspRoundTripMs_;
+    status.referenceUnderrunBlocks = referenceUnderrunBlocks_.load(std::memory_order_relaxed);
+    status.referenceOverrunDrops = referenceOverrunDrops_.load(std::memory_order_relaxed);
     status.remoteDspAverageRoundTripJitterUs = remoteDspAverageRoundTripJitterUs_;
     status.remoteDspMaxRoundTripJitterUs = remoteDspMaxRoundTripJitterUs_;
     status.requestedPerformanceCoreCount = std::max(1, settings_.requestedPerformanceCoreCount);
@@ -3576,7 +3632,12 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
             interleavedStereo[static_cast<size_t>(f) * 2u + 1u] += r;
             listenReadPosFrames_ += listenResampleRatio_;
         }
-        if (s_dryThisBlock) ++s_underruns;
+        if (s_dryThisBlock) {
+            ++s_underruns;
+            // Publish it too: this is the tap dropout the render wake-jitter meter can never see,
+            // because the render thread woke on time — it was the CAPTURE side that ran dry.
+            referenceUnderrunBlocks_.fetch_add(1, std::memory_order_relaxed);
+        }
         if (++s_diagCounter % 200 == 0) {
             if (FILE* df = refDiagLog()) {
                 fprintf(df, "ref-fifo: ratio=%.5f target=%.5f depth=%.0f/%.0f avail=%lld under=%lld blk=%lld\n",
@@ -3727,6 +3788,10 @@ void NeuracoustDspEngine::resetTrackMetersLocked() {
         projectMeters_.trackNames.push_back(track.name);
         projectMeters_.trackPeakLeft.push_back(0.0f);
         projectMeters_.trackPeakRight.push_back(0.0f);
+        // Kept the same length as the peaks — the bridge's meter count is the MIN across all of
+        // these arrays, so a short console array hides every track's meter.
+        projectMeters_.trackConsoleGainReductionDb.push_back(0.0f);
+        projectMeters_.trackConsoleGateGainReductionDb.push_back(0.0f);
     }
 }
 

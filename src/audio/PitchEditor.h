@@ -26,6 +26,24 @@ struct DetectedNote {
     double medianFrequencyHz = 0.0;
     double confidence = 0.0;        // mean confidence across the note's frames
     double pitchOffsetSemitones = 0.0;   // the USER edit (0 = untouched). Set before renderNoteEdits.
+    double timeOffsetSeconds = 0.0;      // Melodyne-style horizontal note move.
+    double durationScale = 1.0;          // Melodyne-style left/right time stretch (0.25..4).
+
+    // The rest of the Melodyne tool palette. All default to "untouched", and renderNoteEdits skips a
+    // note entirely when every one of them is at its default — an unedited take must come back
+    // sample-for-sample, not merely close.
+    double gainDb = 0.0;                 // Amplitude tool: per-note level, ±24 dB.
+    bool muted = false;                  // Amplitude/Mute tool: silence this note.
+    double formantSemitones = 0.0;       // Formant tool: move the timbre without moving the pitch.
+    /// Attack-speed tool. 1 = the note's own attack. >1 sharpens it, <1 softens it, by time-warping
+    /// the note's OWN amplitude envelope over its attack — so 1.0 is exactly transparent.
+    double attackSpeed = 1.0;
+    /// Pitch-modulation tool: scales the note's vibrato depth. 1 = as sung, 0 = dead straight,
+    /// 2 = twice the wobble. Operates on the fast part of the note's own pitch contour.
+    double pitchModulationScale = 1.0;
+    /// Pitch-drift tool: scales the note's slow pitch movement (the scoop into a note, the sag out
+    /// of it) by the same rule, on the contour's slow part.
+    double pitchDriftScale = 1.0;
 };
 
 // Detection modes, Melodyne-style. Melodic = monophonic pitch (YIN). Percussive = onset/transient
@@ -61,6 +79,17 @@ std::vector<PitchFrame> smoothPitchTrack(const std::vector<PitchFrame>& track);
 std::vector<DetectedNote> segmentNotes(const std::vector<PitchFrame>& track,
                                        double minDurationSeconds = 0.06,
                                        double toleranceSemitones = 0.6);
+
+// Rescale a note's own pitch CONTOUR in place: its deviation from the note's median pitch is split
+// into a slow part (drift) and a fast part (vibrato) and each is multiplied by its scale, then the
+// audio is resampled at a varying rate to follow the new contour. Both scales at 1 is a no-op.
+//
+// Variable-rate resampling is what makes this cheap and clean: the required correction is tiny (a
+// ±0.5-semitone vibrato is a ±3 % rate change), so no phase vocoder is needed and none of its
+// smearing is incurred. The rate curve is normalised to mean 1 so the note keeps its length.
+// Exposed for testing; renderNoteEdits applies it before the constant pitch shift.
+std::vector<float> scaleNotePitchContour(const std::vector<float>& interleaved, int channels,
+                                         double sampleRate, double modulationScale, double driftScale);
 
 // Render the input with each note pitch-shifted by its pitchOffsetSemitones (a phase-vocoder shift of
 // just that note's audio span, length preserved, short crossfades at the note edges to hide seams).

@@ -9,10 +9,14 @@
 #include "audio/HeadphoneProfiles.h"
 #include "audio/AudioInterfaceCatalog.h"
 #include "audio/AudioInterfaceProfiles.h"
+#include "core/Base64.h"
 #include "core/Localization.h"
 #include "audio/AudioDeviceModel.h"
 #include "audio/ListenRoom.h"
+#include "audio/MetronomeClick.h"
 #include "audio/MidiInputRecorder.h"
+#include "control/ControlSurfaceMidi.h"
+#include "control/MackieHuiProtocol.h"
 #include "audio/OfflineBounce.h"
 #include "audio/RealtimeAudioEngine.h"
 #include "audio/RemoteDspServerClient.h"
@@ -22,13 +26,16 @@
 #include "audio/WavFile.h"
 #include "plugins/InsertDspPolicy.h"
 #include "plugins/MonitorDspModules.h"
+#include "plugins/AraHost.h"
 #include "plugins/PluginScanner.h"
 #include "plugins/Vst3RealtimeBridgeProtocol.h"
 #include "plugins/Vst3SdkAdapter.h"
 #include "project/EditOperations.h"
 #include "project/ProjectDocument.h"
+#include "project/AafImport.h"
 #include "project/AudioImport.h"
 #include "project/ProjectHistory.h"
+#include "project/TimelineExport.h"
 
 #include <pthread/qos.h>
 #include <unistd.h>
@@ -40,9 +47,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <thread>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <filesystem>
@@ -85,6 +94,9 @@ void nc_tr(const char* key, char* out, size_t outLen) {
 
 struct NCEngine {
     RealtimeAudioEngine engine;
+    /// Why the last plug-in action was refused (e.g. an ARA plug-in kept out of the realtime
+    /// chain), so the UI can say more than "it didn't work".
+    std::string lastPluginMessage;
     ProjectDocument project = neuracoust::daw::defaultProject();
     bool monitorDspEnabled = true;
     bool delayCompensationEnabled = true;
@@ -117,6 +129,16 @@ struct NCEngine {
 
     /// Live MIDI input for monitoring a keyboard through an instrument track.
     neuracoust::daw::MidiInputRecorder midiInputRecorder;
+    neuracoust::daw::ControlSurfaceMidi huiMidi;
+    neuracoust::daw::MackieHuiProtocol huiProtocol;
+    std::deque<NCHuiEvent> huiEvents;
+    int huiBankOffset = 0;
+    std::array<float, 9> huiLastFaders {{-1,-1,-1,-1,-1,-1,-1,-1,-1}};
+    std::array<int, 8> huiLastFlags {{-1,-1,-1,-1,-1,-1,-1,-1}};
+    std::array<std::string, 8> huiLastNames;
+    bool huiLastPlaying = false;
+    bool huiLastRecording = false;
+    int huiKeepAliveCounter = 0;
     /// Peak activity (0..1) of the MIDI seen since the last meter read; consumed by
     /// nc_midi_input_activity so the UI can decay it.
     float midiInputActivity = 0.0f;
@@ -138,8 +160,14 @@ struct NCEngine {
         struct Held { double startBeat = 0.0; int velocity = 0; bool on = false; };
         std::array<Held, 128> held {};
         int noteCount = 0;      // notes committed into the region so far (0 = empty take)
+        int controllerCount = 0;  // whitelisted CC + pitch-bend events written into the region
     };
     MidiRecordTake midiRecordTake;
+
+    /// Pitches an editor keyboard is currently holding down, per track. A mouse-up that
+    /// lands outside the key, or a view torn down mid-drag, would otherwise leave a note
+    /// sounding forever.
+    std::map<std::string, std::set<int>> previewHeldNotes;
 
     /// Reverse audio ring from an open instrument editor: the editor's own instance
     /// renders GUI keyboard clicks (and the forwarded live MIDI), publishes into the
@@ -176,6 +204,12 @@ struct NCEngine {
     // Melodyne-mode pitch edit: notes detected for the clip most recently opened in the editor, with
     // the user's per-note offsets. Detect populates it; the editor sets offsets; apply consumes it.
     std::vector<neuracoust::daw::DetectedNote> pitchEditNotes;
+    /// The one live ARA editing session, if any. In-process by necessity — ARA hands the plug-in
+    /// pointers into our address space for its audio access, so it cannot be sandboxed the way the
+    /// VST3 realtime hosts are. One at a time: two Melodyne documents over the same clip would each
+    /// think they own it.
+    std::unique_ptr<neuracoust::daw::AraDocumentController> araSession;
+    std::string araSessionClipId;
     std::string pitchEditClipId;
 
     // Live loopback measurement of a physical audio interface (②d): the DAC→ADC path measured
@@ -204,6 +238,15 @@ struct NCEngine {
     float pendingInterfacePeak = 0.0f;   // sweep peak, 0..1 (for the clip verdict)
     neuracoust::daw::PluginCandidateFilterOptions facets;
     bool monitorEqLinearPhase = false;   // FIR (linear-phase) monitor EQ vs the biquad fit
+    // Low-latency monitoring. The linear-phase FIR costs numTaps/2 samples of pure delay —
+    // 2048 samples, 42.7 ms at 48 kHz with the default 4096 taps — on EVERYTHING monitored.
+    // That is right for judging a mix and unplayable for performing: a keyboard answers a
+    // twentieth of a second late. So while any track is record-armed or input-monitoring,
+    // the EQ falls back to the minimum-phase biquad fit of the same target curve, which adds
+    // no delay at all. This is what every DAW calls low-latency monitoring; on here it needs
+    // no manual switch because the arm state already says what the user is doing.
+    bool monitorEqLowLatencyWhileMonitoring = true;
+    bool monitorEqLowLatencyActive = false;   // whether the fallback is engaged right now
     int  monitorEqFirTaps = 4096;        // FIR length: resolution vs latency (numTaps/2 samples)
     bool monitorEqHeadphoneOeTarget = false;  // reference a headphone model to the Harman OE target
 
@@ -510,6 +553,8 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->realtimeMaxWakeJitterUs = s.realtimeMaxWakeJitterUs;
     out->realtimeMaxRenderDurationUs = s.realtimeMaxRenderDurationUs;
     out->realtimeLateWakeCount = s.realtimeLateWakeCount;
+    out->referenceUnderrunBlocks = s.referenceUnderrunBlocks;
+    out->referenceOverrunDrops = s.referenceOverrunDrops;
     out->remoteDspMonitorActive = s.remoteDspMonitorActive;
     out->remoteDspRoundTripMs = s.remoteDspRoundTripMs;
     out->activeRealtimeVst3TrackInserts = s.activeRealtimeVst3TrackInsertCount;
@@ -520,12 +565,16 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     const size_t meterCount = std::min({s.trackMeterNames.size(),
                                         s.trackPeakLeft.size(),
                                         s.trackPeakRight.size(),
+                                        s.trackConsoleGainReductionDb.size(),
+                                        s.trackConsoleGateGainReductionDb.size(),
                                         static_cast<size_t>(NC_MAX_TRACK_METERS)});
     out->trackMeterCount = static_cast<int>(meterCount);
     for (size_t i = 0; i < meterCount; ++i) {
         copyText(out->trackMeterNames[i], NC_NAME_LEN, s.trackMeterNames[i]);
         out->trackPeakLeft[i] = s.trackPeakLeft[i];
         out->trackPeakRight[i] = s.trackPeakRight[i];
+        out->trackConsoleGainReductionDb[i] = s.trackConsoleGainReductionDb[i];
+        out->trackConsoleGateGainReductionDb[i] = s.trackConsoleGateGainReductionDb[i];
     }
 
     copyText(out->deviceName, NC_TEXT_LEN, s.deviceName);
@@ -827,6 +876,108 @@ void nc_metronome_genre(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->project.metronomeGenre : std::string{"straight"});
 }
 
+bool nc_metronome_print_to_track(NCEngine* engine, bool loopRangeOnly,
+                                 char* error, size_t errorLen) {
+    if (engine == nullptr) {
+        copyText(error, errorLen, "engine is null");
+        return false;
+    }
+
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+    if (loopRangeOnly) {
+        if (!engine->project.loopEnabled ||
+            engine->project.loopEndSeconds <= engine->project.loopStartSeconds) {
+            copyText(error, errorLen, "먼저 유효한 루프/편집 범위를 지정하세요.");
+            return false;
+        }
+        startSeconds = std::max(0.0, engine->project.loopStartSeconds);
+        endSeconds = engine->project.loopEndSeconds;
+    } else {
+        for (const auto& clip : engine->project.clips) {
+            endSeconds = std::max(endSeconds, clip.startSeconds + clip.durationSeconds);
+        }
+        for (const auto& region : engine->project.midiRegions) {
+            endSeconds = std::max(endSeconds, region.startSeconds + region.durationSeconds);
+        }
+        for (const auto& clip : engine->project.videoClips) {
+            endSeconds = std::max(endSeconds, clip.startSeconds + clip.durationSeconds);
+        }
+        // An empty session still gets four bars, which makes the command useful while
+        // preparing a count/cue track before importing or recording anything.
+        if (endSeconds <= 0.0) {
+            const double quarterSeconds = 60.0 / std::max(1, engine->project.tempoBpm);
+            const double barQuarters =
+                std::max(1, engine->project.timeSignatureNumerator) * 4.0 /
+                std::max(1, engine->project.timeSignatureDenominator);
+            endSeconds = quarterSeconds * barQuarters * 4.0;
+        }
+    }
+
+    const int sampleRate = std::max(8000, static_cast<int>(std::lround(engine->project.sampleRate)));
+    const int64_t frameCount = std::max<int64_t>(
+        1, static_cast<int64_t>(std::ceil((endSeconds - startSeconds) * sampleRate)));
+    neuracoust::daw::WavAudioData audio;
+    audio.channels = 1;
+    audio.sampleRate = sampleRate;
+    audio.bitsPerSample = 24;
+    audio.interleavedSamples.resize(static_cast<size_t>(frameCount));
+
+    auto settings = buildEngineSettings(engine);
+    settings.sampleRate = sampleRate;
+    settings.metronomeEnabled = true;
+    settings.tempoMap = engine->project.tempoMap;
+    settings.timeSignatureMap = engine->project.timeSignatureMap;
+    const int64_t timelineStartFrame =
+        static_cast<int64_t>(std::llround(startSeconds * sampleRate));
+    for (int64_t frame = 0; frame < frameCount; ++frame) {
+        audio.interleavedSamples[static_cast<size_t>(frame)] =
+            neuracoust::daw::renderMetronomeClickSampleAtFrame(timelineStartFrame + frame, settings);
+    }
+
+    const auto mediaDirectory = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(std::filesystem::path(engine->projectPath));
+    std::error_code fsError;
+    std::filesystem::create_directories(mediaDirectory, fsError);
+    if (fsError) {
+        copyText(error, errorLen, "Audio Files 폴더를 만들 수 없습니다: " + fsError.message());
+        return false;
+    }
+    std::filesystem::path wavPath = mediaDirectory / "Metronome Print.wav";
+    for (int suffix = 2; std::filesystem::exists(wavPath) && suffix < 10000; ++suffix) {
+        wavPath = mediaDirectory / ("Metronome Print " + std::to_string(suffix) + ".wav");
+    }
+    std::string writeError;
+    if (!neuracoust::daw::writePcm24WavFileAtomically(wavPath, audio, writeError)) {
+        copyText(error, errorLen, writeError.empty() ? "메트로놈 WAV를 만들 수 없습니다." : writeError);
+        return false;
+    }
+
+    const std::string freshName = neuracoust::daw::addAudioTrack(engine->project);
+    if (freshName.empty()) {
+        std::filesystem::remove(wavPath, fsError);
+        copyText(error, errorLen, "오디오 트랙을 추가할 수 없습니다.");
+        return false;
+    }
+    std::string clickName = "Metronome";
+    int suffix = 2;
+    const auto nameExists = [&](const std::string& candidate) {
+        return std::any_of(engine->project.tracks.begin(), engine->project.tracks.end(),
+                           [&](const auto& track) {
+                               return track.name == candidate && track.name != freshName;
+                           });
+    };
+    while (nameExists(clickName)) clickName = "Metronome " + std::to_string(suffix++);
+    neuracoust::daw::renameTrack(engine->project, freshName, clickName);
+    neuracoust::daw::appendAudioClipAt(engine->project, clickName, wavPath.string(),
+                                      startSeconds, endSeconds - startSeconds);
+    engine->reconcileProjectDeclicked();
+    engine->recordStep(loopRangeOnly ? "Print metronome range" : "Print metronome track");
+    copyText(error, errorLen, clickName + " 트랙을 만들었습니다.");
+    return true;
+}
+
 void nc_engine_set_test_tone_enabled(NCEngine* engine, bool enabled) {
     if (engine != nullptr) {
         engine->engine.setTestToneEnabled(enabled);
@@ -908,6 +1059,28 @@ double nc_project_loop_start(NCEngine* engine) {
 
 double nc_project_loop_end(NCEngine* engine) {
     return engine != nullptr ? engine->project.loopEndSeconds : 0.0;
+}
+
+double nc_project_pre_roll(NCEngine* engine) {
+    return engine != nullptr ? engine->project.preRollSeconds : 0.0;
+}
+
+double nc_project_post_roll(NCEngine* engine) {
+    return engine != nullptr ? engine->project.postRollSeconds : 0.0;
+}
+
+void nc_project_set_pre_post_roll(NCEngine* engine, double preRollSeconds, double postRollSeconds) {
+    if (engine == nullptr) return;
+    const double pre = std::clamp(std::isfinite(preRollSeconds) ? preRollSeconds : 0.0, 0.0, 3600.0);
+    const double post = std::clamp(std::isfinite(postRollSeconds) ? postRollSeconds : 0.0, 0.0, 3600.0);
+    if (engine->project.preRollSeconds == pre && engine->project.postRollSeconds == post) return;
+    engine->project.preRollSeconds = pre;
+    engine->project.postRollSeconds = post;
+    std::string error;
+    if (!engine->engine.updateProject(engine->project, error)) {
+        engine->engine.loadProject(engine->project, error);
+    }
+    engine->recordStep("Set loop pre/post-roll");
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1252,110 @@ bool nc_track_record_armed(NCEngine* engine, int index) {
 bool nc_track_input_monitoring(NCEngine* engine, int index) {
     const auto* track = trackAt(engine, index);
     return track != nullptr && track->inputMonitoring;
+}
+
+void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, index);
+    copyText(out, outLen, track != nullptr ? track->consoleChannel.model : std::string{});
+}
+void nc_track_console_module_order(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* t=trackAt(engine,index); copyText(out,outLen,t?t->consoleChannel.moduleOrder:std::string{});
+}
+void nc_track_set_console_module_order(NCEngine* engine, int index, const char* order) {
+    auto* t=trackAt(engine,index); if(!t||!order)return; t->consoleChannel.moduleOrder=order;
+    engine->reconcileProject(); engine->recordStep("Console module order");
+}
+
+bool nc_track_console_bool(NCEngine* engine, int index, const char* parameter) {
+    const auto* t = trackAt(engine, index); if (t == nullptr || parameter == nullptr) return false;
+    const std::string p(parameter);
+    if (p == "filterEnabled") return t->consoleChannel.filterEnabled;
+    if (p == "filterCircuitMode") return t->consoleChannel.filterCircuitMode;
+    if (p == "highPassEnabled") return t->consoleChannel.highPassEnabled;
+    if (p == "lowPassEnabled") return t->consoleChannel.lowPassEnabled;
+    if (p == "eqEnabled") return t->consoleChannel.eqEnabled;
+    if (p == "eqCircuitMode") return t->consoleChannel.eqCircuitMode;
+    if (p == "eqHfBell") return t->consoleChannel.eqHfBell;
+    if (p == "eqLfBell") return t->consoleChannel.eqLfBell;
+    if (p == "eqEMode") return t->consoleChannel.eqEMode;
+    if (p == "compEnabled") return t->consoleChannel.compEnabled;
+    if (p == "compCircuitMode") return t->consoleChannel.compCircuitMode;
+    if (p == "compFastAttack") return t->consoleChannel.compFastAttack;
+    if (p == "compPeakMode") return t->consoleChannel.compPeakMode;
+    if (p == "gateEnabled") return t->consoleChannel.gateEnabled;
+    if (p == "gateCircuitMode") return t->consoleChannel.gateCircuitMode;
+    if (p == "saturatorEnabled") return t->consoleChannel.saturatorEnabled;
+    if (p == "saturatorCircuitMode") return t->consoleChannel.saturatorCircuitMode;
+    if (p == "gateFastAttack") return t->consoleChannel.gateFastAttack;
+    if (p == "expanderMode") return t->consoleChannel.expanderMode;
+    return false;
+}
+
+float nc_track_console_value(NCEngine* engine, int index, const char* parameter) {
+    const auto* t = trackAt(engine, index); if (t == nullptr || parameter == nullptr) return 0;
+    const auto& c=t->consoleChannel; const std::string p(parameter);
+#define NC_GET(name, field) if (p == name) return c.field
+    NC_GET("highPassHz", highPassHz); NC_GET("lowPassHz", lowPassHz);
+    NC_GET("compThresholdDb", compThresholdDb); NC_GET("compRatio", compRatio);
+    NC_GET("compAttackMs", compAttackMs); NC_GET("compReleaseMs", compReleaseMs);
+    NC_GET("compMix", compMix);
+    NC_GET("saturatorDriveDb", saturatorDriveDb); NC_GET("saturatorMix", saturatorMix);
+    NC_GET("gateThresholdDb", gateThresholdDb); NC_GET("gateRangeDb", gateRangeDb);
+    NC_GET("gateAttackMs", gateAttackMs); NC_GET("gateHoldMs", gateHoldMs); NC_GET("gateReleaseMs", gateReleaseMs);
+    NC_GET("eqHfGainDb", eqHfGainDb); NC_GET("eqHfHz", eqHfHz);
+    NC_GET("eqHmfGainDb", eqHmfGainDb); NC_GET("eqHmfHz", eqHmfHz); NC_GET("eqHmfQ", eqHmfQ);
+    NC_GET("eqLmfGainDb", eqLmfGainDb); NC_GET("eqLmfHz", eqLmfHz); NC_GET("eqLmfQ", eqLmfQ);
+    NC_GET("eqLfGainDb", eqLfGainDb); NC_GET("eqLfHz", eqLfHz);
+#undef NC_GET
+    return 0;
+}
+
+void nc_track_set_console_bool(NCEngine* engine, int index, const char* parameter, bool value) {
+    auto* t=trackAt(engine,index); if(t==nullptr||parameter==nullptr)return; const std::string p(parameter);
+    if(p=="filterEnabled") {
+        t->consoleChannel.filterEnabled=value;
+        t->consoleChannel.highPassEnabled=value;
+        t->consoleChannel.lowPassEnabled=value;
+    } else if(p=="highPassEnabled") {
+        t->consoleChannel.highPassEnabled=value;
+        t->consoleChannel.filterEnabled=t->consoleChannel.highPassEnabled || t->consoleChannel.lowPassEnabled;
+    } else if(p=="lowPassEnabled") {
+        t->consoleChannel.lowPassEnabled=value;
+        t->consoleChannel.filterEnabled=t->consoleChannel.highPassEnabled || t->consoleChannel.lowPassEnabled;
+    } else if(p=="filterCircuitMode")t->consoleChannel.filterCircuitMode=value;
+    else if(p=="eqEnabled")t->consoleChannel.eqEnabled=value;
+    else if(p=="eqCircuitMode")t->consoleChannel.eqCircuitMode=value;
+    else if(p=="eqHfBell")t->consoleChannel.eqHfBell=value; else if(p=="eqLfBell")t->consoleChannel.eqLfBell=value;
+    else if(p=="eqEMode")t->consoleChannel.eqEMode=value; else if(p=="compEnabled")t->consoleChannel.compEnabled=value;
+    else if(p=="compCircuitMode")t->consoleChannel.compCircuitMode=value;
+    else if(p=="compFastAttack")t->consoleChannel.compFastAttack=value; else if(p=="compPeakMode")t->consoleChannel.compPeakMode=value;
+    else if(p=="gateEnabled")t->consoleChannel.gateEnabled=value; else if(p=="gateCircuitMode")t->consoleChannel.gateCircuitMode=value;
+    else if(p=="saturatorEnabled")t->consoleChannel.saturatorEnabled=value;
+    else if(p=="saturatorCircuitMode")t->consoleChannel.saturatorCircuitMode=value;
+    else if(p=="expanderMode")t->consoleChannel.expanderMode=value;
+    else if(p=="gateFastAttack")t->consoleChannel.gateFastAttack=value;
+    else return;
+    engine->reconcileProject(); engine->recordStep("Console channel");
+}
+
+void nc_track_set_console_value(NCEngine* engine, int index, const char* parameter, float value) {
+    auto* t=trackAt(engine,index); if(t==nullptr||parameter==nullptr)return; auto& c=t->consoleChannel; const std::string p(parameter);
+#define NC_SET(name, field, lo, hi) if(p==name)c.field=std::max(lo,std::min(hi,value));else
+    NC_SET("highPassHz",highPassHz,20.0f,350.0f) NC_SET("lowPassHz",lowPassHz,3000.0f,12000.0f)
+    NC_SET("compThresholdDb",compThresholdDb,-40.0f,0.0f) NC_SET("compRatio",compRatio,1.0f,20.0f)
+    NC_SET("compAttackMs",compAttackMs,0.1f,100.0f) NC_SET("compReleaseMs",compReleaseMs,40.0f,1500.0f)
+    NC_SET("compMix",compMix,0.0f,1.0f)
+    NC_SET("saturatorDriveDb",saturatorDriveDb,0.0f,24.0f) NC_SET("saturatorMix",saturatorMix,0.0f,1.0f)
+    NC_SET("gateThresholdDb",gateThresholdDb,-60.0f,0.0f) NC_SET("gateRangeDb",gateRangeDb,0.0f,40.0f)
+    NC_SET("gateAttackMs",gateAttackMs,0.05f,20.0f) NC_SET("gateHoldMs",gateHoldMs,0.0f,800.0f)
+    NC_SET("gateReleaseMs",gateReleaseMs,40.0f,1500.0f)
+    NC_SET("eqHfGainDb",eqHfGainDb,-18.0f,18.0f) NC_SET("eqHfHz",eqHfHz,4000.0f,16000.0f)
+    NC_SET("eqHmfGainDb",eqHmfGainDb,-18.0f,18.0f) NC_SET("eqHmfHz",eqHmfHz,1200.0f,7500.0f)
+    NC_SET("eqHmfQ",eqHmfQ,0.2f,10.0f) NC_SET("eqLmfGainDb",eqLmfGainDb,-18.0f,18.0f)
+    NC_SET("eqLmfHz",eqLmfHz,400.0f,2500.0f) NC_SET("eqLmfQ",eqLmfQ,0.2f,10.0f)
+    NC_SET("eqLfGainDb",eqLfGainDb,-18.0f,18.0f) NC_SET("eqLfHz",eqLfHz,90.0f,450.0f) { return; }
+#undef NC_SET
+    engine->reconcileProject();
 }
 
 void nc_track_set_volume_db(NCEngine* engine, int index, float db) {
@@ -2478,14 +2755,90 @@ static const neuracoust::daw::DetectedNote* noteAt(NCEngine* engine, int index) 
     if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return nullptr;
     return &engine->pitchEditNotes[static_cast<size_t>(index)];
 }
+static neuracoust::daw::DetectedNote* mutableNoteAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return nullptr;
+    return &engine->pitchEditNotes[static_cast<size_t>(index)];
+}
 double nc_clip_note_start_seconds(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->startSeconds : 0.0; }
 double nc_clip_note_duration_seconds(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->durationSeconds : 0.0; }
 double nc_clip_note_detected_midi(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->detectedMidi : 0.0; }
 double nc_clip_note_offset_semitones(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->pitchOffsetSemitones : 0.0; }
+double nc_clip_note_time_offset_seconds(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->timeOffsetSeconds : 0.0; }
+double nc_clip_note_duration_scale(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->durationScale : 1.0; }
 double nc_clip_note_confidence(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->confidence : 0.0; }
+
+// The rest of the Melodyne palette. Each clamps to the range renderNoteEdits honours, so a UI that
+// drags past the end stops rather than producing something the render would reinterpret.
+double nc_clip_note_gain_db(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->gainDb : 0.0; }
+bool nc_clip_note_muted(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n != nullptr && n->muted; }
+double nc_clip_note_formant_semitones(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->formantSemitones : 0.0; }
+double nc_clip_note_attack_speed(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->attackSpeed : 1.0; }
+void nc_clip_note_set_gain_db(NCEngine* engine, int index, double gainDb) {
+    if (auto* n = mutableNoteAt(engine, index)) n->gainDb = std::clamp(gainDb, -24.0, 24.0);
+}
+void nc_clip_note_set_muted(NCEngine* engine, int index, bool muted) {
+    if (auto* n = mutableNoteAt(engine, index)) n->muted = muted;
+}
+void nc_clip_note_set_formant_semitones(NCEngine* engine, int index, double semitones) {
+    if (auto* n = mutableNoteAt(engine, index)) n->formantSemitones = std::clamp(semitones, -12.0, 12.0);
+}
+void nc_clip_note_set_attack_speed(NCEngine* engine, int index, double speed) {
+    if (auto* n = mutableNoteAt(engine, index)) n->attackSpeed = std::clamp(speed, 0.25, 4.0);
+}
+double nc_clip_note_modulation_scale(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->pitchModulationScale : 1.0; }
+double nc_clip_note_drift_scale(NCEngine* engine, int index) { auto* n = noteAt(engine, index); return n ? n->pitchDriftScale : 1.0; }
+void nc_clip_note_set_modulation_scale(NCEngine* engine, int index, double scale) {
+    if (auto* n = mutableNoteAt(engine, index)) n->pitchModulationScale = std::clamp(scale, 0.0, 4.0);
+}
+void nc_clip_note_set_drift_scale(NCEngine* engine, int index, double scale) {
+    if (auto* n = mutableNoteAt(engine, index)) n->pitchDriftScale = std::clamp(scale, 0.0, 4.0);
+}
+/// Puts one note back to untouched — Melodyne's "reset" on a blob.
+void nc_clip_note_reset(NCEngine* engine, int index) {
+    auto* n = mutableNoteAt(engine, index);
+    if (n == nullptr) return;
+    n->pitchOffsetSemitones = 0.0;
+    n->timeOffsetSeconds = 0.0;
+    n->durationScale = 1.0;
+    n->gainDb = 0.0;
+    n->muted = false;
+    n->formantSemitones = 0.0;
+    n->attackSpeed = 1.0;
+    n->pitchModulationScale = 1.0;
+    n->pitchDriftScale = 1.0;
+}
+
 void nc_clip_note_set_offset(NCEngine* engine, int index, double semitones) {
     if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return;
     engine->pitchEditNotes[static_cast<size_t>(index)].pitchOffsetSemitones = std::clamp(semitones, -24.0, 24.0);
+}
+void nc_clip_note_set_time_offset(NCEngine* engine, int index, double seconds) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return;
+    auto& note = engine->pitchEditNotes[static_cast<size_t>(index)];
+    note.timeOffsetSeconds = std::clamp(seconds, -note.startSeconds,
+                                        std::max(0.0, 86400.0 - note.startSeconds));
+}
+void nc_clip_note_set_duration_scale(NCEngine* engine, int index, double scale) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return;
+    engine->pitchEditNotes[static_cast<size_t>(index)].durationScale = std::clamp(scale, 0.25, 4.0);
+}
+bool nc_clip_note_split(NCEngine* engine, int index, double localSeconds) {
+    if (engine == nullptr || index < 0 || index >= static_cast<int>(engine->pitchEditNotes.size())) return false;
+    auto& notes = engine->pitchEditNotes;
+    const auto original = notes[static_cast<size_t>(index)];
+    const double relative = localSeconds - original.startSeconds;
+    if (relative < 0.02 || relative > original.durationSeconds - 0.02) return false;
+    auto left = original;
+    auto right = original;
+    left.durationSeconds = relative;
+    left.durationScale = 1.0;
+    right.startSeconds = localSeconds;
+    right.durationSeconds = original.durationSeconds - relative;
+    right.timeOffsetSeconds = original.timeOffsetSeconds;
+    right.durationScale = 1.0;
+    notes[static_cast<size_t>(index)] = left;
+    notes.insert(notes.begin() + index + 1, right);
+    return true;
 }
 
 // Render the cached per-note offsets into a new WAV and repoint the clip (length preserved, so start/
@@ -2497,7 +2850,11 @@ bool nc_clip_apply_note_edits(NCEngine* engine, const char* clipId, char* error,
         copyText(error, errorLen, "no detected notes for this clip"); return false;
     }
     bool anyEdit = false;
-    for (const auto& n : engine->pitchEditNotes) if (std::abs(n.pitchOffsetSemitones) >= 0.01) { anyEdit = true; break; }
+    for (const auto& n : engine->pitchEditNotes)
+        if (std::abs(n.pitchOffsetSemitones) >= 0.01 || std::abs(n.timeOffsetSeconds) >= 0.0001 ||
+            std::abs(n.durationScale - 1.0) >= 0.001) {
+            anyEdit = true; break;
+        }
     if (!anyEdit) return true;   // nothing to do
 
     std::vector<float> window; int channels = 0; double rate = 0.0; std::string err;
@@ -2628,6 +2985,293 @@ bool nc_clip_repoint_to_window_wav(NCEngine* engine, const char* clipId, const c
     return changed;
 }
 
+
+// --- ARA editing sessions -------------------------------------------------------------------
+//
+// One clip at a time. The clip's played window is written out ONCE (araSourcePath) and every ARA
+// session works from that file, never from the clip's current source: after a commit the clip points
+// at the rendered result, so re-opening against it would apply the archive on top of audio that
+// already carries it.
+
+namespace {
+
+/// The clip's unedited ARA source window, creating it on first use. Empty on failure.
+std::string ensureAraSourceWindow(NCEngine* engine, neuracoust::daw::ClipState* clip,
+                                  std::string& error) {
+    if (!clip->araSourcePath.empty() && std::filesystem::exists(clip->araSourcePath)) {
+        return clip->araSourcePath;
+    }
+    std::vector<float> window;
+    int channels = 0;
+    double rate = 0.0;
+    std::string err;
+    if (readClipWindow(engine, clip->id.c_str(), window, channels, rate, err) == nullptr) {
+        error = "클립 오디오를 읽지 못했습니다: " + err;
+        return {};
+    }
+    neuracoust::daw::WavAudioData out;
+    out.channels = channels;
+    out.sampleRate = rate;
+    out.interleavedSamples = std::move(window);
+
+    std::error_code ec;
+    const std::filesystem::path dir = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::filesystem::create_directories(dir, ec);
+    const std::string stem = std::filesystem::path(clip->sourcePath).stem().string();
+    const std::filesystem::path path = dir / (stem + "_arasrc_" + clip->id + ".wav");
+    if (!neuracoust::daw::writePcm24WavFileAtomically(path, out, err)) {
+        error = "ARA 소스를 저장하지 못했습니다: " + err;
+        return {};
+    }
+    clip->araSourcePath = path.string();
+    return clip->araSourcePath;
+}
+
+neuracoust::daw::ClipState* findClip(NCEngine* engine, const char* clipId) {
+    if (engine == nullptr || clipId == nullptr) return nullptr;
+    for (auto& c : engine->project.clips) {
+        if (c.id == clipId) return &c;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+
+// The ARA-capable plug-ins, straight from the full catalog — deliberately not through the browser's
+// filter, which the plug-in browser owns and would be clobbered by a query from a clip menu.
+int nc_ara_plugin_count(NCEngine* engine) {
+    if (engine == nullptr) return 0;
+    int count = 0;
+    for (const auto& plugin : engine->plugins) {
+        if (plugin.araCapable) ++count;
+    }
+    return count;
+}
+
+namespace {
+const neuracoust::daw::PluginCandidate* araPluginAt(NCEngine* engine, int index) {
+    if (engine == nullptr || index < 0) return nullptr;
+    int seen = 0;
+    for (const auto& plugin : engine->plugins) {
+        if (!plugin.araCapable) continue;
+        if (seen == index) return &plugin;
+        ++seen;
+    }
+    return nullptr;
+}
+} // namespace
+
+void nc_ara_plugin_name(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = araPluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->name : std::string{});
+}
+
+void nc_ara_plugin_path(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* plugin = araPluginAt(engine, index);
+    copyText(out, outLen, plugin != nullptr ? plugin->path : std::string{});
+}
+
+bool nc_ara_open(NCEngine* engine, const char* clipId, const char* pluginName, const char* pluginPath,
+                 char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || clipId == nullptr || pluginName == nullptr || pluginPath == nullptr) {
+        copyText(error, errorLen, "invalid arguments");
+        return false;
+    }
+    if (!neuracoust::daw::araHostingCompiledIn()) {
+        copyText(error, errorLen, "이 빌드에는 ARA 지원이 없습니다.");
+        return false;
+    }
+    if (engine->araSession != nullptr) {
+        copyText(error, errorLen, "이미 다른 클립의 ARA 편집이 열려 있습니다.");
+        return false;
+    }
+    auto* clip = findClip(engine, clipId);
+    if (clip == nullptr) {
+        copyText(error, errorLen, "클립을 찾을 수 없습니다.");
+        return false;
+    }
+
+    std::string err;
+    const std::string sourceWav = ensureAraSourceWindow(engine, clip, err);
+    if (sourceWav.empty()) {
+        copyText(error, errorLen, err);
+        return false;
+    }
+    // A previous session's plug-in and this one must agree, or the archive is meaningless.
+    if (!clip->araArchiveBase64.empty() && !clip->araPluginName.empty() &&
+            clip->araPluginName != pluginName) {
+        copyText(error, errorLen, "이 클립은 " + clip->araPluginName + "(으)로 편집되었습니다.");
+        return false;
+    }
+
+    const auto descriptor = neuracoust::daw::resolveVst3PluginDescriptorForInsert(pluginName, pluginPath);
+    auto session = std::make_unique<neuracoust::daw::AraDocumentController>();
+    std::string message;
+    const std::string documentName = engine->project.name.empty() ? "Neuracoust" : engine->project.name;
+    if (!session->create(descriptor, documentName, message)) {
+        copyText(error, errorLen, message);
+        return false;
+    }
+    const std::string sourceName = clip->regionName.empty()
+        ? std::filesystem::path(clip->sourcePath).stem().string()
+        : clip->regionName;
+    if (!session->addAudioFile(sourceWav, clip->id, sourceName, message)) {
+        copyText(error, errorLen, message);
+        return false;
+    }
+    // Restore BEFORE binding: the archive describes the document graph, not the instance.
+    if (!clip->araArchiveBase64.empty() && !session->restoreArchive(clip->araArchiveBase64, message)) {
+        copyText(error, errorLen, "이전 편집을 복원하지 못했습니다: " + message);
+        return false;
+    }
+    if (!session->bindPlugInInstance(message)) {
+        copyText(error, errorLen, message);
+        return false;
+    }
+
+    clip->araPluginName = pluginName;
+    clip->araPluginPath = pluginPath;
+    engine->araSession = std::move(session);
+    engine->araSessionClipId = clip->id;
+    return true;
+}
+
+bool nc_ara_is_open(NCEngine* engine) {
+    return engine != nullptr && engine->araSession != nullptr;
+}
+
+void nc_ara_open_clip_id(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->araSessionClipId : std::string{});
+}
+
+bool nc_ara_attach_editor(NCEngine* engine, void* nsView, int* widthOut, int* heightOut,
+                          char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (widthOut != nullptr) *widthOut = 0;
+    if (heightOut != nullptr) *heightOut = 0;
+    if (engine == nullptr || engine->araSession == nullptr) {
+        copyText(error, errorLen, "열린 ARA 편집이 없습니다.");
+        return false;
+    }
+    int width = 0;
+    int height = 0;
+    std::string message;
+    if (!engine->araSession->createEditorView(nsView, width, height, message)) {
+        copyText(error, errorLen, message);
+        return false;
+    }
+    if (widthOut != nullptr) *widthOut = width;
+    if (heightOut != nullptr) *heightOut = height;
+    return true;
+}
+
+void nc_ara_detach_editor(NCEngine* engine) {
+    if (engine != nullptr && engine->araSession != nullptr) {
+        engine->araSession->destroyEditorView();
+    }
+}
+
+bool nc_ara_commit(NCEngine* engine, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    if (engine == nullptr || engine->araSession == nullptr) {
+        copyText(error, errorLen, "열린 ARA 편집이 없습니다.");
+        return false;
+    }
+    auto* clip = findClip(engine, engine->araSessionClipId.c_str());
+    if (clip == nullptr) {
+        copyText(error, errorLen, "클립이 사라졌습니다.");
+        return false;
+    }
+
+    // The editor view holds the plug-in's UI state; take it down before archiving so what is stored
+    // is what the user sees, and so the plug-in is not drawing while its document is read.
+    engine->araSession->destroyEditorView();
+
+    std::string message;
+    std::string archive;
+    if (!engine->araSession->storeArchive(archive, message)) {
+        copyText(error, errorLen, "편집을 저장하지 못했습니다: " + message);
+        return false;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path dir = engine->projectPath.empty()
+        ? neuracoust::daw::temporaryImportAudioFilesDirectory()
+        : neuracoust::daw::projectAudioFilesDirectory(engine->projectPath);
+    std::filesystem::create_directories(dir, ec);
+    const std::string stem = std::filesystem::path(clip->araSourcePath).stem().string();
+    const std::filesystem::path printPath = dir / (stem + "_print.wav");
+    if (!engine->araSession->renderToWavFile(printPath.string(), message)) {
+        copyText(error, errorLen, "렌더링하지 못했습니다: " + message);
+        return false;
+    }
+
+    neuracoust::daw::WavAudioData printed;
+    std::string err;
+    if (!neuracoust::daw::readPcmWavFile(printPath.string(), printed, err) ||
+            printed.channels < 1 || printed.sampleRate <= 0) {
+        copyText(error, errorLen, "렌더링 결과를 읽지 못했습니다: " + err);
+        return false;
+    }
+
+    clip->araArchiveBase64 = archive;
+    clip->sourcePath = printPath.string();
+    clip->sourceOffsetSeconds = 0.0;   // the printed window IS the clip
+    clip->sourceSampleRate = printed.sampleRate;
+    clip->sourceChannels = printed.channels;
+    clip->sourceFileUid.clear();
+    engine->waveformCache.erase(printPath.string());
+
+    const bool changed = applyClipEdit(engine, true);
+    if (changed) {
+        engine->recordStep("ARA 편집 적용");
+    } else {
+        copyText(error, errorLen, "프로젝트를 갱신하지 못했습니다.");
+    }
+    return changed;
+}
+
+void nc_ara_close(NCEngine* engine) {
+    if (engine == nullptr || engine->araSession == nullptr) return;
+    engine->araSession->destroy();
+    engine->araSession.reset();
+    engine->araSessionClipId.clear();
+}
+
+bool nc_clip_has_ara_edits(NCEngine* engine, const char* clipId) {
+    const auto* clip = findClip(engine, clipId);
+    return clip != nullptr && !clip->araArchiveBase64.empty();
+}
+
+bool nc_clip_clear_ara_edits(NCEngine* engine, const char* clipId, char* error, size_t errorLen) {
+    copyText(error, errorLen, std::string{});
+    auto* clip = findClip(engine, clipId);
+    if (clip == nullptr) {
+        copyText(error, errorLen, "클립을 찾을 수 없습니다.");
+        return false;
+    }
+    if (engine->araSessionClipId == clip->id) {
+        copyText(error, errorLen, "먼저 ARA 편집 창을 닫으세요.");
+        return false;
+    }
+    if (clip->araSourcePath.empty() || !std::filesystem::exists(clip->araSourcePath)) {
+        copyText(error, errorLen, "되돌릴 원본이 없습니다.");
+        return false;
+    }
+    // Back to the window the first session started from — that file was never edited.
+    clip->sourcePath = clip->araSourcePath;
+    clip->sourceOffsetSeconds = 0.0;
+    clip->araArchiveBase64.clear();
+    clip->sourceFileUid.clear();
+    const bool changed = applyClipEdit(engine, true);
+    if (changed) engine->recordStep("ARA 편집 제거");
+    return changed;
+}
+
 // Polyphonic detection is built by separating the clip (Demucs) then detecting each part. These let
 // Swift orchestrate that: reset the note cache, then append the notes found in each stem file. Notes
 // accumulate and are sorted by time, so the editor shows every part's pitch at once (true polyphony).
@@ -2649,9 +3293,28 @@ int nc_detect_notes_add_from_file(NCEngine* engine, const char* wavPath, int mod
               [](const neuracoust::daw::DetectedNote& a, const neuracoust::daw::DetectedNote& b) { return a.startSeconds < b.startSeconds; });
     return static_cast<int>(found.size());
 }
+void nc_detect_notes_add_note(NCEngine* engine, double startSeconds, double durationSeconds,
+                              double midiPitch, double confidence) {
+    if (engine == nullptr || !std::isfinite(startSeconds) || !std::isfinite(durationSeconds) ||
+        !std::isfinite(midiPitch)) return;
+    neuracoust::daw::DetectedNote note;
+    note.startSeconds = std::max(0.0, startSeconds);
+    note.durationSeconds = std::max(0.02, durationSeconds);
+    note.detectedMidi = std::clamp(midiPitch, 0.0, 127.0);
+    note.confidence = std::clamp(confidence, 0.0, 1.0);
+    engine->pitchEditNotes.push_back(note);
+}
 // Bind the accumulated notes to a clip so apply/export know their target.
 void nc_detect_notes_bind_clip(NCEngine* engine, const char* clipId) {
-    if (engine != nullptr && clipId != nullptr) engine->pitchEditClipId = clipId;
+    if (engine != nullptr && clipId != nullptr) {
+        std::sort(engine->pitchEditNotes.begin(), engine->pitchEditNotes.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.startSeconds == b.startSeconds
+                          ? a.detectedMidi < b.detectedMidi
+                          : a.startSeconds < b.startSeconds;
+                  });
+        engine->pitchEditClipId = clipId;
+    }
 }
 
 // Segment an externally-produced pitch track (e.g. from the CREPE neural detector helper) into notes
@@ -3408,6 +4071,14 @@ bool isPanParameter(const char* parameterId) {
     return parameterId != nullptr && std::strcmp(parameterId, kPanParameterId) == 0;
 }
 
+bool isGenericMixerAutomationParameter(const char* parameterId) {
+    return parameterId != nullptr &&
+        (std::strcmp(parameterId, "track.mute") == 0 ||
+         std::strcmp(parameterId, "track.volume.trim") == 0 ||
+         std::strncmp(parameterId, "send.", 5) == 0 ||
+         std::strncmp(parameterId, "instrument.", 11) == 0);
+}
+
 /// Plugin-insert automation lanes are keyed "insert.<slot>.<paramId>".
 bool isPluginAutomationParameter(const char* parameterId) {
     return parameterId != nullptr && std::strncmp(parameterId, "insert.", 7) == 0;
@@ -3542,6 +4213,134 @@ bool nc_midi_region_add(NCEngine* engine, int trackIndex, double startSeconds,
     return true;
 }
 
+bool nc_midi_import_file_to_track(NCEngine* engine, const char* midiPath, int trackIndex,
+                                  double startSeconds, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || midiPath == nullptr) {
+        return false;
+    }
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr) {
+        return false;
+    }
+    neuracoust::daw::MidiImportResult imported =
+        neuracoust::daw::readProjectMidiFile(std::filesystem::path(midiPath));
+    if (!imported.ok) {
+        return false;
+    }
+    // A MIDI file's note times are tempo-independent beats; flatten every imported region's notes into
+    // one region at the drop point, preserving relative beat timing. The region then plays at the host
+    // project's tempo (standard MIDI behaviour), so a 113-BPM drum loop follows the session tempo.
+    const double importBps =
+        (imported.project.tempoBpm > 0 ? static_cast<double>(imported.project.tempoBpm) : 120.0) / 60.0;
+    const double projBps =
+        (engine->project.tempoBpm > 0 ? static_cast<double>(engine->project.tempoBpm) : 120.0) / 60.0;
+    struct FlatNote { int pitch; double startBeats; double durBeats; int velocity; };
+    std::vector<FlatNote> flat;
+    double maxBeatEnd = 0.0;
+    for (const auto& region : imported.project.midiRegions) {
+        const double regionStartBeats = region.startSeconds * importBps;
+        for (const auto& note : region.notes) {
+            const double sb = regionStartBeats + note.startBeats;
+            const double db = std::max(0.03125, note.durationBeats);
+            flat.push_back({note.pitch, sb, db, note.velocity});
+            maxBeatEnd = std::max(maxBeatEnd, sb + db);
+        }
+    }
+    if (flat.empty()) {
+        return false;
+    }
+    const double durationSeconds = std::max(0.25, maxBeatEnd / std::max(0.01, projBps));
+    const std::string regionId = neuracoust::daw::addMidiRegion(engine->project, track->name,
+                                                                std::max(0.0, startSeconds), durationSeconds);
+    if (regionId.empty()) {
+        return false;
+    }
+    for (const auto& n : flat) {
+        neuracoust::daw::addMidiNote(engine->project, regionId, n.pitch, n.startBeats, n.durBeats, n.velocity);
+    }
+    applyMidiEdit(engine, true, "Import MIDI file");
+    copyText(out, outLen, regionId);
+    return true;
+}
+
+int nc_midi_import_file_auto(NCEngine* engine, const char* midiPath, int preferredTrackIndex,
+                             double startSeconds, char* error, size_t errorLen) {
+    if (error != nullptr && errorLen > 0) error[0] = '\0';
+    if (engine == nullptr || midiPath == nullptr) return 0;
+    neuracoust::daw::MidiImportResult imported =
+        neuracoust::daw::readProjectMidiFile(std::filesystem::path(midiPath));
+    if (!imported.ok) { copyText(error, errorLen, "read failed"); return 0; }
+
+    const double importBps =
+        (imported.project.tempoBpm > 0 ? static_cast<double>(imported.project.tempoBpm) : 120.0) / 60.0;
+    const double projBps =
+        (engine->project.tempoBpm > 0 ? static_cast<double>(engine->project.tempoBpm) : 120.0) / 60.0;
+
+    // Source tracks that actually carry notes (a full song is many; a loop is one).
+    std::vector<const neuracoust::daw::MidiRegionState*> regions;
+    for (const auto& r : imported.project.midiRegions) if (!r.notes.empty()) regions.push_back(&r);
+    if (regions.empty()) { copyText(error, errorLen, "no notes"); return 0; }
+
+    // Flatten a set of source regions into ONE region on `trackName` at the drop point.
+    auto addRegion = [&](const std::string& trackName,
+                         const std::vector<const neuracoust::daw::MidiRegionState*>& src) -> bool {
+        struct FN { int pitch; double startBeats; double durBeats; int velocity; };
+        std::vector<FN> flat; double maxEnd = 0.0;
+        for (const auto* R : src) {
+            const double base = R->startSeconds * importBps;
+            for (const auto& n : R->notes) {
+                const double s = base + n.startBeats, d = std::max(0.03125, n.durationBeats);
+                flat.push_back({n.pitch, s, d, n.velocity}); maxEnd = std::max(maxEnd, s + d);
+            }
+        }
+        if (flat.empty()) return false;
+        const double durSec = std::max(0.25, maxEnd / std::max(0.01, projBps));
+        const std::string rid = neuracoust::daw::addMidiRegion(engine->project, trackName,
+                                                               std::max(0.0, startSeconds), durSec);
+        if (rid.empty()) return false;
+        for (const auto& n : flat) neuracoust::daw::addMidiNote(engine->project, rid, n.pitch, n.startBeats, n.durBeats, n.velocity);
+        return true;
+    };
+
+    // Single source track → one region (reuse the preferred lane if given, else a new instrument track).
+    if (regions.size() <= 1) {
+        auto* track = trackAt(engine, preferredTrackIndex);
+        std::string trackName;
+        if (track != nullptr) trackName = track->name;
+        else trackName = neuracoust::daw::addInstrumentTrack(engine->project);
+        if (!addRegion(trackName, regions)) { copyText(error, errorLen, "add failed"); return 0; }
+        applyMidiEdit(engine, true, "Import MIDI file");
+        return 1;
+    }
+
+    // Multi-track song → one new instrument track PER source track, named from the source track name so
+    // the parts land labelled (Piano / Bass / Drums / …). All under one undo step.
+    auto uniqueName = [&](std::string wanted) {
+        if (wanted.empty()) return std::string();
+        std::string base = wanted, candidate = wanted; int suffix = 2;
+        auto taken = [&](const std::string& n) {
+            for (const auto& t : engine->project.tracks) if (t.name == n) return true; return false;
+        };
+        while (taken(candidate)) candidate = base + " " + std::to_string(suffix++);
+        return candidate;
+    };
+    int made = 0;
+    for (const auto* R : regions) {
+        const std::string created = neuracoust::daw::addInstrumentTrack(engine->project);
+        if (created.empty()) continue;
+        std::string finalName = created;
+        const std::string wanted = uniqueName(R->trackName);
+        if (!wanted.empty() && wanted != created) {
+            for (auto& t : engine->project.tracks) if (t.name == created) { t.name = wanted; finalName = wanted; break; }
+        }
+        if (addRegion(finalName, { R })) ++made;
+    }
+    if (made == 0) { copyText(error, errorLen, "add failed"); return 0; }
+    applyMidiEdit(engine, true, "Import MIDI file (multi-track)");
+    return made;
+}
+
 bool nc_midi_region_move(NCEngine* engine, const char* regionId, int trackIndex, double startSeconds) {
     const auto* region = midiRegionById(engine, regionId);
     if (region == nullptr) {
@@ -3636,6 +4435,28 @@ bool nc_midi_region_duplicate(NCEngine* engine, const char* regionId, char* out,
     return true;
 }
 
+bool nc_midi_regions_merge(NCEngine* engine, const char* const* regionIds, int count,
+                           char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (engine == nullptr || regionIds == nullptr || count < 2) {
+        return false;
+    }
+    std::vector<std::string> ids;
+    ids.reserve(static_cast<size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        if (regionIds[index] != nullptr) {
+            ids.emplace_back(regionIds[index]);
+        }
+    }
+    const std::string mergedId = neuracoust::daw::mergeMidiRegions(engine->project, ids);
+    if (mergedId.empty()) {
+        return false;
+    }
+    applyMidiEdit(engine, true, "Merge MIDI regions");
+    copyText(out, outLen, mergedId);
+    return true;
+}
+
 int nc_midi_note_count(NCEngine* engine, const char* regionId) {
     const auto* region = midiRegionById(engine, regionId);
     return region != nullptr ? static_cast<int>(region->notes.size()) : 0;
@@ -3709,6 +4530,64 @@ bool nc_midi_note_delete(NCEngine* engine, const char* regionId, const char* not
     return applyMidiEdit(engine,
                          neuracoust::daw::deleteMidiNote(engine->project, regionId, noteId),
                          "Delete note");
+}
+
+bool nc_midi_notes_merge(NCEngine* engine, const char* regionId,
+                         const char* const* noteIds, int count) {
+    if (engine == nullptr || regionId == nullptr || noteIds == nullptr || count < 2) {
+        return false;
+    }
+    std::vector<std::string> ids;
+    ids.reserve(static_cast<size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        if (noteIds[index] != nullptr) {
+            ids.emplace_back(noteIds[index]);
+        }
+    }
+    std::vector<std::string> surviving;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::mergeMidiNotes(engine->project, regionId, ids, surviving),
+                         "Glue notes");
+}
+
+namespace {
+/// Shared marshalling for the note-list editor functions: a C string array to std::vector.
+std::vector<std::string> noteIdVector(const char* const* noteIds, int count) {
+    std::vector<std::string> ids;
+    if (noteIds == nullptr || count <= 0) return ids;
+    ids.reserve(static_cast<size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        if (noteIds[index] != nullptr) ids.emplace_back(noteIds[index]);
+    }
+    return ids;
+}
+} // namespace
+
+bool nc_midi_notes_legato(NCEngine* engine, const char* regionId,
+                          const char* const* noteIds, int count, double gapBeats) {
+    if (engine == nullptr || regionId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::applyMidiLegato(engine->project, regionId,
+                                                          noteIdVector(noteIds, count), gapBeats),
+                         "Legato");
+}
+
+bool nc_midi_notes_delete_overlaps(NCEngine* engine, const char* regionId,
+                                   const char* const* noteIds, int count) {
+    if (engine == nullptr || regionId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::deleteMidiNoteOverlaps(engine->project, regionId,
+                                                                 noteIdVector(noteIds, count)),
+                         "Delete overlaps");
+}
+
+bool nc_midi_notes_set_length(NCEngine* engine, const char* regionId,
+                              const char* const* noteIds, int count, double lengthBeats) {
+    if (engine == nullptr || regionId == nullptr) return false;
+    return applyMidiEdit(engine,
+                         neuracoust::daw::setMidiNoteLengths(engine->project, regionId,
+                                                             noteIdVector(noteIds, count), lengthBeats),
+                         "Fixed lengths");
 }
 
 // --- Controller (CC) lanes -------------------------------------------------
@@ -4194,7 +5073,8 @@ bool nc_time_sig_delete(NCEngine* engine, double timeSeconds, double tol) {
 
 bool nc_automation_parameter_supported(const char* parameterId) {
     return isVolumeParameter(parameterId) || isPanParameter(parameterId)
-        || isPluginAutomationParameter(parameterId);
+        || isPluginAutomationParameter(parameterId)
+        || isGenericMixerAutomationParameter(parameterId);
 }
 
 // Evaluate a lane's points (linear) at a time; returns fallback for an empty lane.
@@ -4227,6 +5107,14 @@ void nc_apply_plugin_automation(NCEngine* engine, double timeSeconds) {
             const float v = std::max(0.0f, std::min(1.0f, evalAutomationPoints(lane.points, timeSeconds, 0.0f)));
             engine->engine.updateTrackVst3Parameter(track.name, static_cast<size_t>(slot),
                                                     static_cast<uint32_t>(pid), "", v);
+        }
+        for (const auto& lane : track.automationLanes) {
+            if (lane.parameterId.rfind("instrument.", 0) != 0 || lane.points.empty()) continue;
+            int slot = -1; unsigned int pid = 0;
+            if (std::sscanf(lane.parameterId.c_str(), "instrument.%d.%u", &slot, &pid) != 2 || slot < 0) continue;
+            const float v = std::max(0.0f, std::min(1.0f, evalAutomationPoints(lane.points, timeSeconds, 0.0f)));
+            engine->engine.updateInstrumentVst3Parameter(track.name, static_cast<size_t>(slot),
+                                                         static_cast<uint32_t>(pid), "", v);
         }
     }
 }
@@ -4656,6 +5544,88 @@ bool nc_apply_monitor_template(NCEngine* engine, const char* serialized) {
     return true;
 }
 
+bool nc_import_aaf(NCEngine* engine, const char* path, char* msgOut, size_t msgLen) {
+    copyText(msgOut, msgLen, "");
+    if (engine == nullptr || path == nullptr || *path == '\0') {
+        copyText(msgOut, msgLen, "AAF 경로가 없습니다.");
+        return false;
+    }
+    neuracoust::daw::ProjectDocument imported;
+    const auto result = neuracoust::daw::importAafSession(path, imported);
+    copyText(msgOut, msgLen, result.message);
+    if (!result.ok) {
+        return false;
+    }
+    // Replaces the open document, like opening a project — the import is a whole session.
+    // Replaces the open document, like opening a project — an AAF import IS a whole session. No
+    // path yet: it came from an .aaf, so the first save must ask where to put the .ndaw.
+    engine->project = std::move(imported);
+    engine->projectPath.clear();
+    engine->autosaveError.clear();
+    adoptProject(engine);
+    return true;
+}
+
+bool nc_aaf_import_available(void) {
+    return neuracoust::daw::aafImportAvailable();
+}
+
+int nc_bounce_stems(NCEngine* engine, const char* folderPath, char* errOut, size_t errLen) {
+    copyText(errOut, errLen, "");
+    if (engine == nullptr || folderPath == nullptr || *folderPath == '\0') {
+        copyText(errOut, errLen, "출력 폴더가 없습니다.");
+        return 0;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(folderPath, ec);
+    if (ec) {
+        copyText(errOut, errLen, std::string("폴더를 만들 수 없습니다: ") + ec.message());
+        return 0;
+    }
+
+    // Every stem is rendered from the SAME document with one track soloed, so each file starts at
+    // 00:00 and runs the full session length. Dropping them onto tracks in another DAW at zero then
+    // lines them up exactly — which is the whole point of stems as an interchange path.
+    int written = 0;
+    std::string lastError;
+    for (const auto& track : engine->project.tracks) {
+        if (track.trackType == "master" || track.trackType == "monitor" || track.trackType == "folder") {
+            continue;
+        }
+        neuracoust::daw::ProjectDocument stemProject = engine->project;
+        bool soloedAnything = false;
+        for (auto& candidate : stemProject.tracks) {
+            const bool isTarget = candidate.name == track.name;
+            if (candidate.trackType == "master" || candidate.trackType == "monitor") {
+                continue;
+            }
+            candidate.solo = isTarget;
+            candidate.muted = false;   // solo decides; a pre-existing mute must not silence the stem
+            if (isTarget) soloedAnything = true;
+        }
+        if (!soloedAnything) {
+            continue;
+        }
+        // A filename from the track name, with anything path-hostile replaced.
+        std::string safeName;
+        for (const char ch : track.name) {
+            safeName.push_back((ch == '/' || ch == '\\' || ch == ':') ? '_' : ch);
+        }
+        if (safeName.empty()) safeName = "Track";
+        const auto outPath = (std::filesystem::path(folderPath) / (safeName + ".wav")).string();
+        const auto result = neuracoust::daw::bounceProjectToWav(stemProject, outPath);
+        if (result.ok) {
+            ++written;
+        } else {
+            lastError = result.message;
+        }
+    }
+    if (written == 0) {
+        copyText(errOut, errLen, lastError.empty() ? "내보낼 트랙이 없습니다." : lastError);
+    }
+    return written;
+}
+
 bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out) {
     if (out != nullptr) {
         std::memset(out, 0, sizeof(*out));
@@ -4928,6 +5898,34 @@ void nc_plugin_category(NCEngine* engine, int index, char* out, size_t outLen) {
 void nc_plugin_format(NCEngine* engine, int index, char* out, size_t outLen) {
     const auto* plugin = pluginAt(engine, index);
     copyText(out, outLen, plugin != nullptr ? plugin->format : std::string{});
+}
+
+void nc_plugin_ara_info(NCEngine* engine, int index, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    const auto* plugin = pluginAt(engine, index);
+    if (plugin == nullptr) {
+        return;
+    }
+    const auto descriptor = neuracoust::daw::resolveVst3PluginDescriptorForInsert(
+        plugin->name, plugin->path, plugin->pluginClassId, plugin->pluginClassName);
+    const auto info = neuracoust::daw::inspectAraFactory(descriptor);
+    if (!info.available) {
+        copyText(out, outLen, info.message);
+        return;
+    }
+    // What the plug-in itself reports — not a guess from its name.
+    std::string text = info.plugInName + " " + info.versionString + " · " + info.manufacturerName +
+                       " · ARA " + std::to_string(info.lowestSupportedApiGeneration) + "–" +
+                       std::to_string(info.highestSupportedApiGeneration);
+    if (!info.compatibleWithHost) {
+        text += " · 호스트와 세대 불일치";
+    }
+    copyText(out, outLen, text);
+}
+
+bool nc_plugin_is_ara(NCEngine* engine, int index) {
+    const auto* plugin = pluginAt(engine, index);
+    return plugin != nullptr && plugin->araCapable;
 }
 
 void nc_plugin_path(NCEngine* engine, int index, char* out, size_t outLen) {
@@ -5258,6 +6256,10 @@ void nc_track_instrument_name(NCEngine* engine, int trackIndex, char* out, size_
     copyText(out, outLen, track != nullptr ? track->instrument.pluginName : std::string{});
 }
 
+void nc_last_plugin_message(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->lastPluginMessage : std::string{});
+}
+
 bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {
     auto* track = trackAt(engine, trackIndex);
     const auto* plugin = pluginAt(engine, pluginIndex);
@@ -5269,6 +6271,18 @@ bool nc_track_add_insert(NCEngine* engine, int trackIndex, int pluginIndex) {
     // here so instruments and effects stay strictly separated regardless of which UI path called.
     if (plugin->category.find("Instrument") != std::string::npos) {
         return false;
+    }
+
+    // ARA plug-ins (Melodyne and friends) are not realtime effects — hosted as a plain insert they
+    // run their own transport and wedge the DAW. Refuse with an explanation rather than adding a
+    // slot that hangs.
+    {
+        const auto descriptor = neuracoust::daw::resolveVst3PluginDescriptorForInsert(
+            plugin->name, plugin->path, plugin->pluginClassId, plugin->pluginClassName);
+        if (neuracoust::daw::requiresAraHost(descriptor)) {
+            engine->lastPluginMessage = neuracoust::daw::araRequiredMessage(descriptor);
+            return false;
+        }
     }
 
     const std::string trackName = track->name;
@@ -6429,20 +7443,6 @@ std::string* speakerCableFieldForSlot(MonitorDspModule& m, int slot) {
     return slot == 1 ? &m.speakerCableB : slot == 2 ? &m.speakerCableC : &m.speakerCableA;
 }
 
-// The physical monitor output routes, ported verbatim from the old UI's
-// monitorPhysicalOutputRoutes(). "None" means the modelled/virtual path; the rest send
-// the slot straight to a hardware output pair (MonitorOutputRouting resolves them).
-const std::vector<std::string>& speakerOutputRouteCatalog() {
-    static const std::vector<std::string> routes = {
-        "None", "Main 1-2",
-        "Output 1-2", "Output 3-4", "Output 5-6", "Output 7-8",
-        "Output 9-10", "Output 11-12", "Output 13-14", "Output 15-16",
-        "Output 17-18", "Output 19-20", "Output 21-22", "Output 23-24",
-        "Output 25-26", "Output 27-28", "Output 29-30", "Output 31-32",
-    };
-    return routes;
-}
-
 // The speaker-model catalog, ported from the old UI's speakerModelBaseCatalog(). The
 // (NF/MF/LF) suffix is the field category. The name drives the monitor tone model.
 const std::vector<std::string>& speakerModelCatalog() {
@@ -7461,7 +8461,15 @@ void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* cor
         combined = neuracoust::daw::normalizeCurveMidband(combined);
     }
 
-    if (engine->monitorEqLinearPhase) {
+    // Performing or recording? Take the zero-latency path even when linear phase is on.
+    const bool monitoringLive = engine->monitorEqLowLatencyWhileMonitoring &&
+        std::any_of(engine->project.tracks.begin(), engine->project.tracks.end(),
+                    [](const neuracoust::daw::TrackState& track) {
+                        return track.recordArmed || track.inputMonitoring;
+                    });
+    engine->monitorEqLowLatencyActive = monitoringLive && engine->monitorEqLinearPhase;
+
+    if (engine->monitorEqLinearPhase && !monitoringLive) {
         // Linear-phase path: design a FIR that matches the target across the whole band (steep
         // bass rolloff + treble dips included), and clear the biquad so only one runs.
         engine->project.monitorEqBands.clear();
@@ -7525,6 +8533,24 @@ void nc_monitor_eq_set_linear_phase(NCEngine* engine, bool enabled) {
 bool nc_monitor_eq_headphone_oe_target(NCEngine* engine) {
     return engine != nullptr && engine->monitorEqHeadphoneOeTarget;
 }
+// Low-latency monitoring: while any track is armed or input-monitoring, drop the FIR's
+// numTaps/2 delay by using the minimum-phase fit of the same curve.
+bool nc_monitor_eq_low_latency_monitoring(NCEngine* engine) {
+    return engine != nullptr && engine->monitorEqLowLatencyWhileMonitoring;
+}
+void nc_monitor_eq_set_low_latency_monitoring(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->monitorEqLowLatencyWhileMonitoring == enabled) return;
+    engine->monitorEqLowLatencyWhileMonitoring = enabled;
+    // The caller re-runs nc_monitor_eq_sync to rebuild through the path this now selects.
+}
+bool nc_monitor_eq_low_latency_active(NCEngine* engine) {
+    return engine != nullptr && engine->monitorEqLowLatencyActive;
+}
+/// Latency the monitor EQ is adding right now, in samples. 0 on the biquad path.
+int nc_monitor_eq_latency_samples(NCEngine* engine) {
+    return engine != nullptr ? engine->engine.monitorFirLatencySamples() : 0;
+}
+
 void nc_monitor_eq_set_headphone_oe_target(NCEngine* engine, bool enabled) {
     if (engine == nullptr || engine->monitorEqHeadphoneOeTarget == enabled) return;
     engine->monitorEqHeadphoneOeTarget = enabled;
@@ -7656,14 +8682,30 @@ float nc_auto_fade_amplitude(const char* curve, double t) {
     return db <= -119.0f ? 0.0f : static_cast<float>(std::pow(10.0, db / 20.0));
 }
 
-int nc_speaker_output_route_count() {
-    return static_cast<int>(speakerOutputRouteCatalog().size());
+int nc_speaker_output_route_count(NCEngine* engine) {
+    const int channels = engine != nullptr
+        ? std::max(2, engine->engine.status().outputChannels)
+        : 2;
+    // None + Main 1-2 + one entry for each complete pair above channels 1-2.
+    return 1 + channels / 2;
 }
 
-void nc_speaker_output_route(int index, char* out, size_t outLen) {
-    const auto& routes = speakerOutputRouteCatalog();
-    copyText(out, outLen, (index >= 0 && static_cast<size_t>(index) < routes.size())
-                              ? routes[static_cast<size_t>(index)] : std::string{});
+void nc_speaker_output_route(NCEngine* engine, int index, char* out, size_t outLen) {
+    const int count = nc_speaker_output_route_count(engine);
+    if (index < 0 || index >= count) {
+        copyText(out, outLen, {});
+        return;
+    }
+    if (index == 0) {
+        copyText(out, outLen, "None");
+        return;
+    }
+    if (index == 1) {
+        copyText(out, outLen, "Main 1-2");
+        return;
+    }
+    const int left = index * 2 - 1;
+    copyText(out, outLen, "Output " + std::to_string(left) + "-" + std::to_string(left + 1));
 }
 
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model) {
@@ -7982,6 +9024,71 @@ void nc_track_instrument_editor_closed(NCEngine* engine, int index) {
     }
 }
 
+bool nc_track_instrument_slot_write_state_file(NCEngine* engine, int index, int slotIndex,
+                                               const char* path) {
+    if (path == nullptr || *path == '\0' || slotIndex < 0) {
+        return false;
+    }
+    const auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    if (slot == nullptr || slot->pluginStateBase64.empty()) {
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (!neuracoust::daw::decodeBase64(slot->pluginStateBase64, bytes) || bytes.empty()) {
+        return false;
+    }
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return file.good();
+}
+
+bool nc_track_instrument_slot_read_state_file(NCEngine* engine, int index, int slotIndex,
+                                              const char* path) {
+    if (path == nullptr || *path == '\0' || slotIndex < 0) {
+        return false;
+    }
+    auto* slot = instrumentSlotMutable(engine, index, static_cast<size_t>(slotIndex));
+    if (slot == nullptr) {
+        return false;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    const std::vector<char> bytes((std::istreambuf_iterator<char>(file)),
+                                  std::istreambuf_iterator<char>());
+    if (bytes.empty()) {
+        return false;
+    }
+    const std::string encoded = neuracoust::daw::encodeBase64(bytes.data(), bytes.size());
+    if (encoded == slot->pluginStateBase64) {
+        // The user opened the editor and changed nothing: rebuilding the instrument here
+        // would cut the sound for no reason.
+        return false;
+    }
+    slot->pluginStateBase64 = encoded;
+    auto* track = trackAt(engine, index);
+    if (track != nullptr && slotIndex == 0 && !track->instrumentSlots.empty()) {
+        // Keep the legacy mirror in step, as the parameter setter does.
+        track->instrument = track->instrumentSlots.front();
+    }
+    // Apply the patch to the LIVE instrument voice on the main thread — deactivate, setState,
+    // reactivate the existing instance — rather than reconciling. A reconcile would make the
+    // realtime audio thread destroy and re-instantiate the whole workstation instrument, which
+    // stalls the render for hundreds of milliseconds (the sound drops out) and was the crash /
+    // "old preset then silence" on editor close. If the voice is not prepared yet, the deferred
+    // prepare applies the patch from the field we just set, so either way the patch is not lost.
+    if (track != nullptr) {
+        engine->engine.updateInstrumentComponentState(track->name, static_cast<size_t>(slotIndex),
+                                                      encoded);
+    }
+    engine->recordStep("Change instrument patch");
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // MIDI recording — accumulate the live keyboard into a region while the transport records
 // ---------------------------------------------------------------------------
@@ -8030,6 +9137,31 @@ void nc_midi_record_feed(NCEngine* engine, const NCMidiLiveEvent* events, int co
         const int pitch = events[i].data1 & 0x7F;
         const bool noteOn = statusByte == 0x90u && (events[i].data2 & 0x7F) > 0;
         const bool noteOff = statusByte == 0x80u || (statusByte == 0x90u && (events[i].data2 & 0x7F) == 0);
+        // Continuous controllers. Only the ones the project whitelists are written into the
+        // region — everything a keyboard sends is heard live either way, but recording all
+        // of it buries a part under aftertouch and unused lanes. The pedal is what makes a
+        // piano take sound like the performance, so CC64 is on by default.
+        if (statusByte == 0xB0u) {
+            const int controller = events[i].data1 & 0x7F;
+            const auto& allowed = engine->project.midiRecordControllers;
+            if (std::find(allowed.begin(), allowed.end(), controller) != allowed.end()) {
+                neuracoust::daw::addMidiControllerEvent(engine->project, take.regionId, beat,
+                                                        controller, events[i].data2 & 0x7F,
+                                                        (events[i].status & 0x0Fu) + 1);
+                ++take.controllerCount;
+            }
+            continue;
+        }
+        // Pitch bend is not a CC and has its own switch. 14-bit, LSB then MSB.
+        if (statusByte == 0xE0u) {
+            if (engine->project.midiRecordPitchBend) {
+                const int value = ((events[i].data2 & 0x7F) << 7) | (events[i].data1 & 0x7F);
+                neuracoust::daw::addMidiPitchBendEvent(engine->project, take.regionId, beat, value,
+                                                       (events[i].status & 0x0Fu) + 1);
+                ++take.controllerCount;
+            }
+            continue;
+        }
         if (noteOn) {
             take.held[static_cast<size_t>(pitch)] = { beat, events[i].data2 & 0x7F, true };
         } else if (noteOff && take.held[static_cast<size_t>(pitch)].on) {
@@ -8069,8 +9201,10 @@ bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outLen) {
             h.on = false;
         }
     }
-    if (take.noteCount == 0) {
+    if (take.noteCount == 0 && take.controllerCount == 0) {
         // Nothing was played: drop the placeholder region and reconcile it out of the picture.
+        // A take with no notes but recorded controller moves — a pedal or mod-wheel overdub —
+        // is real work and is kept.
         neuracoust::daw::deleteMidiRegion(engine->project, take.regionId);
         engine->reconcileProject();
         take.regionId.clear();
@@ -8083,6 +9217,90 @@ bool nc_midi_record_commit(NCEngine* engine, char* outRegionId, size_t outLen) {
     copyText(outRegionId, outLen, take.regionId);
     take.regionId.clear();
     return true;
+}
+
+void nc_midi_preview_note(NCEngine* engine, int trackIndex, int pitch, int velocity, bool noteOn) {
+    auto* track = trackAt(engine, trackIndex);
+    if (engine == nullptr || track == nullptr || track->trackType != "instrument") {
+        return;
+    }
+    neuracoust::daw::Vst3MidiEvent event;
+    event.frameOffset = 0;
+    event.channel = 1;
+    event.kind = neuracoust::daw::Vst3MidiEventKind::Note;
+    event.pitch = std::max(0, std::min(127, pitch));
+    event.noteOn = noteOn;
+    event.velocity = noteOn ? std::max(1, std::min(127, velocity)) : 0;
+    engine->engine.queueLiveMidiEvents(track->name, {event});
+    // While this track's editor is open the EDITOR's instance owns the live path, so the
+    // render instance would answer a click the user cannot hear. Mirror it there too.
+    if (noteOn) {
+        engine->previewHeldNotes[track->name].insert(event.pitch);
+    } else {
+        auto held = engine->previewHeldNotes.find(track->name);
+        if (held != engine->previewHeldNotes.end()) {
+            held->second.erase(event.pitch);
+            if (held->second.empty()) engine->previewHeldNotes.erase(held);
+        }
+    }
+}
+
+void nc_midi_preview_all_notes_off(NCEngine* engine, int trackIndex) {
+    auto* track = trackAt(engine, trackIndex);
+    if (engine == nullptr || track == nullptr) {
+        return;
+    }
+    const auto held = engine->previewHeldNotes.find(track->name);
+    if (held == engine->previewHeldNotes.end()) {
+        return;
+    }
+    std::vector<neuracoust::daw::Vst3MidiEvent> offs;
+    offs.reserve(held->second.size());
+    for (const int pitch : held->second) {
+        neuracoust::daw::Vst3MidiEvent event;
+        event.frameOffset = 0;
+        event.channel = 1;
+        event.kind = neuracoust::daw::Vst3MidiEventKind::Note;
+        event.pitch = pitch;
+        event.noteOn = false;
+        event.velocity = 0;
+        offs.push_back(event);
+    }
+    engine->previewHeldNotes.erase(held);
+    engine->engine.queueLiveMidiEvents(track->name, offs);
+}
+
+bool nc_midi_record_controller_enabled(NCEngine* engine, int controller) {
+    if (engine == nullptr || controller < 0 || controller > 127) return false;
+    const auto& allowed = engine->project.midiRecordControllers;
+    return std::find(allowed.begin(), allowed.end(), controller) != allowed.end();
+}
+
+void nc_midi_record_set_controller_enabled(NCEngine* engine, int controller, bool enabled) {
+    if (engine == nullptr || controller < 0 || controller > 127) return;
+    auto& allowed = engine->project.midiRecordControllers;
+    const auto found = std::find(allowed.begin(), allowed.end(), controller);
+    if (enabled && found == allowed.end()) {
+        allowed.push_back(controller);
+        std::sort(allowed.begin(), allowed.end());
+    } else if (!enabled && found != allowed.end()) {
+        allowed.erase(found);
+    } else {
+        return;
+    }
+    // A capture setting, not a graph change: nothing to reconcile, but it is part of the
+    // document, so the project is dirty and it belongs in the history.
+    engine->recordStep("Set recorded MIDI controllers");
+}
+
+bool nc_midi_record_pitch_bend_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->project.midiRecordPitchBend;
+}
+
+void nc_midi_record_set_pitch_bend_enabled(NCEngine* engine, bool enabled) {
+    if (engine == nullptr || engine->project.midiRecordPitchBend == enabled) return;
+    engine->project.midiRecordPitchBend = enabled;
+    engine->recordStep("Set recorded MIDI controllers");
 }
 
 // The selected instrument track hears the keyboard without being record-armed (Logic/Live
@@ -8422,4 +9640,148 @@ bool nc_ai_apply_command(NCEngine* engine, const char* typeStr, const char* trac
     engine->recordStep(std::string("AI: ") + aiCommandTypeToString(cmd.type));
     copyText(msg, msgLen, serializeAiCommandPreview(cmd));
     return true;
+}
+
+namespace {
+std::vector<int> huiTrackIndices(NCEngine* engine) {
+    std::vector<int> result;
+    if (!engine) return result;
+    for (int i = 0; i < static_cast<int>(engine->project.tracks.size()); ++i) {
+        const auto& track = engine->project.tracks[static_cast<size_t>(i)];
+        if (track.trackType != "master" && track.trackType != "monitor") result.push_back(i);
+    }
+    return result;
+}
+int huiMasterIndex(NCEngine* engine) {
+    if (!engine) return -1;
+    for (int i = 0; i < static_cast<int>(engine->project.tracks.size()); ++i)
+        if (engine->project.tracks[static_cast<size_t>(i)].trackType == "master") return i;
+    return -1;
+}
+float huiDbToNormalized(float db) {
+    if (db <= -60.0f) return 0.0f;
+    return std::clamp((db + 60.0f) / 72.0f, 0.0f, 1.0f);
+}
+int huiEventCode(neuracoust::daw::HuiActionType type) {
+    using T = neuracoust::daw::HuiActionType;
+    switch (type) {
+    case T::Fader: return 1; case T::PanDelta: return 2; case T::Select: return 3;
+    case T::Mute: return 4; case T::Solo: return 5; case T::RecordArm: return 6;
+    case T::Play: return 7; case T::Stop: return 8; case T::Record: return 9;
+    case T::Rewind: return 10; case T::FastForward: return 11;
+    default: return 0;
+    }
+}
+}
+
+int nc_hui_input_count(NCEngine* engine) {
+    return engine ? static_cast<int>(engine->huiMidi.inputs().size()) : 0;
+}
+int nc_hui_output_count(NCEngine* engine) {
+    return engine ? static_cast<int>(engine->huiMidi.outputs().size()) : 0;
+}
+void nc_hui_input_id(NCEngine* engine, int index, char* out, size_t len) {
+    const auto list = engine ? engine->huiMidi.inputs() : std::vector<neuracoust::daw::ControlSurfaceMidiEndpoint>{};
+    copyText(out, len, index >= 0 && index < static_cast<int>(list.size()) ? list[static_cast<size_t>(index)].id : "");
+}
+void nc_hui_input_name(NCEngine* engine, int index, char* out, size_t len) {
+    const auto list = engine ? engine->huiMidi.inputs() : std::vector<neuracoust::daw::ControlSurfaceMidiEndpoint>{};
+    copyText(out, len, index >= 0 && index < static_cast<int>(list.size()) ? list[static_cast<size_t>(index)].name : "");
+}
+void nc_hui_output_id(NCEngine* engine, int index, char* out, size_t len) {
+    const auto list = engine ? engine->huiMidi.outputs() : std::vector<neuracoust::daw::ControlSurfaceMidiEndpoint>{};
+    copyText(out, len, index >= 0 && index < static_cast<int>(list.size()) ? list[static_cast<size_t>(index)].id : "");
+}
+void nc_hui_output_name(NCEngine* engine, int index, char* out, size_t len) {
+    const auto list = engine ? engine->huiMidi.outputs() : std::vector<neuracoust::daw::ControlSurfaceMidiEndpoint>{};
+    copyText(out, len, index >= 0 && index < static_cast<int>(list.size()) ? list[static_cast<size_t>(index)].name : "");
+}
+bool nc_hui_connect(NCEngine* engine, const char* inputId, const char* outputId) {
+    if (!engine) return false;
+    engine->huiEvents.clear(); engine->huiBankOffset = 0;
+    engine->huiLastFaders.fill(-1); engine->huiLastFlags.fill(-1);
+    engine->huiLastNames.fill("");
+    const bool ok = engine->huiMidi.connect(inputId ? inputId : "", outputId ? outputId : "");
+    if (ok) engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::keepAlive().bytes);
+    return ok;
+}
+void nc_hui_disconnect(NCEngine* engine) { if (engine) engine->huiMidi.disconnect(); }
+bool nc_hui_connected(NCEngine* engine) { return engine && engine->huiMidi.connected(); }
+void nc_hui_status(NCEngine* engine, char* out, size_t len) {
+    copyText(out, len, engine ? engine->huiMidi.statusMessage() : "연결 안 됨");
+}
+bool nc_hui_next_event(NCEngine* engine, NCHuiEvent* out) {
+    if (!engine || !out || !engine->huiMidi.connected()) return false;
+    const auto tracks = huiTrackIndices(engine);
+    for (const auto& message : engine->huiMidi.consumeMessages()) {
+        const auto action = engine->huiProtocol.decode(message);
+        if (!action) continue;
+        using T = neuracoust::daw::HuiActionType;
+        if (action->type == T::BankLeft || action->type == T::BankRight ||
+            action->type == T::ChannelLeft || action->type == T::ChannelRight) {
+            if (!action->pressed) continue;
+            const int step = (action->type == T::BankLeft || action->type == T::BankRight) ? 8 : 1;
+            const int direction = (action->type == T::BankLeft || action->type == T::ChannelLeft) ? -1 : 1;
+            engine->huiBankOffset = std::clamp(engine->huiBankOffset + direction * step,
+                                               0, std::max(0, static_cast<int>(tracks.size()) - 1));
+            engine->huiLastFaders.fill(-1); engine->huiLastFlags.fill(-1); engine->huiLastNames.fill("");
+            continue;
+        }
+        NCHuiEvent event{};
+        event.type = huiEventCode(action->type);
+        event.value = action->value; event.pressed = action->pressed;
+        if (action->channel == 8) event.trackIndex = huiMasterIndex(engine);
+        else if (action->channel >= 0 && engine->huiBankOffset + action->channel < static_cast<int>(tracks.size()))
+            event.trackIndex = tracks[static_cast<size_t>(engine->huiBankOffset + action->channel)];
+        else event.trackIndex = -1;
+        if (event.type) engine->huiEvents.push_back(event);
+    }
+    if (engine->huiEvents.empty()) return false;
+    *out = engine->huiEvents.front(); engine->huiEvents.pop_front(); return true;
+}
+
+void nc_hui_sync(NCEngine* engine, bool transportRunning, bool recording) {
+    if (!engine || !engine->huiMidi.connected()) return;
+    const auto tracks = huiTrackIndices(engine);
+    for (int channel = 0; channel < 8; ++channel) {
+        const int pos = engine->huiBankOffset + channel;
+        if (pos >= static_cast<int>(tracks.size())) continue;
+        const auto& track = engine->project.tracks[static_cast<size_t>(tracks[static_cast<size_t>(pos)])];
+        const float fader = huiDbToNormalized(track.volumeDb);
+        if (std::abs(fader - engine->huiLastFaders[static_cast<size_t>(channel)]) > 0.0005f) {
+            engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::fader(channel, fader).bytes);
+            engine->huiLastFaders[static_cast<size_t>(channel)] = fader;
+        }
+        const int flags = (track.recordArmed ? 1 : 0) | (track.solo ? 2 : 0) | (track.muted ? 4 : 0);
+        if (flags != engine->huiLastFlags[static_cast<size_t>(channel)]) {
+            for (int port = 0; port < 3; ++port)
+                engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::switchLed(channel, port,
+                                      (flags & (1 << port)) != 0).bytes);
+            engine->huiLastFlags[static_cast<size_t>(channel)] = flags;
+        }
+        if (track.name != engine->huiLastNames[static_cast<size_t>(channel)]) {
+            engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::displayText(channel, track.name).bytes);
+            engine->huiLastNames[static_cast<size_t>(channel)] = track.name;
+        }
+    }
+    const int master = huiMasterIndex(engine);
+    if (master >= 0) {
+        const float fader = huiDbToNormalized(engine->project.tracks[static_cast<size_t>(master)].volumeDb);
+        if (std::abs(fader - engine->huiLastFaders[8]) > 0.0005f) {
+            engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::fader(8, fader).bytes);
+            engine->huiLastFaders[8] = fader;
+        }
+    }
+    if (transportRunning != engine->huiLastPlaying) {
+        engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::switchLed(0x0e, 3, transportRunning).bytes);
+        engine->huiLastPlaying = transportRunning;
+    }
+    if (recording != engine->huiLastRecording) {
+        engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::switchLed(0x0e, 4, recording).bytes);
+        engine->huiLastRecording = recording;
+    }
+    if (++engine->huiKeepAliveCounter >= 25) {
+        engine->huiKeepAliveCounter = 0;
+        engine->huiMidi.send(neuracoust::daw::MackieHuiProtocol::keepAlive().bytes);
+    }
 }

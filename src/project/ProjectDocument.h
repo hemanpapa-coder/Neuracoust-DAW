@@ -167,6 +167,13 @@ struct PlaylistClipPlacementState {
     /// and clips are rebuilt from placements. Declared LAST: aggregate
     /// initializers index fields by position.
     double originalStartSeconds = -1.0;
+    /// ARA (Melodyne) state, per clip instance — two copies of the same audio can carry different
+    /// edits, so this rides the PLACEMENT rather than the shared clip definition.
+    /// See ClipState::araArchiveBase64 for what these mean.
+    std::string araPluginName;
+    std::string araPluginPath;
+    std::string araSourcePath;
+    std::string araArchiveBase64;
 };
 
 struct TrackPlaylistState {
@@ -198,6 +205,13 @@ struct ProjectDocument {
     bool metronomeAccentFirst = true;      // accent the bar's downbeat
     std::string metronomeGenre = "straight";     // named groove preset (UI catalog)
     std::vector<float> metronomeAccentPattern;   // per-step gains over a bar (empty = default)
+    // Which continuous controllers a MIDI take captures. Recording everything a keyboard
+    // sends buries a part in aftertouch and unused CC lanes, so this is a whitelist:
+    // CC numbers here are written into the region, everything else is heard live and
+    // dropped. Pitch bend is not a CC and carries its own flag. Defaults are the three a
+    // player expects to survive a take — sustain, modulation, bend.
+    std::vector<int> midiRecordControllers {1, 64};
+    bool midiRecordPitchBend = true;
     std::string detectedKey = "C";
     std::string detectedKeyMode = "major";
     std::string chordKeyModePreference = "auto";
