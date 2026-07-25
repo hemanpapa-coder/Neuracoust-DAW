@@ -552,9 +552,22 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         OUTPUT_VARIABLE _nc_identity_dump ERROR_QUIET)
     string(REGEX MATCH "([0-9A-F]+) \"${NEURACOUST_DEV_SIGN_CERT_NAME}\""
            _nc_cert_match "${_nc_identity_dump}")
-    if(CMAKE_MATCH_1)
-        set(NEURACOUST_CODESIGN_IDENTITY "${CMAKE_MATCH_1}")
-        message(STATUS "Code-signing app with stable dev cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' (${CMAKE_MATCH_1}) — TCC grants persist across rebuilds.")
+    # Capture the hash NOW: the MATCHALL below is another regex op and resets CMAKE_MATCH_1, so
+    # reading it after that would always be empty — which silently forced ad-hoc signing (and the
+    # per-rebuild TCC/Accessibility resets this whole block exists to prevent).
+    set(_nc_cert_hash "${CMAKE_MATCH_1}")
+    # More than one identity of the same name is a TCC hazard: which one a build signs with can
+    # switch between rebuilds (the first match here, but keychain order is not guaranteed), and a
+    # changed signing leaf makes macOS treat the app as new — silently resetting mic/feed and
+    # accessibility grants. Surface it so the duplicate can be removed (keep exactly one).
+    string(REGEX MATCHALL "\"${NEURACOUST_DEV_SIGN_CERT_NAME}\"" _nc_all_matches "${_nc_identity_dump}")
+    list(LENGTH _nc_all_matches _nc_match_count)
+    if(_nc_match_count GREATER 1)
+        message(WARNING "Found ${_nc_match_count} code-signing identities named '${NEURACOUST_DEV_SIGN_CERT_NAME}'. Rebuilds may switch between them, resetting TCC (microphone/reference-feed, Accessibility) grants. Delete the extras so exactly one remains — Keychain Access → login → My Certificates, or `security delete-identity -Z <sha1>`.")
+    endif()
+    if(_nc_cert_hash)
+        set(NEURACOUST_CODESIGN_IDENTITY "${_nc_cert_hash}")
+        message(STATUS "Code-signing app with stable dev cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' (${_nc_cert_hash}) — TCC grants persist across rebuilds.")
     else()
         set(NEURACOUST_CODESIGN_IDENTITY "-")
         message(STATUS "Dev signing cert '${NEURACOUST_DEV_SIGN_CERT_NAME}' not found — ad-hoc signing (TCC grants reset each rebuild). See docs/dev-signing-cert.md.")

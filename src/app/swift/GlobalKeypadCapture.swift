@@ -19,6 +19,8 @@ final class GlobalKeypadCapture {
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var tapThread: Thread?
+    private var tapRunLoop: CFRunLoop?
     private(set) var isEnabled = false
 
     /// Every numeric-keypad virtual key code. Which ones actually DO something is decided by `onKey`
@@ -68,34 +70,45 @@ final class GlobalKeypadCapture {
                     return Unmanaged.passUnretained(event)
                 }
                 guard type == .keyDown || type == .keyUp, let refcon else { return Unmanaged.passUnretained(event) }
-                let me = Unmanaged<GlobalKeypadCapture>.fromOpaque(refcon).takeUnretainedValue()
                 // The virtual key code already distinguishes the keypad from the top number row.
-                // Some external USB keypads do not set maskNumericPad consistently, so requiring
-                // both made a genuine keypad silently pass through without ever reaching the DAW.
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                // CRITICAL: this tap sees EVERY keystroke on the whole system. The swallow decision
+                // must be made here, purely from the captured-key set — never by round-tripping to the
+                // main thread. When the tap ran on the main run loop and called it synchronously, a
+                // busy main thread (heavy pitch-editor redraw, a modal) stalled the callback and froze
+                // the keyboard system-wide. Non-keypad keys pass straight through, untouched.
                 guard GlobalKeypadCapture.capturedKeyCodes.contains(keyCode) else { return Unmanaged.passUnretained(event) }
+                let me = Unmanaged<GlobalKeypadCapture>.fromOpaque(refcon).takeUnretainedValue()
                 let isDown = (type == .keyDown)
                 let isRepeat = isDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-                var handled = false
-                // The tap runs on the main run loop, so this hop is already on the main thread; the
-                // sync dispatch keeps us correct even if the tap is ever moved to another loop.
-                if Thread.isMainThread {
-                    handled = me.onKey?(keyCode, isDown, isRepeat) ?? false
-                } else {
-                    DispatchQueue.main.sync { handled = me.onKey?(keyCode, isDown, isRepeat) ?? false }
-                }
-                return handled ? nil : Unmanaged.passUnretained(event)
+                // The handler touches engine (main-thread) state, so hop async — the tap thread never
+                // waits on the main thread. Keypad keys are always claimed (handleGlobalKeypad always
+                // returns true), so swallow unconditionally here.
+                DispatchQueue.main.async { _ = me.onKey?(keyCode, isDown, isRepeat) }
+                return nil
             },
             userInfo: refcon
         ) else {
             return false
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: port, enable: true)
         tap = port
-        runLoopSource = source
+        // Run the tap on a DEDICATED thread, not the main run loop: it must keep servicing global key
+        // events even while the main thread is busy, or the whole system's keyboard stalls. The thread
+        // does almost nothing (a Set lookup + an async hop), so it never blocks.
+        let thread = Thread { [weak self] in
+            let loop = CFRunLoopGetCurrent()
+            self?.tapRunLoop = loop
+            let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+            self?.runLoopSource = src
+            CFRunLoopAddSource(loop, src, .commonModes)
+            CGEvent.tapEnable(tap: port, enable: true)
+            CFRunLoopRun()   // returns when disable() stops the loop
+        }
+        thread.name = "com.neuracoust.keypad-tap"
+        thread.stackSize = 512 * 1024
+        tapThread = thread
+        thread.start()
         isEnabled = true
         return true
     }
@@ -103,10 +116,13 @@ final class GlobalKeypadCapture {
     func disable() {
         guard isEnabled else { return }
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
+        // Stop the dedicated thread's run loop so CFRunLoopRun() returns and the thread exits.
+        if let loop = tapRunLoop { CFRunLoopStop(loop) }
         tap = nil
         runLoopSource = nil
+        tapRunLoop = nil
+        tapThread = nil
         isEnabled = false
     }
 

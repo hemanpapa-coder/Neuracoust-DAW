@@ -12,6 +12,12 @@ static float peak(const std::vector<float>& audio) {
 static float tailPeak(const std::vector<float>& audio) {
     float p = 0; for (size_t i = audio.size() / 2; i < audio.size(); ++i) p = std::max(p, std::abs(audio[i])); return p;
 }
+static float tailChannelPeak(const std::vector<float>& audio, size_t channel) {
+    float p = 0;
+    for (size_t i = audio.size() / 2 + channel; i < audio.size(); i += 2)
+        p = std::max(p, std::abs(audio[i]));
+    return p;
+}
 
 int main() {
     constexpr double sr = 48000.0;
@@ -45,6 +51,19 @@ int main() {
     auto compressed = tone; processor.processInterleavedStereo(compressed, comp, sr);
     assert(tailPeak(compressed) < peak(tone) * 0.8f);
     assert(processor.compressorGainReductionDb() > 1.0f);
+
+    // Stereo-link follows the louder side; dual mono leaves a quiet opposite
+    // channel substantially less compressed.
+    std::vector<float> asymmetric = tone;
+    for (size_t i = 1; i < asymmetric.size(); i += 2) asymmetric[i] *= 0.08f;
+    processor.reset(sr);
+    auto linkedCompressed = asymmetric;
+    processor.processInterleavedStereo(linkedCompressed, comp, sr);
+    processor.reset(sr);
+    auto dualComp = comp; dualComp.dualMono = true;
+    auto dualCompressed = asymmetric;
+    processor.processInterleavedStereo(dualCompressed, dualComp, sr);
+    assert(tailChannelPeak(dualCompressed, 1) > tailChannelPeak(linkedCompressed, 1) * 1.5f);
 
     processor.reset(sr);
     ConsoleChannelState dryMix = comp;

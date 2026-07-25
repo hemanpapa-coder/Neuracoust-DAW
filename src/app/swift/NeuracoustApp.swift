@@ -5,6 +5,18 @@ import Darwin
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var engine: EngineController?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // SwiftUI makes the first focusable control (the Pre-roll text field) the window's initial
+        // first responder on launch, so the cursor blinks there and it swallows the spacebar and the
+        // shortcut keys (they type into the field instead of driving the transport). Clear focus once
+        // the window is up — twice, since SwiftUI may assign it a beat after launch.
+        for delay in [0.0, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                for window in NSApplication.shared.windows { window.makeFirstResponder(nil) }
+            }
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         Task { @MainActor [weak self] in
             self?.engine?.open(urls: urls)

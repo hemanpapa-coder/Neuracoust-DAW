@@ -32,7 +32,7 @@ struct PitchEditorPanel: View {
                         toolIcon(shown, active: active)
                     }
                     .buttonStyle(.borderless)
-                    .help("\(shown.rawValue) — \(shown.hint)")
+                    .helpTip("\(shown.rawValue) — \(shown.hint)")
                 } else {
                     Menu {
                         ForEach(members, id: \.self) { tool in
@@ -52,7 +52,7 @@ struct PitchEditorPanel: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("\(shown.rawValue) — \(shown.hint) (길게 눌러 다른 도구)")
+                    .helpTip("\(shown.rawValue) — \(shown.hint) (길게 눌러 다른 도구)")
                 }
             }
         }
@@ -92,7 +92,7 @@ struct PitchEditorPanel: View {
     private var header: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Space.md) {
-                Text("피치 에디터").font(Theme.Font.ui(11, .semibold)).foregroundStyle(Theme.Palette.text)
+                Text("피치앤타임 에디터").font(Theme.Font.ui(11, .semibold)).foregroundStyle(Theme.Palette.text)
                     .lineLimit(1)
                 Picker("", selection: $engine.pitchEditorMode) {
                     ForEach(EngineController.PitchEditorMode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -107,7 +107,7 @@ struct PitchEditorPanel: View {
                         Image(systemName: "arrow.uturn.backward")
                     }
                     .buttonStyle(.borderless)
-                    .help("모든 음을 검출된 상태로 되돌립니다")
+                    .helpTip("모든 음을 검출된 상태로 되돌립니다")
                     Picker("", selection: Binding(
                         get: { engine.detectionMode },
                         set: { engine.detectionMode = $0; engine.redetectNotes() })) {
@@ -124,7 +124,7 @@ struct PitchEditorPanel: View {
                                 get: { engine.useCrepeTiny },
                                 set: { engine.useCrepeTiny = $0; engine.redetectNotes() }))
                                 .toggleStyle(.checkbox).font(Theme.Font.ui(9))
-                                .help("작고 빠른 모델 — 긴 파일 빠른 검출용, 정확도는 약간 낮음")
+                                .helpTip("작고 빠른 모델 — 긴 파일 빠른 검출용, 정확도는 약간 낮음")
                         }
                     }
                     Text(engine.detectionMode == .percussive
@@ -132,6 +132,40 @@ struct PitchEditorPanel: View {
                          : "\(engine.pitchNotes.count)개 노트 · 위/아래 드래그로 음정")
                         .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textFaint)
                         .lineLimit(1)
+                    if engine.detectionMode != .percussive {
+                        // Pitch snapping (Melodyne grid / scale) + one-click Correct Pitch macro.
+                        Picker("", selection: $engine.pitchSnapMode) {
+                            ForEach(EngineController.PitchSnapMode.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 120)
+                        .helpTip("음정 스냅 — 끄기(자유) / 반음 / 스케일(조에 맞춤)")
+                        Menu("보정") {
+                            Button("스케일로 (100%)") { engine.correctPitch(intensity: 1.0) }
+                            Button("절반 (50%)") { engine.correctPitch(intensity: 0.5) }
+                            Button("약하게 (25%)") { engine.correctPitch(intensity: 0.25) }
+                        }
+                        .menuStyle(.borderlessButton).fixedSize().font(Theme.Font.ui(9))
+                        .helpTip("모든 음을 조(\(engine.musicalKey))의 가장 가까운 음으로 이동 — 멜로다인 Correct Pitch")
+                        Menu("타임") {
+                            Button("1/4로 맞춤") { engine.quantizeNoteTime(intensity: 1, subdivisionsPerBeat: 1) }
+                            Button("1/8로 맞춤") { engine.quantizeNoteTime(intensity: 1, subdivisionsPerBeat: 2) }
+                            Button("1/16로 맞춤") { engine.quantizeNoteTime(intensity: 1, subdivisionsPerBeat: 4) }
+                            Divider()
+                            Button("1/16 절반 (50%)") { engine.quantizeNoteTime(intensity: 0.5, subdivisionsPerBeat: 4) }
+                        }
+                        .menuStyle(.borderlessButton).fixedSize().font(Theme.Font.ui(9))
+                        .helpTip("노트 시작을 비트 그리드로 정렬 — 멜로다인 Quantize Time")
+                        Menu("옥타브") {
+                            Button("▲ 위로 (+12)") { engine.shiftPitchOctave(1) }
+                            Button("▼ 아래로 (−12)") { engine.shiftPitchOctave(-1) }
+                        }
+                        .menuStyle(.borderlessButton).fixedSize().font(Theme.Font.ui(9))
+                        .helpTip("선택한 음(없으면 전체)을 옥타브 위/아래로 — 검출 옥타브 오류 교정")
+                        if !engine.selectedPitchNotes.isEmpty {
+                            Text("\(engine.selectedPitchNotes.count) 선택")
+                                .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.accent)
+                        }
+                    }
                 } else {
                     anchorControls
                 }
@@ -140,9 +174,9 @@ struct PitchEditorPanel: View {
                     .toggleStyle(.checkbox).font(Theme.Font.ui(9)).fixedSize()
                 Toggle("포먼트 보존", isOn: $engine.formantPreserve)
                     .toggleStyle(.checkbox).font(Theme.Font.ui(9)).fixedSize()
-                    .help("음정을 바꿔도 음색(포먼트)을 유지 — 치프멍크 방지. 끄면 원음 그대로 이동")
+                    .helpTip("음정을 바꿔도 음색(포먼트)을 유지 — 치프멍크 방지. 끄면 원음 그대로 이동")
                 Button { engine.previewPitchEdit() } label: { Image(systemName: "play.circle") }
-                    .buttonStyle(.plain).help("편집 결과 미리듣기")
+                    .buttonStyle(.plain).helpTip("편집 결과 미리듣기")
                 Button("파일로 내보내기") { engine.exportPitchEditToFile() }.font(Theme.Font.ui(10)).fixedSize()
                 Button("적용") {
                     if engine.pitchEditorMode == .anchor { engine.applyTimeMapEdit() }
@@ -230,7 +264,9 @@ private struct PitchEditorCanvasSection: View {
                 onAudition: { engine.auditionPitchEvent(localStart: $0, duration: $1) },
                 onSeek: { engine.setPitchEditorPosition($0) },
                 onViewportChange: { timeOffset = $0; pitchOffset = $1 },
-                onZoomChange: { horizontalZoom = $0; verticalZoom = $1 })
+                onZoomChange: { horizontalZoom = $0; verticalZoom = $1 },
+                selectedNotes: engine.selectedPitchNotes,
+                onSelectNotes: { engine.selectedPitchNotes = $0 })
         }
     }
 }
@@ -265,6 +301,8 @@ struct MelodyneNoteCanvas: NSViewRepresentable {
     var onSeek: (Double) -> Void
     var onViewportChange: (Double, Double) -> Void
     var onZoomChange: (Double, Double) -> Void
+    var selectedNotes: Set<Int> = []
+    var onSelectNotes: (Set<Int>) -> Void = { _ in }
 
     func makeNSView(context: Context) -> MelodyneNoteNSView {
         let v = MelodyneNoteNSView()
@@ -275,11 +313,13 @@ struct MelodyneNoteCanvas: NSViewRepresentable {
         v.onModulation = onModulation; v.onDrift = onDrift
         v.onAudition = onAudition; v.onSeek = onSeek
         v.onViewportChange = onViewportChange; v.onZoomChange = onZoomChange
+        v.onSelectNotes = onSelectNotes
         return v
     }
     func updateNSView(_ v: MelodyneNoteNSView, context: Context) {
         v.notes = notes
         v.tool = tool
+        v.selectedNotes = selectedNotes
         v.clipDuration = max(0.1, clipDuration)
         v.peaks = peaks
         v.waveformGain = CGFloat(waveformGain)
@@ -294,13 +334,31 @@ struct MelodyneNoteCanvas: NSViewRepresentable {
         v.onModulation = onModulation; v.onDrift = onDrift
         v.onAudition = onAudition; v.onSeek = onSeek
         v.onViewportChange = onViewportChange; v.onZoomChange = onZoomChange
+        v.onSelectNotes = onSelectNotes
         v.needsDisplay = true
     }
 }
 
 final class MelodyneNoteNSView: NSView {
     var notes: [EngineController.PitchNote] = [] { didSet { needsDisplay = true } }
-    var tool: EngineController.PitchEditTool = .main { didSet { needsDisplay = true } }
+    var tool: EngineController.PitchEditTool = .main {
+        didSet {
+            needsDisplay = true
+            // Re-evaluate resetCursorRects now, or the cursor keeps the previous tool's shape until
+            // some unrelated event refreshes it (why 돋보기/가위 didn't change the cursor).
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    var selectedNotes: Set<Int> = [] { didSet { needsDisplay = true } }
+    var onSelectNotes: ((Set<Int>) -> Void)?
+    // Marquee note-selection (drag from empty lane space).
+    private var selecting = false
+    private var selectStart: NSPoint = .zero
+    private var selectCurrent: NSPoint = .zero
+    // Batch drag: the selected notes' pitch/time/level captured at mouse-down.
+    private var batchBaseOffsets: [Int: Double] = [:]
+    private var batchBaseTimeOffsets: [Int: Double] = [:]
+    private var batchBaseGains: [Int: Double] = [:]
     var onGainDb: ((Int, Double) -> Void)?
     var onMute: ((Int, Bool) -> Void)?
     var onFormant: ((Int, Double) -> Void)?
@@ -358,6 +416,17 @@ final class MelodyneNoteNSView: NSView {
     private var dragBaseAttackSpeed: Double = 1
     private var dragBaseModulation: Double = 1
     private var dragBaseDrift: Double = 1
+    // Hand (pan) tool: grab the canvas and slide the visible window.
+    private var panning = false
+    private var panBaseVisibleStart: Double = 0
+    private var panBasePitchOffset: Double = 0
+    // Zoom (magnifier) tool: drag a rubber-band box; on release the box fills the view (Melodyne).
+    private var zooming = false
+    private var zoomStart: NSPoint = .zero
+    private var zoomCurrent: NSPoint = .zero
+    // Vertical pitch scrollbar drag.
+    private var scrollbarDragging = false
+    private var scrollBasePitchOffset: Double = 0
     private enum DragOperation { case contextual, pitch, time, stretchStart, stretchEnd, formant, amplitude, attack, modulation, drift }
     private var dragOperation: DragOperation = .contextual
     private var transientDragIndex: Int? = nil
@@ -411,6 +480,20 @@ final class MelodyneNoteNSView: NSView {
     private func timeForX(_ x: CGFloat) -> Double {
         min(clipDuration, max(0, visibleStart + Double((x - editorRect.minX) / max(1, editorRect.width)) * visibleDuration))
     }
+    /// The note-derived pitch bounds BEFORE zoom/offset — the scrollbar's full scrollable extent.
+    private func contentPitchRange() -> (lo: Double, hi: Double) {
+        let pitched = notes.filter { !isPercussive($0) }
+        guard !pitched.isEmpty else { return (57, 71) }
+        var lo = Double.greatestFiniteMagnitude, hi = -Double.greatestFiniteMagnitude
+        for n in pitched { lo = min(lo, n.editedMidi); hi = max(hi, n.editedMidi) }
+        lo = floor(lo) - 3; hi = ceil(hi) + 3
+        if hi - lo < 14 { let mid = (lo + hi) / 2; lo = mid - 7; hi = mid + 7 }
+        return (lo, hi)
+    }
+    /// Draggable vertical pitch scrollbar on the right edge, so you don't have to spin the wheel.
+    private var pitchScrollbarRect: NSRect {
+        NSRect(x: editorRect.maxX - 9, y: editorRect.minY + 2, width: 7, height: editorRect.height - 4)
+    }
     private func rowHeight() -> CGFloat {
         let (lo, hi) = pitchRange()
         return editorRect.height / CGFloat(max(1.0, hi - lo))
@@ -430,29 +513,28 @@ final class MelodyneNoteNSView: NSView {
     /// A note blob shaped by the source waveform under that note — no decorative/random ripple.
     private func blobPath(_ rect: NSRect, note: EngineController.PitchNote) -> NSBezierPath {
         let p = NSBezierPath()
-        let steps = max(4, min(48, Int(rect.width / 4)))
-        func amplitude(_ fraction: CGFloat) -> CGFloat {
-            guard !peaks.isEmpty else { return 0.55 }
-            let seconds = note.editedStartSeconds + Double(fraction) * note.editedDurationSeconds
+        // Real waveform silhouette: sample the clip's min/max peaks across the note's span and draw
+        // the ACTUAL (asymmetric) envelope around the pitch line — not a smoothed symmetric blob.
+        // One column per screen pixel so the shape reads like the file's waveform, as in Melodyne.
+        let steps = max(8, min(Int(rect.width.rounded()), 600))
+        let scale = 1.0 / Double(normalisedPeakReference) * Double(waveformGain)
+        let h = rect.height * 0.48
+        // (top, bottom) offsets in −1…1 for column i; keeps a hairline in near-silence so a quiet
+        // note stays visible and clickable. Normalised against the clip's loudest peak.
+        func env(_ i: Int) -> (top: CGFloat, bottom: CGFloat) {
+            guard !peaks.isEmpty else { return (0.4, -0.4) }
+            let f = Double(i) / Double(steps)
+            let seconds = note.editedStartSeconds + f * note.editedDurationSeconds
             let index = min(peaks.count - 1, max(0, Int(seconds / max(0.001, clipDuration) * Double(peaks.count))))
             let peak = peaks[index]
-            // Normalise against the clip's loudest peak, then apply the user's waveform gain. Drawing
-            // the raw 0..1 sample value made a vocal that peaks at -15 dBFS occupy a sixth of the row
-            // — the shape was there but far too small to read the phrasing off.
-            let raw = CGFloat(max(abs(peak.x), abs(peak.y)))
-            return max(0.16, min(1, raw / normalisedPeakReference * waveformGain))
+            let top = min(1.0, Double(max(0, peak.y)) * scale)
+            let bot = max(-1.0, Double(min(0, peak.x)) * scale)
+            return (CGFloat(max(0.05, top)), CGFloat(min(-0.05, bot)))
         }
-        p.move(to: NSPoint(x: rect.minX, y: rect.midY))
-        for i in 0...steps {
-            let f = CGFloat(i) / CGFloat(steps)
-            p.line(to: NSPoint(x: rect.minX + rect.width * f,
-                               y: rect.midY + amplitude(f) * rect.height * 0.48))
-        }
-        for i in stride(from: steps, through: 0, by: -1) {
-            let f = CGFloat(i) / CGFloat(steps)
-            p.line(to: NSPoint(x: rect.minX + rect.width * f,
-                               y: rect.midY - amplitude(f) * rect.height * 0.48))
-        }
+        func x(_ i: Int) -> CGFloat { rect.minX + rect.width * CGFloat(i) / CGFloat(steps) }
+        p.move(to: NSPoint(x: rect.minX, y: rect.midY + env(0).top * h))
+        for i in 0...steps { p.line(to: NSPoint(x: x(i), y: rect.midY + env(i).top * h)) }
+        for i in stride(from: steps, through: 0, by: -1) { p.line(to: NSPoint(x: x(i), y: rect.midY + env(i).bottom * h)) }
         p.close()
         return p
     }
@@ -509,23 +591,46 @@ final class MelodyneNoteNSView: NSView {
                 waveform.stroke()
             }
         } else {
-            // Piano-style semitone rows and a permanent note-name gutter.
+            // Semitone rows behind the notes (light zebra by pitch class).
+            let names = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+            let blackKeys: Set<Int> = [1, 3, 6, 8, 10]
             for midi in Int(lo.rounded(.up))...Int(hi.rounded(.down)) {
                 let y = yForMidi(Double(midi))
                 let pc = ((midi % 12) + 12) % 12
-                let black = [1, 3, 6, 8, 10].contains(pc)
                 let band = NSRect(x: editorRect.minX, y: y - rowHeight() / 2,
                                   width: editorRect.width, height: rowHeight())
-                (black ? NSColor(hex: 0xe8e8e6) : NSColor(hex: 0xf8f8f6)).setFill()
+                (blackKeys.contains(pc) ? NSColor(hex: 0xececea) : NSColor(hex: 0xf8f8f6)).setFill()
                 band.intersection(editorRect).fill()
-                NSColor(hex: 0xc9c9c6).setStroke()
+                NSColor(hex: 0xd2d2cf).setStroke()
                 let p = NSBezierPath(); p.move(to: NSPoint(x: editorRect.minX, y: y - rowHeight() / 2))
                 p.line(to: NSPoint(x: editorRect.maxX, y: y - rowHeight() / 2)); p.lineWidth = 0.5; p.stroke()
-                let names = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-                let label = names[pc] + (pc == 0 ? "\(midi / 12 - 1)" : "")
-                (label as NSString).draw(at: NSPoint(x: 5, y: y - 5),
-                                        withAttributes: [.font: NSFont.systemFont(ofSize: 8),
-                                                         .foregroundColor: NSColor(hex: 0x606060)])
+            }
+            // A vertical piano keyboard in the left gutter: black keys as dark tabs, note name on each.
+            let gw = editorRect.minX
+            if gw > 8 {
+                for midi in Int(lo.rounded(.up))...Int(hi.rounded(.down)) {
+                    let y = yForMidi(Double(midi))
+                    let rh = rowHeight()
+                    let pc = ((midi % 12) + 12) % 12
+                    let black = blackKeys.contains(pc)
+                    NSColor(hex: 0xfbfbf9).setFill()
+                    NSRect(x: 0, y: y - rh / 2, width: gw, height: rh).fill()
+                    NSColor(hex: 0xccccc9).setStroke()
+                    let sep = NSBezierPath(); sep.move(to: NSPoint(x: 0, y: y - rh / 2))
+                    sep.line(to: NSPoint(x: gw, y: y - rh / 2)); sep.lineWidth = 0.5; sep.stroke()
+                    if black {   // dark tab over the left ~62%, like a piano's black keys
+                        NSColor(hex: 0x2b2b2b).setFill()
+                        NSRect(x: 0, y: y - rh / 2 + 0.5, width: gw * 0.62, height: max(1, rh - 1)).fill()
+                    }
+                    if rh >= 6 {   // note name on every key (C carries its octave), right-aligned
+                        let label = names[pc] + (pc == 0 ? "\(midi / 12 - 1)" : "")
+                        let attrs: [NSAttributedString.Key: Any] = [
+                            .font: NSFont.systemFont(ofSize: min(9, max(6, rh - 2))),
+                            .foregroundColor: NSColor(hex: pc == 0 ? 0x333333 : 0x666666)]
+                        let sz = (label as NSString).size(withAttributes: attrs)
+                        (label as NSString).draw(at: NSPoint(x: gw - sz.width - 3, y: y - sz.height / 2), withAttributes: attrs)
+                    }
+                }
             }
         }
         if !percussiveMode {
@@ -563,8 +668,14 @@ final class MelodyneNoteNSView: NSView {
                          xRadius: 2, yRadius: 2).fill()
         }
         // Pitched notes: detected position (faint) + edited (solid), a link line when moved.
-        for (_, n) in notes.enumerated() where !isPercussive(n) {
+        for (i, n) in notes.enumerated() where !isPercussive(n) {
             let r = rectForNote(n)
+            // Selected notes get a cyan halo so a multi-note edit target is unmistakable.
+            if selectedNotes.contains(i) {
+                NSColor(hex: 0x6bd3c0).withAlphaComponent(0.9).setStroke()
+                let halo = NSBezierPath(roundedRect: r.insetBy(dx: -2.5, dy: -2.5), xRadius: 4, yRadius: 4)
+                halo.lineWidth = 1.5; halo.stroke()
+            }
             if abs(n.offsetSemitones) > 0.01 {
                 let detY = yForMidi(n.detectedMidi)
                 NSColor(hex: 0x3a3128).setStroke()
@@ -610,21 +721,19 @@ final class MelodyneNoteNSView: NSView {
                 NSColor(hex: 0xd8493f).withAlphaComponent(0.9).setStroke()
                 slash.stroke()
             }
-            if abs(n.formantSemitones) > 0.01 {
-                // Formant marks sit on the blob's top edge — a separate axis from pitch, so they
-                // must not be mistaken for the pitch label below.
-                let ticks = min(6, Int(abs(n.formantSemitones).rounded()))
-                NSColor(hex: 0x7fd1e0).withAlphaComponent(0.95).setStroke()
-                for k in 0..<max(1, ticks) {
-                    let x = r.minX + 3 + CGFloat(k) * 3
-                    guard x < r.maxX - 2 else { break }
-                    let tick = NSBezierPath()
-                    let y = n.formantSemitones > 0 ? r.maxY - 1 : r.minY + 1
-                    tick.move(to: NSPoint(x: x, y: y))
-                    tick.line(to: NSPoint(x: x, y: n.formantSemitones > 0 ? y - 2.5 : y + 2.5))
-                    tick.lineWidth = 1.2
-                    tick.stroke()
-                }
+            // Formant: a thick, solid horizontal bar through the note — the way Melodyne shows it, so
+            // it's easy to see and grab (up = lighter, down = darker). Shown while the formant tool is
+            // active or the note carries a formant edit.
+            if tool == .formant || abs(n.formantSemitones) > 0.01 {
+                let off = CGFloat(max(-1.0, min(1.0, n.formantSemitones / 24.0))) * r.height * 0.42
+                let fy = r.midY + off
+                NSColor(hex: 0x5fc7de).withAlphaComponent(abs(n.formantSemitones) > 0.01 ? 0.98 : 0.5).setStroke()
+                let bar = NSBezierPath()
+                bar.move(to: NSPoint(x: r.minX + 2, y: fy))
+                bar.line(to: NSPoint(x: r.maxX - 2, y: fy))
+                bar.lineWidth = 3
+                bar.lineCapStyle = .round
+                bar.stroke()
             }
             if abs(n.attackSpeed - 1) > 0.01 {
                 // A wedge at the note's head, steeper for a faster attack.
@@ -676,6 +785,38 @@ final class MelodyneNoteNSView: NSView {
             let p = NSBezierPath(); p.move(to: NSPoint(x: playX, y: overviewRect.maxY))
             p.line(to: NSPoint(x: playX, y: rulerRect.maxY)); p.lineWidth = 1.5; p.stroke()
         }
+        // Zoom tool's rubber-band selection box.
+        if zooming {
+            let box = NSRect(x: min(zoomStart.x, zoomCurrent.x), y: min(zoomStart.y, zoomCurrent.y),
+                             width: abs(zoomCurrent.x - zoomStart.x), height: abs(zoomCurrent.y - zoomStart.y))
+            NSColor(hex: 0x6bd3c0).withAlphaComponent(0.14).setFill()
+            box.fill()
+            NSColor(hex: 0x6bd3c0).setStroke()
+            let p = NSBezierPath(rect: box); p.lineWidth = 1; p.stroke()
+        }
+        // Marquee note-selection box.
+        if selecting {
+            let box = NSRect(x: min(selectStart.x, selectCurrent.x), y: min(selectStart.y, selectCurrent.y),
+                             width: abs(selectCurrent.x - selectStart.x), height: abs(selectCurrent.y - selectStart.y))
+            NSColor(hex: 0x7fb0e0).withAlphaComponent(0.12).setFill()
+            box.fill()
+            NSColor(hex: 0x7fb0e0).withAlphaComponent(0.8).setStroke()
+            let p = NSBezierPath(rect: box); p.lineWidth = 1; p.stroke()
+        }
+        // Vertical pitch scrollbar (right edge): the thumb marks the visible pitch window within the
+        // full note range; drag it to scroll instead of spinning the wheel.
+        let (clo, chi) = contentPitchRange()
+        let (vlo, vhi) = pitchRange()
+        let sb = pitchScrollbarRect
+        NSColor.black.withAlphaComponent(0.22).setFill()
+        NSBezierPath(roundedRect: sb, xRadius: 3, yRadius: 3).fill()
+        let span = max(1.0, chi - clo)
+        func trackY(_ m: Double) -> CGFloat { sb.minY + CGFloat((m - clo) / span) * sb.height }
+        let y0 = max(sb.minY, min(sb.maxY, trackY(min(vlo, vhi))))
+        let y1 = max(sb.minY, min(sb.maxY, trackY(max(vlo, vhi))))
+        let thumb = NSRect(x: sb.minX + 1, y: y0, width: sb.width - 2, height: max(16, y1 - y0))
+        NSColor(hex: scrollbarDragging ? 0xb9bdc4 : 0x8a8f98).withAlphaComponent(0.75).setFill()
+        NSBezierPath(roundedRect: thumb, xRadius: 2.5, yRadius: 2.5).fill()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -688,6 +829,29 @@ final class MelodyneNoteNSView: NSView {
             return
         }
         guard pt.x >= editorRect.minX else { return }
+        // Vertical pitch scrollbar: grab the thumb (right edge) to scroll the pitch view.
+        if pitchScrollbarRect.insetBy(dx: -3, dy: 0).contains(pt) {
+            scrollbarDragging = true
+            dragStartY = pt.y
+            scrollBasePitchOffset = pitchOffset
+            return
+        }
+        // Hand tool: grab the canvas and pan — no note editing at all.
+        if tool == .hand {
+            panning = true
+            dragStartX = pt.x; dragStartY = pt.y
+            panBaseVisibleStart = visibleStart
+            panBasePitchOffset = pitchOffset
+            NSCursor.closedHand.set()
+            return
+        }
+        // Zoom (magnifier) tool: begin a rubber-band box. Drag out a region, and on release it
+        // fills the view (Melodyne-style). A click with no drag steps the zoom (⌥ = out).
+        if tool == .zoom {
+            zooming = true
+            zoomStart = pt; zoomCurrent = pt
+            return
+        }
         // Percussive transient? grab the nearest line for a horizontal (timing) drag.
         for (i, n) in notes.enumerated() where isPercussive(n) {
             let x = xForTime(transientTime(i, n))
@@ -700,9 +864,23 @@ final class MelodyneNoteNSView: NSView {
         // audible target comfortably larger than the painted contour.
         for (i, n) in notes.enumerated() where !isPercussive(n) && rectForNote(n).insetBy(dx: -5, dy: -7).contains(pt) {
             let r = rectForNote(n)
-            if tool == .separate {
-                if event.clickCount == 2 { onSplit?(i, timeForX(pt.x)) }
+            // Shift-click toggles this note in/out of the selection — no edit, no drag.
+            if event.modifierFlags.contains(.shift) {
+                var sel = selectedNotes
+                if sel.contains(i) { sel.remove(i) } else { sel.insert(i) }
+                selectedNotes = sel; onSelectNotes?(sel)
                 return
+            }
+            // Scissors: a single click cuts the note at that point (a dedicated tool acts at once —
+            // no double-click). Do this before selection so the click splits rather than just selects.
+            if tool == .separate {
+                onSplit?(i, timeForX(pt.x))
+                return
+            }
+            // A plain click on a note outside the selection makes it the sole selection; a click on
+            // an already-selected note keeps the group so the drag moves them all together.
+            if !selectedNotes.contains(i) {
+                selectedNotes = [i]; onSelectNotes?([i])
             }
             // Mute is a click, not a drag — Melodyne's amplitude/mute tool toggles the blob.
             if tool == .mute {
@@ -710,6 +888,13 @@ final class MelodyneNoteNSView: NSView {
                 return
             }
             dragIndex = i; dragStartY = pt.y; dragStartX = pt.x
+            // Capture the pitch/time/level base of every selected note for a group drag.
+            batchBaseOffsets.removeAll(); batchBaseTimeOffsets.removeAll(); batchBaseGains.removeAll()
+            for si in selectedNotes where si >= 0 && si < notes.count {
+                batchBaseOffsets[si] = notes[si].offsetSemitones
+                batchBaseTimeOffsets[si] = notes[si].timeOffsetSeconds
+                batchBaseGains[si] = notes[si].gainDb
+            }
             dragBaseOffset = n.offsetSemitones
             dragBaseTimeOffset = n.timeOffsetSeconds
             dragBaseDurationScale = n.durationScale
@@ -728,7 +913,7 @@ final class MelodyneNoteNSView: NSView {
             case .formant: dragOperation = .formant
             case .amplitude: dragOperation = .amplitude
             case .attack: dragOperation = .attack
-            case .mute, .separate: dragOperation = .contextual
+            case .mute, .separate, .hand, .zoom: dragOperation = .contextual   // .hand/.zoom handled earlier
             case .time, .main:
                 if pt.x <= r.minX + edgeWidth { dragOperation = .stretchStart }
                 else if pt.x >= r.maxX - edgeWidth { dragOperation = .stretchEnd }
@@ -738,12 +923,27 @@ final class MelodyneNoteNSView: NSView {
             onAudition?(n.editedStartSeconds, n.editedDurationSeconds)
             return
         }
-        onSeek?(timeForX(pt.x))
+        // Empty lane space: begin a marquee note-selection. A click with no drag (resolved in
+        // mouseUp) instead clears the selection and moves the play position.
+        selecting = true
+        selectStart = pt; selectCurrent = pt
         dragIndex = nil; transientDragIndex = nil
     }
 
     override func resetCursorRects() {
         super.resetCursorRects()
+        if tool == .hand {
+            addCursorRect(editorRect, cursor: .openHand)
+            return
+        }
+        if tool == .zoom {
+            addCursorRect(editorRect, cursor: .crosshair)
+            return
+        }
+        if tool == .separate {   // scissors: a precise cut-point cursor across the whole lane
+            addCursorRect(editorRect, cursor: .crosshair)
+            return
+        }
         for n in notes where !isPercussive(n) {
             let r = rectForNote(n).insetBy(dx: -3, dy: -5)
             switch tool {
@@ -752,11 +952,40 @@ final class MelodyneNoteNSView: NSView {
             case .separate: addCursorRect(r, cursor: .crosshair)
             case .mute: addCursorRect(r, cursor: .pointingHand)
             case .main: addCursorRect(r, cursor: .openHand)
+            case .hand, .zoom: break   // handled by the early returns above
             }
         }
     }
     override func mouseDragged(with event: NSEvent) {
         let pt = convert(event.locationInWindow, from: nil)
+        if scrollbarDragging {
+            let (clo, chi) = contentPitchRange()
+            let dmidi = Double((pt.y - dragStartY) / max(1, editorRect.height)) * (chi - clo)
+            onViewportChange?(timeOffset, scrollBasePitchOffset + dmidi)
+            return
+        }
+        if panning {
+            // Grab-and-slide: the canvas follows the cursor, so dragging right reveals
+            // earlier time (window moves left) and dragging up reveals higher pitch.
+            let dx = pt.x - dragStartX
+            let dy = pt.y - dragStartY
+            let dtime = Double(dx / max(1, editorRect.width)) * visibleDuration
+            let (lo, hi) = pitchRange()
+            let dpitch = Double(dy / max(1, editorRect.height)) * (hi - lo)
+            let nextTime = min(max(0, clipDuration - visibleDuration), max(0, panBaseVisibleStart - dtime))
+            onViewportChange?(nextTime, panBasePitchOffset - dpitch)
+            return
+        }
+        if zooming {
+            zoomCurrent = pt
+            needsDisplay = true    // draw the rubber-band box live
+            return
+        }
+        if selecting {
+            selectCurrent = pt
+            needsDisplay = true    // draw the marquee live
+            return
+        }
         if let ti = transientDragIndex {
             let t = timeForX(pt.x)
             onMoveTransient?(ti, t)
@@ -782,7 +1011,12 @@ final class MelodyneNoteNSView: NSView {
             return
         }
         if dragOperation == .amplitude {
-            onGainDb?(i, dragBaseGainDb + Double(dy) * 0.12)   // ±24 dB over ±200 pt
+            let deltaDb = Double(dy) * 0.12   // ±24 dB over ±200 pt
+            if selectedNotes.count > 1 {
+                for (si, base) in batchBaseGains { onGainDb?(si, base + deltaDb) }
+            } else {
+                onGainDb?(i, dragBaseGainDb + deltaDb)
+            }
             return
         }
         if dragOperation == .attack {
@@ -800,13 +1034,93 @@ final class MelodyneNoteNSView: NSView {
             }
         } else if dragOperation == .time || (dragOperation == .contextual && abs(dx) > abs(dy)) {
             let deltaSeconds = Double(dx / max(1, editorRect.width)) * visibleDuration
-            onTimeOffset?(i, dragBaseTimeOffset + deltaSeconds)
+            if selectedNotes.count > 1 {
+                for (si, base) in batchBaseTimeOffsets { onTimeOffset?(si, base + deltaSeconds) }
+            } else {
+                onTimeOffset?(i, dragBaseTimeOffset + deltaSeconds)
+            }
         } else {
             let deltaSemis = Double(dy / max(1, rowHeight()))
-            onOffset?(i, dragBaseOffset + deltaSemis)   // engine snaps to a whole semitone
+            if selectedNotes.count > 1 {
+                for (si, base) in batchBaseOffsets { onOffset?(si, base + deltaSemis) }   // each snaps individually
+            } else {
+                onOffset?(i, dragBaseOffset + deltaSemis)   // engine snaps to a whole semitone
+            }
         }
     }
     override func mouseUp(with event: NSEvent) {
+        if scrollbarDragging {
+            scrollbarDragging = false
+            needsDisplay = true
+            return
+        }
+        if panning {
+            panning = false
+            NSCursor.openHand.set()
+            return
+        }
+        if selecting {
+            selecting = false
+            let box = NSRect(x: min(selectStart.x, selectCurrent.x), y: min(selectStart.y, selectCurrent.y),
+                             width: abs(selectCurrent.x - selectStart.x), height: abs(selectCurrent.y - selectStart.y))
+            if box.width < 4 && box.height < 4 {
+                // A click, not a sweep: clear the selection and move the play position.
+                if !selectedNotes.isEmpty { selectedNotes = []; onSelectNotes?([]) }
+                onSeek?(timeForX(selectStart.x))
+            } else {
+                // Sweep: select the notes the box touches (⇧ adds to the current selection).
+                var sel: Set<Int> = event.modifierFlags.contains(.shift) ? selectedNotes : []
+                for (i, n) in notes.enumerated() where !isPercussive(n) && rectForNote(n).intersects(box) {
+                    sel.insert(i)
+                }
+                selectedNotes = sel; onSelectNotes?(sel)
+            }
+            needsDisplay = true
+            return
+        }
+        if zooming {
+            zooming = false
+            let dx = abs(zoomCurrent.x - zoomStart.x)
+            let dy = abs(zoomCurrent.y - zoomStart.y)
+            if dx < 6 && dy < 6 {
+                // Treated as a click: step the zoom around the point (⌥ = out).
+                let out = event.modifierFlags.contains(.option)
+                let factor = out ? (1.0 / 1.6) : 1.6
+                let newHZ = min(16, max(1, horizontalZoom * factor))
+                let cursorTime = timeForX(zoomStart.x)
+                let frac = Double((zoomStart.x - editorRect.minX) / max(1, editorRect.width))
+                let newDur = clipDuration / max(1, newHZ)
+                let newStart = min(max(0, clipDuration - newDur), max(0, cursorTime - frac * newDur))
+                onZoomChange?(newHZ, min(8, max(1, verticalZoom * factor)))
+                onViewportChange?(newStart, pitchOffset)
+            } else {
+                // Box zoom: the dragged region fills the view, both axes.
+                let x0 = min(zoomStart.x, zoomCurrent.x), x1 = max(zoomStart.x, zoomCurrent.x)
+                let t0 = timeForX(x0), t1 = timeForX(x1)
+                if t1 - t0 > 0.001 {
+                    let newHZ = min(16, max(1, clipDuration / (t1 - t0)))
+                    onZoomChange?(newHZ, verticalZoom)   // vertical handled below via viewport
+                    // Pitch: map the box's y-span to a midi span and recentre. fullSpan/baseCenter are
+                    // zoom-independent, so the new offset stays valid under the new vertical zoom.
+                    let (loCur, hiCur) = pitchRange()
+                    let midCur = (loCur + hiCur) / 2
+                    let fullSpan = (hiCur - loCur) * max(1, verticalZoom)
+                    let baseCenter = midCur - pitchOffset
+                    let midiForY: (CGFloat) -> Double = { y in
+                        loCur + Double((y - self.editorRect.minY) / max(1, self.editorRect.height)) * (hiCur - loCur)
+                    }
+                    let m0 = midiForY(min(zoomStart.y, zoomCurrent.y))
+                    let m1 = midiForY(max(zoomStart.y, zoomCurrent.y))
+                    let visSpan = max(2.0, m1 - m0)
+                    let newVZ = min(8, max(1, fullSpan / visSpan))
+                    let newOffset = (m0 + m1) / 2 - baseCenter
+                    onZoomChange?(newHZ, newVZ)
+                    onViewportChange?(t0, newOffset)
+                }
+            }
+            needsDisplay = true
+            return
+        }
         // Re-audition after a pitch drag so the release immediately demonstrates the
         // edited note. The mouse-down audition necessarily used the pre-drag render.
         if let i = dragIndex, i >= 0, i < notes.count {

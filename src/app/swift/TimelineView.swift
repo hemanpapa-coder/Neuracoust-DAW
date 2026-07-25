@@ -2274,7 +2274,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             }
         }
         if onOpenPitchEditor != nil {
-            clipProc("피치 에디터 (멜로다인 / 세라토 앵커)", #selector(openPitchEditorMenu(_:)))
+            clipProc("피치앤타임 에디터", #selector(openPitchEditorMenu(_:)))
         }
         // VocAlign: time-align this clip onto another (the lead) picked from the other clips.
         if onAlignToReference != nil {

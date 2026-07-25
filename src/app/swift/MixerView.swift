@@ -8,6 +8,120 @@ private struct MixerPrePanHeightKey: PreferenceKey {
     }
 }
 
+private enum ConsoleLayoutTuner {
+    static let editingKey = "mixer.consoleLayout.editing"
+    static let prefix = "mixer.consoleLayout.position."
+
+    static func copyToClipboard() {
+        let defaults = UserDefaults.standard
+        let positions = defaults.dictionaryRepresentation()
+            .filter { $0.key.hasPrefix(prefix) }
+            .reduce(into: [String: Any]()) { result, item in
+                result[String(item.key.dropFirst(prefix.count))] = item.value
+            }
+        let payload: [String: Any] = [
+            "format": "NeuracoustConsoleLayout/v1",
+            "positions": positions,
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload,
+                                                     options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    static func reset() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
+        NotificationCenter.default.post(name: .consoleLayoutDidReset, object: nil)
+    }
+}
+
+private extension Notification.Name {
+    static let consoleLayoutDidReset = Notification.Name("NeuracoustConsoleLayoutDidReset")
+}
+
+private struct ConsoleLayoutItem: ViewModifier {
+    let id: String
+    @AppStorage(ConsoleLayoutTuner.editingKey) private var editing = false
+    @State private var x: CGFloat
+    @State private var y: CGFloat
+    @State private var dragStart = CGSize.zero
+    @State private var isDragging = false
+
+    init(_ id: String) {
+        self.id = id
+        _x = State(initialValue: CGFloat(UserDefaults.standard.double(
+            forKey: ConsoleLayoutTuner.prefix + id + ".x")))
+        _y = State(initialValue: CGFloat(UserDefaults.standard.double(
+            forKey: ConsoleLayoutTuner.prefix + id + ".y")))
+    }
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+                .allowsHitTesting(!editing)
+            if editing {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Theme.Palette.accent.opacity(0.8),
+                                    style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                            .allowsHitTesting(false)
+                    }
+                    .contextMenu {
+                        Button("이 항목 위치 초기화") {
+                            x = 0; y = 0; dragStart = .zero; save()
+                        }
+                    }
+            }
+        }
+        // The visual and its edit hit target move as one unit. Keeping the offset
+        // outside the ZStack prevents the old double-offset mismatch.
+        .offset(x: x, y: y)
+        .zIndex(isDragging ? 10_000 : (editing ? 1 : 0))
+        // Mixer strips live inside a two-axis ScrollView. The layout drag must win
+        // before that scroll view begins panning, otherwise the selected control
+        // appears immovable or a neighbouring view receives the gesture.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    guard editing else { return }
+                    isDragging = true
+                    x = dragStart.width + value.translation.width
+                    y = dragStart.height + value.translation.height
+                }
+                .onEnded { _ in
+                    guard editing else { return }
+                    dragStart = CGSize(width: x, height: y)
+                    isDragging = false
+                    save()
+                },
+            including: editing ? .all : .none
+        )
+        .onAppear { dragStart = CGSize(width: x, height: y) }
+        .onReceive(NotificationCenter.default.publisher(for: .consoleLayoutDidReset)) { _ in
+            x = 0; y = 0; dragStart = .zero
+        }
+    }
+
+    private func save() {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(x), forKey: ConsoleLayoutTuner.prefix + id + ".x")
+        defaults.set(Double(y), forKey: ConsoleLayoutTuner.prefix + id + ".y")
+    }
+}
+
+private extension View {
+    func consoleLayoutItem(_ id: String) -> some View {
+        modifier(ConsoleLayoutItem(id))
+    }
+}
+
 /// Small console knob for narrow mixer strips. Vertical drag changes the value;
 /// double-click restores the hardware-inspired default.
 private struct ConsoleMiniKnob: View {
@@ -33,39 +147,35 @@ private struct ConsoleMiniKnob: View {
                 // alternating long/short ticks keep the control readable at mixer size.
                 ForEach(0..<11, id: \.self) { tick in
                     Capsule()
-                        .fill(tick == 5 ? Color.white.opacity(0.72) : Color.white.opacity(0.28))
-                        .frame(width: tick == 5 ? 1.2 : 0.8,
-                               height: tick.isMultiple(of: 5) ? 3.5 : 2.2)
-                        .offset(y: -14)
+                        .fill(tick == 5 ? Color.white.opacity(0.9) : Color.white.opacity(0.55))
+                        .frame(width: tick == 5 ? 1.4 : 1,
+                               height: tick.isMultiple(of: 5) ? 4.2 : 3)
+                        .offset(y: -23)
                         .rotationEffect(.degrees(-135 + Double(tick) * 27))
                 }
                 Circle()
-                    .fill(Color.black.opacity(0.38))
-                    .frame(width: 27, height: 27)
-                    .shadow(color: .black.opacity(0.75), radius: 1.5, x: 0, y: 1)
+                    .fill(Color.black.opacity(0.75))
+                    .frame(width: 46, height: 46)
                 Circle()
-                    .fill(RadialGradient(colors: [
-                        faceTint?.opacity(0.98) ?? Color(hex: 0x5a5b58),
-                        faceTint?.opacity(0.72) ?? Color(hex: 0x252725),
-                        Color.black.opacity(0.96)
-                    ], center: .topLeading, startRadius: 1, endRadius: 18))
-                    .overlay(Circle().stroke(Color.white.opacity(0.23), lineWidth: 0.7))
-                    .frame(width: 23, height: 23)
-                Capsule()
-                    .fill(tint)
-                    .frame(width: 1.8, height: 8.5)
-                    .offset(y: -4.5)
-                    .rotationEffect(.degrees(-135 + normalized * 270))
-                    .shadow(color: .black.opacity(0.55), radius: 0.5, x: 0, y: 0.5)
+                    .fill(faceTint ?? Color(hex: 0xd8d6cf))
+                    .overlay(Circle().stroke(Color.black.opacity(0.8), lineWidth: 1.2))
+                    .frame(width: 40, height: 40)
                 Circle()
-                    .fill(Color.black.opacity(0.36))
+                    .stroke(faceTint == nil ? Color.black.opacity(0.9) : tint,
+                            lineWidth: 0.8)
                     .frame(width: 5, height: 5)
+                    .offset(y: -14.5)
+                    .rotationEffect(.degrees(-135 + normalized * 270))
+                Text(display(liveValue ?? value))
+                    .font(Theme.Font.mono(7.5, .bold))
+                    .foregroundStyle(faceTint == nil ? Color.black.opacity(0.9)
+                                                     : Color(hex: 0xf7f4ea))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .frame(width: 28)
+                    .shadow(color: faceTint == nil ? .clear : .black.opacity(0.75), radius: 1)
             }
-            .frame(width: 31, height: 31)
-            Text(display(liveValue ?? value))
-                .font(Theme.Font.mono(5.8, .semibold))
-                .foregroundStyle(Color(hex: 0xc9c7bd))
-                .lineLimit(1)
+            .frame(width: 53, height: 53)
         }
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 1)
@@ -102,15 +212,15 @@ enum MixerModuleFocus: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .filter: return "Hi/Lo Cut"
-        case .comp: return "Comp"
-        case .gate: return "Gate"
+        case .filter: return "FLT"
+        case .comp: return "CMP"
+        case .gate: return "GAT"
         case .eq: return "EQ"
-        case .saturator: return "Saturator"
+        case .saturator: return "SAT"
         case .deEss: return "DeEss"
-        case .insert: return "Insert"
+        case .insert: return "INS"
         case .inRec: return "In/Rec"
-        case .sends: return "Sends"
+        case .sends: return "SND"
         case .denoise: return "Denoise"
         }
     }
@@ -289,6 +399,7 @@ private struct InsertSlotChipView: View {
 
 struct MixerView: View {
     @EnvironmentObject private var engine: EngineController
+    @AppStorage(ConsoleLayoutTuner.editingKey) private var consoleLayoutEditing = false
 
     /// Section visibility, mirroring the design's toolbar chips.
     @State private var showIO = true
@@ -336,6 +447,36 @@ struct MixerView: View {
                 .foregroundStyle(Theme.Palette.textFaint)
 
             Spacer()
+
+            HStack(spacing: Theme.Space.sm) {
+                Button {
+                    consoleLayoutEditing.toggle()
+                } label: {
+                    Label(consoleLayoutEditing ? "배치 편집 중 · 종료" : "UI 배치 시작",
+                          systemImage: consoleLayoutEditing ? "xmark.circle.fill"
+                                                            : "arrow.up.and.down.and.arrow.left.and.right")
+                }
+                .foregroundStyle(consoleLayoutEditing ? Theme.Palette.amber
+                                                      : Theme.Palette.textMuted)
+
+                Button {
+                    ConsoleLayoutTuner.copyToClipboard()
+                } label: {
+                    Label("클립보드 복사", systemImage: "doc.on.doc")
+                }
+
+                Menu {
+                    Button("모든 위치 초기화", role: .destructive) {
+                        ConsoleLayoutTuner.reset()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+            }
+            .font(Theme.Font.ui(8.5, .semibold))
+            .buttonStyle(.plain)
 
             Text("표시")
                 .font(Theme.Font.ui(8.5))
@@ -623,6 +764,7 @@ struct ChannelStrip: View {
                 panSection
                 if selectedModules.contains(.inRec) { buttonRow }
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
+                channelGainReductionMeter
                 // Output (post-plugin) meter — horizontal, right above the fader. The one
                 // under the input is the incoming meter; this one is after the inserts.
                 HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
@@ -777,6 +919,8 @@ struct ChannelStrip: View {
                     .frame(width: 4, height: 4)
                 Text(module.label)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .allowsTightening(true)
                 Spacer(minLength: 0)
             }
                 .font(Theme.Font.ui(7.5, enabled || focused ? .bold : .regular))
@@ -859,6 +1003,40 @@ struct ChannelStrip: View {
         .buttonStyle(.plain)
     }
 
+    /// The module name is the power control. A bright title means that the
+    /// processor is in; a quiet title means bypassed. The model belongs in the
+    /// TYPE menu at the foot of the module, not beside the power indication.
+    private func consoleModuleHeader(_ title: String, parameter: String,
+                                     enabled: Bool) -> some View {
+        Button { engine.setConsoleBool(track.id, parameter, !enabled) } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(Theme.Font.mono(7, .bold))
+                    .foregroundStyle(enabled ? Theme.Palette.textBright
+                                             : Theme.Palette.textFaint)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .helpTip(enabled ? "\(title) 끄기" : "\(title) 켜기")
+        .consoleLayoutItem("header.\(parameter)")
+    }
+
+    private var consoleModelPicker: some View {
+        HStack(spacing: 3) {
+            Text("TYPE").font(Theme.Font.mono(6, .semibold))
+            Spacer(minLength: 0)
+            Menu("SSL 4000E") {
+                Button("SSL 4000E") {}
+            }
+            .font(Theme.Font.mono(6.2, .semibold))
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .foregroundStyle(Theme.Palette.textFaint)
+    }
+
     private func consoleSlider(_ label: String, _ parameter: String,
                                range: ClosedRange<Float>, format: String) -> some View {
         let value = engine.consoleValue(track.id, parameter)
@@ -882,55 +1060,37 @@ struct ChannelStrip: View {
 
     private var consoleCompSection: some View {
         VStack(spacing: 3) {
-            HStack {
-                Text("COMPRESSOR")
-                    .font(Theme.Font.mono(6.5, .bold))
-                    .foregroundStyle(Theme.Palette.textDim)
-                Spacer(minLength: 0)
-                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
-            }
+            consoleModuleHeader("COMPRESSOR", parameter: "compEnabled",
+                                enabled: track.consoleCompEnabled)
 
-            HStack(alignment: .center, spacing: 5) {
-                compressorKnob("MIX", parameter: "compMix", range: 0...1,
-                               defaultValue: 1, display: { String(format: "%.0f%%", $0 * 100) })
-                Spacer(minLength: 0)
-                compressorSwitch("FAST ATTK", parameter: "compFastAttack",
-                                 enabled: track.consoleCompFastAttack)
-            }
-            HStack(alignment: .center, spacing: 5) {
+            // The clipboard coordinates communicate the intended staggered rhythm;
+            // this is the optically-spaced production layout derived from them.
+            ZStack(alignment: .topLeading) {
                 compressorKnob("RATIO", parameter: "compRatio", range: 1...20,
-                               defaultValue: 4, display: { String(format: "%.1f:1", $0) })
-                Spacer(minLength: 0)
-                compressorSwitch("PEAK", parameter: "compPeakMode",
-                                 enabled: track.consoleCompPeakMode)
+                               defaultValue: 4, unit: ":1", layoutKeySuffix: ".baked1",
+                               display: { String(format: "%.1f", $0) })
+                    .position(x: 30, y: 34)
+                compressorKnob("THR", parameter: "compThresholdDb", range: -40...0,
+                               defaultValue: -18, unit: "dB", layoutKeySuffix: ".baked1",
+                               display: { String(format: "%.0f", $0) })
+                    .position(x: 80, y: 50)
+                compressorKnob("REL", parameter: "compReleaseMs", range: 40...1500,
+                               defaultValue: 360, unit: "ms", layoutKeySuffix: ".baked1",
+                               display: { String(format: "%.0f", $0) })
+                    .position(x: 30, y: 104)
+                compressorKnob("MIX", parameter: "compMix", range: 0...1,
+                               defaultValue: 1, unit: "%", layoutKeySuffix: ".baked1",
+                               display: { String(format: "%.0f", $0 * 100) })
+                    .position(x: 80, y: 120)
+                compressorSwitch(track.consoleCompFastAttack ? "FAST" : "SLOW",
+                                 parameter: "compFastAttack",
+                                 enabled: track.consoleCompFastAttack,
+                                 layoutKeySuffix: ".baked1")
+                    .position(x: 30, y: 158)
             }
-            HStack(alignment: .center, spacing: 5) {
-                compressorKnob("THRESH", parameter: "compThresholdDb", range: -40...0,
-                               defaultValue: -18, display: { String(format: "%.0f dB", $0) })
-                Spacer(minLength: 0)
-                compressorGainReductionMeter
-            }
-            HStack(alignment: .center, spacing: 5) {
-                compressorKnob("RELEASE", parameter: "compReleaseMs", range: 40...1500,
-                               defaultValue: 360, display: {
-                                   $0 >= 1000 ? String(format: "%.1fs", $0 / 1000) : String(format: "%.0fms", $0)
-                               })
-                Spacer(minLength: 0)
-                compressorSwitch("COMP", parameter: "compEnabled",
-                                 enabled: track.consoleCompEnabled)
-            }
+            .frame(height: 172)
 
-            HStack(spacing: 3) {
-                Text("TYPE").font(Theme.Font.mono(6, .semibold))
-                Spacer(minLength: 0)
-                Menu("SSL 4000E") {
-                    Button("SSL 4000E") {}
-                }
-                .font(Theme.Font.mono(6.2, .semibold))
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-            }
-            .foregroundStyle(Theme.Palette.textFaint)
+            consoleModelPicker
             circuitModeSwitch(parameter: "compCircuitMode", enabled: track.consoleCompCircuitMode)
         }
         .padding(4).background(consoleModuleBackground)
@@ -938,13 +1098,15 @@ struct ChannelStrip: View {
 
     private func compressorKnob(_ title: String, parameter: String,
                                 range: ClosedRange<Float>, defaultValue: Float,
+                                unit: String = "",
                                 tint: Color = Theme.Palette.textBright,
                                 faceTint: Color? = nil,
+                                layoutKeySuffix: String = "",
                                 display: @escaping (Float) -> String) -> some View {
         let value = engine.consoleValue(track.id, parameter)
         return VStack(spacing: 0) {
             Text(title)
-                .font(Theme.Font.mono(5.8, .semibold))
+                .font(Theme.Font.mono(6.7, .bold))
                 .foregroundStyle(Theme.Palette.textDim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -953,37 +1115,37 @@ struct ChannelStrip: View {
                             onChange: { engine.setConsoleValue(track.id, parameter, $0) },
                             onCommit: { engine.recordGesture("4000E \(parameter)") },
                             tint: tint, faceTint: faceTint)
+            if !unit.isEmpty {
+                Text(unit)
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                    .lineLimit(1)
+            }
         }
-        .frame(width: 31)
+        .frame(width: 55)
+        .consoleLayoutItem("knob.\(parameter)\(layoutKeySuffix)")
     }
 
-    private func compressorSwitch(_ title: String, parameter: String, enabled: Bool) -> some View {
+    private func compressorSwitch(_ title: String, parameter: String, enabled: Bool,
+                                  layoutKeySuffix: String = "") -> some View {
         Button { engine.setConsoleBool(track.id, parameter, !enabled) } label: {
-            VStack(spacing: 1) {
-                Circle()
-                    .fill(enabled ? Color(hex: 0xf0b54a) : Color(hex: 0x292d2c))
-                    .frame(width: 6, height: 6)
-                    .overlay(Circle().stroke(Color.black.opacity(0.8), lineWidth: 0.7))
-                    .shadow(color: enabled ? Color(hex: 0xf0b54a).opacity(0.7) : .clear, radius: 2)
-                Text(title)
-                    .font(Theme.Font.mono(5.6, .semibold))
-                    .lineLimit(1)
-                    .padding(.horizontal, 4)
-                    .frame(minHeight: 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(enabled ? Color(hex: 0x51544f) : Color(hex: 0x282b29))
-                            .overlay(RoundedRectangle(cornerRadius: 2)
-                                .stroke(Color.white.opacity(enabled ? 0.28 : 0.12), lineWidth: 0.7))
-                    )
-            }
-            .foregroundStyle(enabled ? Color(hex: 0xf1eee4) : Color(hex: 0x8b8d87))
+            Text(title)
+                .font(Theme.Font.mono(5.8, .bold))
+                .lineLimit(1)
+                .padding(.horizontal, 5)
+                .frame(minWidth: 30, minHeight: 15)
+                .foregroundStyle(enabled ? Color(hex: 0x181b1a) : Color(hex: 0x92958f))
+                .background(
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(enabled ? Color(hex: 0xf0b54a) : Color(hex: 0x282b29))
+                        .overlay(RoundedRectangle(cornerRadius: 2)
+                            .stroke(Color.white.opacity(enabled ? 0.34 : 0.12), lineWidth: 0.7))
+                        .shadow(color: enabled ? Color(hex: 0xf0b54a).opacity(0.45)
+                                              : .clear, radius: 2)
+                )
         }
         .buttonStyle(.plain)
-    }
-
-    private var compressorGainReductionMeter: some View {
-        gainReductionMeter(track.consoleCompGainReductionDb, title: "GR dB")
+        .consoleLayoutItem("switch.\(parameter)\(layoutKeySuffix)")
     }
 
     private func gainReductionMeter(_ value: Float, title: String) -> some View {
@@ -1010,17 +1172,43 @@ struct ChannelStrip: View {
         }
     }
 
+    /// A permanent channel-level GR lane directly below the automation mode and
+    /// above the output meter. Keeping it outside the compressor panel makes every
+    /// strip line up and frees the processor panel from metering height.
+    private var channelGainReductionMeter: some View {
+        let amount = CGFloat(max(0, min(20, track.consoleCompGainReductionDb)) / 20)
+        return HStack(spacing: 3) {
+            Text("GR")
+                .font(Theme.Font.mono(5.5, .bold))
+                .foregroundStyle(track.consoleCompEnabled
+                                 ? Theme.Palette.amber : Theme.Palette.textFainter)
+                .frame(width: 12, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .trailing) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Theme.Palette.recess)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(LinearGradient(colors: [Theme.Palette.amber,
+                                                     Theme.Palette.red],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: proxy.size.width * amount)
+                }
+            }
+            .frame(height: 4)
+            Text(String(format: "%.1f", track.consoleCompGainReductionDb))
+                .font(Theme.Font.mono(5.5, .semibold))
+                .foregroundStyle(Theme.Palette.textNumeric)
+                .frame(width: 19, alignment: .trailing)
+        }
+        .frame(height: 8)
+        .opacity(track.consoleCompEnabled || track.consoleCompGainReductionDb > 0.05 ? 1 : 0.42)
+        .helpTip("채널 컴프레서 게인 리덕션")
+    }
+
     private var consoleFilterSection: some View {
         VStack(spacing: 3) {
-            HStack {
-                Text("FILTERS")
-                    .font(Theme.Font.mono(6.5, .bold))
-                    .foregroundStyle(Theme.Palette.textDim)
-                Spacer(minLength: 0)
-                Text("4000E")
-                    .font(Theme.Font.mono(6, .semibold))
-                    .foregroundStyle(accent)
-            }
+            consoleModuleHeader("FILTERS", parameter: "filterEnabled",
+                                enabled: track.consoleFilterEnabled)
             HStack(alignment: .top, spacing: 8) {
                 filterControl(title: "LOW CUT",
                               parameter: "highPassHz",
@@ -1040,6 +1228,7 @@ struct ChannelStrip: View {
                               unit: "kHz",
                               display: { String(format: "%.1f", $0 / 1000) })
             }
+            consoleModelPicker
             circuitModeSwitch(parameter: "filterCircuitMode", enabled: track.consoleFilterCircuitMode)
         }
         .padding(4).background(consoleModuleBackground)
@@ -1078,51 +1267,43 @@ struct ChannelStrip: View {
 
     private var consoleGateSection: some View {
         VStack(spacing: 3) {
-            HStack {
-                Text("GATE / EXPANDER")
-                    .font(Theme.Font.mono(6.5, .bold))
-                    .foregroundStyle(Theme.Palette.textDim)
-                Spacer(minLength: 0)
-                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
-            }
+            consoleModuleHeader("GATE / EXPANDER", parameter: "gateEnabled",
+                                enabled: track.consoleGateEnabled)
             HStack(alignment: .center, spacing: 5) {
                 compressorKnob("RANGE", parameter: "gateRangeDb", range: 0...40,
-                               defaultValue: 20, display: { String(format: "%.0f dB", $0) })
+                               defaultValue: 20, unit: "dB",
+                               display: { String(format: "%.0f", $0) })
                 Spacer(minLength: 0)
-                compressorKnob("THRESH", parameter: "gateThresholdDb", range: -60...0,
-                               defaultValue: -36, display: { String(format: "%.0f dB", $0) })
+                compressorKnob("THR", parameter: "gateThresholdDb", range: -60...0,
+                               defaultValue: -36, unit: "dB",
+                               display: { String(format: "%.0f", $0) })
             }
             HStack(alignment: .center, spacing: 5) {
-                compressorKnob("RELEASE", parameter: "gateReleaseMs", range: 40...1500,
-                               defaultValue: 360, display: {
-                                   $0 >= 1000 ? String(format: "%.1fs", $0 / 1000) : String(format: "%.0fms", $0)
-                               })
+                compressorKnob("REL", parameter: "gateReleaseMs", range: 40...1500,
+                               defaultValue: 360, unit: "ms",
+                               display: { String(format: "%.0f", $0) })
                 Spacer(minLength: 0)
                 compressorKnob("HOLD", parameter: "gateHoldMs", range: 0...800,
-                               defaultValue: 0, display: { String(format: "%.0fms", $0) })
+                               defaultValue: 0, unit: "ms",
+                               display: { String(format: "%.0f", $0) })
             }
             HStack(alignment: .center, spacing: 5) {
                 compressorSwitch("EXPAND", parameter: "expanderMode",
                                  enabled: track.consoleExpanderMode)
                 Spacer(minLength: 0)
-                compressorSwitch("FAST ATTK", parameter: "gateFastAttack",
+                compressorSwitch(track.consoleGateFastAttack ? "FAST" : "SLOW",
+                                 parameter: "gateFastAttack",
                                  enabled: track.consoleGateFastAttack)
             }
             HStack(alignment: .center, spacing: 5) {
-                compressorSwitch("GATE", parameter: "gateEnabled",
-                                 enabled: track.consoleGateEnabled)
+                Text(track.consoleExpanderMode ? "EXPANDER" : "GATE")
+                    .font(Theme.Font.mono(6.5, .bold))
+                    .foregroundStyle(track.consoleGateEnabled
+                                     ? Theme.Palette.textBright : Theme.Palette.textFaint)
                 Spacer(minLength: 0)
                 gainReductionMeter(track.consoleGateGainReductionDb, title: "GR dB")
             }
-            HStack(spacing: 3) {
-                Text("TYPE").font(Theme.Font.mono(6, .semibold))
-                Spacer(minLength: 0)
-                Menu("SSL 4000E") { Button("SSL 4000E") {} }
-                    .font(Theme.Font.mono(6.2, .semibold))
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-            }
-            .foregroundStyle(Theme.Palette.textFaint)
+            consoleModelPicker
             circuitModeSwitch(parameter: "gateCircuitMode", enabled: track.consoleGateCircuitMode)
         }
         .padding(4).background(consoleModuleBackground)
@@ -1134,80 +1315,83 @@ struct ChannelStrip: View {
         let lmf = Color(hex: 0x36a6b8)
         let lf = Color(hex: 0x242426)
         let pointer = Color(hex: 0xf2eee5)
-        return VStack(spacing: 4) {
-            HStack {
-                Text("EQUALISER")
-                    .font(Theme.Font.mono(6.5, .bold))
-                    .foregroundStyle(Theme.Palette.textDim)
-                Spacer(minLength: 0)
-                Button { engine.setConsoleBool(track.id, "eqEnabled", !track.consoleEqEnabled) } label: {
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(track.consoleEqEnabled ? Theme.Palette.red : Theme.Palette.recess)
-                            .frame(width: 7, height: 7)
-                            .overlay(Circle().stroke(Theme.Palette.coolDividerBright, lineWidth: 1))
-                        Text("4000E")
-                    }
-                    .font(Theme.Font.mono(6, .semibold))
-                    .foregroundStyle(track.consoleEqEnabled ? Theme.Palette.textBright : accent)
-                }
-                .buttonStyle(.plain)
-            }
+        return VStack(spacing: 2) {
+            consoleModuleHeader("EQUALISER", parameter: "eqEnabled",
+                                enabled: track.consoleEqEnabled)
 
-            HStack(alignment: .center, spacing: 8) {
-                compressorKnob("HF GAIN", parameter: "eqHfGainDb", range: -18...18,
-                               defaultValue: 0, tint: pointer, faceTint: hf,
-                               display: { String(format: "%+.0f dB", $0) })
-                Spacer(minLength: 0)
-                VStack(spacing: 4) {
-                    compressorSwitch("BELL", parameter: "eqHfBell", enabled: track.consoleEqHfBell)
-                    compressorKnob("HF FREQ", parameter: "eqHfHz", range: 4000...16000,
-                                   defaultValue: 8000, tint: pointer, faceTint: hf,
-                                   display: { String(format: "%.1f kHz", $0 / 1000) })
+            HStack(alignment: .center, spacing: 2) {
+                compressorKnob("", parameter: "eqHfGainDb", range: -18...18,
+                               defaultValue: 0, unit: "dB", tint: pointer, faceTint: hf,
+                               display: { String(format: "%+.0f", $0) })
+                    .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    compactEqBandLabel("HF", color: hf)
+                    compressorKnob("", parameter: "eqHfHz", range: 4000...16000,
+                                   defaultValue: 8000, unit: "kHz", tint: pointer, faceTint: hf,
+                                   display: { String(format: "%.1f", $0 / 1000) })
+                    compressorSwitch("BELL", parameter: "eqHfBell",
+                                     enabled: track.consoleEqHfBell)
                 }
+                    .frame(maxWidth: .infinity)
             }
             eqSectionDivider(hf)
 
-            HStack(alignment: .top, spacing: 3) {
-                compressorKnob("HMF GAIN", parameter: "eqHmfGainDb", range: -18...18,
-                               defaultValue: 0, tint: pointer, faceTint: hmf,
-                               display: { String(format: "%+.0f dB", $0) })
-                compressorKnob("HMF FREQ", parameter: "eqHmfHz", range: 1200...7500,
-                               defaultValue: 3000, tint: pointer, faceTint: hmf,
-                               display: { String(format: "%.1f kHz", $0 / 1000) })
-                compressorKnob("HMF Q", parameter: "eqHmfQ", range: 0.2...10,
-                               defaultValue: 1, tint: pointer, faceTint: hmf,
-                               display: { String(format: "%.1f", $0) })
+            HStack(alignment: .center, spacing: 2) {
+                VStack(spacing: 2) {
+                    compressorKnob("", parameter: "eqHmfGainDb", range: -18...18,
+                                   defaultValue: 0, unit: "dB", tint: pointer, faceTint: hmf,
+                                   display: { String(format: "%+.0f", $0) })
+                    compressorKnob("", parameter: "eqHmfQ", range: 0.2...10,
+                                   defaultValue: 1, unit: "Q", tint: pointer, faceTint: hmf,
+                                   display: { String(format: "%.1f", $0) })
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    compactEqBandLabel("HMF", color: hmf)
+                    compressorKnob("", parameter: "eqHmfHz", range: 1200...7500,
+                                   defaultValue: 3000, unit: "kHz", tint: pointer, faceTint: hmf,
+                                   display: { String(format: "%.1f", $0 / 1000) })
+                }
+                    .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             eqSectionDivider(hmf)
 
-            HStack(alignment: .top, spacing: 3) {
-                compressorKnob("LMF GAIN", parameter: "eqLmfGainDb", range: -18...18,
-                               defaultValue: 0, tint: pointer, faceTint: lmf,
-                               display: { String(format: "%+.0f dB", $0) })
-                compressorKnob("LMF FREQ", parameter: "eqLmfHz", range: 400...2500,
-                               defaultValue: 1000, tint: pointer, faceTint: lmf,
-                               display: { String(format: "%.2f kHz", $0 / 1000) })
-                compressorKnob("LMF Q", parameter: "eqLmfQ", range: 0.2...10,
-                               defaultValue: 1, tint: pointer, faceTint: lmf,
-                               display: { String(format: "%.1f", $0) })
+            HStack(alignment: .center, spacing: 2) {
+                VStack(spacing: 2) {
+                    compressorKnob("", parameter: "eqLmfGainDb", range: -18...18,
+                                   defaultValue: 0, unit: "dB", tint: pointer, faceTint: lmf,
+                                   display: { String(format: "%+.0f", $0) })
+                    compressorKnob("", parameter: "eqLmfQ", range: 0.2...10,
+                                   defaultValue: 1, unit: "Q", tint: pointer, faceTint: lmf,
+                                   display: { String(format: "%.1f", $0) })
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    compactEqBandLabel("LMF", color: lmf)
+                    compressorKnob("", parameter: "eqLmfHz", range: 400...2500,
+                                   defaultValue: 1000, unit: "kHz", tint: pointer, faceTint: lmf,
+                                   display: { String(format: "%.2f", $0 / 1000) })
+                }
+                    .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             eqSectionDivider(lmf)
 
-            HStack(alignment: .center, spacing: 8) {
-                VStack(spacing: 3) {
-                    compressorKnob("LF FREQ", parameter: "eqLfHz", range: 90...450,
-                                   defaultValue: 200, tint: pointer, faceTint: lf,
-                                   display: { String(format: "%.0f Hz", $0) })
-                    compressorKnob("LF GAIN", parameter: "eqLfGainDb", range: -18...18,
-                                   defaultValue: 0, tint: pointer, faceTint: lf,
-                                   display: { String(format: "%+.0f dB", $0) })
+            HStack(alignment: .center, spacing: 2) {
+                compressorKnob("", parameter: "eqLfGainDb", range: -18...18,
+                               defaultValue: 0, unit: "dB", tint: pointer, faceTint: lf,
+                               display: { String(format: "%+.0f", $0) })
+                    .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    compactEqBandLabel("LF", color: Color(hex: 0x8d8d86))
+                    compressorKnob("", parameter: "eqLfHz", range: 90...450,
+                                   defaultValue: 200, unit: "Hz", tint: pointer, faceTint: lf,
+                                   display: { String(format: "%.0f", $0) })
+                    compressorSwitch("BELL", parameter: "eqLfBell",
+                                     enabled: track.consoleEqLfBell)
                 }
-                Spacer(minLength: 0)
-                compressorSwitch("BELL", parameter: "eqLfBell", enabled: track.consoleEqLfBell)
+                    .frame(maxWidth: .infinity)
             }
+            consoleModelPicker
             circuitModeSwitch(parameter: "eqCircuitMode", enabled: track.consoleEqCircuitMode)
         }
         .padding(4).background(consoleModuleBackground)
@@ -1220,27 +1404,44 @@ struct ChannelStrip: View {
             .frame(height: 1)
     }
 
+    private func eqBandHeader<Accessory: View>(_ title: String, color: Color,
+                                               @ViewBuilder accessory: () -> Accessory) -> some View {
+        HStack(spacing: 3) {
+            Capsule().fill(color).frame(width: 2, height: 7)
+            Text(title)
+                .font(Theme.Font.mono(6.5, .bold))
+                .foregroundStyle(color.opacity(0.95))
+            Spacer(minLength: 0)
+            accessory()
+        }
+        .frame(minHeight: 8)
+    }
+
+    private func compactEqBandLabel(_ title: String, color: Color) -> some View {
+        HStack(spacing: 2) {
+            Capsule().fill(color).frame(width: 2, height: 6)
+            Text(title)
+                .font(Theme.Font.mono(6, .bold))
+                .foregroundStyle(color.opacity(0.95))
+        }
+        .frame(height: 7)
+    }
+
     private var consoleSaturatorSection: some View {
         VStack(spacing: 4) {
-            HStack {
-                Text("SATURATOR")
-                    .font(Theme.Font.mono(6.5, .bold))
-                    .foregroundStyle(Theme.Palette.textDim)
-                Spacer(minLength: 0)
-                Text("4000E").font(Theme.Font.mono(6, .semibold)).foregroundStyle(accent)
-            }
+            consoleModuleHeader("SATURATOR", parameter: "saturatorEnabled",
+                                enabled: track.consoleSaturatorEnabled)
             HStack(spacing: 6) {
                 compressorKnob("DRIVE", parameter: "saturatorDriveDb", range: 0...24,
-                               defaultValue: 6, tint: Theme.Palette.amber,
-                               display: { String(format: "%.1f dB", $0) })
+                               defaultValue: 6, unit: "dB", tint: Theme.Palette.amber,
+                               display: { String(format: "%.1f", $0) })
                 Spacer(minLength: 0)
                 compressorKnob("MIX", parameter: "saturatorMix", range: 0...1,
-                               defaultValue: 1, tint: Theme.Palette.amber,
-                               display: { String(format: "%.0f%%", $0 * 100) })
+                               defaultValue: 1, unit: "%", tint: Theme.Palette.amber,
+                               display: { String(format: "%.0f", $0 * 100) })
                 Spacer(minLength: 0)
-                compressorSwitch("SAT IN", parameter: "saturatorEnabled",
-                                 enabled: track.consoleSaturatorEnabled)
             }
+            consoleModelPicker
             circuitModeSwitch(parameter: "saturatorCircuitMode",
                               enabled: track.consoleSaturatorCircuitMode)
         }
@@ -1249,8 +1450,17 @@ struct ChannelStrip: View {
 
     private func circuitModeSwitch(parameter: String, enabled: Bool) -> some View {
         HStack(spacing: 5) {
-            Text("MODE").font(Theme.Font.mono(5.8, .semibold))
             Spacer(minLength: 0)
+            Button { engine.setConsoleBool(track.id, "dualMono", !track.consoleDualMono) } label: {
+                Image(systemName: "rectangle.split.2x1")
+                    .font(.system(size: 9, weight: track.consoleDualMono ? .bold : .regular))
+                    .foregroundStyle(track.consoleDualMono ? Color(hex: 0x5bb6df)
+                                                           : Theme.Palette.textFaint)
+                    .frame(width: 14, height: 13)
+            }
+            .helpTip(track.consoleDualMono
+                     ? "듀얼 모노 — 좌우 채널의 다이내믹 검출을 독립 처리합니다."
+                     : "스테레오 링크 — 좌우 채널을 함께 검출합니다.")
             Button { engine.setConsoleBool(track.id, parameter, false) } label: {
                 Image(systemName: "waveform.path")
                     .font(.system(size: 9, weight: !enabled ? .bold : .regular))
@@ -1268,6 +1478,7 @@ struct ChannelStrip: View {
         }
         .font(Theme.Font.mono(5.8, .semibold))
         .buttonStyle(.plain)
+        .padding(.trailing, 2)
     }
 
     private func consoleEqBand<Content: View>(_ title: String,
@@ -1289,24 +1500,11 @@ struct ChannelStrip: View {
 
     private var consoleModuleBackground: some View {
         RoundedRectangle(cornerRadius: 5)
-            .fill(
-                LinearGradient(colors: [
-                    Color(hex: 0x252a2a),
-                    Color(hex: 0x171b1b),
-                    Color(hex: 0x202423)
-                ], startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color(hex: 0xb6a978).opacity(0.42))
-                    .frame(width: 1)
-                    .padding(.vertical, 5)
-            }
+            .fill(Color(hex: 0x151f27))
             .overlay(
                 RoundedRectangle(cornerRadius: 5)
-                    .stroke(Color(hex: 0x77776f).opacity(0.52), lineWidth: 0.8)
+                    .stroke(Color(hex: 0x697784).opacity(0.62), lineWidth: 0.8)
             )
-            .shadow(color: .black.opacity(0.5), radius: 1.5, x: 0, y: 1)
     }
 
     /// A corner toggle — click to switch this channel (and the whole mixer selection)

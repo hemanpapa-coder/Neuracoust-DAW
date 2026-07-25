@@ -86,6 +86,9 @@ struct ConsoleChannelState {
     bool compEnabled = false;
     bool gateEnabled = false;
     bool saturatorEnabled = false;
+    /// Linked stereo when false; independent L/R dynamics detectors when true.
+    /// EQ/filter/saturation already maintain independent channel signal paths.
+    bool dualMono = false;
     bool filterCircuitMode = false;
     bool eqCircuitMode = false;
     bool compCircuitMode = false;

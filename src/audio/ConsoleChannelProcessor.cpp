@@ -73,8 +73,8 @@ void ConsoleChannelProcessor::Biquad::lowPass(double sr, float hz) {
 void ConsoleChannelProcessor::reset(double sr) {
     sampleRate_ = sr;
     for (auto& channel : eq_) for (auto& band : channel) band.clear();
-    compDetector_ = gateDetector_ = compGainDb_ = gateGainDb_ = 0;
-    gateHold_ = 0;
+    compDetector_.fill(0); gateDetector_.fill(0);
+    compGainDb_.fill(0); gateGainDb_.fill(0); gateHold_.fill(0);
 }
 
 void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio,
@@ -128,35 +128,51 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 if (p.eqCircuitMode) { l=circuitStage(l,0.55f); r=circuitStage(r,0.55f); }
             } else if (module=="comp" && p.compEnabled) {
                 const float dryL = l, dryR = r;
-                const float d=std::max(std::abs(l),std::abs(r));
-                if (p.compPeakMode) {
-                    // Peak mode follows transients directly; the normal SSL-style detector
-                    // uses a short RMS window for a rounder, program-dependent response.
-                    compDetector_ = d;
-                } else {
-                    compDetector_=d*d+cDet*(compDetector_-d*d);
-                }
-                const float detectorLevel = p.compPeakMode
-                    ? compDetector_ : std::sqrt(std::max(0.0f,compDetector_));
-                const float over=std::max(0.0f,gainToDb(detectorLevel)-p.compThresholdDb);
-                const float target=-over*(1.0f-1.0f/clamp(p.compRatio,1.0f,20.0f));
-                const float c=target<compGainDb_?cAtk:cRel; compGainDb_=target+c*(compGainDb_-target);
-                const float g=dbToGain(compGainDb_);
                 const float mix=clamp(p.compMix,0.0f,1.0f);
-                l=dryL*(1.0f-mix)+(dryL*g)*mix;
-                r=dryR*(1.0f-mix)+(dryR*g)*mix;
+                const float linked = std::max(std::abs(l), std::abs(r));
+                const std::array<float, 2> detectorInput {
+                    p.dualMono ? std::abs(l) : linked,
+                    p.dualMono ? std::abs(r) : linked
+                };
+                std::array<float, 2> gain {};
+                for (size_t ch = 0; ch < 2; ++ch) {
+                    const float d = detectorInput[ch];
+                    if (p.compPeakMode) compDetector_[ch] = d;
+                    else compDetector_[ch] = d*d + cDet*(compDetector_[ch] - d*d);
+                    const float detectorLevel = p.compPeakMode
+                        ? compDetector_[ch] : std::sqrt(std::max(0.0f, compDetector_[ch]));
+                    const float over = std::max(0.0f, gainToDb(detectorLevel) - p.compThresholdDb);
+                    const float target = -over*(1.0f - 1.0f/clamp(p.compRatio, 1.0f, 20.0f));
+                    const float c = target < compGainDb_[ch] ? cAtk : cRel;
+                    compGainDb_[ch] = target + c*(compGainDb_[ch] - target);
+                    gain[ch] = dbToGain(compGainDb_[ch]);
+                }
+                l=dryL*(1.0f-mix)+(dryL*gain[0])*mix;
+                r=dryR*(1.0f-mix)+(dryR*gain[1])*mix;
                 if (p.compCircuitMode) { l=circuitStage(l,0.8f); r=circuitStage(r,0.8f); }
             } else if (module=="gate" && p.gateEnabled) {
-                const float d=std::max(std::abs(l),std::abs(r));
-                gateDetector_=d*d+gDet*(gateDetector_-d*d);
-                const float inDb=gainToDb(std::sqrt(std::max(0.0f,gateDetector_)));
-                if(inDb>=p.gateThresholdDb)gateHold_=holdSamples;else if(gateHold_>0)--gateHold_;
-                const float below=std::max(0.0f,p.gateThresholdDb-inDb);
-                float shape=clamp(below/24.0f,0.0f,1.0f);
-                if(!p.expanderMode)shape=below>4.0f?std::pow(shape,0.35f):0.0f;
-                const float target=gateHold_>0?0.0f:-clamp(p.gateRangeDb,0.0f,40.0f)*shape;
-                const float c=target>gateGainDb_?gAtk:gRel; gateGainDb_=target+c*(gateGainDb_-target);
-                const float g=dbToGain(gateGainDb_); l*=g; r*=g;
+                const float linked = std::max(std::abs(l), std::abs(r));
+                const std::array<float, 2> detectorInput {
+                    p.dualMono ? std::abs(l) : linked,
+                    p.dualMono ? std::abs(r) : linked
+                };
+                std::array<float, 2> gain {};
+                for (size_t ch = 0; ch < 2; ++ch) {
+                    const float d = detectorInput[ch];
+                    gateDetector_[ch] = d*d + gDet*(gateDetector_[ch] - d*d);
+                    const float inDb = gainToDb(std::sqrt(std::max(0.0f, gateDetector_[ch])));
+                    if (inDb >= p.gateThresholdDb) gateHold_[ch] = holdSamples;
+                    else if (gateHold_[ch] > 0) --gateHold_[ch];
+                    const float below = std::max(0.0f, p.gateThresholdDb - inDb);
+                    float shape = clamp(below/24.0f, 0.0f, 1.0f);
+                    if (!p.expanderMode) shape = below > 4.0f ? std::pow(shape, 0.35f) : 0.0f;
+                    const float target = gateHold_[ch] > 0
+                        ? 0.0f : -clamp(p.gateRangeDb, 0.0f, 40.0f)*shape;
+                    const float c = target > gateGainDb_[ch] ? gAtk : gRel;
+                    gateGainDb_[ch] = target + c*(gateGainDb_[ch] - target);
+                    gain[ch] = dbToGain(gateGainDb_[ch]);
+                }
+                l*=gain[0]; r*=gain[1];
                 if (p.gateCircuitMode) { l=circuitStage(l,0.4f); r=circuitStage(r,0.4f); }
             } else if (module=="saturator" && p.saturatorEnabled) {
                 const float dryL=l, dryR=r;

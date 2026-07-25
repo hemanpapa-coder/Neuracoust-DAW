@@ -16,8 +16,12 @@ public:
     void processInterleavedStereo(std::vector<float>& audio,
                                   const ConsoleChannelState& parameters,
                                   double sampleRate);
-    float compressorGainReductionDb() const { return std::max(0.0f, -compGainDb_); }
-    float gateGainReductionDb() const { return std::max(0.0f, -gateGainDb_); }
+    float compressorGainReductionDb() const {
+        return std::max({0.0f, -compGainDb_[0], -compGainDb_[1]});
+    }
+    float gateGainReductionDb() const {
+        return std::max({0.0f, -gateGainDb_[0], -gateGainDb_[1]});
+    }
 
 private:
     struct Biquad {
@@ -30,9 +34,11 @@ private:
         void clear() { z1 = z2 = 0; }
     };
     std::array<std::array<Biquad, 6>, 2> eq_;
-    float compDetector_ = 0, gateDetector_ = 0;
-    float compGainDb_ = 0, gateGainDb_ = 0;
-    int gateHold_ = 0;
+    std::array<float, 2> compDetector_ {0, 0};
+    std::array<float, 2> gateDetector_ {0, 0};
+    std::array<float, 2> compGainDb_ {0, 0};
+    std::array<float, 2> gateGainDb_ {0, 0};
+    std::array<int, 2> gateHold_ {0, 0};
     double sampleRate_ = 0;
 };
 

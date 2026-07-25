@@ -201,7 +201,7 @@ struct TransportBar: View {
                             Text("10초 링아웃").tag(10.0)
                         }
                     }
-                transportOptionButton("Return",
+                transportOptionButton("arrow.uturn.backward",
                                       selected: engine.stopBehavior == .returnToStart,
                                       tint: Theme.Palette.accent) {
                     engine.stopBehavior = engine.stopBehavior == .returnToStart ? .inPlace : .returnToStart
@@ -234,7 +234,7 @@ struct TransportBar: View {
                     Divider()
                     Button("프리/포스트롤 설정…") { engine.presentLoopRollSettings() }
                 } label: {
-                    transportOptionLabel(engine.loopEnabled ? "Loop" : "Normal",
+                    transportOptionLabel(engine.loopEnabled ? "repeat" : "arrow.forward",
                                          selected: engine.loopEnabled,
                                          tint: Theme.Palette.green)
                 }
@@ -270,11 +270,11 @@ struct TransportBar: View {
         }
     }
 
-    private var recordModeShortLabel: String {
+    private var recordModeShortLabel: String {   // now an SF Symbol name (icon-only shelf)
         switch engine.recordMode {
-        case .newTake: return "Take"
-        case .loop: return "Loop"
-        case .punch: return "Punch"
+        case .newTake: return "circle.fill"
+        case .loop: return "repeat"
+        case .punch: return "arrowtriangle.down.fill"
         }
     }
 
@@ -309,19 +309,19 @@ struct TransportBar: View {
         Text("펀치/루프 범위는 루프 구간을 사용합니다")
     }
 
-    private func transportOptionButton(_ title: String, selected: Bool, tint: Color,
+    private func transportOptionButton(_ systemImage: String, selected: Bool, tint: Color,
                                        action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            transportOptionLabel(title, selected: selected, tint: tint)
+            transportOptionLabel(systemImage, selected: selected, tint: tint)
         }
         .buttonStyle(.plain)
     }
 
-    private func transportOptionLabel(_ title: String, selected: Bool, tint: Color) -> some View {
-        Text(title)
-            .font(.system(size: 7.5, weight: .semibold))
+    /// The small mode shelf under the transport keys — icon-only (no text), the way the user asked.
+    private func transportOptionLabel(_ systemImage: String, selected: Bool, tint: Color) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 7.5, weight: .bold))
             .foregroundStyle(selected ? Color.black.opacity(0.82) : Theme.Palette.textFaint)
-            .lineLimit(1)
             .frame(width: 28, height: 11)
             .background(
                 RoundedRectangle(cornerRadius: 2.5)

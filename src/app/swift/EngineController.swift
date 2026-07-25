@@ -332,6 +332,7 @@ final class EngineController: ObservableObject {
         var consoleGateEnabled = false
         var consoleGateCircuitMode = false
         var consoleSaturatorEnabled = false
+        var consoleDualMono = false
         var consoleSaturatorCircuitMode = false
         var consoleExpanderMode = true
         var consoleGateFastAttack = false
@@ -1767,7 +1768,7 @@ final class EngineController: ObservableObject {
     // MARK: - Pitch editor (Melodyne note mode + Serato anchor time-map mode)
 
     enum PitchEditorMode: String, CaseIterable {
-        case melodyne = "멜로다인", anchor = "세라토 앵커"
+        case melodyne = "멜로다인", anchor = "타임 워프"
         // rawValue stays as the internal key (persisted); `title` is what the UI shows. The old
         // labels named other companies' products — a note-based pitch editor and an anchor-based
         // time-warp are what these actually are.
@@ -1785,6 +1786,8 @@ final class EngineController: ObservableObject {
     /// Every tool here is one the offline print actually performs — nothing is a placeholder.
     enum PitchEditTool: String, CaseIterable {
         case main = "메인"
+        case hand = "손"
+        case zoom = "돋보기"
         case pitch = "피치"
         case modulation = "모듈레이션"
         case drift = "드리프트"
@@ -1797,13 +1800,15 @@ final class EngineController: ObservableObject {
 
         /// Which toolbar button this tool lives under.
         enum Group: String, CaseIterable {
-            case main = "메인", pitch = "피치", formant = "포먼트"
+            case main = "메인", hand = "손", zoom = "돋보기", pitch = "피치", formant = "포먼트"
             case amplitude = "레벨", time = "타임", separate = "분리"
         }
 
         var group: Group {
             switch self {
             case .main: return .main
+            case .hand: return .hand
+            case .zoom: return .zoom
             case .pitch, .modulation, .drift: return .pitch
             case .formant: return .formant
             case .amplitude, .mute: return .amplitude
@@ -1815,6 +1820,8 @@ final class EngineController: ObservableObject {
         var symbol: String {
             switch self {
             case .main: return "arrow.up.and.down.and.arrow.left.and.right"
+            case .hand: return "hand.raised"
+            case .zoom: return "plus.magnifyingglass"
             case .pitch: return "music.note"
             case .modulation: return "waveform"
             case .drift: return "arrow.up.forward"
@@ -1831,15 +1838,17 @@ final class EngineController: ObservableObject {
         var hint: String {
             switch self {
             case .main: return "잡은 위치가 결정: 가운데=이동, 위아래=음정, 가장자리=길이"
-            case .pitch: return "위아래로 끌어 음정만 바꿉니다 (반음 스냅)"
-            case .modulation: return "위아래로 끌어 그 음의 비브라토를 깊게/얕게 (0 = 완전히 곧게)"
-            case .drift: return "위아래로 끌어 그 음의 느린 피치 이동(스쿱/처짐)을 키우거나 줄입니다"
-            case .formant: return "위아래로 끌어 음색(포먼트)만 옮깁니다 — 음정은 그대로"
-            case .amplitude: return "위아래로 끌어 그 음만 크게/작게 (±24 dB)"
-            case .mute: return "클릭해 그 음을 껐다 켭니다"
-            case .time: return "좌우로 끌어 위치를, 가장자리를 끌어 길이를 바꿉니다"
-            case .attack: return "좌우로 끌어 어택을 날카롭게/부드럽게 (1.0 = 원본 그대로)"
-            case .separate: return "더블클릭한 자리에서 음을 둘로 자릅니다"
+            case .hand: return "손 — 편집 없이 화면을 잡고 이동합니다. 위/아래로 끌면 음정 축, 좌우로 끌면 시간 축이 스크롤됩니다. ‘좌우’ 이동은 돋보기로 **가로 확대**한 상태에서만 움직일 여지가 생깁니다(확대 안 하면 클립 전체가 이미 보여 움직일 곳이 없음)."
+            case .zoom: return "돋보기 — 드래그로 상자를 그리면 그 영역이 화면을 가득 채우게 확대됩니다. 짧게 **클릭**하면 그 지점 기준 단계 확대, **⌥클릭**은 축소."
+            case .pitch: return "피치 — 노트를 위/아래로 끌어 음정을 바꿉니다. 스냅 모드가 ‘반음’이면 반음 격자, ‘스케일’이면 조(調)의 음, ‘끄기’면 연속으로 움직입니다. **여러 노트를 선택**하면 함께 이동합니다."
+            case .modulation: return "모듈레이션(비브라토) — 위로 끌면 그 음의 흔들림을 깊게, 아래로 끌면 얕게. 끝까지 내리면 완전히 곧은 음이 됩니다(원래 비브라토를 배율로 조절)."
+            case .drift: return "드리프트 — 음 안에서 느리게 미끄러지는 피치(스쿱·처짐)를 위/아래로 키우거나 줄입니다. 끝까지 내리면 드리프트 제거."
+            case .formant: return "포먼트 — 위/아래로 끌어 음색(성별·톤)만 옮깁니다. **음정은 그대로** 두어 음정을 바꿔도 치프멍크가 되지 않게 합니다."
+            case .amplitude: return "레벨 — 노트를 위/아래로 끌어 그 음만 크게/작게 합니다(±24 dB). **여러 노트를 선택**하면 함께 조절됩니다."
+            case .mute: return "음소거 — 노트를 클릭해 껐다 켭니다. 꺼도 위치는 그대로 보여 다시 켤 수 있습니다."
+            case .time: return "타임 — 노트 **가운데**를 좌우로 끌면 위치가, **가장자리**를 끌면 길이가 바뀝니다. 여러 노트를 선택하면 함께 이동합니다."
+            case .attack: return "어택 — 좌우로 끌어 음의 시작을 날카롭게/부드럽게. 1.0이 원본이며, 오른쪽이 더 날카롭습니다."
+            case .separate: return "가위(분리) — 노트를 **한 번 클릭**한 자리에서 둘로 자릅니다. 커서가 십자(절단점)로 바뀝니다."
             }
         }
     }
@@ -1908,6 +1917,15 @@ final class EngineController: ObservableObject {
     @Published var pitchEditorTimelineSync: Bool = true
     let pitchEditorClock = PlayheadClock()
     @Published private(set) var pitchNotes: [PitchNote] = []
+    /// Selected note indices in the pitch editor. Empty = act on the whole clip; non-empty = the
+    /// macros and batch drags act only on these (Melodyne-style multi-note editing).
+    @Published var selectedPitchNotes: Set<Int> = []
+    /// The note indices a macro should touch: the selection if any, else every note.
+    private var targetPitchNoteIndices: [Int] {
+        let all = Array(pitchNotes.indices)
+        if selectedPitchNotes.isEmpty { return all }
+        return selectedPitchNotes.filter { $0 >= 0 && $0 < pitchNotes.count }.sorted()
+    }
     private var pitchDetectionGeneration = 0
     @Published private(set) var pitchClipPeaks: [SIMD2<Float>] = []   // (min,max) per column, clip window
     // Percussive mode: transient index → its new (dragged) start time in seconds.
@@ -2057,6 +2075,9 @@ final class EngineController: ObservableObject {
 
     private func loadNotesFromCache() {
         guard let handle else { return }
+        // Note indices change on every (re)detection, so a stale selection would point at the wrong
+        // blobs — clear it whenever the note list is rebuilt.
+        selectedPitchNotes = []
         let count = Int(nc_clip_note_count(handle))
         var notes: [PitchNote] = []
         for i in 0..<count {
@@ -2214,12 +2235,110 @@ final class EngineController: ObservableObject {
         }
     }
 
-    /// Set a note's pitch offset (snapped to whole semitones for the Melodyne grid).
+    /// How a dragged note's pitch snaps. Off = continuous (draw any pitch), Chromatic = nearest
+    /// semitone, Scale = nearest degree of `musicalKey` (Melodyne's scale snap).
+    enum PitchSnapMode: String, CaseIterable, Identifiable {
+        case off = "끄기", chromatic = "반음", scale = "스케일"
+        var id: String { rawValue }
+    }
+    @Published var pitchSnapMode: PitchSnapMode = .chromatic
+
+    /// Pitch classes (0–11) allowed by `musicalKey`, e.g. "C" → C major, "Am" → A natural minor.
+    /// Falls back to the full chromatic set for anything unparseable.
+    var scalePitchClasses: Set<Int> {
+        let names = ["C": 0, "C#": 1, "DB": 1, "D": 2, "D#": 3, "EB": 3, "E": 4, "FB": 4,
+                     "F": 5, "F#": 6, "GB": 6, "G": 7, "G#": 8, "AB": 8, "A": 9, "A#": 10,
+                     "BB": 10, "B": 11, "CB": 11]
+        let raw = musicalKey.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return Set(0..<12) }
+        let isMinor = raw.lowercased().contains("m") && !raw.lowercased().contains("maj")
+        // Root = leading letter + optional accidental.
+        var root = String(raw.prefix(1)).uppercased()
+        if raw.count > 1, "#b♯♭".contains(raw[raw.index(raw.startIndex, offsetBy: 1)]) {
+            root += raw[raw.index(raw.startIndex, offsetBy: 1)] == "♯" ? "#"
+                  : raw[raw.index(raw.startIndex, offsetBy: 1)] == "♭" ? "b"
+                  : String(raw[raw.index(raw.startIndex, offsetBy: 1)])
+        }
+        guard let rootPc = names[root.uppercased()] else { return Set(0..<12) }
+        let major = [0, 2, 4, 5, 7, 9, 11], minor = [0, 2, 3, 5, 7, 8, 10]
+        return Set((isMinor ? minor : major).map { ($0 + rootPc) % 12 })
+    }
+
+    /// Snap an absolute MIDI pitch to the nearest member of `pitchClasses` (searching outward).
+    private func snapMidi(_ midi: Double, to pitchClasses: Set<Int>) -> Double {
+        if pitchClasses.count >= 12 { return midi.rounded() }
+        let base = Int(midi.rounded())
+        for d in 0...12 {
+            for cand in [base - d, base + d] where pitchClasses.contains(((cand % 12) + 12) % 12) {
+                return Double(cand)
+            }
+        }
+        return midi.rounded()
+    }
+
+    /// Apply the active snap mode to a raw dragged offset for a given note.
+    func snappedPitchOffset(noteIndex index: Int, rawSemitones raw: Double) -> Double {
+        guard index >= 0, index < pitchNotes.count else { return raw }
+        let detected = pitchNotes[index].detectedMidi
+        switch pitchSnapMode {
+        case .off:       return raw
+        case .chromatic: return (detected + raw).rounded() - detected
+        case .scale:     return snapMidi(detected + raw, to: scalePitchClasses) - detected
+        }
+    }
+
+    /// Set a note's pitch offset, snapped per `pitchSnapMode` (Melodyne grid / scale).
     func setPitchNoteOffset(_ index: Int, semitones: Double) {
         guard let handle, index >= 0, index < pitchNotes.count else { return }
-        let snapped = semitones.rounded()
+        let snapped = snappedPitchOffset(noteIndex: index, rawSemitones: semitones)
         nc_clip_note_set_offset(handle, Int32(index), snapped)
         pitchNotes[index].offsetSemitones = snapped
+    }
+
+    /// Melodyne "Correct Pitch" macro: move every note's centre toward the nearest scale degree
+    /// (or semitone, if no scale) by `intensity` (0 = no change, 1 = fully on the grid). One undo step.
+    func correctPitch(intensity: Double) {
+        guard let handle else { return }
+        let pcs = scalePitchClasses
+        let amount = max(0, min(1, intensity))
+        for i in targetPitchNoteIndices {
+            let target = snapMidi(pitchNotes[i].detectedMidi, to: pcs)
+            let corrected = (target - pitchNotes[i].detectedMidi) * amount
+            nc_clip_note_set_offset(handle, Int32(i), corrected)
+            pitchNotes[i].offsetSemitones = corrected
+        }
+        nc_history_record_gesture(handle, "피치 보정")
+    }
+
+    /// Melodyne "Quantize Time" macro: nudge every note's onset toward the nearest beat-grid line
+    /// (`subdivisionsPerBeat`: 1 = 1/4, 2 = 1/8, 4 = 1/16) by `intensity` (0…1). One undo step.
+    func quantizeNoteTime(intensity: Double, subdivisionsPerBeat: Int = 4) {
+        guard let handle else { return }
+        let step = (60.0 / Double(max(1, tempoBpm))) / Double(max(1, subdivisionsPerBeat))
+        let amount = max(0, min(1, intensity))
+        for i in targetPitchNoteIndices {
+            let n = pitchNotes[i]
+            let absStart = pitchEditorClipStartSeconds + n.startSeconds + n.timeOffsetSeconds
+            let target = (absStart / step).rounded() * step - pitchEditorClipStartSeconds - n.startSeconds
+            let moved = n.timeOffsetSeconds + (target - n.timeOffsetSeconds) * amount
+            let clamped = min(pitchEditorClipDuration - n.startSeconds - n.durationSeconds,
+                              max(-n.startSeconds, moved))
+            nc_clip_note_set_time_offset(handle, Int32(i), clamped)
+            pitchNotes[i].timeOffsetSeconds = clamped
+        }
+        nc_history_record_gesture(handle, "타임 퀀타이즈")
+    }
+
+    /// Shift the selected notes (or all, if none selected) by whole octaves — the common fix when
+    /// detection lands an octave off. One undo step.
+    func shiftPitchOctave(_ octaves: Int) {
+        guard let handle else { return }
+        for i in targetPitchNoteIndices {
+            let next = max(-24, min(24, pitchNotes[i].offsetSemitones + Double(octaves) * 12))
+            nc_clip_note_set_offset(handle, Int32(i), next)
+            pitchNotes[i].offsetSemitones = next
+        }
+        nc_history_record_gesture(handle, "옥타브 이동")
     }
 
     func setPitchNoteTimeOffset(_ index: Int, seconds: Double) {
@@ -2253,7 +2372,7 @@ final class EngineController: ObservableObject {
 
     func setPitchNoteFormant(_ index: Int, semitones: Double) {
         guard let handle, index >= 0, index < pitchNotes.count else { return }
-        let clamped = min(12.0, max(-12.0, semitones))
+        let clamped = min(24.0, max(-24.0, semitones))
         nc_clip_note_set_formant_semitones(handle, Int32(index), clamped)
         pitchNotes[index].formantSemitones = clamped
     }
@@ -2311,7 +2430,11 @@ final class EngineController: ObservableObject {
         guard let handle, let clipId = pitchEditorClipId else { return }
         var err = [CChar](repeating: 0, count: 256)
         if nc_clip_apply_note_edits(handle, clipId, &err, err.count) {
-            reloadClips(); refreshHistory(); closePitchEditor()
+            reloadClips(); refreshHistory()
+            // Keep the editor open on the freshly-baked clip instead of closing it, so the user can
+            // keep working. Re-detecting on the new audio shows the notes at their applied pitches
+            // (offsets folded in, back to 0) — the committed state, ready for the next edit.
+            openPitchEditor(clipId)
         } else {
             let m = String(cString: err); if !m.isEmpty { Diagnostics.shared.log("pitch edit: \(m)") }
         }
@@ -2384,6 +2507,12 @@ final class EngineController: ObservableObject {
                 if track.muted { return 0 }
             }
         }
+        // Post-fader: the summed output also passes the master fader, which this
+        // out-of-mixer preview would otherwise skip (leaving it louder than playback).
+        if let master = tracks.first(where: { $0.kind == .master }) {
+            db += master.volumeDb
+            if master.muted { return 0 }
+        }
         return max(0, min(1, powf(10, db / 20)))
     }
 
@@ -2453,6 +2582,9 @@ final class EngineController: ObservableObject {
     func previewPitchEdit() {
         guard let handle, let clipId = pitchEditorClipId else { return }
         pitchPreviewSound?.stop()
+        // Same rule as auditionPitchEvent: silence the engine's own playback so the
+        // untouched original doesn't sound over (and mask) the rendered preview.
+        setTransport(running: false)
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("neuracoust-preview-\(UUID().uuidString).wav")
         var err = [CChar](repeating: 0, count: 512)
         let ok: Bool
@@ -2483,10 +2615,15 @@ final class EngineController: ObservableObject {
         pitchPreviewPlayer?.stop(); pitchPreviewEngine?.stop()
         pitchPreviewPlayer = nil; pitchPreviewEngine = nil
         pitchPreviewSound?.stop()
+        auditionStopWork?.cancel()
+        // Always silence the engine's own playback before the rendered edit preview.
+        // If the transport is running, the engine keeps sounding the UNTOUCHED clip
+        // through the full mixer while this offline preview plays on top — the two
+        // sources sum (roughly +6 dB, "twice as loud") and the dominant original
+        // masks the edit, so a pitch move sounds like it did nothing. Stopping the
+        // transport unconditionally makes the preview the only thing sounding.
+        setTransport(running: false)
         if pitchEditorTimelineSync {
-            auditionStopWork?.cancel()
-            // Stop any original-project playback before the rendered edit preview.
-            setTransport(running: false)
             seek(pitchEditorClipStartSeconds + start)
         }
         guard let handle, let clipId = pitchEditorClipId else { return }
@@ -2497,6 +2634,9 @@ final class EngineController: ObservableObject {
             Diagnostics.shared.log("pitch audition render: \(String(cString: err))")
             return
         }
+        let editedCount = pitchNotes.filter { abs($0.offsetSemitones) > 0.001 }.count
+        Diagnostics.shared.log(String(format: "pitch audition: gain=%.3f, notes w/ pitch offset=%d/%d",
+                                       pitchPreviewGain, editedCount, pitchNotes.count))
         if !playPitchPreviewFile(tmp, start: start, duration: length) {
             // Last-resort fallback for machines where a second CoreAudio client cannot
             // open the selected interface.
@@ -3235,8 +3375,10 @@ final class EngineController: ObservableObject {
             option ? addInstrumentTrack() : addAudioTrack()
         case KeyCode.n:
             newProject()                        // ⌘N = New Session
-        case KeyCode.i where shift:
-            importAudio(intoTrack: 0)           // Pro Tools: ⌘⇧I = Import Audio
+        case KeyCode.i:
+            // Pro Tools binds Import Audio to ⌘⇧I; plain ⌘I was unbound and users reach
+            // for it, so both import (⌘I is free here — no Get Info / Italic to shadow).
+            importAudio(intoTrack: 0)
         case KeyCode.b where option:
             bounceProject()                     // Pro Tools: ⌘⌥B = Bounce to Disk
         case KeyCode.e:
@@ -3295,7 +3437,23 @@ final class EngineController: ObservableObject {
     private var playStartSeconds: Double = 0
 
     func togglePlay() {
-        setTransport(running: !transportRunning)
+        // A fade/range audition temporarily hijacks the loop range (loopEnabled + a short window)
+        // and only restores it in stopAudition(). If the user hits the spacebar to end or resume
+        // playback instead, that restore never runs and normal play loops the short audition
+        // window ("plays a tiny section over and over"). Restore the real loop first, using the
+        // pre-toggle running state so a spacebar press to STOP doesn't bounce back into play.
+        let wasRunning = transportRunning
+        if savedLoopForAudition != nil {
+            stopAudition()
+        }
+        // Melodyne-style auto-apply: starting playback commits any pending pitch edits to the clip
+        // first (the bake is synchronous, so the timeline then plays exactly what you just drew —
+        // no manual Apply needed). No edits pending → nothing happens, no wasted undo step.
+        if !wasRunning, pitchEditorClipId != nil, pitchEditorMode == .melodyne,
+           pitchNotes.contains(where: { $0.edited }) {
+            applyPitchEdits()
+        }
+        setTransport(running: !wasRunning)
     }
 
     func stop() {
@@ -3956,6 +4114,7 @@ final class EngineController: ObservableObject {
                 consoleGateEnabled: "gateEnabled".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleGateCircuitMode: "gateCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleSaturatorEnabled: "saturatorEnabled".withCString { nc_track_console_bool(handle, i, $0) },
+                consoleDualMono: "dualMono".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleSaturatorCircuitMode: "saturatorCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleExpanderMode: "expanderMode".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleGateFastAttack: "gateFastAttack".withCString { nc_track_console_bool(handle, i, $0) }
@@ -3999,7 +4158,11 @@ final class EngineController: ObservableObject {
     func setConsoleBool(_ id: Int, _ parameter: String, _ value: Bool) {
         guard let handle else { return }
         parameter.withCString { nc_track_set_console_bool(handle, Int32(id), $0, value) }
-        reloadTracks(); refreshHistory()
+        // A console switch changes one strip only. Reloading the entire mixer here
+        // invalidated every channel, recomputed aligned heights, and could make the
+        // mixer appear frozen while switching FLT/EQ/GAT/CMP/SAT.
+        syncTrack(id)
+        refreshHistory()
     }
 
     func setConsoleModuleOrder(_ id: Int, _ order: [String]) {
@@ -7092,6 +7255,45 @@ final class EngineController: ObservableObject {
         tracks[position].solo = nc_track_solo(handle, i)
         tracks[position].recordArmed = nc_track_record_armed(handle, i)
         tracks[position].inputMonitoring = nc_track_input_monitoring(handle, i)
+        // Console switches are also mutable per-track fields. Without re-reading
+        // them, a toggle reached the DSP but the button stayed visually stale and
+        // every subsequent click sent the same value again (notably Dual Mono).
+        tracks[position].consoleFilterEnabled =
+            "filterEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleFilterCircuitMode =
+            "filterCircuitMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleHighPassEnabled =
+            "highPassEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleLowPassEnabled =
+            "lowPassEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleEqEnabled =
+            "eqEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleEqCircuitMode =
+            "eqCircuitMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleEqHfBell =
+            "eqHfBell".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleEqLfBell =
+            "eqLfBell".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleCompEnabled =
+            "compEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleCompCircuitMode =
+            "compCircuitMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleCompFastAttack =
+            "compFastAttack".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleGateEnabled =
+            "gateEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleGateCircuitMode =
+            "gateCircuitMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleGateFastAttack =
+            "gateFastAttack".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleExpanderMode =
+            "expanderMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleSaturatorEnabled =
+            "saturatorEnabled".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleSaturatorCircuitMode =
+            "saturatorCircuitMode".withCString { nc_track_console_bool(handle, i, $0) }
+        tracks[position].consoleDualMono =
+            "dualMono".withCString { nc_track_console_bool(handle, i, $0) }
     }
 
     /// Meters arrive keyed by track name, so match on name, not position.
@@ -7705,11 +7907,12 @@ final class EngineController: ObservableObject {
     }
     /// Re-arm keypad capture at launch if it was on last time (and the permission still holds).
     func restoreKeypadCapture() {
-        keypadCaptureRequested = UserDefaults.standard.bool(forKey: "nc.keypadCaptureEnabled")
-        guard keypadCaptureRequested else { return }
-        if GlobalKeypadCapture.accessibilityTrusted(prompt: false) {
-            setKeypadCapture(true)
-        }
+        // SAFETY: the global keypad CGEventTap has repeatedly frozen system-wide keyboard input, so it
+        // is no longer auto-armed on launch — the app always starts with capture OFF. The user turns it
+        // on explicitly (monitor dock) only when they want it, and can turn it off the instant the
+        // freeze recurs. Do NOT re-arm from the persisted flag here.
+        keypadCaptureRequested = false
+        keypadCaptureEnabled = false
     }
     /// Release the global tap on quit so the keypad returns to the system.
     func releaseKeypadCapture() { keypadCapture.disable() }

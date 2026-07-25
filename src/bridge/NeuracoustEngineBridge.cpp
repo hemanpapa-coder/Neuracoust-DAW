@@ -1285,6 +1285,7 @@ bool nc_track_console_bool(NCEngine* engine, int index, const char* parameter) {
     if (p == "gateEnabled") return t->consoleChannel.gateEnabled;
     if (p == "gateCircuitMode") return t->consoleChannel.gateCircuitMode;
     if (p == "saturatorEnabled") return t->consoleChannel.saturatorEnabled;
+    if (p == "dualMono") return t->consoleChannel.dualMono;
     if (p == "saturatorCircuitMode") return t->consoleChannel.saturatorCircuitMode;
     if (p == "gateFastAttack") return t->consoleChannel.gateFastAttack;
     if (p == "expanderMode") return t->consoleChannel.expanderMode;
@@ -1331,6 +1332,7 @@ void nc_track_set_console_bool(NCEngine* engine, int index, const char* paramete
     else if(p=="compFastAttack")t->consoleChannel.compFastAttack=value; else if(p=="compPeakMode")t->consoleChannel.compPeakMode=value;
     else if(p=="gateEnabled")t->consoleChannel.gateEnabled=value; else if(p=="gateCircuitMode")t->consoleChannel.gateCircuitMode=value;
     else if(p=="saturatorEnabled")t->consoleChannel.saturatorEnabled=value;
+    else if(p=="dualMono")t->consoleChannel.dualMono=value;
     else if(p=="saturatorCircuitMode")t->consoleChannel.saturatorCircuitMode=value;
     else if(p=="expanderMode")t->consoleChannel.expanderMode=value;
     else if(p=="gateFastAttack")t->consoleChannel.gateFastAttack=value;
@@ -2780,7 +2782,7 @@ void nc_clip_note_set_muted(NCEngine* engine, int index, bool muted) {
     if (auto* n = mutableNoteAt(engine, index)) n->muted = muted;
 }
 void nc_clip_note_set_formant_semitones(NCEngine* engine, int index, double semitones) {
-    if (auto* n = mutableNoteAt(engine, index)) n->formantSemitones = std::clamp(semitones, -12.0, 12.0);
+    if (auto* n = mutableNoteAt(engine, index)) n->formantSemitones = std::clamp(semitones, -24.0, 24.0);
 }
 void nc_clip_note_set_attack_speed(NCEngine* engine, int index, double speed) {
     if (auto* n = mutableNoteAt(engine, index)) n->attackSpeed = std::clamp(speed, 0.25, 4.0);
@@ -3353,6 +3355,25 @@ bool nc_clip_export_note_edits(NCEngine* engine, const char* clipId, const char*
     }
     std::vector<float> rendered = neuracoust::daw::renderNoteEdits(window, channels, rate, engine->pitchEditNotes);
     if (rendered.empty()) { copyText(error, errorLen, "pitch edit produced no audio"); return false; }
+    // DIAGNOSTIC: did the render actually alter the audio of the first pitch-edited note?
+    // Sum of absolute differences over that note's region — near-zero means the render was a
+    // no-op there (render bug); large means the shift happened (look at audition/perception).
+    for (size_t ni = 0; ni < engine->pitchEditNotes.size(); ++ni) {
+        const auto& n = engine->pitchEditNotes[ni];
+        if (std::abs(n.pitchOffsetSemitones) < 0.01) continue;
+        const int64_t frames = static_cast<int64_t>(window.size()) / std::max(1, channels);
+        const int64_t s = std::max<int64_t>(0, std::llround(n.startSeconds * rate));
+        const int64_t e = std::min<int64_t>(frames, s + std::llround(n.durationSeconds * rate));
+        double sad = 0.0; int64_t cnt = 0;
+        for (int64_t i = s * channels; i < e * channels && i < static_cast<int64_t>(rendered.size()); ++i) {
+            sad += std::abs(static_cast<double>(rendered[static_cast<size_t>(i)]) - window[static_cast<size_t>(i)]);
+            ++cnt;
+        }
+        fprintf(stderr, "[pitch-render] note %zu offset=%.2fst region=[%.2f,%.2f]s meanAbsDiff=%.6f frames=%lld\n",
+                ni, n.pitchOffsetSemitones, n.startSeconds, n.startSeconds + n.durationSeconds,
+                cnt > 0 ? sad / cnt : 0.0, static_cast<long long>(cnt));
+        break;
+    }
     neuracoust::daw::WavAudioData out;
     out.channels = channels; out.sampleRate = rate; out.interleavedSamples = std::move(rendered);
     if (!neuracoust::daw::writePcm24WavFileAtomically(std::filesystem::path(outPath), out, err)) {

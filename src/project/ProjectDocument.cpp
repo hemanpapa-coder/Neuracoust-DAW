@@ -2108,6 +2108,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"consoleGateEnabled\":" << (track.consoleChannel.gateEnabled ? "true" : "false")
             << ",\"consoleGateCircuitMode\":" << (track.consoleChannel.gateCircuitMode ? "true" : "false")
             << ",\"consoleSaturatorEnabled\":" << (track.consoleChannel.saturatorEnabled ? "true" : "false")
+            << ",\"consoleDualMono\":" << (track.consoleChannel.dualMono ? "true" : "false")
             << ",\"consoleSaturatorCircuitMode\":" << (track.consoleChannel.saturatorCircuitMode ? "true" : "false")
             << ",\"consoleSaturatorDriveDb\":" << track.consoleChannel.saturatorDriveDb
             << ",\"consoleSaturatorMix\":" << track.consoleChannel.saturatorMix
@@ -2848,6 +2849,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.consoleChannel.gateEnabled = boolAfterKey(body, "consoleGateEnabled", false);
         track.consoleChannel.gateCircuitMode = boolAfterKey(body, "consoleGateCircuitMode", false);
         track.consoleChannel.saturatorEnabled = boolAfterKey(body, "consoleSaturatorEnabled", false);
+        track.consoleChannel.dualMono = boolAfterKey(body, "consoleDualMono", false);
         track.consoleChannel.saturatorCircuitMode = boolAfterKey(body, "consoleSaturatorCircuitMode", false);
         track.consoleChannel.saturatorDriveDb = finiteRange((float)numberAfterKey(body, "consoleSaturatorDriveDb", 6), 6.0f, 0.0f, 24.0f);
         track.consoleChannel.saturatorMix = finiteRange((float)numberAfterKey(body, "consoleSaturatorMix", 1), 1.0f, 0.0f, 1.0f);
