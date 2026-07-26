@@ -23,9 +23,10 @@ float saturate(float x, float drive, bool circuit) {
 }
 
 float ConsoleChannelProcessor::Biquad::process(float x) {
-    // Slide the live coefficients toward the target each sample (~15 ms), so a knob move
-    // never steps the filter — this is what removes the gain-move zipper.
-    constexpr float r = 0.0016f;
+    // Slide the live coefficients toward the target each sample. The time constant is longer
+    // than the UI update interval (~16 ms) on purpose, so consecutive knob updates blend into
+    // one continuous glide instead of a series of short ramps that read as steps.
+    constexpr float r = 0.00045f;   // ~50 ms settle at 48 kHz
     b0 += r * (tb0 - b0); b1 += r * (tb1 - b1); b2 += r * (tb2 - b2);
     a1 += r * (ta1 - a1); a2 += r * (ta2 - a2);
     const float y = b0 * x + z1;

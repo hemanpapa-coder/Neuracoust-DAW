@@ -3454,6 +3454,11 @@ final class EngineController: ObservableObject {
             applyPitchEdits()
         }
         setTransport(running: !wasRunning)
+        // The spacebar toggle must honor the stop mode too — not just the Stop button — so
+        // play → space (stop) → space (play) resumes from where playback began.
+        if wasRunning, stopBehavior == .returnToStart {
+            seek(playStartSeconds)
+        }
     }
 
     func stop() {
