@@ -29,7 +29,10 @@ private struct KnobScrollWheel: NSViewRepresentable {
                 guard let self, self.active, let win = self.window, event.window === win else { return event }
                 if event.momentumPhase != [] { return nil }   // ignore inertial coast (would overshoot)
                 let precise = event.hasPreciseScrollingDeltas
-                let dy = precise ? event.scrollingDeltaY : event.deltaY
+                let raw = precise ? event.scrollingDeltaY : event.deltaY
+                // Normalize to the physical wheel: up = positive = increase = clockwise, regardless
+                // of the system's natural-scroll setting.
+                let dy = event.isDirectionInvertedFromDevice ? -raw : raw
                 if dy != 0 { self.onScroll?(dy, precise); return nil }
                 return event
             }
@@ -384,6 +387,63 @@ private struct EqGraphView: View {
     }
 }
 
+// The compressor's parallel-MIX bar: a horizontal fader driven by the actual bar width (so drag
+// tracks the cursor exactly), a live drag state (smooth), and wheel support.
+private struct MixBar: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    @State private var live: Float?
+    @State private var hovering = false
+    @State private var accum: CGFloat = 0
+    @State private var commit: DispatchWorkItem?
+
+    private func scheduleCommit() {
+        commit?.cancel()
+        let w = DispatchWorkItem { engine.recordGesture("4000E compMix"); live = nil }
+        commit = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
+    }
+    private func wheel(_ delta: CGFloat, _ precise: Bool) {
+        var n = 0
+        if precise {
+            if accum != 0 && (delta > 0) != (accum > 0) { accum = 0 }
+            accum += delta
+            if abs(accum) >= 25 { n = accum > 0 ? 1 : -1; accum -= CGFloat(n) * 25 }
+        } else { n = delta > 0 ? 1 : -1 }
+        guard n != 0 else { return }
+        let base = live ?? engine.consoleValue(trackId, "compMix")
+        let v = min(1, max(0, base + Float(n) * 0.02))   // 2% per notch
+        live = v; engine.setConsoleValue(trackId, "compMix", v); scheduleCommit()
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            GeometryReader { g in
+                let value = live ?? engine.consoleValue(trackId, "compMix")
+                let w = g.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color(hex: 0x0a1410))
+                    RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x54e08a).opacity(0.35))
+                        .frame(width: w * CGFloat(max(0, min(1, value))))
+                    Text(String(format: "%.0f%%", value * 100)).font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0x7dffb4)).frame(width: w)
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { d in
+                    let v = Float(max(0, min(1, d.location.x / max(1, w))))
+                    live = v; engine.setConsoleValue(trackId, "compMix", v)
+                }.onEnded { _ in engine.recordGesture("4000E compMix"); live = nil })
+                .overlay(KnobScrollWheel(active: hovering) { dy, p in wheel(dy, p) }.frame(width: 0, height: 0))
+                .onHover { hovering = $0 }
+            }
+            .frame(height: 22)
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(.black, lineWidth: 1))
+            Text("MIX").font(.system(size: 13, weight: .bold)).tracking(1.2).foregroundStyle(Color(hex: 0xe6dfd0))
+        }
+        .padding(.horizontal, 10).frame(height: 30)
+    }
+}
+
 // MARK: - Module chrome
 
 private struct ConsoleModuleChrome<Content: View>: View {
@@ -604,27 +664,7 @@ struct NeuracoustConsoleModulesView: View {
     private var compress: some View {
         ConsoleModuleChrome(title: "COMPRESS", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             VStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    let mix = engine.consoleValue(trackId, "compMix")
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 3).fill(Color(hex: 0x0a1410))
-                        GeometryReader { g in
-                            RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x54e08a).opacity(0.3))
-                                .frame(width: g.size.width * CGFloat(mix))
-                        }
-                        Text(String(format: "%.0f%%", mix * 100)).font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Color(hex: 0x7dffb4)).frame(maxWidth: .infinity)
-                    }
-                    .frame(height: 22).overlay(RoundedRectangle(cornerRadius: 3).stroke(.black, lineWidth: 1))
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0).onChanged { d in
-                        let w = max(1, width == 205 ? 150 : (width - 55))   // approx bar width; fine for control feel
-                        let v = Float(max(0, min(1, d.location.x / w)))
-                        engine.setConsoleValue(trackId, "compMix", v)
-                    }.onEnded { _ in engine.recordGesture("4000E compMix") })
-                    Text("MIX").font(.system(size: 13, weight: .bold)).tracking(1.2).foregroundStyle(Color(hex: 0xe6dfd0))
-                }
-                .padding(.horizontal, 10).frame(height: 30)
+                MixBar(engine: engine, trackId: trackId)
 
                 let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
