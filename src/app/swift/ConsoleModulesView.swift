@@ -609,8 +609,9 @@ struct NeuracoustConsoleModulesView: View {
              centerFormat: Self.freqLabel, wheelLog: true, logScale: true)   // log pointer + semitone wheel
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
+        // Reversed: turning toward the wide-bell side lowers Q, narrow side raises it (SSL feel).
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
-             diameter: 73, markFont: 15, unitFont: 15, centerFormat: Self.qLabel, wheelStep: 0.4)
+             diameter: 73, markFont: 15, unitFont: 15, centerFormat: Self.qLabel, wheelStep: 0.4, reverse: true)
     }
 
     // Shared big knob for the non-EQ 4000E modules: end labels, live value on the face, name below.
