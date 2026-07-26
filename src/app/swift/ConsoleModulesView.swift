@@ -32,6 +32,9 @@ private struct ConsoleKnob: View {
     var markFont: CGFloat = 7
     var unitFont: CGFloat = 6.5
     var unitAtZero: Bool = false        // draw the unit in place of the "0" mark instead of at the bottom
+    var dotDiameter: CGFloat = 0        // "·" marks render as a filled circle of this size (0 = as text)
+    var dotGap: CGFloat = 2             // gap from the knob rim to a dot mark
+    var dimpleSize: CGFloat = 8         // pointer dimple outer diameter (inner = half)
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
@@ -68,9 +71,9 @@ private struct ConsoleKnob: View {
             // Carved dimple pointer.
             Circle()
                 .fill(Color.black.opacity(0.55))
-                .overlay(Circle().fill(color.dot).frame(width: 4, height: 4))
-                .frame(width: 8, height: 8)
-                .offset(y: -(diameter / 2 - 9))
+                .overlay(Circle().fill(color.dot).frame(width: dimpleSize / 2, height: dimpleSize / 2))
+                .frame(width: dimpleSize, height: dimpleSize)
+                .offset(y: -(diameter / 2 - dimpleSize / 2 - 4))
                 .rotationEffect(.degrees(valueDeg))
         }
         .frame(width: diameter + markRadius * 2 + 12, height: diameter + markRadius * 2 + 10)
@@ -94,10 +97,21 @@ private struct ConsoleKnob: View {
         GeometryReader { geo in
             let cx = geo.size.width / 2, cy = geo.size.height / 2
             let r = diameter / 2 + markRadius
+            let dotR = diameter / 2 + dotGap + dotDiameter / 2
             ForEach(Array(marks.enumerated()), id: \.offset) { i, label in
                 let t = marks.count > 1 ? Double(i) / Double(marks.count - 1) : 0.5
                 let a = (markStart + (markEnd - markStart) * t) * .pi / 180
-                if unitAtZero && label == "0" {
+                if label == "·" && dotDiameter > 0 {
+                    Circle()
+                        .fill(Color(hex: 0xb9b3a6))
+                        .frame(width: dotDiameter, height: dotDiameter)
+                        .position(x: cx + dotR * sin(a), y: cy - dotR * cos(a))
+                } else if label == "QN" || label == "QW" {
+                    QCurveIcon(wide: label == "QW")
+                        .stroke(Color(hex: 0xb9b3a6), style: StrokeStyle(lineWidth: 1.2, lineJoin: .round))
+                        .frame(width: 16, height: 10)
+                        .position(x: cx + r * sin(a), y: cy - r * cos(a))
+                } else if unitAtZero && label == "0" {
                     Text(unit)
                         .font(.system(size: markFont, design: .monospaced))
                         .foregroundStyle(Color(hex: 0xd8d2c4))
@@ -116,6 +130,26 @@ private struct ConsoleKnob: View {
                     .position(x: cx, y: geo.size.height - 3)
             }
         }
+    }
+}
+
+// A small bell curve — narrow (high Q) or wide (low Q) — drawn beside the Q knob.
+private struct QCurveIcon: Shape {
+    var wide: Bool
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let w = rect.width, h = rect.height, base = rect.maxY, mid = rect.midX
+        let width = wide ? w * 0.42 : w * 0.16
+        let steps = 20
+        p.move(to: CGPoint(x: rect.minX, y: base))
+        for i in 0...steps {
+            let x = w * CGFloat(i) / CGFloat(steps)
+            let dx = (x - mid) / width
+            let y = base - h * CGFloat(exp(-Double(dx * dx)))
+            p.addLine(to: CGPoint(x: x, y: y))
+        }
+        p.addLine(to: CGPoint(x: rect.maxX, y: base))
+        return p
     }
 }
 
@@ -188,7 +222,6 @@ struct NeuracoustConsoleModulesView: View {
     let inOn: Bool
     let onToggleIn: () -> Void
 
-    private let dbMarks = ["-15", "12", "9", "6", "3", "0", "3", "6", "9", "12", "+15"]
     // Gain knobs: dots for the steps, "-"/"+" at the extremes, "0" at unity.
     private let dbDotMarks = ["–", "·", "·", "·", "·", "0", "·", "·", "·", "·", "+"]
 
@@ -223,10 +256,11 @@ struct NeuracoustConsoleModulesView: View {
     private func knob(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
                       _ color: ConsoleKnobColor, marks: [String], unit: String, markRadius: CGFloat = 12,
                       diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5,
-                      unitAtZero: Bool = false) -> some View {
+                      unitAtZero: Bool = false, dotDiameter: CGFloat = 0, dimpleSize: CGFloat = 8) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
                     diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero,
+                    dotDiameter: dotDiameter, dimpleSize: dimpleSize,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -251,25 +285,41 @@ struct NeuracoustConsoleModulesView: View {
 
     private var equaliser: some View {
         ConsoleModuleChrome(title: "EQUALISER", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
-            // EQ knobs 20% larger, mark labels +4pt, and the two columns pulled closer together.
-            let d: CGFloat = 60, mf: CGFloat = 12, uf: CGFloat = 12, lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 100
+            // Gain: dot scale (dots 3×, 2pt off the knob) with -/0/+ text and a 2× dimple.
+            // Freq: only the two end numbers, the rest dots. Q: narrow/wide bell icons + dots.
+            let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 100
             ZStack {
                 eqSpine
-                placed(lx, 52, knob("eqHfGainDb", -18...18, 0, .red, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
-                placed(rx, 86, knob("eqHfHz", 4000...16000, 8000, .red, marks: ["1.5", "3", "5", "8", "10", "14", "16"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 138, knob("eqHmfGainDb", -18...18, 0, .green, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
-                placed(rx, 172, knob("eqHmfHz", 1200...7500, 3000, .green, marks: [".6", "1", "2", "3", "4", "5", "7"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 224, knob("eqHmfQ", 0.2...10, 1, .green, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(rx, 258, knob("eqLmfQ", 0.2...10, 1, .blue, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 310, knob("eqLmfGainDb", -18...18, 0, .blue, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
-                placed(rx, 344, knob("eqLmfHz", 400...2500, 1000, .blue, marks: [".4", ".8", "1", "1.5", "2.5"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 396, knob("eqLfGainDb", -18...18, 0, .brown, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
-                placed(rx, 430, knob("eqLfHz", 90...450, 200, .brown, marks: ["30", "50", "100", "200", "300", "400", "450"], unit: "Hz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
+                placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "·", "·", "·", "·", "·", "16"], "kHz"), size: sz)
+                placed(lx, 138, eqGain("eqHmfGainDb", .green), size: sz)
+                placed(rx, 172, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "·", "·", "·", "·", "·", "7"], "kHz"), size: sz)
+                placed(lx, 224, eqQ("eqHmfQ", .green), size: sz)
+                placed(rx, 258, eqQ("eqLmfQ", .blue), size: sz)
+                placed(lx, 310, eqGain("eqLmfGainDb", .blue), size: sz)
+                placed(rx, 344, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "·", "·", "·", "2.5"], "kHz"), size: sz)
+                placed(lx, 396, eqGain("eqLfGainDb", .brown), size: sz)
+                placed(rx, 430, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "·", "·", "·", "·", "·", "450"], "Hz"), size: sz)
                 bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 461)
             }
             .frame(height: 490)
         }
+    }
+
+    // EQ knob categories. Shared: 60pt body, 14pt labels, 5pt dots 2pt off the rim.
+    private func eqGain(_ param: String, _ color: ConsoleKnobColor) -> some View {
+        knob(param, -18...18, 0, color, marks: dbDotMarks, unit: "",
+             diameter: 60, markFont: 14, dotDiameter: 5, dimpleSize: 16)
+    }
+    private func eqFreq(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
+                        _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
+        knob(param, range, def, color, marks: marks, unit: unit,
+             diameter: 60, markFont: 14, unitFont: 14, dotDiameter: 5)
+    }
+    private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
+        knob(param, 0.2...10, 1, color, marks: ["QN", "·", "·", "·", "QW"], unit: "Q",
+             diameter: 60, markFont: 14, unitFont: 14, dotDiameter: 5)
     }
 
     private var eqSpine: some View {
