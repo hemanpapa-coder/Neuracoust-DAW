@@ -31,6 +31,7 @@ private struct ConsoleKnob: View {
     var diameter: CGFloat = 50
     var markFont: CGFloat = 7
     var unitFont: CGFloat = 6.5
+    var unitAtZero: Bool = false        // draw the unit in place of the "0" mark instead of at the bottom
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
@@ -96,12 +97,19 @@ private struct ConsoleKnob: View {
             ForEach(Array(marks.enumerated()), id: \.offset) { i, label in
                 let t = marks.count > 1 ? Double(i) / Double(marks.count - 1) : 0.5
                 let a = (markStart + (markEnd - markStart) * t) * .pi / 180
-                Text(label)
-                    .font(.system(size: markFont, design: .monospaced))
-                    .foregroundStyle(Color(hex: 0xb9b3a6))
-                    .position(x: cx + r * sin(a), y: cy - r * cos(a))
+                if unitAtZero && label == "0" {
+                    Text(unit)
+                        .font(.system(size: markFont, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0xd8d2c4))
+                        .position(x: cx + r * sin(a), y: cy - r * cos(a))
+                } else {
+                    Text(label)
+                        .font(.system(size: markFont, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0xb9b3a6))
+                        .position(x: cx + r * sin(a), y: cy - r * cos(a))
+                }
             }
-            if !unit.isEmpty {
+            if !unit.isEmpty && !(unitAtZero && marks.contains("0")) {
                 Text(unit)
                     .font(.system(size: unitFont, design: .monospaced))
                     .foregroundStyle(Color(hex: 0x8d8878))
@@ -115,7 +123,9 @@ private struct ConsoleKnob: View {
 
 private struct ConsoleModuleChrome<Content: View>: View {
     let title: String
-    let plate: String
+    let modelName: String
+    let models: [String]
+    let onSelectModel: (String) -> Void
     let inOn: Bool
     let onToggleIn: () -> Void
     @ViewBuilder var content: () -> Content
@@ -142,12 +152,23 @@ private struct ConsoleModuleChrome<Content: View>: View {
 
             content()
 
-            Text(plate).font(.system(size: 11, weight: .bold)).tracking(1.1).foregroundStyle(Color(hex: 0x1d1e20))
-                .frame(maxWidth: .infinity).frame(height: 26)
-                .background(LinearGradient(colors: [Color(hex: 0xdedad0), Color(hex: 0xb8b4a9)], startPoint: .top, endPoint: .bottom))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(.black, lineWidth: 1))
-                .padding(8)
+            // Name plate = console model selector. Pick a different console to switch the model.
+            Menu {
+                ForEach(models, id: \.self) { m in
+                    Button { onSelectModel(m) } label: {
+                        if m == modelName { Label(m, systemImage: "checkmark") } else { Text(m) }
+                    }
+                }
+            } label: {
+                Text(modelName).font(.system(size: 11, weight: .bold)).tracking(1.1).foregroundStyle(Color(hex: 0x1d1e20))
+                    .frame(maxWidth: .infinity).frame(height: 26)
+                    .background(LinearGradient(colors: [Color(hex: 0xdedad0), Color(hex: 0xb8b4a9)], startPoint: .top, endPoint: .bottom))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(.black, lineWidth: 1))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .padding(8)
         }
         .frame(width: 205)
         .background(LinearGradient(colors: [Color(hex: 0x2b2d2f), Color(hex: 0x232527)], startPoint: .top, endPoint: .bottom))
@@ -199,10 +220,11 @@ struct NeuracoustConsoleModulesView: View {
     // A knob bound to a console parameter.
     private func knob(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
                       _ color: ConsoleKnobColor, marks: [String], unit: String, markRadius: CGFloat = 12,
-                      diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5) -> some View {
+                      diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5,
+                      unitAtZero: Bool = false) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
-                    diameter: diameter, markFont: markFont, unitFont: unitFont,
+                    diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -214,7 +236,7 @@ struct NeuracoustConsoleModulesView: View {
     // MARK: modules
 
     private var filters: some View {
-        ConsoleModuleChrome(title: "FILTERS", plate: "NEURACOUST · NC-F", inOn: inOn, onToggleIn: onToggleIn) {
+        ConsoleModuleChrome(title: "FILTERS", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             ZStack {
                 placed(148, 56, knob("lowPassHz", 3000...12000, 12000, .black,
                                      marks: ["12", "8", "5", "3.5", "3"], unit: "kHz", markRadius: 11))
@@ -226,21 +248,21 @@ struct NeuracoustConsoleModulesView: View {
     }
 
     private var equaliser: some View {
-        ConsoleModuleChrome(title: "EQUALISER", plate: "NEURACOUST · NC-EQ E", inOn: inOn, onToggleIn: onToggleIn) {
+        ConsoleModuleChrome(title: "EQUALISER", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             // EQ knobs 20% larger, mark labels +4pt, and the two columns pulled closer together.
-            let d: CGFloat = 60, mf: CGFloat = 11, uf: CGFloat = 10, lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 100
+            let d: CGFloat = 60, mf: CGFloat = 12, uf: CGFloat = 12, lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 100
             ZStack {
                 eqSpine
-                placed(lx, 52, knob("eqHfGainDb", -18...18, 0, .red, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(rx, 86, knob("eqHfHz", 4000...16000, 8000, .red, marks: ["1.5", "3", "5", "8", "10", "14", "16"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(lx, 138, knob("eqHmfGainDb", -18...18, 0, .green, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(rx, 172, knob("eqHmfHz", 1200...7500, 3000, .green, marks: [".6", "1", "2", "3", "4", "5", "7"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(lx, 224, knob("eqHmfQ", 0.2...10, 1, .green, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(rx, 258, knob("eqLmfQ", 0.2...10, 1, .blue, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(lx, 310, knob("eqLmfGainDb", -18...18, 0, .blue, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(rx, 344, knob("eqLmfHz", 400...2500, 1000, .blue, marks: [".4", ".8", "1", "1.5", "2.5"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(lx, 396, knob("eqLfGainDb", -18...18, 0, .brown, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf), size: sz)
-                placed(rx, 430, knob("eqLfHz", 90...450, 200, .brown, marks: ["30", "50", "100", "200", "300", "400", "450"], unit: "Hz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf), size: sz)
+                placed(lx, 52, knob("eqHfGainDb", -18...18, 0, .red, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(rx, 86, knob("eqHfHz", 4000...16000, 8000, .red, marks: ["1.5", "3", "5", "8", "10", "14", "16"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 138, knob("eqHmfGainDb", -18...18, 0, .green, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(rx, 172, knob("eqHmfHz", 1200...7500, 3000, .green, marks: [".6", "1", "2", "3", "4", "5", "7"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 224, knob("eqHmfQ", 0.2...10, 1, .green, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(rx, 258, knob("eqLmfQ", 0.2...10, 1, .blue, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 310, knob("eqLmfGainDb", -18...18, 0, .blue, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(rx, 344, knob("eqLmfHz", 400...2500, 1000, .blue, marks: [".4", ".8", "1", "1.5", "2.5"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 396, knob("eqLfGainDb", -18...18, 0, .brown, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(rx, 430, knob("eqLfHz", 90...450, 200, .brown, marks: ["30", "50", "100", "200", "300", "400", "450"], unit: "Hz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
                 bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 461)
             }
@@ -278,7 +300,7 @@ struct NeuracoustConsoleModulesView: View {
     }
 
     private var compress: some View {
-        ConsoleModuleChrome(title: "COMPRESS", plate: "NEURACOUST · NC-COMP", inOn: inOn, onToggleIn: onToggleIn) {
+        ConsoleModuleChrome(title: "COMPRESS", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             VStack(spacing: 0) {
                 HStack(spacing: 7) {
                     let mix = engine.consoleValue(trackId, "compMix")
@@ -313,7 +335,7 @@ struct NeuracoustConsoleModulesView: View {
     }
 
     private var gate: some View {
-        ConsoleModuleChrome(title: "GATE / EXP", plate: "NEURACOUST · NC-GATE", inOn: inOn, onToggleIn: onToggleIn) {
+        ConsoleModuleChrome(title: "GATE / EXP", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             ZStack {
                 placed(152, 56, knob("gateThresholdDb", -60...0, -36, .silver, marks: ["0", "-10", "-20", "-30", "-40", "-50", "-60"], unit: "THRESHOLD", markRadius: 11))
                 placed(56, 56, knob("gateRangeDb", 0...40, 20, .green, marks: ["0", "5", "10", "20", "30", "35", "40"], unit: "RANGE"))

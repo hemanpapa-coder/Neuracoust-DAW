@@ -4150,6 +4150,12 @@ final class EngineController: ObservableObject {
         syncTrack(id)
     }
 
+    // Console model shown on each module's name plate. UI/label only for now — the per-model
+    // DSP character is future work; this is the switch that will drive it.
+    static let consoleModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 8078", "API Vision", "Neuracoust NC"]
+    @Published var consoleModel: String = "SSL 4000E"
+    func setConsoleModel(_ name: String) { consoleModel = name }
+
     func consoleValue(_ id: Int, _ parameter: String) -> Float {
         guard let handle else { return 0 }
         return parameter.withCString { nc_track_console_value(handle, Int32(id), $0) }
