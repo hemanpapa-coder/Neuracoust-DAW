@@ -33,7 +33,7 @@ private struct ConsoleKnob: View {
     var unitFont: CGFloat = 6.5
     var unitAtZero: Bool = false        // draw the unit in place of the "0" mark instead of at the bottom
     var dotDiameter: CGFloat = 0        // "·" marks render as a filled circle of this size (0 = as text)
-    var dotGap: CGFloat = 2             // gap from the knob rim to a dot mark
+    var dotGap: CGFloat = 4             // gap from the knob rim to a dot mark
     var dimpleSize: CGFloat = 8         // pointer dimple outer diameter (inner = half)
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
@@ -228,7 +228,7 @@ struct NeuracoustConsoleModulesView: View {
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
         case .filter: return 188
-        case .eq:     return 566
+        case .eq:     return 586
         case .comp:   return 372
         case .gate:   return 330
         default:      return 300
@@ -292,18 +292,18 @@ struct NeuracoustConsoleModulesView: View {
                 eqSpine
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
                 placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "·", "·", "·", "·", "·", "16"], "kHz"), size: sz)
-                placed(lx, 138, eqGain("eqHmfGainDb", .green), size: sz)
-                placed(rx, 172, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "·", "·", "·", "·", "·", "7"], "kHz"), size: sz)
-                placed(lx, 224, eqQ("eqHmfQ", .green), size: sz)
-                placed(rx, 258, eqQ("eqLmfQ", .blue), size: sz)
-                placed(lx, 310, eqGain("eqLmfGainDb", .blue), size: sz)
-                placed(rx, 344, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "·", "·", "·", "2.5"], "kHz"), size: sz)
-                placed(lx, 396, eqGain("eqLfGainDb", .brown), size: sz)
-                placed(rx, 430, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "·", "·", "·", "·", "·", "450"], "Hz"), size: sz)
+                placed(lx, 143, eqGain("eqHmfGainDb", .green), size: sz)
+                placed(rx, 177, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "·", "·", "·", "·", "·", "7"], "kHz"), size: sz)
+                placed(lx, 234, eqQ("eqHmfQ", .green), size: sz)
+                placed(rx, 268, eqQ("eqLmfQ", .blue), size: sz)
+                placed(lx, 325, eqGain("eqLmfGainDb", .blue), size: sz)
+                placed(rx, 359, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "·", "·", "·", "2.5"], "kHz"), size: sz)
+                placed(lx, 416, eqGain("eqLfGainDb", .brown), size: sz)
+                placed(rx, 450, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "·", "·", "·", "·", "·", "450"], "Hz"), size: sz)
                 bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
-                bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 461)
+                bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 481)
             }
-            .frame(height: 490)
+            .frame(height: 510)
         }
     }
 
@@ -324,10 +324,10 @@ struct NeuracoustConsoleModulesView: View {
 
     private var eqSpine: some View {
         ZStack {
-            spineRail(Color(hex: 0xa5372c), top: 12, height: 84)
-            spineRail(Color(hex: 0x2f7a45), top: 98, height: 168)
-            spineRail(Color(hex: 0x3a6fa8), top: 270, height: 82)
-            spineRail(Color(hex: 0x6b4a3a), top: 356, height: 122)
+            spineRail(Color(hex: 0xa5372c), top: 12, height: 89)
+            spineRail(Color(hex: 0x2f7a45), top: 101, height: 178)
+            spineRail(Color(hex: 0x3a6fa8), top: 283, height: 87)
+            spineRail(Color(hex: 0x6b4a3a), top: 374, height: 129)
         }
     }
     private func spineRail(_ c: Color, top: CGFloat, height: CGFloat) -> some View {
