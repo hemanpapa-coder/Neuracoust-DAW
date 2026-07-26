@@ -86,6 +86,8 @@ private struct ConsoleKnob: View {
     @State private var scrollCommit: DispatchWorkItem?
     @State private var scrollAccum: CGFloat = 0
     @State private var hovering = false
+    @State private var valueShown = false
+    @State private var fadeWork: DispatchWorkItem?
 
     private var normalized: Double {
         Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
@@ -111,13 +113,14 @@ private struct ConsoleKnob: View {
                 .frame(width: 4, height: 8)
                 .offset(y: -(diameter / 2 - 7))
                 .rotationEffect(.degrees(valueDeg))
-            // Live value on the knob face (e.g. current frequency).
+            // Live value on the knob face — appears while adjusting, fades out ~2s after.
             if let centerFormat {
                 Text(centerFormat(liveValue ?? value))
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(.system(size: markFont, weight: .semibold, design: .monospaced))
                     .foregroundStyle(color.dot)
                     .lineLimit(1)
                     .fixedSize()
+                    .opacity(valueShown ? 1 : 0)
             }
         }
         .frame(width: diameter + markRadius * 2 + 12, height: diameter + markRadius * 2 + 10 + extraBottom)
@@ -131,12 +134,21 @@ private struct ConsoleKnob: View {
                 if dragStart == nil { dragStart = start }
                 let span = range.upperBound - range.lowerBound
                 let next = min(range.upperBound, max(range.lowerBound, start + Float(-drag.translation.height / 90) * span))
-                liveValue = next; onChange(next)
+                liveValue = next; onChange(next); flashValue()
             }
             .onEnded { _ in dragStart = nil; liveValue = nil; onCommit() })
         .highPriorityGesture(TapGesture(count: 2).onEnded {
-            onChange(defaultValue); onCommit()
+            onChange(defaultValue); onCommit(); flashValue()
         })
+    }
+
+    // Show the on-face value now, then fade it out ~2s after the last adjustment.
+    private func flashValue() {
+        fadeWork?.cancel()
+        valueShown = true
+        let w = DispatchWorkItem { withAnimation(.easeOut(duration: 1.6)) { valueShown = false } }
+        fadeWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
     }
 
     // Wheel over the knob: one detent = one step (1 dB for gain, a semitone for freq, etc.);
@@ -170,6 +182,7 @@ private struct ConsoleKnob: View {
         next = min(range.upperBound, max(range.lowerBound, next))
         liveValue = next
         onChange(next)
+        flashValue()
         scrollCommit?.cancel()
         let work = DispatchWorkItem { onCommit(); liveValue = nil }
         scrollCommit = work
@@ -210,7 +223,7 @@ private struct ConsoleKnob: View {
                 Text(unit)
                     .font(.system(size: unitFont, design: .monospaced))
                     .foregroundStyle(Color(hex: 0xb9b3a6))
-                    .position(x: cx, y: geo.size.height - 3)
+                    .position(x: cx, y: cy + diameter / 2 + 2 + unitFont / 2)   // 2pt below the rim
             }
         }
     }
@@ -310,11 +323,12 @@ struct NeuracoustConsoleModulesView: View {
 
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
-        case .filter: return 188
-        case .eq:     return 676
-        case .comp:   return 372
-        case .gate:   return 330
-        default:      return 300
+        case .filter:    return 226
+        case .eq:        return 696
+        case .comp:      return 356
+        case .gate:      return 326
+        case .saturator: return 226
+        default:         return 300
         }
     }
 
@@ -327,11 +341,12 @@ struct NeuracoustConsoleModulesView: View {
 
     @ViewBuilder private var moduleBody: some View {
         switch module {
-        case .filter: filters
-        case .eq:     equaliser
-        case .comp:   compress
-        case .gate:   gate
-        default:      EmptyView()
+        case .filter:    filters
+        case .eq:        equaliser
+        case .comp:      compress
+        case .gate:      gate
+        case .saturator: saturator
+        default:         EmptyView()
         }
     }
 
@@ -360,13 +375,12 @@ struct NeuracoustConsoleModulesView: View {
 
     private var filters: some View {
         ConsoleModuleChrome(title: "FILTERS", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
+            let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
-                placed(148, 56, knob("lowPassHz", 3000...12000, 12000, .black,
-                                     marks: ["12", "8", "5", "3.5", "3"], unit: "kHz", markRadius: 11))
-                placed(56, 56, knob("highPassHz", 20...350, 20, .black,
-                                    marks: ["20", "30", "50", "70", "120", "200", "300", "350"], unit: "Hz", markRadius: 11))
+                placed(lx, 72, cKnob("highPassHz", 20...350, 20, .black, ["20", "350"], "HPF", Self.freqLabel, 0, log: true), size: sz)
+                placed(rx, 72, cKnob("lowPassHz", 3000...12000, 12000, .black, ["3k", "12k"], "LPF", Self.freqLabel, 0, log: true), size: sz)
             }
-            .frame(height: 112)
+            .frame(height: 150)
         }
     }
 
@@ -377,38 +391,52 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
-                placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
+                placed(rx, 106, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
                 placed(lx, 162, eqGain("eqHmfGainDb", .green), size: sz)
-                placed(rx, 196, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "7"], "kHz"), size: sz)
+                placed(rx, 216, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "7"], "kHz"), size: sz)
                 placed(lx, 272, eqQ("eqHmfQ", .green), size: sz)
-                placed(rx, 306, eqQ("eqLmfQ", .blue), size: sz)
+                placed(rx, 326, eqQ("eqLmfQ", .blue), size: sz)
                 placed(lx, 382, eqGain("eqLmfGainDb", .blue), size: sz)
-                placed(rx, 416, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
+                placed(rx, 436, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
                 placed(lx, 492, eqGain("eqLfGainDb", .brown), size: sz)
-                placed(rx, 526, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
+                placed(rx, 546, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
                 bellButton("eqHfBell", on: engine.consoleBool(trackId, "eqHfBell")).position(x: rx, y: 25)
-                bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 555)
+                bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 560)
             }
-            .frame(height: 600)
+            .frame(height: 620)
         }
     }
 
     // EQ knob categories. Shared: 60pt body, 14pt labels, 5pt dots 2pt off the rim.
     private func eqGain(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, -18...18, 0, color, marks: gainMarks, unit: "",
-             diameter: 66, markFont: 15, wheelStep: 1)                 // 1 dB per notch
+             diameter: 73, markFont: 15, centerFormat: Self.dbLabel, wheelStep: 1)   // 1 dB per notch
     }
     private func eqFreq(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
                         _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
-        // Live frequency in the knob face; unit dropped clear of the rim below.
         knob(param, range, def, color, marks: marks, unit: unit, markRadius: 14,
-             diameter: 66, markFont: 15, unitFont: 15,
-             extraBottom: 17, centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
+             diameter: 73, markFont: 15, unitFont: 15,
+             centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
-             diameter: 66, markFont: 15, unitFont: 15, wheelStep: 0.4)   // coarser Q per notch
+             diameter: 73, markFont: 15, unitFont: 15, centerFormat: Self.qLabel, wheelStep: 0.4)
     }
+
+    // Shared big knob for the non-EQ 4000E modules: end labels, live value on the face, name below.
+    private func cKnob(_ param: String, _ range: ClosedRange<Float>, _ def: Float, _ color: ConsoleKnobColor,
+                       _ ends: [String], _ name: String, _ fmt: @escaping (Float) -> String,
+                       _ step: Float, log: Bool = false) -> some View {
+        knob(param, range, def, color, marks: ends, unit: name, markRadius: 14,
+             diameter: 73, markFont: 15, unitFont: 15, centerFormat: fmt, wheelStep: step, wheelLog: log)
+    }
+
+    static func dbLabel(_ v: Float) -> String { String(format: "%+.0f", v) }
+    static func qLabel(_ v: Float) -> String { String(format: "%.1f", v) }
+    static func msLabel(_ v: Float) -> String { v >= 1000 ? String(format: "%.1fs", v / 1000) : String(format: "%.0f", v) }
+    static func ratioLabel(_ v: Float) -> String { String(format: "%.1f", v) }
+    static func pctLabel(_ v: Float) -> String { String(format: "%.0f", v * 100) }
+    static func intLabel(_ v: Float) -> String { String(format: "%.0f", v) }
 
     static func freqLabel(_ v: Float) -> String {
         if v >= 10000 { return String(format: "%.0fk", v / 1000) }
@@ -458,24 +486,37 @@ struct NeuracoustConsoleModulesView: View {
                 }
                 .padding(.horizontal, 10).frame(height: 30)
 
+                let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
-                    placed(52, 56, knob("compRatio", 1...20, 4, .silver, marks: ["2", "3", "5", "8", "∞"], unit: "RATIO"))
-                    placed(152, 90, knob("compThresholdDb", -40...0, -18, .silver, marks: ["0", "-5", "-10", "-15", "-20", "-30", "-40"], unit: "THRESHOLD", markRadius: 11))
-                    placed(52, 142, knob("compReleaseMs", 40...1500, 360, .silver, marks: [".04", ".1", ".3", ".6", "1.5"], unit: "RELEASE"))
+                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .silver, ["1", "20"], "RATIO", Self.ratioLabel, 0.5), size: sz)
+                    placed(rx, 66, cKnob("compThresholdDb", -40...0, -18, .silver, ["0", "-40"], "THRESH", Self.intLabel, 1), size: sz)
+                    placed(lx, 176, cKnob("compReleaseMs", 40...1500, 360, .silver, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
                 }
-                .frame(height: 190)
+                .frame(height: 250)
             }
         }
     }
 
     private var gate: some View {
         ConsoleModuleChrome(title: "GATE / EXP", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
+            let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
-                placed(152, 56, knob("gateThresholdDb", -60...0, -36, .silver, marks: ["0", "-10", "-20", "-30", "-40", "-50", "-60"], unit: "THRESHOLD", markRadius: 11))
-                placed(56, 56, knob("gateRangeDb", 0...40, 20, .green, marks: ["0", "5", "10", "20", "30", "35", "40"], unit: "RANGE"))
-                placed(56, 142, knob("gateReleaseMs", 40...1500, 360, .green, marks: [".04", ".1", ".3", ".6", "1.5"], unit: "RELEASE"))
+                placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RANGE", Self.intLabel, 1), size: sz)
+                placed(rx, 66, cKnob("gateThresholdDb", -60...0, -36, .silver, ["0", "-60"], "THRESH", Self.intLabel, 1), size: sz)
+                placed(lx, 176, cKnob("gateReleaseMs", 40...1500, 360, .green, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
             }
-            .frame(height: 222)
+            .frame(height: 250)
+        }
+    }
+
+    private var saturator: some View {
+        ConsoleModuleChrome(title: "SATURATOR", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
+            let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
+            ZStack {
+                placed(lx, 72, cKnob("saturatorDriveDb", 0...24, 6, .silver, ["0", "24"], "DRIVE", Self.intLabel, 1), size: sz)
+                placed(rx, 72, cKnob("saturatorMix", 0...1, 1, .silver, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
+            }
+            .frame(height: 150)
         }
     }
 }

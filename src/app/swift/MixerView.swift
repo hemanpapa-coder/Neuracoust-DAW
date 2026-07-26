@@ -862,7 +862,11 @@ struct ChannelStrip: View {
                     inOn: track.consoleGateEnabled,
                     onToggleIn: { engine.setConsoleBool(track.id, "gateEnabled", !track.consoleGateEnabled) })
             }
-            if selectedModules.contains(.saturator) { consoleSaturatorSection }
+            if selectedModules.contains(.saturator) {
+                NeuracoustConsoleModulesView(module: .saturator, width: stripWidth, engine: engine, trackId: track.id,
+                    inOn: track.consoleSaturatorEnabled,
+                    onToggleIn: { engine.setConsoleBool(track.id, "saturatorEnabled", !track.consoleSaturatorEnabled) })
+            }
             if (selectedModules.contains(.deEss) || selectedModules.contains(.denoise))
                 && showInserts && track.kind.showsInserts { insertSection }
             if track.kind == .master && selectedModules.contains(.sends) {
