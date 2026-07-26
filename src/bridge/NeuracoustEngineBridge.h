@@ -1524,6 +1524,8 @@ float  nc_auto_fade_amplitude(const char* curve, double t);
 int  nc_speaker_output_route_count(NCEngine* engine);
 void nc_speaker_output_route(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model);
+void nc_monitor_set_speaker_real_model(NCEngine* engine, int slot, const char* model);
+void nc_monitor_speaker_real_model(NCEngine* engine, int slot, char* out, size_t outLen);
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
 void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
 // Per-slot amp/cable for a passive modeled speaker (heuristic tone folded into the monitor EQ).

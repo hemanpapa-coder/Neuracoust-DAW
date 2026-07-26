@@ -949,7 +949,8 @@ final class EngineController: ObservableObject {
         var output: String
         var simWeight: Float
         var roomEq: Bool
-        // Passive modeled speaker's amp + cable (heuristic tone), and whether the model is passive.
+        // The REAL hardware this slot monitors on (speaker + its amp/cable), used by the correction.
+        var realModel: String = ""
         var amp: String = ""
         var cable: String = ""
         var modelIsPassive: Bool = false
@@ -7467,6 +7468,7 @@ final class EngineController: ObservableObject {
                 output: readString { nc_monitor_speaker_output(handle, s, $0, $1) },
                 simWeight: nc_monitor_speaker_sim_weight(handle, s),
                 roomEq: nc_monitor_speaker_room_eq(handle, s),
+                realModel: readString { nc_monitor_speaker_real_model(handle, s, $0, $1) },
                 amp: readString { nc_monitor_speaker_amp(handle, s, $0, $1) },
                 cable: readString { nc_monitor_speaker_cable(handle, s, $0, $1) },
                 modelIsPassive: !bare.isEmpty && bare.withCString { nc_speaker_model_is_passive($0) }
@@ -9149,6 +9151,14 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_speaker_amp(handle, Int32(slot), $0) }
         reloadMonitorState()          // re-reads slots + re-derives the EQ with the amp tone
+        refreshHistory()
+    }
+
+    /// The REAL speaker this A/B/C slot monitors on (correction = target − real). "" = none.
+    func setSpeakerRealModel(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_speaker_real_model(handle, Int32(slot), $0) }
+        reloadMonitorState()
         refreshHistory()
     }
     func setSpeakerCable(_ slot: Int, _ model: String) {

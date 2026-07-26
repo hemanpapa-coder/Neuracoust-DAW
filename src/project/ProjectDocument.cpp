@@ -2458,6 +2458,9 @@ std::string serializeProject(const ProjectDocument& inputProject) {
 	            << "\",\"speakerCableA\":\"" << escapeJsonString(module.speakerCableA)
 	            << "\",\"speakerCableB\":\"" << escapeJsonString(module.speakerCableB)
 	            << "\",\"speakerCableC\":\"" << escapeJsonString(module.speakerCableC)
+	            << "\",\"realModelA\":\"" << escapeJsonString(module.realModelA)
+	            << "\",\"realModelB\":\"" << escapeJsonString(module.realModelB)
+	            << "\",\"realModelC\":\"" << escapeJsonString(module.realModelC)
 	            << "\",\"streamingPreview\":\"" << escapeJsonString(module.streamingPreview)
 	            << "\",\"activeTargetSlot\":" << std::max(0, std::min(2, module.activeTargetSlot))
 	            << ",\"speakerRoomEqA\":" << (module.speakerRoomEqA ? "true" : "false")
@@ -3584,6 +3587,9 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
 	            found->speakerCableA = stringAfterKey(body, "speakerCableA");
 	            found->speakerCableB = stringAfterKey(body, "speakerCableB");
 	            found->speakerCableC = stringAfterKey(body, "speakerCableC");
+	            found->realModelA = stringAfterKey(body, "realModelA");
+	            found->realModelB = stringAfterKey(body, "realModelB");
+	            found->realModelC = stringAfterKey(body, "realModelC");
 	            if (!streamingPreview.empty()) {
 	                found->streamingPreview = streamingPreview;
 	            }

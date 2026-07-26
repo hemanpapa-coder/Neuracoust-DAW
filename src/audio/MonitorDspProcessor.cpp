@@ -151,6 +151,14 @@ std::string activeTargetModel(const MonitorDspModule& module) {
     return module.targetModelA;
 }
 
+// The REAL speaker for the active slot; falls back to the single realModel (old projects).
+std::string activeRealModel(const MonitorDspModule& module) {
+    const std::string& slotReal = module.activeTargetSlot == 1 ? module.realModelB
+                                 : module.activeTargetSlot == 2 ? module.realModelC
+                                 : module.realModelA;
+    return slotReal.empty() ? module.realModel : slotReal;
+}
+
 std::string canonicalSpeakerModelName(const std::string& model) {
     std::string value = model;
     const char* prefixes[] = {
@@ -220,13 +228,13 @@ std::string canonicalSpeakerModelName(const std::string& model) {
 }
 
 bool speakerTargetMatchesReal(const MonitorDspModule& module) {
-    const auto real = canonicalSpeakerModelName(module.realModel);
+    const auto real = canonicalSpeakerModelName(activeRealModel(module));
     const auto target = canonicalSpeakerModelName(activeTargetModel(module));
     return !real.empty() && real == target;
 }
 
 bool speakerTargetMatchesPhysicalReal(const MonitorDspModule& module) {
-    const auto real = canonicalSpeakerModelName(module.realModel);
+    const auto real = canonicalSpeakerModelName(activeRealModel(module));
     const auto target = canonicalSpeakerModelName(activeTargetModel(module));
     return !real.empty() && real != "FLAT" && real != "OFF" && real == target;
 }
@@ -237,14 +245,14 @@ float speakerTargetTone(const MonitorDspModule& module) {
         return 0.0f;
     }
     const float targetScore = speakerToneScore(active);
-    const float realScore = speakerToneScore(module.realModel);
+    const float realScore = speakerToneScore(activeRealModel(module));
     return std::clamp((targetScore - realScore) * kSpeakerModelDeltaGain,
                       kSpeakerModelDeltaMin,
                       kSpeakerModelDeltaMax);
 }
 
 float realSpeakerCompensation(const MonitorDspModule& module) {
-    return modelAmount(module.realModel, "Custom", 0.02f);
+    return modelAmount(activeRealModel(module), "Custom", 0.02f);
 }
 
 float speakerLevelMatchGain(float targetTone) {
@@ -314,7 +322,7 @@ const MonitorDspModule* activeStreamingPreviewModule(const std::vector<MonitorDs
 }
 
 float headphoneCrossfeedAmount(const MonitorDspModule& module) {
-    const std::string combined = module.realModel + " " + activeTargetModel(module);
+    const std::string combined = activeRealModel(module) + " " + activeTargetModel(module);
     float amount = 0.085f;
     amount += modelAmount(combined, "Open", -0.018f);
     amount += modelAmount(combined, "Closed", 0.018f);

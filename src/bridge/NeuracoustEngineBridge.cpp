@@ -7460,6 +7460,9 @@ bool* speakerRoomEqFieldForSlot(MonitorDspModule& m, int slot) {
 std::string* speakerAmpFieldForSlot(MonitorDspModule& m, int slot) {
     return slot == 1 ? &m.powerAmpB : slot == 2 ? &m.powerAmpC : &m.powerAmpA;
 }
+std::string* speakerRealModelFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.realModelB : slot == 2 ? &m.realModelC : &m.realModelA;
+}
 std::string* speakerCableFieldForSlot(MonitorDspModule& m, int slot) {
     return slot == 1 ? &m.speakerCableB : slot == 2 ? &m.speakerCableC : &m.speakerCableA;
 }
@@ -8741,6 +8744,24 @@ void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model)
     *speakerOutputFieldForSlot(*module, slot) = "None";
     engine->recordStep("Set speaker model");
     engine->pushModules();
+}
+
+// The REAL speaker the user monitors on for this slot (empty = none). Drives the correction.
+void nc_monitor_set_speaker_real_model(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    std::string* field = speakerRealModelFieldForSlot(*module, slot);
+    if (*field == model) return;
+    *field = model;
+    engine->recordStep("Set real speaker");
+    engine->pushModules();
+}
+
+void nc_monitor_speaker_real_model(NCEngine* engine, int slot, char* out, size_t outLen) {
+    if (engine == nullptr || slot < 0 || slot > 2) { copyText(out, outLen, std::string{}); return; }
+    MonitorDspModule* module = engine->speakerSimulation();
+    copyText(out, outLen, module != nullptr ? *speakerRealModelFieldForSlot(*module, slot) : std::string{});
 }
 
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route) {

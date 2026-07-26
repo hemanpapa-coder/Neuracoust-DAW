@@ -37,6 +37,11 @@ struct MonitorDspModule {
     std::string speakerCableA;
     std::string speakerCableB;
     std::string speakerCableC;
+    // Per-slot REAL speaker the user actually monitors on (correction = target − real). Empty
+    // falls back to the single realModel (old projects / the removed device-button field).
+    std::string realModelA;
+    std::string realModelB;
+    std::string realModelC;
 };
 
 std::vector<MonitorDspModule> defaultMonitorDspModules();

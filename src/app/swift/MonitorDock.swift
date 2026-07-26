@@ -419,18 +419,9 @@ struct MonitorDock: View {
     private var speakerMenu: some View {
         deviceMenu
         Divider()
-        // Physical output: the interface D/A, then the real speaker the user monitors on. The
-        // power amp / speaker cable / AC power / connector live on the MODELING (A/B/C) side —
-        // per-slot on each 모델링 스피커 set — not here, to keep the physical picker uncluttered.
+        // Physical output = the interface D/A only. The real speaker (+ its amp/cable) now lives
+        // per-slot on each A/B/C set, so it moved out of this device picker.
         audioInterfaceMenuGroup
-        // "모델 없음" clears the physical speaker model (no modelling / raw output).
-        Button { engine.setPhysicalSpeakerModel("") } label: {
-            if engine.physicalSpeakerModel.isEmpty { Label("모델 없음", systemImage: "checkmark") }
-            else { Text("모델 없음") }
-        }
-        modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
-                  selected: engine.physicalSpeakerModel,
-                  measured: Set(engine.virtualMonitorTargets)) { engine.setPhysicalSpeakerModel($0) }
         Divider()
         // Speakers wired backwards: swap L/R in the monitor path.
         Button {
@@ -617,28 +608,28 @@ struct MonitorDock: View {
         // Number-row shortcut for selecting this set (A/B/C).
         shortcutMenu(set.id == 1 ? .setB : set.id == 2 ? .setC : .setA)
         Divider()
-        // A slot models a virtual SPEAKER always; in HEADPHONE mode it may instead model a
-        // headphone (mutually exclusive — picking one replaces the other). The headphone option
-        // is hidden in speaker mode, where it makes no sense.
-        modelMenu("스피커 모델", catalog: engine.speakerModelCatalog,
+        // Each A/B/C slot fully describes one monitor path: the REAL speaker you have (+ its amp
+        // and cable, for a passive one — leave empty for an active speaker), then the SIMULATOR
+        // you want to hear, room EQ, and the physical output pair it drives.
+        modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
+                  selected: set.realModel) { engine.setSpeakerRealModel(set.id, $0) }
+        if !set.realModel.isEmpty {
+            modelMenu("실물 파워앰프", catalog: engine.powerAmpModelCatalog,
+                      selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
+            modelMenu("실물 스피커 케이블", catalog: engine.speakerCableModelCatalog,
+                      selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
+        }
+        Divider()
+        // The SIMULATOR this slot voices toward. In HEADPHONE mode it may instead model a
+        // headphone (mutually exclusive — picking one replaces the other).
+        modelMenu("스피커 시뮬레이터", catalog: engine.speakerModelCatalog,
                   selected: (modelled && !isHeadphone) ? bare : "",
                   measured: Set(engine.virtualMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
         if engine.outputMode == .headphone {
-            modelMenu("헤드폰 모델", catalog: engine.headphoneModelCatalog,
+            modelMenu("헤드폰 시뮬레이터", catalog: engine.headphoneModelCatalog,
                       selected: (modelled && isHeadphone) ? bare : "",
                       measured: Set(engine.headphoneMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
         }
-        // A passive speaker model needs a modelled power amp + speaker cable in front of it.
-        // These belong to the virtual A/B/C chain; they do not describe the user's real hardware.
-        if modelled && !isHeadphone && set.modelIsPassive {
-            modelMenu("모델링 파워앰프", catalog: engine.powerAmpModelCatalog,
-                      selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
-            modelMenu("모델링 스피커 케이블", catalog: engine.speakerCableModelCatalog,
-                      selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
-        }
-        // Physical output pair for THIS slot — always available now. The slot's speaker model
-        // (sim) and room EQ run on this output, so each A/B/C speaker can drive its own output
-        // pair with its own simulator. The list adapts to the device's channel count (4→32).
         Divider()
         Menu("물리 출력") {
             ForEach(engine.speakerOutputRoutes, id: \.self) { route in
