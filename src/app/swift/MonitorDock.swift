@@ -187,7 +187,7 @@ struct MonitorDock: View {
                 RotaryKnob(
                     value: engine.monitorVolumeDb,
                     range: -60...(-12),          // capped at -12 dB so speaker-sim EQ boosts keep D/A headroom
-                    resetValue: -12,
+                    resetValue: -30,
                     onChange: { engine.setMonitorVolume($0) }
                 )
                 .contextMenu { shortcutMenu(.volDown); shortcutMenu(.volUp) }

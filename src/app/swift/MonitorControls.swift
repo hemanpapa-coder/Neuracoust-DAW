@@ -41,17 +41,17 @@ struct RotaryKnob: View {
                 .rotationEffect(.degrees(135))
                 .padding(3)
 
-            // Pointer
+            // Pointer — half length, outer end anchored at the rim (shrinks from the inside).
             Capsule()
                 .fill(Theme.Palette.purpleLight)
-                .frame(width: 2.5, height: 16)
-                .offset(y: -14)
+                .frame(width: 2.5, height: 8)
+                .offset(y: -18)
                 .rotationEffect(angle)
 
+            // Value centred in the knob face.
             Text(String(format: "%.0f", value))
                 .font(Theme.Font.mono(13, .semibold))
                 .foregroundStyle(Theme.Palette.textNumeric)
-                .offset(y: 12)
         }
         .frame(width: 64, height: 64)
         .contentShape(Circle())

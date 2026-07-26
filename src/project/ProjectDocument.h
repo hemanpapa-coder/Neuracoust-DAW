@@ -297,7 +297,7 @@ struct ProjectDocument {
     std::string monitorStationTalkbackRoute = "listen_room";
     int monitorStationTalkbackChannel = 1;   // input channel (1-based) the talkback mic is on
     float monitorInputTrimDb = -9.0f;
-    float monitorVolumeDb = -12.0f;
+    float monitorVolumeDb = -30.0f;
     bool listenRoomEnabled = false;
     std::string listenRoomSessionName = "mix";
     std::string listenRoomSource = "monitor";

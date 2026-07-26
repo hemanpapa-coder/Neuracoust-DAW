@@ -2769,7 +2769,7 @@ final class EngineController: ObservableObject {
     }
     @Published private(set) var speakerSets: [SpeakerSet] = []
     @Published private(set) var activeSpeakerSlot = 0
-    @Published private(set) var monitorVolumeDb: Float = -12
+    @Published private(set) var monitorVolumeDb: Float = -30
     @Published private(set) var monitorListen = MonitorListen()
     @Published private(set) var monitorDim = false
     @Published private(set) var monitorMono = false

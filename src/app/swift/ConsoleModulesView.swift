@@ -659,9 +659,9 @@ struct NeuracoustConsoleModulesView: View {
 
                 let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
-                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .orange, ["1", "∞"], "RAT", Self.ratioLabel, 0.5), size: sz)
+                    placed(lx, 66, cKnob("compRatio", 1...25, 5, .orange, ["1", "∞"], "RAT", Self.ratioLabel, 0, log: true), size: sz)
                     placed(rx, 120, cKnob("compThresholdDb", -20...10, 0, .orange, ["+10", "-20"], "THR", Self.intLabel, 1, reverse: true), size: sz)
-                    placed(lx, 176, cKnob("compReleaseMs", 100...1500, 360, .orange, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
+                    placed(lx, 176, cKnob("compReleaseMs", 40...4000, 400, .orange, ["40", "4s"], "REL", Self.msLabel, 0, log: true), size: sz)
                 }
                 .frame(height: 258)
             }
@@ -674,7 +674,7 @@ struct NeuracoustConsoleModulesView: View {
             ZStack {
                 placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RNG", Self.intLabel, 1), size: sz)
                 placed(rx, 120, cKnob("gateThresholdDb", -30...5, -18, .orange, ["-30", "+5"], "THR", Self.intLabel, 1), size: sz)
-                placed(lx, 176, cKnob("gateReleaseMs", 100...1500, 360, .green, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
+                placed(lx, 176, cKnob("gateReleaseMs", 40...4000, 400, .green, ["40", "4s"], "REL", Self.msLabel, 0, log: true), size: sz)
             }
             .frame(height: 258)
         }
