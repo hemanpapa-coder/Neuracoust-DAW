@@ -5,14 +5,17 @@ import AppKit
 // clicks/drags), and reports wheel deltas only while the cursor is over the knob, via a local
 // scroll-event monitor.
 private struct KnobScrollWheel: NSViewRepresentable {
+    var active: Bool                        // true while the cursor hovers this knob (SwiftUI, scale-aware)
     var onScroll: (CGFloat, Bool) -> Void   // (delta, isPreciseTrackpad)
     func makeNSView(context: Context) -> NSView {
-        let v = Catcher(); v.onScroll = onScroll; return v
+        let v = Catcher(); v.active = active; v.onScroll = onScroll; return v
     }
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? Catcher)?.onScroll = onScroll
+        guard let v = nsView as? Catcher else { return }
+        v.active = active; v.onScroll = onScroll
     }
     final class Catcher: NSView {
+        var active = false
         var onScroll: ((CGFloat, Bool) -> Void)?
         private var monitor: Any?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }   // mouse passes straight through
@@ -20,14 +23,13 @@ private struct KnobScrollWheel: NSViewRepresentable {
             super.viewDidMoveToWindow()
             if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
             guard window != nil else { return }
+            // Gate on the SwiftUI hover flag, not on geometry: the module is drawn scaled, so an
+            // NSView bounds check (which ignores the SwiftUI scale transform) would miss.
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let win = self.window, event.window === win else { return event }
-                let rect = self.convert(self.bounds, to: nil)
-                if rect.contains(event.locationInWindow) {
-                    let precise = event.hasPreciseScrollingDeltas
-                    let dy = precise ? event.scrollingDeltaY : event.deltaY
-                    if dy != 0 { self.onScroll?(dy, precise); return nil }
-                }
+                guard let self, self.active, let win = self.window, event.window === win else { return event }
+                let precise = event.hasPreciseScrollingDeltas
+                let dy = precise ? event.scrollingDeltaY : event.deltaY
+                if dy != 0 { self.onScroll?(dy, precise); return nil }
                 return event
             }
         }
@@ -82,6 +84,7 @@ private struct ConsoleKnob: View {
     @State private var liveValue: Float?
     @State private var scrollCommit: DispatchWorkItem?
     @State private var scrollAccum: CGFloat = 0
+    @State private var hovering = false
 
     private var normalized: Double {
         Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
@@ -118,8 +121,9 @@ private struct ConsoleKnob: View {
         }
         .frame(width: diameter + markRadius * 2 + 12, height: diameter + markRadius * 2 + 10 + extraBottom)
         .overlay(marksOverlay)
-        .overlay(KnobScrollWheel { dy, precise in applyScroll(dy, precise) }.frame(width: diameter, height: diameter))
+        .overlay(KnobScrollWheel(active: hovering) { dy, precise in applyScroll(dy, precise) }.frame(width: 0, height: 0))
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .gesture(DragGesture(minimumDistance: 1)
             .onChanged { drag in
                 let start = dragStart ?? value
