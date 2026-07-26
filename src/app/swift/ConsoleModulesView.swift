@@ -199,7 +199,7 @@ private struct ConsoleKnob: View {
             if !unit.isEmpty && !(unitAtZero && marks.contains("0")) {
                 Text(unit)
                     .font(.system(size: unitFont, design: .monospaced))
-                    .foregroundStyle(Color(hex: 0x8d8878))
+                    .foregroundStyle(Color(hex: 0xb9b3a6))
                     .position(x: cx, y: geo.size.height - 3)
             }
         }
@@ -391,9 +391,9 @@ struct NeuracoustConsoleModulesView: View {
     private func eqFreq(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
                         _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
         // Live frequency in the knob face; unit dropped clear of the rim below.
-        knob(param, range, def, color, marks: marks, unit: unit,
+        knob(param, range, def, color, marks: marks, unit: unit, markRadius: 14,
              diameter: 66, markFont: 15, unitFont: 15,
-             extraBottom: 15, centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
+             extraBottom: 17, centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
@@ -411,14 +411,15 @@ struct NeuracoustConsoleModulesView: View {
             engine.setConsoleBool(trackId, param, !on); engine.recordGesture("4000E \(param)")
         } label: {
             QCurveIcon(wide: true)
-                .stroke(on ? Color(hex: 0x2a1f10) : Color(hex: 0xded7c9), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                .stroke(on ? Color(hex: 0x3a2600) : Color(hex: 0xded7c9), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
                 .frame(width: 18, height: 11)
                 .frame(width: 30, height: 24)
                 .background(on
-                    ? AnyView(LinearGradient(colors: [Color(hex: 0xe0a94b), Color(hex: 0xa9741f)], startPoint: .top, endPoint: .bottom))
+                    ? AnyView(LinearGradient(colors: [Color(hex: 0xffd166), Color(hex: 0xf0a83a)], startPoint: .top, endPoint: .bottom))
                     : AnyView(LinearGradient(colors: [Color(hex: 0x3d3f41), Color(hex: 0x232527)], startPoint: .top, endPoint: .bottom)))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(on ? Color(hex: 0xffe08a) : .black, lineWidth: 1))
+                .shadow(color: on ? Color(hex: 0xffc247).opacity(0.9) : .clear, radius: 5)   // lights up when pressed
         }.buttonStyle(.plain)
     }
 
