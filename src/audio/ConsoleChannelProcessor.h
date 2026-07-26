@@ -34,6 +34,14 @@ private:
         void clear() { z1 = z2 = 0; }
     };
     std::array<std::array<Biquad, 6>, 2> eq_;
+    // Smoothed copies of the coefficient-driving EQ/filter params, so a knob move
+    // ramps the biquad coefficients instead of jumping them (which zippers/clicks).
+    struct SmoothParams {
+        bool init = false;
+        float hpHz = 0, lpHz = 0, hfHz = 0, hfG = 0, hmfHz = 0, hmfQ = 0, hmfG = 0,
+              lmfHz = 0, lmfQ = 0, lmfG = 0, lfHz = 0, lfG = 0;
+    };
+    SmoothParams sp_;
     std::array<float, 2> compDetector_ {0, 0};
     std::array<float, 2> gateDetector_ {0, 0};
     std::array<float, 2> compGainDb_ {0, 0};

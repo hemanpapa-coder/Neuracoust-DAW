@@ -942,13 +942,14 @@ struct ChannelStrip: View {
     private func reorderArrow(up: Bool, _ module: MixerModuleFocus, disabled: Bool) -> some View {
         Button { moveModule(module, by: up ? -1 : 1) } label: {
             Image(systemName: up ? "chevron.up" : "chevron.down")
-                .font(.system(size: 6, weight: .bold))
-                .foregroundStyle(disabled ? Theme.Palette.textFainter.opacity(0.3) : Theme.Palette.textFaint)
-                .frame(width: 13, height: 8)
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(disabled ? Theme.Palette.textFainter.opacity(0.25) : accent.opacity(0.85))
+                .frame(width: 15, height: 9)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .help(up ? "위로 이동" : "아래로 이동")
     }
 
     private func moduleIsEnabled(_ module: MixerModuleFocus) -> Bool {

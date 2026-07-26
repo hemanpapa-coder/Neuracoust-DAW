@@ -75,6 +75,7 @@ void ConsoleChannelProcessor::reset(double sr) {
     for (auto& channel : eq_) for (auto& band : channel) band.clear();
     compDetector_.fill(0); gateDetector_.fill(0);
     compGainDb_.fill(0); gateGainDb_.fill(0); gateHold_.fill(0);
+    sp_.init = false;
 }
 
 void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio,
@@ -86,17 +87,31 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
          !p.saturatorEnabled)) return;
     if (sampleRate_ != sr) reset(sr);
+    // Ramp the coefficient-driving params toward their targets so a knob move slides the
+    // biquad coefficients block-to-block instead of stepping them (which clicks/zippers).
+    if (!sp_.init) {
+        sp_ = {true, p.highPassHz, p.lowPassHz, p.eqHfHz, p.eqHfGainDb, p.eqHmfHz, p.eqHmfQ,
+               p.eqHmfGainDb, p.eqLmfHz, p.eqLmfQ, p.eqLmfGainDb, p.eqLfHz, p.eqLfGainDb};
+    } else {
+        constexpr float a = 0.25f;   // per-block ramp (~25 ms to settle at a 256-sample block)
+        auto sm = [](float& s, float t) { s += a * (t - s); };
+        sm(sp_.hpHz, p.highPassHz);   sm(sp_.lpHz, p.lowPassHz);
+        sm(sp_.hfHz, p.eqHfHz);       sm(sp_.hfG, p.eqHfGainDb);
+        sm(sp_.hmfHz, p.eqHmfHz);     sm(sp_.hmfQ, p.eqHmfQ);   sm(sp_.hmfG, p.eqHmfGainDb);
+        sm(sp_.lmfHz, p.eqLmfHz);     sm(sp_.lmfQ, p.eqLmfQ);   sm(sp_.lmfG, p.eqLmfGainDb);
+        sm(sp_.lfHz, p.eqLfHz);       sm(sp_.lfG, p.eqLfGainDb);
+    }
     for (auto& ch : eq_) {
-        ch[0].highPass(sr, p.highPassHz);
-        ch[1].lowPass(sr, p.lowPassHz);
-        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz, 0.7f, p.eqHfGainDb);
-        else ch[2].shelf(sr, p.eqHfHz, p.eqHfGainDb, true);
-        const float hmfQ = p.eqEMode ? p.eqHmfQ : std::max(0.2f, p.eqHmfQ * 0.7f);
-        const float lmfQ = p.eqEMode ? p.eqLmfQ : std::max(0.2f, p.eqLmfQ * 0.7f);
-        ch[3].peak(sr, p.eqHmfHz, hmfQ, p.eqHmfGainDb);
-        ch[4].peak(sr, p.eqLmfHz, lmfQ, p.eqLmfGainDb);
-        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz, 0.7f, p.eqLfGainDb);
-        else ch[5].shelf(sr, p.eqLfHz, p.eqLfGainDb, false);
+        ch[0].highPass(sr, sp_.hpHz);
+        ch[1].lowPass(sr, sp_.lpHz);
+        if (p.eqHfBell) ch[2].peak(sr, sp_.hfHz, 0.7f, sp_.hfG);
+        else ch[2].shelf(sr, sp_.hfHz, sp_.hfG, true);
+        const float hmfQ = p.eqEMode ? sp_.hmfQ : std::max(0.2f, sp_.hmfQ * 0.7f);
+        const float lmfQ = p.eqEMode ? sp_.lmfQ : std::max(0.2f, sp_.lmfQ * 0.7f);
+        ch[3].peak(sr, sp_.hmfHz, hmfQ, sp_.hmfG);
+        ch[4].peak(sr, sp_.lmfHz, lmfQ, sp_.lmfG);
+        if (p.eqLfBell) ch[5].peak(sr, sp_.lfHz, 0.7f, sp_.lfG);
+        else ch[5].shelf(sr, sp_.lfHz, sp_.lfG, false);
     }
     const float cDet = coeff(sr, 8), gDet = coeff(sr, 5);
     const float cAtk = coeff(sr, p.compFastAttack ? 3.0f : p.compAttackMs);
