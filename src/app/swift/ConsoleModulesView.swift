@@ -49,16 +49,16 @@ private struct ConsoleKnob: View {
 
     var body: some View {
         ZStack {
-            // Bezel — spun aluminium collar.
+            // Bezel — spun aluminium collar (lighter, gradient reaches the full rim).
             Circle()
-                .fill(RadialGradient(colors: [Color(hex: 0x6a6b64), Color(hex: 0x232420), Color(hex: 0x08090a)],
-                                     center: UnitPoint(x: 0.40, y: 0.24), startRadius: 1, endRadius: 26))
+                .fill(RadialGradient(colors: [Color(hex: 0xa9aaa1), Color(hex: 0x63645d), Color(hex: 0x3d3e38)],
+                                     center: UnitPoint(x: 0.40, y: 0.24), startRadius: 1, endRadius: diameter / 2))
                 .overlay(AngularGradient(gradient: Gradient(colors: [
-                    .white.opacity(0.22), .black.opacity(0.30), .white.opacity(0.15),
-                    .black.opacity(0.32), .white.opacity(0.22)]), center: .center, angle: .degrees(208))
-                    .clipShape(Circle()).opacity(0.65))
-                .overlay(Circle().stroke(.black, lineWidth: 1))
-                .shadow(color: .black.opacity(0.5), radius: 4, y: 3)
+                    .white.opacity(0.20), .black.opacity(0.16), .white.opacity(0.14),
+                    .black.opacity(0.18), .white.opacity(0.20)]), center: .center, angle: .degrees(208))
+                    .clipShape(Circle()).opacity(0.55))
+                .overlay(Circle().stroke(Color(hex: 0x2b2c28), lineWidth: 1))
+                .shadow(color: .black.opacity(0.32), radius: 3, y: 2)
                 .frame(width: diameter, height: diameter)
             // Matte colored cap.
             Circle()
@@ -301,7 +301,6 @@ struct NeuracoustConsoleModulesView: View {
             // Freq: only the two end numbers, the rest dots. Q: narrow/wide bell icons + dots.
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
-                eqSpine
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
                 placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "·", "·", "·", "·", "·", "16"], "kHz"), size: sz)
                 placed(lx, 162, eqGain("eqHmfGainDb", .green), size: sz)
@@ -340,23 +339,6 @@ struct NeuracoustConsoleModulesView: View {
         if v >= 10000 { return String(format: "%.0fk", v / 1000) }
         if v >= 1000 { return String(format: "%.1fk", v / 1000) }
         return String(format: "%.0f", v)
-    }
-
-    private var eqSpine: some View {
-        ZStack {
-            // Matching colored rails on both edges, inset off the border; 5pt gaps between colors.
-            ForEach([4.0, 201.0] as [CGFloat], id: \.self) { x in
-                spineRail(Color(hex: 0xa5372c), top: 12, height: 110, x: x)
-                spineRail(Color(hex: 0x2f7a45), top: 127, height: 160, x: x)
-                spineRail(Color(hex: 0x3a6fa8), top: 292, height: 160, x: x)
-                spineRail(Color(hex: 0x6b4a3a), top: 457, height: 113, x: x)
-            }
-        }
-    }
-    private func spineRail(_ c: Color, top: CGFloat, height: CGFloat, x: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 2).fill(c)
-            .frame(width: 5, height: height)
-            .position(x: x, y: top + height / 2)
     }
 
     private func bellButton(_ param: String, on: Bool) -> some View {
