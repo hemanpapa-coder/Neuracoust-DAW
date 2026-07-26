@@ -243,6 +243,7 @@ public:
                           double sourceOffsetSeconds);
     bool updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);
+    bool updateTrackConsoleChannel(const std::string& trackName, const ConsoleChannelState& console);
     bool updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send);
     bool updateTrackInsertBypassState(const std::string& trackName, size_t insertIndex, bool bypassed);
     bool updateMasterInsertBypassState(size_t insertIndex, bool bypassed);

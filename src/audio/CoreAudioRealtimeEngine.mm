@@ -894,6 +894,10 @@ public:
         return updated;
     }
 
+    bool updateTrackConsoleChannel(const std::string& trackName, const ConsoleChannelState& console) {
+        return dspEngine_.updateTrackConsoleChannel(trackName, console);
+    }
+
     bool updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) {
         const bool updated = dspEngine_.updateTrackSendSlot(trackName, sendIndex, send);
         if (updated) {
@@ -1593,6 +1597,7 @@ bool RealtimeAudioEngine::updateClipStart(const std::string& clipId, double star
 bool RealtimeAudioEngine::updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds, double sourceOffsetSeconds) { return impl_->updateClipBounds(clipId, startSeconds, durationSeconds, sourceOffsetSeconds); }
 bool RealtimeAudioEngine::updateClipFades(const std::string& clipId, double fadeInSeconds, double fadeOutSeconds) { return impl_->updateClipFades(clipId, fadeInSeconds, fadeOutSeconds); }
 bool RealtimeAudioEngine::updateTrackMix(const std::string& trackName, float volumeDb, float pan) { return impl_->updateTrackMix(trackName, volumeDb, pan); }
+bool RealtimeAudioEngine::updateTrackConsoleChannel(const std::string& trackName, const ConsoleChannelState& console) { return impl_->updateTrackConsoleChannel(trackName, console); }
 bool RealtimeAudioEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) { return impl_->updateTrackSendSlot(trackName, sendIndex, send); }
 bool RealtimeAudioEngine::updateTrackInsertBypassState(const std::string& trackName, size_t insertIndex, bool bypassed) { return impl_->updateTrackInsertBypassState(trackName, insertIndex, bypassed); }
 bool RealtimeAudioEngine::updateMasterInsertBypassState(size_t insertIndex, bool bypassed) { return impl_->updateMasterInsertBypassState(insertIndex, bypassed); }

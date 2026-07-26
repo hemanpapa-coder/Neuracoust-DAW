@@ -1357,7 +1357,11 @@ void nc_track_set_console_value(NCEngine* engine, int index, const char* paramet
     NC_SET("eqLmfHz",eqLmfHz,400.0f,2500.0f) NC_SET("eqLmfQ",eqLmfQ,0.2f,10.0f)
     NC_SET("eqLfGainDb",eqLfGainDb,-18.0f,18.0f) NC_SET("eqLfHz",eqLfHz,30.0f,450.0f) { return; }
 #undef NC_SET
-    engine->reconcileProject();
+    // Continuous knob/wheel changes: push the params straight into the render plan (the processor
+    // ramps to them per sample). Calling reconcileProject() here rebuilt the whole render plan on
+    // every value — 60×/s during a drag — which is what zippered the EQ. The caller records one
+    // undo step when the gesture ends.
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);
 }
 
 void nc_track_set_volume_db(NCEngine* engine, int index, float db) {

@@ -87,6 +87,9 @@ public:
     bool updateClipBounds(const std::string& clipId, double startSeconds, double durationSeconds,
                           double sourceOffsetSeconds);
     bool updateTrackMix(const std::string& trackName, float volumeDb, float pan);
+    // Live-push a track's built-in console channel (EQ/dynamics params) into the render plan
+    // without rebuilding it — so a knob drag doesn't reconcile the whole project 60×/s (which clicks).
+    bool updateTrackConsoleChannel(const std::string& trackName, const ConsoleChannelState& console);
     bool updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send);
     bool updateTrackInsertBypassState(const std::string& trackName, size_t insertIndex, bool bypassed);
     bool updateMasterInsertBypassState(size_t insertIndex, bool bypassed);

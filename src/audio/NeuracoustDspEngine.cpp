@@ -1369,6 +1369,19 @@ bool NeuracoustDspEngine::updateTrackMix(const std::string& trackName, float vol
     return true;
 }
 
+bool NeuracoustDspEngine::updateTrackConsoleChannel(const std::string& trackName,
+                                                    const ConsoleChannelState& console) {
+    if (trackName.empty()) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto trackIt = std::find_if(projectPlan_.tracks.begin(), projectPlan_.tracks.end(),
+                                [&](const TrackState& track) { return track.name == trackName; });
+    if (trackIt == projectPlan_.tracks.end()) return false;
+    // The ConsoleChannelProcessor (kept in the render state, keyed by route) ramps its coefficients
+    // toward these params per sample, so pushing them here is click-free.
+    trackIt->consoleChannel = console;
+    return true;
+}
+
 bool NeuracoustDspEngine::updateTrackSendSlot(const std::string& trackName, size_t sendIndex, const TrackSendState& send) {
     if (trackName.empty() || !std::isfinite(send.gainDb) || !std::isfinite(send.pan)) {
         return false;
