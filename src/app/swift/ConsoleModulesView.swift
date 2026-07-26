@@ -43,12 +43,14 @@ private struct KnobScrollWheel: NSViewRepresentable {
 
 private struct ConsoleKnobColor {
     let mid: Color, lo: Color, dot: Color
-    static let black  = ConsoleKnobColor(mid: Color(hex: 0x1b1c1f), lo: Color(hex: 0x070806), dot: Color(hex: 0xf4f1e8))
-    static let silver = ConsoleKnobColor(mid: Color(hex: 0xa29c8d), lo: Color(hex: 0x605c52), dot: Color(hex: 0x2a2a2a))
-    static let red    = ConsoleKnobColor(mid: Color(hex: 0x8a2519), lo: Color(hex: 0x450f09), dot: Color(hex: 0xf4f1e8))
-    static let green  = ConsoleKnobColor(mid: Color(hex: 0x1f6534), lo: Color(hex: 0x0b2e17), dot: Color(hex: 0xf4f1e8))
-    static let blue   = ConsoleKnobColor(mid: Color(hex: 0x25578c), lo: Color(hex: 0x0f2b47), dot: Color(hex: 0xf4f1e8))
-    static let brown  = ConsoleKnobColor(mid: Color(hex: 0x563628), lo: Color(hex: 0x241310), dot: Color(hex: 0xf4f1e8))
+    // Flat cap colors (swatches 1-4). `lo` unused now the caps are flat.
+    static let black  = ConsoleKnobColor(mid: Color(hex: 0x1b1c1f), lo: Color(hex: 0x1b1c1f), dot: Color(hex: 0xf4f1e8))
+    static let silver = ConsoleKnobColor(mid: Color(hex: 0xa29c8d), lo: Color(hex: 0xa29c8d), dot: Color(hex: 0x2a2a2a))
+    static let red    = ConsoleKnobColor(mid: Color(hex: 0x5f2a26), lo: Color(hex: 0x5f2a26), dot: Color(hex: 0xf4f1e8))
+    static let green  = ConsoleKnobColor(mid: Color(hex: 0x2e5a3c), lo: Color(hex: 0x2e5a3c), dot: Color(hex: 0xf4f1e8))
+    static let blue   = ConsoleKnobColor(mid: Color(hex: 0x3f6193), lo: Color(hex: 0x3f6193), dot: Color(hex: 0xf4f1e8))
+    static let brown  = ConsoleKnobColor(mid: Color(hex: 0x4e3a2c), lo: Color(hex: 0x4e3a2c), dot: Color(hex: 0xf4f1e8))
+    static let bezel  = Color(hex: 0x9a9a9a)   // swatch 5 (outer ring)
 }
 
 /// One console rotary — machined bezel, matte colored cap, carved dimple pointer, radial marks.
@@ -88,32 +90,22 @@ private struct ConsoleKnob: View {
 
     var body: some View {
         ZStack {
-            // Bezel — spun aluminium collar (lighter, gradient reaches the full rim).
+            // Bezel — flat outer ring (swatch 5), wider/softer shadow, no 3D.
             Circle()
-                .fill(RadialGradient(colors: [Color(hex: 0xa9aaa1), Color(hex: 0x63645d), Color(hex: 0x3d3e38)],
-                                     center: UnitPoint(x: 0.40, y: 0.24), startRadius: 1, endRadius: diameter / 2))
-                .overlay(AngularGradient(gradient: Gradient(colors: [
-                    .white.opacity(0.20), .black.opacity(0.16), .white.opacity(0.14),
-                    .black.opacity(0.18), .white.opacity(0.20)]), center: .center, angle: .degrees(208))
-                    .clipShape(Circle()).opacity(0.55))
-                .overlay(Circle().stroke(Color(hex: 0x2b2c28), lineWidth: 1))
-                .shadow(color: .black.opacity(0.32), radius: 3, y: 2)
+                .fill(ConsoleKnobColor.bezel)
+                .overlay(Circle().stroke(.black.opacity(0.22), lineWidth: 1))
+                .shadow(color: .black.opacity(0.20), radius: 6, y: 2)
                 .frame(width: diameter, height: diameter)
-            // Matte colored cap.
+            // Flat colored cap (swatches 1-4), no gradient/highlight.
             Circle()
                 .fill(color.mid)
-                .overlay(Circle().fill(LinearGradient(colors: [.white.opacity(0.10), .clear, .black.opacity(0.40)],
-                                                      startPoint: .top, endPoint: .bottom)))
-                .overlay(Circle().fill(RadialGradient(colors: [.white.opacity(0.14), .clear],
-                                                      center: UnitPoint(x: 0.5, y: 0.30), startRadius: 0, endRadius: 22)))
-                .overlay(Circle().stroke(.white.opacity(0.07), lineWidth: 1))
-                .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 1))
                 .frame(width: diameter - 8, height: diameter - 8)
-            // Pointer line (5×2), near the rim, in the cap's marker color.
-            RoundedRectangle(cornerRadius: 1)
+            // Pointer line (8×4), near the rim, in the cap's marker color.
+            RoundedRectangle(cornerRadius: 1.5)
                 .fill(color.dot)
-                .frame(width: 2, height: 5)
-                .offset(y: -(diameter / 2 - 6))
+                .frame(width: 4, height: 8)
+                .offset(y: -(diameter / 2 - 7))
                 .rotationEffect(.degrees(valueDeg))
             // Live value on the knob face (e.g. current frequency).
             if let centerFormat {
