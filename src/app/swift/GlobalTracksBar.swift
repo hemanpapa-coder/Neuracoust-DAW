@@ -379,7 +379,7 @@ struct GlobalTracksBar: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(selected ? Ruler.tempo.color.opacity(0.28) : .clear))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Ruler.tempo.color : .clear, lineWidth: 1.3))
                 .contentShape(Rectangle())
-                .offset(x: px - Self.headerWidth - 3)
+                .offset(x: px - Self.headerWidth - 6)   // dot centre on the event time, like the marker pin
                 .gesture(dragGesture(key: "tp\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth,
                                      onMove: { engine.moveTempoMarker(from: e.timeSeconds, to: $0) }))
                 .onTapGesture { engine.selectConductor(.tempo(e.timeSeconds)) }
@@ -410,7 +410,7 @@ struct GlobalTracksBar: View {
                 .padding(.horizontal, 5).frame(height: 15)
                 .background(RoundedRectangle(cornerRadius: 3).fill(ruler.color.opacity(selected ? 0.34 : 0.16)))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? ruler.color : ruler.color.opacity(anchored ? 0.15 : 0.35), lineWidth: selected ? 1.3 : 0.5))
-                .offset(x: px - Self.headerWidth + 2)
+                .offset(x: px - Self.headerWidth - 7)   // dot centre on the event time, aligned with marker/tempo
                 // Every real event is draggable, including the ones seeded at the start.
                 .gesture(movable ? dragGesture(key: "\(ruler.rawValue)\(e.timeSeconds)", start: e.timeSeconds, laneWidth: laneWidth, onMove: onMove) : nil)
                 .onTapGesture { onSelect?() }
