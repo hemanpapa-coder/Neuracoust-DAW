@@ -4161,6 +4161,11 @@ final class EngineController: ObservableObject {
         return parameter.withCString { nc_track_console_value(handle, Int32(id), $0) }
     }
 
+    func consoleBool(_ id: Int, _ parameter: String) -> Bool {
+        guard let handle else { return false }
+        return parameter.withCString { nc_track_console_bool(handle, Int32(id), $0) }
+    }
+
     func setConsoleBool(_ id: Int, _ parameter: String, _ value: Bool) {
         guard let handle else { return }
         parameter.withCString { nc_track_set_console_bool(handle, Int32(id), $0, value) }

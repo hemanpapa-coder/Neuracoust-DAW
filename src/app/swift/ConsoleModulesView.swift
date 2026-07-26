@@ -27,6 +27,7 @@ private struct KnobScrollWheel: NSViewRepresentable {
             // NSView bounds check (which ignores the SwiftUI scale transform) would miss.
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self, self.active, let win = self.window, event.window === win else { return event }
+                if event.momentumPhase != [] { return nil }   // ignore inertial coast (would overshoot)
                 let precise = event.hasPreciseScrollingDeltas
                 let dy = precise ? event.scrollingDeltaY : event.deltaY
                 if dy != 0 { self.onScroll?(dy, precise); return nil }
@@ -144,9 +145,11 @@ private struct ConsoleKnob: View {
         var notches = 0
         if precise {
             scrollAccum += delta
-            let perNotch: CGFloat = 10          // ~10pt of trackpad travel = one step
-            let n = (scrollAccum / perNotch).rounded(.towardZero)
-            if n != 0 { scrollAccum -= n * perNotch; notches = Int(n) }
+            let perNotch: CGFloat = 45          // trackpad: ~45pt of travel per step, one step max per event
+            if abs(scrollAccum) >= perNotch {
+                notches = scrollAccum > 0 ? 1 : -1
+                scrollAccum -= CGFloat(notches) * perNotch
+            }
         } else {
             notches = delta > 0 ? 1 : -1        // one mouse detent = one step (no acceleration)
         }
@@ -380,8 +383,8 @@ struct NeuracoustConsoleModulesView: View {
                 placed(rx, 416, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
                 placed(lx, 492, eqGain("eqLfGainDb", .brown), size: sz)
                 placed(rx, 526, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
-                bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
-                bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 555)
+                bellButton("eqHfBell", on: engine.consoleBool(trackId, "eqHfBell")).position(x: rx, y: 25)
+                bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 555)
             }
             .frame(height: 600)
         }
@@ -415,15 +418,15 @@ struct NeuracoustConsoleModulesView: View {
             engine.setConsoleBool(trackId, param, !on); engine.recordGesture("4000E \(param)")
         } label: {
             QCurveIcon(wide: true)
-                .stroke(on ? Color(hex: 0x3a2600) : Color(hex: 0xded7c9), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                .stroke(on ? Color(hex: 0x5a3f1e) : Color(hex: 0xded7c9), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
                 .frame(width: 18, height: 11)
                 .frame(width: 30, height: 24)
                 .background(on
-                    ? AnyView(LinearGradient(colors: [Color(hex: 0xffd166), Color(hex: 0xf0a83a)], startPoint: .top, endPoint: .bottom))
+                    ? AnyView(LinearGradient(colors: [Color(hex: 0xf6d6a4), Color(hex: 0xeec384)], startPoint: .top, endPoint: .bottom))
                     : AnyView(LinearGradient(colors: [Color(hex: 0x3d3f41), Color(hex: 0x232527)], startPoint: .top, endPoint: .bottom)))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(on ? Color(hex: 0xffe08a) : .black, lineWidth: 1))
-                .shadow(color: on ? Color(hex: 0xffc247).opacity(0.9) : .clear, radius: 5)   // lights up when pressed
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(on ? Color(hex: 0xf7e0be) : .black, lineWidth: 1))
+                .shadow(color: on ? Color(hex: 0xf3cd9a).opacity(0.95) : .clear, radius: 6)   // peach light when on
         }.buttonStyle(.plain)
     }
 
