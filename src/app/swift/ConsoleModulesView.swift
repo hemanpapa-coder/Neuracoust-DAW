@@ -53,6 +53,7 @@ private struct ConsoleKnobColor {
     static let green  = ConsoleKnobColor(mid: Color(hex: 0x2e5a3c), lo: Color(hex: 0x2e5a3c), dot: Color(hex: 0xf4f1e8))
     static let blue   = ConsoleKnobColor(mid: Color(hex: 0x3f6193), lo: Color(hex: 0x3f6193), dot: Color(hex: 0xf4f1e8))
     static let brown  = ConsoleKnobColor(mid: Color(hex: 0x4e3a2c), lo: Color(hex: 0x4e3a2c), dot: Color(hex: 0xf4f1e8))
+    static let orange = ConsoleKnobColor(mid: Color(hex: 0xa8632e), lo: Color(hex: 0xa8632e), dot: Color(hex: 0xf4f1e8))
     static let bezel  = Color(hex: 0x9a9a9a)   // swatch 5 (outer ring)
 }
 
@@ -619,9 +620,9 @@ struct NeuracoustConsoleModulesView: View {
 
                 let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
-                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .silver, ["1", "∞"], "RAT", Self.ratioLabel, 0.5), size: sz)
-                    placed(rx, 120, cKnob("compThresholdDb", -20...10, 0, .silver, ["+10", "-20"], "THR", Self.intLabel, 1, reverse: true), size: sz)
-                    placed(lx, 176, cKnob("compReleaseMs", 100...1500, 360, .silver, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
+                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .orange, ["1", "∞"], "RAT", Self.ratioLabel, 0.5), size: sz)
+                    placed(rx, 120, cKnob("compThresholdDb", -20...10, 0, .orange, ["+10", "-20"], "THR", Self.intLabel, 1, reverse: true), size: sz)
+                    placed(lx, 176, cKnob("compReleaseMs", 100...1500, 360, .orange, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
                 }
                 .frame(height: 258)
             }
@@ -633,7 +634,7 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RNG", Self.intLabel, 1), size: sz)
-                placed(rx, 120, cKnob("gateThresholdDb", -30...0, -18, .silver, ["-30", "0"], "THR", Self.intLabel, 1), size: sz)
+                placed(rx, 120, cKnob("gateThresholdDb", -30...0, -18, .orange, ["-30", "0"], "THR", Self.intLabel, 1), size: sz)
                 placed(lx, 176, cKnob("gateReleaseMs", 100...1500, 360, .green, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
             }
             .frame(height: 258)
@@ -644,8 +645,8 @@ struct NeuracoustConsoleModulesView: View {
         ConsoleModuleChrome(title: "SATURATOR", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
-                placed(lx, 72, cKnob("saturatorDriveDb", 0...24, 6, .silver, ["0", "24"], "DRIVE", Self.intLabel, 1), size: sz)
-                placed(rx, 126, cKnob("saturatorMix", 0...1, 1, .silver, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
+                placed(lx, 72, cKnob("saturatorDriveDb", 0...24, 6, .orange, ["0", "24"], "DRIVE", Self.intLabel, 1), size: sz)
+                placed(rx, 126, cKnob("saturatorMix", 0...1, 1, .orange, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
             }
             .frame(height: 210)
         }
