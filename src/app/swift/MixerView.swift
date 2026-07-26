@@ -936,7 +936,17 @@ struct ChannelStrip: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { selectModule(module) }
-        .helpTip("\(module.label) 채널 영역을 표시합니다. ▲▼로 순서를 바꿉니다.")
+        .onDrag { NSItemProvider(object: module.rawValue as NSString) }
+        .onDrop(of: [.plainText], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let raw = object as? String,
+                      let source = MixerModuleFocus(rawValue: raw) else { return }
+                DispatchQueue.main.async { moveModule(source, before: module) }
+            }
+            return true
+        }
+        .helpTip("\(module.label) 채널 영역을 표시합니다. 드래그하거나 ▲▼로 순서를 바꿉니다.")
     }
 
     private func reorderArrow(up: Bool, _ module: MixerModuleFocus, disabled: Bool) -> some View {

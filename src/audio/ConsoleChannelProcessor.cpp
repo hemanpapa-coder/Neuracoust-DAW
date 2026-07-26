@@ -23,10 +23,20 @@ float saturate(float x, float drive, bool circuit) {
 }
 
 float ConsoleChannelProcessor::Biquad::process(float x) {
+    // Slide the live coefficients toward the target each sample (~15 ms), so a knob move
+    // never steps the filter — this is what removes the gain-move zipper.
+    constexpr float r = 0.0016f;
+    b0 += r * (tb0 - b0); b1 += r * (tb1 - b1); b2 += r * (tb2 - b2);
+    a1 += r * (ta1 - a1); a2 += r * (ta2 - a2);
     const float y = b0 * x + z1;
     z1 = b1 * x - a1 * y + z2;
     z2 = b2 * x - a2 * y;
     return y;
+}
+
+void ConsoleChannelProcessor::Biquad::set(float nb0, float nb1, float nb2, float na1, float na2) {
+    tb0 = nb0; tb1 = nb1; tb2 = nb2; ta1 = na1; ta2 = na2;
+    if (!primed) { b0 = nb0; b1 = nb1; b2 = nb2; a1 = na1; a2 = na2; primed = true; }
 }
 
 void ConsoleChannelProcessor::Biquad::peak(double sr, float hz, float q, float gainDb) {
@@ -35,8 +45,8 @@ void ConsoleChannelProcessor::Biquad::peak(double sr, float hz, float q, float g
     const float a = std::pow(10.0f, gainDb / 40.0f);
     const float alpha = std::sin(w) / (2.0f * std::max(0.05f, q));
     const float a0 = 1.0f + alpha / a;
-    b0 = (1.0f + alpha * a) / a0; b1 = (-2.0f * std::cos(w)) / a0;
-    b2 = (1.0f - alpha * a) / a0; a1 = b1; a2 = (1.0f - alpha / a) / a0;
+    const float nb1 = (-2.0f * std::cos(w)) / a0;
+    set((1.0f + alpha * a) / a0, nb1, (1.0f - alpha * a) / a0, nb1, (1.0f - alpha / a) / a0);
 }
 
 void ConsoleChannelProcessor::Biquad::shelf(double sr, float hz, float gainDb, bool high) {
@@ -53,21 +63,21 @@ void ConsoleChannelProcessor::Biquad::shelf(double sr, float hz, float gainDb, b
         na0=(a+1)+(a-1)*c+beta; na1=-2*((a-1)+(a+1)*c); na2=(a+1)+(a-1)*c-beta;
     }
     const float inv = 1.0f / std::max(0.000001f, na0);
-    b0=nb0*inv; b1=nb1*inv; b2=nb2*inv; a1=na1*inv; a2=na2*inv;
+    set(nb0*inv, nb1*inv, nb2*inv, na1*inv, na2*inv);
 }
 
 void ConsoleChannelProcessor::Biquad::highPass(double sr, float hz) {
     hz = clamp(hz, 20.0f, static_cast<float>(sr * 0.45));
     const float w=2*pi*hz/static_cast<float>(sr), s=std::sin(w), c=std::cos(w);
     const float a=s/(2*0.70710678f), a0=1+a;
-    b0=(1+c)*0.5f/a0; b1=-(1+c)/a0; b2=b0; a1=-2*c/a0; a2=(1-a)/a0;
+    set((1+c)*0.5f/a0, -(1+c)/a0, (1+c)*0.5f/a0, -2*c/a0, (1-a)/a0);
 }
 
 void ConsoleChannelProcessor::Biquad::lowPass(double sr, float hz) {
     hz = clamp(hz, 20.0f, static_cast<float>(sr * 0.45));
     const float w=2*pi*hz/static_cast<float>(sr), s=std::sin(w), c=std::cos(w);
     const float a=s/(2*0.70710678f), a0=1+a;
-    b0=(1-c)*0.5f/a0; b1=(1-c)/a0; b2=b0; a1=-2*c/a0; a2=(1-a)/a0;
+    set((1-c)*0.5f/a0, (1-c)/a0, (1-c)*0.5f/a0, -2*c/a0, (1-a)/a0);
 }
 
 void ConsoleChannelProcessor::reset(double sr) {
@@ -75,7 +85,6 @@ void ConsoleChannelProcessor::reset(double sr) {
     for (auto& channel : eq_) for (auto& band : channel) band.clear();
     compDetector_.fill(0); gateDetector_.fill(0);
     compGainDb_.fill(0); gateGainDb_.fill(0); gateHold_.fill(0);
-    sp_.init = false;
 }
 
 void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio,
@@ -87,31 +96,18 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
          !p.saturatorEnabled)) return;
     if (sampleRate_ != sr) reset(sr);
-    // Ramp the coefficient-driving params toward their targets so a knob move slides the
-    // biquad coefficients block-to-block instead of stepping them (which clicks/zippers).
-    if (!sp_.init) {
-        sp_ = {true, p.highPassHz, p.lowPassHz, p.eqHfHz, p.eqHfGainDb, p.eqHmfHz, p.eqHmfQ,
-               p.eqHmfGainDb, p.eqLmfHz, p.eqLmfQ, p.eqLmfGainDb, p.eqLfHz, p.eqLfGainDb};
-    } else {
-        constexpr float a = 0.25f;   // per-block ramp (~25 ms to settle at a 256-sample block)
-        auto sm = [](float& s, float t) { s += a * (t - s); };
-        sm(sp_.hpHz, p.highPassHz);   sm(sp_.lpHz, p.lowPassHz);
-        sm(sp_.hfHz, p.eqHfHz);       sm(sp_.hfG, p.eqHfGainDb);
-        sm(sp_.hmfHz, p.eqHmfHz);     sm(sp_.hmfQ, p.eqHmfQ);   sm(sp_.hmfG, p.eqHmfGainDb);
-        sm(sp_.lmfHz, p.eqLmfHz);     sm(sp_.lmfQ, p.eqLmfQ);   sm(sp_.lmfG, p.eqLmfGainDb);
-        sm(sp_.lfHz, p.eqLfHz);       sm(sp_.lfG, p.eqLfGainDb);
-    }
+    // Coefficients are set from the live params here; the Biquad ramps to them per sample.
     for (auto& ch : eq_) {
-        ch[0].highPass(sr, sp_.hpHz);
-        ch[1].lowPass(sr, sp_.lpHz);
-        if (p.eqHfBell) ch[2].peak(sr, sp_.hfHz, 0.7f, sp_.hfG);
-        else ch[2].shelf(sr, sp_.hfHz, sp_.hfG, true);
-        const float hmfQ = p.eqEMode ? sp_.hmfQ : std::max(0.2f, sp_.hmfQ * 0.7f);
-        const float lmfQ = p.eqEMode ? sp_.lmfQ : std::max(0.2f, sp_.lmfQ * 0.7f);
-        ch[3].peak(sr, sp_.hmfHz, hmfQ, sp_.hmfG);
-        ch[4].peak(sr, sp_.lmfHz, lmfQ, sp_.lmfG);
-        if (p.eqLfBell) ch[5].peak(sr, sp_.lfHz, 0.7f, sp_.lfG);
-        else ch[5].shelf(sr, sp_.lfHz, sp_.lfG, false);
+        ch[0].highPass(sr, p.highPassHz);
+        ch[1].lowPass(sr, p.lowPassHz);
+        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz, 0.7f, p.eqHfGainDb);
+        else ch[2].shelf(sr, p.eqHfHz, p.eqHfGainDb, true);
+        const float hmfQ = p.eqEMode ? p.eqHmfQ : std::max(0.2f, p.eqHmfQ * 0.7f);
+        const float lmfQ = p.eqEMode ? p.eqLmfQ : std::max(0.2f, p.eqLmfQ * 0.7f);
+        ch[3].peak(sr, p.eqHmfHz, hmfQ, p.eqHmfGainDb);
+        ch[4].peak(sr, p.eqLmfHz, lmfQ, p.eqLmfGainDb);
+        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz, 0.7f, p.eqLfGainDb);
+        else ch[5].shelf(sr, p.eqLfHz, p.eqLfGainDb, false);
     }
     const float cDet = coeff(sr, 8), gDet = coeff(sr, 5);
     const float cAtk = coeff(sr, p.compFastAttack ? 3.0f : p.compAttackMs);

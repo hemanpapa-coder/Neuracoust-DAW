@@ -26,7 +26,12 @@ public:
 private:
     struct Biquad {
         float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+        // Target coefficients; process() ramps the live ones toward these per sample so a
+        // gain/freq change slides instead of stepping at the block boundary (no zipper).
+        float tb0 = 1, tb1 = 0, tb2 = 0, ta1 = 0, ta2 = 0;
+        bool primed = false;
         float process(float x);
+        void set(float nb0, float nb1, float nb2, float na1, float na2);
         void peak(double sr, float hz, float q, float gainDb);
         void shelf(double sr, float hz, float gainDb, bool high);
         void highPass(double sr, float hz);
@@ -34,14 +39,6 @@ private:
         void clear() { z1 = z2 = 0; }
     };
     std::array<std::array<Biquad, 6>, 2> eq_;
-    // Smoothed copies of the coefficient-driving EQ/filter params, so a knob move
-    // ramps the biquad coefficients instead of jumping them (which zippers/clicks).
-    struct SmoothParams {
-        bool init = false;
-        float hpHz = 0, lpHz = 0, hfHz = 0, hfG = 0, hmfHz = 0, hmfQ = 0, hmfG = 0,
-              lmfHz = 0, lmfQ = 0, lmfG = 0, lfHz = 0, lfG = 0;
-    };
-    SmoothParams sp_;
     std::array<float, 2> compDetector_ {0, 0};
     std::array<float, 2> gateDetector_ {0, 0};
     std::array<float, 2> compGainDb_ {0, 0};

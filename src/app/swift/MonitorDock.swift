@@ -636,33 +636,28 @@ struct MonitorDock: View {
             modelMenu("모델링 스피커 케이블", catalog: engine.speakerCableModelCatalog,
                       selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
         }
-        // Physical output is a raw passthrough that bypasses the modelled path, so it is
-        // only offered when Speaker Simulation is off (photo-2 context).
-        if !engine.speakerSimulationActive {
-            Menu("물리 출력") {
-                ForEach(engine.speakerOutputRoutes, id: \.self) { route in
-                    Button {
-                        engine.setSpeakerOutput(set.id, route)
-                    } label: {
-                        if set.output == route {
-                            Label(route, systemImage: "checkmark")
-                        } else {
-                            Text(route)
-                        }
+        // Physical output pair for THIS slot — always available now. The slot's speaker model
+        // (sim) and room EQ run on this output, so each A/B/C speaker can drive its own output
+        // pair with its own simulator. The list adapts to the device's channel count (4→32).
+        Divider()
+        Menu("물리 출력") {
+            ForEach(engine.speakerOutputRoutes, id: \.self) { route in
+                Button {
+                    engine.setSpeakerOutput(set.id, route)
+                } label: {
+                    if set.output == route {
+                        Label(route, systemImage: "checkmark")
+                    } else {
+                        Text(route)
                     }
                 }
             }
         }
-        // Room EQ is a correction on a physical passthrough — speaker *simulation*
-        // already models the room/speaker character, so it is not offered there.
-        if !engine.speakerSimulationActive {
-            Divider()
-            Button {
-                engine.setSpeakerRoomEq(set.id, !set.roomEq)
-            } label: {
-                if set.roomEq { Label("룸 EQ", systemImage: "checkmark") } else { Text("룸 EQ") }
-            }
-            .disabled(set.output != "None")   // physical passthrough has no room EQ
+        // Room EQ applies on top of the modelled/physical path for this slot.
+        Button {
+            engine.setSpeakerRoomEq(set.id, !set.roomEq)
+        } label: {
+            if set.roomEq { Label("룸 EQ", systemImage: "checkmark") } else { Text("룸 EQ") }
         }
     }
 

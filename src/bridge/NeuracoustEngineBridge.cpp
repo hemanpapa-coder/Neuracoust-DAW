@@ -8751,12 +8751,9 @@ void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route
     std::string* out = speakerOutputFieldForSlot(*module, slot);
     if (*out == value) return;
     *out = value;
-    // Choosing a physical output bypasses the virtual model: force Flat + room EQ off,
-    // the reference rule. "None" leaves the modelled path in place.
-    if (value != "None") {
-        *speakerModelFieldForSlot(*module, slot) = std::string("Speaker ") + slotLetter(slot) + ": Flat";
-        *speakerRoomEqFieldForSlot(*module, slot) = false;
-    }
+    // A physical output pair now keeps the slot's speaker model + room EQ, so each A/B/C
+    // speaker can run its own simulator on its own output pair. For a raw reference monitor,
+    // pick the "Flat" model on that slot.
     engine->recordStep("Set speaker output");
     engine->pushModules();
 }
