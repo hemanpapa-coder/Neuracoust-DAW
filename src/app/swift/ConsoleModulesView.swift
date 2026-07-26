@@ -80,6 +80,7 @@ private struct ConsoleKnob: View {
     var wheelStep: Float = 0            // value change per wheel notch (0 = proportional, span/100)
     var wheelLog: Bool = false          // if true, wheelStep is octaves/notch, applied multiplicatively
     var logScale: Bool = false          // pointer + drag map logarithmically (frequency knobs)
+    var reverse: Bool = false           // high value at the left (e.g. SSL comp threshold)
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
@@ -98,7 +99,10 @@ private struct ConsoleKnob: View {
         }
         return (v - lo) / max(0.0001, hi - lo)
     }
-    private var valueDeg: Double { markStart + normalized * (markEnd - markStart) }
+    private var valueDeg: Double {
+        let n = reverse ? (1 - normalized) : normalized
+        return markStart + n * (markEnd - markStart)
+    }
 
     var body: some View {
         ZStack {
@@ -145,7 +149,8 @@ private struct ConsoleKnob: View {
                     let nextNorm = min(1, max(0, startNorm + Double(-drag.translation.height / 200)))
                     next = Float(Double(lo) * pow(Double(hi) / Double(lo), nextNorm))
                 } else {
-                    next = min(hi, max(lo, start + Float(-drag.translation.height / 90) * (hi - lo)))
+                    let dv = Float(-drag.translation.height / 90) * (hi - lo)
+                    next = min(hi, max(lo, start + (reverse ? -dv : dv)))
                 }
                 liveValue = next; onChange(next); flashValue()
             }
@@ -182,7 +187,7 @@ private struct ConsoleKnob: View {
             notches = delta > 0 ? 1 : -1        // one mouse detent = one step (no acceleration)
         }
         guard notches != 0 else { return }
-        let dir = Float(notches)
+        let dir = Float(notches) * (reverse ? -1 : 1)
         let base = liveValue ?? value
         var next: Float
         if wheelLog {
@@ -477,13 +482,14 @@ struct NeuracoustConsoleModulesView: View {
                       diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5,
                       unitAtZero: Bool = false, dotDiameter: CGFloat = 0, dimpleSize: CGFloat = 8,
                       extraBottom: CGFloat = 0, centerFormat: ((Float) -> String)? = nil,
-                      wheelStep: Float = 0, wheelLog: Bool = false, logScale: Bool = false) -> some View {
+                      wheelStep: Float = 0, wheelLog: Bool = false, logScale: Bool = false,
+                      reverse: Bool = false) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
                     diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero,
                     dotDiameter: dotDiameter, dimpleSize: dimpleSize,
                     extraBottom: extraBottom, centerFormat: centerFormat,
-                    wheelStep: wheelStep, wheelLog: wheelLog, logScale: logScale,
+                    wheelStep: wheelStep, wheelLog: wheelLog, logScale: logScale, reverse: reverse,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -550,9 +556,10 @@ struct NeuracoustConsoleModulesView: View {
     // Shared big knob for the non-EQ 4000E modules: end labels, live value on the face, name below.
     private func cKnob(_ param: String, _ range: ClosedRange<Float>, _ def: Float, _ color: ConsoleKnobColor,
                        _ ends: [String], _ name: String, _ fmt: @escaping (Float) -> String,
-                       _ step: Float, log: Bool = false) -> some View {
+                       _ step: Float, log: Bool = false, reverse: Bool = false) -> some View {
         knob(param, range, def, color, marks: ends, unit: name, markRadius: 14,
-             diameter: 73, markFont: 15, unitFont: 15, centerFormat: fmt, wheelStep: step, wheelLog: log, logScale: log)
+             diameter: 73, markFont: 15, unitFont: 15, centerFormat: fmt,
+             wheelStep: step, wheelLog: log, logScale: log, reverse: reverse)
     }
 
     static func dbLabel(_ v: Float) -> String { String(format: "%+.0f", v) }
@@ -612,9 +619,9 @@ struct NeuracoustConsoleModulesView: View {
 
                 let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
-                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .silver, ["1", "20"], "RATIO", Self.ratioLabel, 0.5), size: sz)
-                    placed(rx, 120, cKnob("compThresholdDb", -40...0, -18, .silver, ["0", "-40"], "THRESH", Self.intLabel, 1), size: sz)
-                    placed(lx, 176, cKnob("compReleaseMs", 40...1500, 360, .silver, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
+                    placed(lx, 66, cKnob("compRatio", 1...20, 4, .silver, ["1", "∞"], "RATIO", Self.ratioLabel, 0.5), size: sz)
+                    placed(rx, 120, cKnob("compThresholdDb", -20...10, 0, .silver, ["+10", "-20"], "THRESH", Self.intLabel, 1, reverse: true), size: sz)
+                    placed(lx, 176, cKnob("compReleaseMs", 100...1500, 360, .silver, [".1", "1.5"], "RELEASE", Self.msLabel, 10), size: sz)
                 }
                 .frame(height: 258)
             }
@@ -626,8 +633,8 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RANGE", Self.intLabel, 1), size: sz)
-                placed(rx, 120, cKnob("gateThresholdDb", -60...0, -36, .silver, ["0", "-60"], "THRESH", Self.intLabel, 1), size: sz)
-                placed(lx, 176, cKnob("gateReleaseMs", 40...1500, 360, .green, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
+                placed(rx, 120, cKnob("gateThresholdDb", -30...0, -18, .silver, ["-30", "0"], "THRESH", Self.intLabel, 1), size: sz)
+                placed(lx, 176, cKnob("gateReleaseMs", 100...1500, 360, .green, [".1", "1.5"], "RELEASE", Self.msLabel, 10), size: sz)
             }
             .frame(height: 258)
         }
