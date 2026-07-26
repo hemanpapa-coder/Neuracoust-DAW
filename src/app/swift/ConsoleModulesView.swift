@@ -444,11 +444,11 @@ struct NeuracoustConsoleModulesView: View {
 
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
-        case .filter:    return 226
+        case .filter:    return 286
         case .eq:        return 840
-        case .comp:      return 356
-        case .gate:      return 326
-        case .saturator: return 226
+        case .comp:      return 364
+        case .gate:      return 334
+        case .saturator: return 286
         default:         return 300
         }
     }
@@ -499,9 +499,9 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 72, cKnob("highPassHz", 20...350, 20, .black, ["20", "350"], "HPF", Self.freqLabel, 0, log: true), size: sz)
-                placed(rx, 72, cKnob("lowPassHz", 3000...12000, 12000, .black, ["3k", "12k"], "LPF", Self.freqLabel, 0, log: true), size: sz)
+                placed(rx, 126, cKnob("lowPassHz", 3000...12000, 12000, .black, ["3k", "12k"], "LPF", Self.freqLabel, 0, log: true), size: sz)
             }
-            .frame(height: 150)
+            .frame(height: 210)
         }
     }
 
@@ -613,10 +613,10 @@ struct NeuracoustConsoleModulesView: View {
                 let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
                 ZStack {
                     placed(lx, 66, cKnob("compRatio", 1...20, 4, .silver, ["1", "20"], "RATIO", Self.ratioLabel, 0.5), size: sz)
-                    placed(rx, 66, cKnob("compThresholdDb", -40...0, -18, .silver, ["0", "-40"], "THRESH", Self.intLabel, 1), size: sz)
+                    placed(rx, 120, cKnob("compThresholdDb", -40...0, -18, .silver, ["0", "-40"], "THRESH", Self.intLabel, 1), size: sz)
                     placed(lx, 176, cKnob("compReleaseMs", 40...1500, 360, .silver, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
                 }
-                .frame(height: 250)
+                .frame(height: 258)
             }
         }
     }
@@ -626,10 +626,10 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RANGE", Self.intLabel, 1), size: sz)
-                placed(rx, 66, cKnob("gateThresholdDb", -60...0, -36, .silver, ["0", "-60"], "THRESH", Self.intLabel, 1), size: sz)
+                placed(rx, 120, cKnob("gateThresholdDb", -60...0, -36, .silver, ["0", "-60"], "THRESH", Self.intLabel, 1), size: sz)
                 placed(lx, 176, cKnob("gateReleaseMs", 40...1500, 360, .green, ["40", "1.5s"], "RELEASE", Self.msLabel, 10), size: sz)
             }
-            .frame(height: 250)
+            .frame(height: 258)
         }
     }
 
@@ -638,9 +638,9 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 72, cKnob("saturatorDriveDb", 0...24, 6, .silver, ["0", "24"], "DRIVE", Self.intLabel, 1), size: sz)
-                placed(rx, 72, cKnob("saturatorMix", 0...1, 1, .silver, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
+                placed(rx, 126, cKnob("saturatorMix", 0...1, 1, .silver, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
             }
-            .frame(height: 150)
+            .frame(height: 210)
         }
     }
 }
