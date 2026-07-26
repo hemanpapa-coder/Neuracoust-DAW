@@ -212,30 +212,30 @@ private struct ConsoleKnob: View {
                 let a = (markStart + (markEnd - markStart) * t) * .pi / 180
                 if label == "·" && dotDiameter > 0 {
                     Circle()
-                        .fill(Color(hex: 0xb9b3a6))
+                        .fill(ConsoleKnobColor.bezel)
                         .frame(width: dotDiameter, height: dotDiameter)
                         .position(x: cx + dotR * sin(a), y: cy - dotR * cos(a))
                 } else if label == "QN" || label == "QW" {
                     QCurveIcon(wide: label == "QW")
-                        .stroke(Color(hex: 0xb9b3a6), style: StrokeStyle(lineWidth: 1.2, lineJoin: .round))
+                        .stroke(ConsoleKnobColor.bezel, style: StrokeStyle(lineWidth: 1.2, lineJoin: .round))
                         .frame(width: 16, height: 10)
                         .position(x: cx + r * sin(a), y: cy - r * cos(a))
                 } else if unitAtZero && label == "0" {
                     Text(unit)
                         .font(.system(size: markFont, design: .monospaced))
-                        .foregroundStyle(Color(hex: 0xd8d2c4))
+                        .foregroundStyle(ConsoleKnobColor.bezel)
                         .position(x: cx + r * sin(a), y: cy - r * cos(a))
                 } else {
                     Text(label)
                         .font(.system(size: markFont, design: .monospaced))
-                        .foregroundStyle(Color(hex: 0xb9b3a6))
+                        .foregroundStyle(ConsoleKnobColor.bezel)
                         .position(x: cx + r * sin(a), y: cy - r * cos(a))
                 }
             }
             if !unit.isEmpty && !(unitAtZero && marks.contains("0")) {
                 Text(unit)
                     .font(.system(size: unitFont, design: .monospaced))
-                    .foregroundStyle(Color(hex: 0xb9b3a6))
+                    .foregroundStyle(ConsoleKnobColor.bezel)
                     .position(x: cx, y: cy + diameter / 2 + 2 + unitFont / 2)   // 2pt below the rim
             }
         }
