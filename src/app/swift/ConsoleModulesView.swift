@@ -1,4 +1,38 @@
 import SwiftUI
+import AppKit
+
+// Scroll-wheel adjust for a knob: a zero-footprint view that never hit-tests (so it blocks no
+// clicks/drags), and reports wheel deltas only while the cursor is over the knob, via a local
+// scroll-event monitor.
+private struct KnobScrollWheel: NSViewRepresentable {
+    var onScroll: (CGFloat) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = Catcher(); v.onScroll = onScroll; return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? Catcher)?.onScroll = onScroll
+    }
+    final class Catcher: NSView {
+        var onScroll: ((CGFloat) -> Void)?
+        private var monitor: Any?
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }   // mouse passes straight through
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let win = self.window, event.window === win else { return event }
+                let rect = self.convert(self.bounds, to: nil)
+                if rect.contains(event.locationInWindow) {
+                    let dy = event.scrollingDeltaY
+                    if dy != 0 { self.onScroll?(dy); return nil }
+                }
+                return event
+            }
+        }
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+    }
+}
 
 // SSL 4000E-style console channel — the Claude Design "Neuracoust Modules" look, reproduced in
 // SwiftUI and WIRED to the engine's console parameters. Each module is drawn at its native 205px
@@ -41,6 +75,7 @@ private struct ConsoleKnob: View {
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
     @State private var liveValue: Float?
+    @State private var scrollCommit: DispatchWorkItem?
 
     private var normalized: Double {
         Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
@@ -88,6 +123,7 @@ private struct ConsoleKnob: View {
         }
         .frame(width: diameter + markRadius * 2 + 12, height: diameter + markRadius * 2 + 10 + extraBottom)
         .overlay(marksOverlay)
+        .overlay(KnobScrollWheel { dy in applyScroll(dy) }.frame(width: diameter, height: diameter))
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 1)
             .onChanged { drag in
@@ -101,6 +137,19 @@ private struct ConsoleKnob: View {
         .highPriorityGesture(TapGesture(count: 2).onEnded {
             onChange(defaultValue); onCommit()
         })
+    }
+
+    // Wheel over the knob: change live, then record one undo step once scrolling settles.
+    private func applyScroll(_ dy: CGFloat) {
+        let span = range.upperBound - range.lowerBound
+        let base = liveValue ?? value
+        let next = min(range.upperBound, max(range.lowerBound, base + Float(dy) * span / 500))
+        liveValue = next
+        onChange(next)
+        scrollCommit?.cancel()
+        let work = DispatchWorkItem { onCommit(); liveValue = nil }
+        scrollCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     private var marksOverlay: some View {
