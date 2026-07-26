@@ -9163,13 +9163,6 @@ final class EngineController: ObservableObject {
     func setSpeakerRealModel(_ slot: Int, _ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_speaker_real_model(handle, Int32(slot), $0) }
-        // An active speaker has no external power amp / cable — clear them so they neither show
-        // nor colour the sim.
-        let passive = !model.isEmpty && model.withCString { nc_speaker_model_is_passive($0) }
-        if !passive {
-            _ = "".withCString { nc_monitor_set_speaker_amp(handle, Int32(slot), $0) }
-            _ = "".withCString { nc_monitor_set_speaker_cable(handle, Int32(slot), $0) }
-        }
         reloadMonitorState()
         refreshHistory()
     }

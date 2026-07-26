@@ -613,11 +613,12 @@ struct MonitorDock: View {
         // you want to hear, room EQ, and the physical output pair it drives.
         modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
                   selected: set.realModel) { engine.setSpeakerRealModel(set.id, $0) }
-        // Amp + cable only for a PASSIVE real speaker; an active one has them built in.
-        if set.realModelIsPassive {
-            modelMenu("실물 파워앰프", catalog: engine.powerAmpModelCatalog,
+        // Power amp + cable are only meaningful for a PASSIVE speaker — whether that's the real
+        // speaker or a passive modelled/sim target. Active speakers have them built in, so hide them.
+        if set.realModelIsPassive || set.modelIsPassive {
+            modelMenu("파워앰프", catalog: engine.powerAmpModelCatalog,
                       selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
-            modelMenu("실물 스피커 케이블", catalog: engine.speakerCableModelCatalog,
+            modelMenu("스피커 케이블", catalog: engine.speakerCableModelCatalog,
                       selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
         }
         Divider()
