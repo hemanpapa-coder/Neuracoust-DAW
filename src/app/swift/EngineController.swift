@@ -4182,9 +4182,13 @@ final class EngineController: ObservableObject {
         reloadTracks(); refreshHistory()
     }
 
+    // Bumped on any console parameter change so the EQ curve graph redraws live.
+    @Published var consoleRevision: Int = 0
+
     func setConsoleValue(_ id: Int, _ parameter: String, _ value: Float) {
         guard let handle else { return }
         parameter.withCString { nc_track_set_console_value(handle, Int32(id), $0, value) }
+        consoleRevision &+= 1
     }
 
     // MARK: Automation modes (Off / Read / Touch / Latch / Write)

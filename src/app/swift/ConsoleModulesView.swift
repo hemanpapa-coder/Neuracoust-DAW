@@ -262,6 +262,114 @@ private struct QCurveIcon: Shape {
     }
 }
 
+// MARK: - EQ curve graph (FabFilter-style)
+
+// One biquad section; magnitude in dB at a frequency.
+private struct Biquad {
+    var b0 = 1.0, b1 = 0.0, b2 = 0.0, a0 = 1.0, a1 = 0.0, a2 = 0.0
+    func magDb(_ f: Double, _ fs: Double) -> Double {
+        let w = 2 * Double.pi * f / fs
+        let c1 = cos(w), s1 = sin(w), c2 = cos(2 * w), s2 = sin(2 * w)
+        let nRe = b0 + b1 * c1 + b2 * c2, nIm = -(b1 * s1 + b2 * s2)
+        let dRe = a0 + a1 * c1 + a2 * c2, dIm = -(a1 * s1 + a2 * s2)
+        return 10 * log10(max(1e-9, (nRe * nRe + nIm * nIm) / max(1e-12, dRe * dRe + dIm * dIm)))
+    }
+    static func peak(_ fc: Double, _ g: Double, _ q: Double, _ fs: Double) -> Biquad {
+        let A = pow(10, g / 40), w0 = 2 * .pi * fc / fs, cw = cos(w0), alpha = sin(w0) / (2 * max(0.1, q))
+        return Biquad(b0: 1 + alpha * A, b1: -2 * cw, b2: 1 - alpha * A, a0: 1 + alpha / A, a1: -2 * cw, a2: 1 - alpha / A)
+    }
+    static func lowShelf(_ fc: Double, _ g: Double, _ fs: Double) -> Biquad {
+        let A = pow(10, g / 40), w0 = 2 * .pi * fc / fs, cw = cos(w0), sq = 2 * sqrt(A) * (sin(w0) / 2 * 1.4142)
+        return Biquad(b0: A * ((A + 1) - (A - 1) * cw + sq), b1: 2 * A * ((A - 1) - (A + 1) * cw),
+                      b2: A * ((A + 1) - (A - 1) * cw - sq), a0: (A + 1) + (A - 1) * cw + sq,
+                      a1: -2 * ((A - 1) + (A + 1) * cw), a2: (A + 1) + (A - 1) * cw - sq)
+    }
+    static func highShelf(_ fc: Double, _ g: Double, _ fs: Double) -> Biquad {
+        let A = pow(10, g / 40), w0 = 2 * .pi * fc / fs, cw = cos(w0), sq = 2 * sqrt(A) * (sin(w0) / 2 * 1.4142)
+        return Biquad(b0: A * ((A + 1) + (A - 1) * cw + sq), b1: -2 * A * ((A - 1) + (A + 1) * cw),
+                      b2: A * ((A + 1) + (A - 1) * cw - sq), a0: (A + 1) - (A - 1) * cw + sq,
+                      a1: 2 * ((A - 1) - (A + 1) * cw), a2: (A + 1) - (A - 1) * cw - sq)
+    }
+    static func highPass(_ fc: Double, _ fs: Double) -> Biquad {
+        let w0 = 2 * .pi * fc / fs, cw = cos(w0), alpha = sin(w0) / (2 * 0.707)
+        return Biquad(b0: (1 + cw) / 2, b1: -(1 + cw), b2: (1 + cw) / 2, a0: 1 + alpha, a1: -2 * cw, a2: 1 - alpha)
+    }
+    static func lowPass(_ fc: Double, _ fs: Double) -> Biquad {
+        let w0 = 2 * .pi * fc / fs, cw = cos(w0), alpha = sin(w0) / (2 * 0.707)
+        return Biquad(b0: (1 - cw) / 2, b1: 1 - cw, b2: (1 - cw) / 2, a0: 1 + alpha, a1: -2 * cw, a2: 1 - alpha)
+    }
+}
+
+private struct EqGraphView: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    private let minF = 20.0, maxF = 20000.0, dbRange = 18.0
+
+    private func sections() -> [Biquad] {
+        let fs = (engine.sampleRate > 0 ? engine.sampleRate : 48000)
+        func v(_ p: String) -> Double { Double(engine.consoleValue(trackId, p)) }
+        var s: [Biquad] = []
+        let hfF = v("eqHfHz"), hfG = v("eqHfGainDb")
+        s.append(engine.consoleBool(trackId, "eqHfBell") ? .peak(hfF, hfG, 0.9, fs) : .highShelf(hfF, hfG, fs))
+        s.append(.peak(v("eqHmfHz"), v("eqHmfGainDb"), v("eqHmfQ"), fs))
+        s.append(.peak(v("eqLmfHz"), v("eqLmfGainDb"), v("eqLmfQ"), fs))
+        let lfF = v("eqLfHz"), lfG = v("eqLfGainDb")
+        s.append(engine.consoleBool(trackId, "eqLfBell") ? .peak(lfF, lfG, 0.9, fs) : .lowShelf(lfF, lfG, fs))
+        let hp = v("highPassHz"); if hp > 21 { s.append(.highPass(hp, fs)) }
+        let lp = v("lowPassHz"); if lp < 11900 { s.append(.lowPass(lp, fs)) }
+        return s
+    }
+
+    var body: some View {
+        let _ = engine.consoleRevision   // redraw when a knob moves
+        Canvas { ctx, size in
+            let W = size.width, H = size.height
+            let fs = (engine.sampleRate > 0 ? engine.sampleRate : 48000)
+            func xAt(_ f: Double) -> CGFloat { CGFloat(log(f / minF) / log(maxF / minF)) * W }
+            func yAtDb(_ db: Double) -> CGFloat { H / 2 - CGFloat(db / dbRange) * (H / 2 - 5) }
+
+            for f in [100.0, 1000.0, 10000.0] {
+                var p = Path(); p.move(to: CGPoint(x: xAt(f), y: 0)); p.addLine(to: CGPoint(x: xAt(f), y: H))
+                ctx.stroke(p, with: .color(.white.opacity(0.06)), lineWidth: 1)
+            }
+            var mid = Path(); mid.move(to: CGPoint(x: 0, y: H / 2)); mid.addLine(to: CGPoint(x: W, y: H / 2))
+            ctx.stroke(mid, with: .color(.white.opacity(0.10)), lineWidth: 1)
+
+            // Real-time spectrum background.
+            let bins = engine.spectrumBins
+            if bins.count > 1 {
+                let ny = fs / 2
+                var sp = Path(); sp.move(to: CGPoint(x: 0, y: H))
+                var started = false
+                for i in 0..<bins.count {
+                    let f = (Double(i) + 0.5) * ny / Double(bins.count)
+                    if f < minF || f > maxF { continue }
+                    let pt = CGPoint(x: xAt(f), y: H - CGFloat(max(0, min(1, bins[i]))) * H)
+                    if !started { sp.addLine(to: CGPoint(x: pt.x, y: H)); started = true }
+                    sp.addLine(to: pt)
+                }
+                sp.addLine(to: CGPoint(x: W, y: H)); sp.closeSubpath()
+                ctx.fill(sp, with: .color(Color(hex: 0x5bd6a0).opacity(0.16)))
+            }
+
+            // EQ response curve.
+            let secs = sections()
+            var curve = Path()
+            let steps = 160
+            for st in 0...steps {
+                let f = minF * pow(maxF / minF, Double(st) / Double(steps))
+                let db = secs.reduce(0.0) { $0 + $1.magDb(f, fs) }
+                let pt = CGPoint(x: CGFloat(Double(st) / Double(steps)) * W, y: yAtDb(max(-dbRange, min(dbRange, db))))
+                if st == 0 { curve.move(to: pt) } else { curve.addLine(to: pt) }
+            }
+            ctx.stroke(curve, with: .color(Color(hex: 0xffd166)), lineWidth: 1.6)
+        }
+        .background(Color.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
+    }
+}
+
 // MARK: - Module chrome
 
 private struct ConsoleModuleChrome<Content: View>: View {
@@ -337,7 +445,7 @@ struct NeuracoustConsoleModulesView: View {
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
         case .filter:    return 226
-        case .eq:        return 696
+        case .eq:        return 840
         case .comp:      return 356
         case .gate:      return 326
         case .saturator: return 226
@@ -399,8 +507,10 @@ struct NeuracoustConsoleModulesView: View {
 
     private var equaliser: some View {
         ConsoleModuleChrome(title: "EQUALISER", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
-            // Gain: dot scale (dots 3×, 2pt off the knob) with -/0/+ text and a 2× dimple.
-            // Freq: only the two end numbers, the rest dots. Q: narrow/wide bell icons + dots.
+          VStack(spacing: 0) {
+            EqGraphView(engine: engine, trackId: trackId)
+                .frame(height: 132).padding(.horizontal, 6).padding(.bottom, 6)
+            // Gain: -/0/+ text. Freq: two end numbers + live value. Q: narrow/wide bell icons.
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
@@ -417,6 +527,7 @@ struct NeuracoustConsoleModulesView: View {
                 bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 560)
             }
             .frame(height: 620)
+          }
         }
     }
 
