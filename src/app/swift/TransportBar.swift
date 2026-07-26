@@ -244,6 +244,7 @@ struct TransportBar: View {
         case .newTake: return "circle.fill"
         case .loop: return "repeat"
         case .punch: return "arrowtriangle.down.fill"
+        case .punchLoop: return "repeat.circle.fill"
         }
     }
 
@@ -359,9 +360,10 @@ struct TransportBar: View {
     /// design's 새 테이크 / 루프 / 펀치 glyphs.
     private var recordBadge: (symbol: String, tint: Color)? {
         switch engine.recordMode {
-        case .newTake: return nil
-        case .loop:    return ("repeat", Theme.Palette.red)
-        case .punch:   return ("arrowtriangle.down.fill", Theme.Palette.red)
+        case .newTake:   return nil
+        case .loop:      return ("repeat", Theme.Palette.red)
+        case .punch:     return ("arrowtriangle.down.fill", Theme.Palette.red)
+        case .punchLoop: return ("repeat.circle.fill", Theme.Palette.red)
         }
     }
 

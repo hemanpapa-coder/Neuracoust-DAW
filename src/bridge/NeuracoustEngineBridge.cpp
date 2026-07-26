@@ -1348,7 +1348,7 @@ void nc_track_set_console_value(NCEngine* engine, int index, const char* paramet
     NC_SET("compAttackMs",compAttackMs,0.1f,100.0f) NC_SET("compReleaseMs",compReleaseMs,100.0f,1500.0f)
     NC_SET("compMix",compMix,0.0f,1.0f)
     NC_SET("saturatorDriveDb",saturatorDriveDb,0.0f,24.0f) NC_SET("saturatorMix",saturatorMix,0.0f,1.0f)
-    NC_SET("gateThresholdDb",gateThresholdDb,-30.0f,0.0f) NC_SET("gateRangeDb",gateRangeDb,0.0f,40.0f)
+    NC_SET("gateThresholdDb",gateThresholdDb,-30.0f,5.0f) NC_SET("gateRangeDb",gateRangeDb,0.0f,40.0f)
     NC_SET("gateAttackMs",gateAttackMs,0.05f,20.0f) NC_SET("gateHoldMs",gateHoldMs,0.0f,800.0f)
     NC_SET("gateReleaseMs",gateReleaseMs,100.0f,1500.0f)
     NC_SET("eqHfGainDb",eqHfGainDb,-18.0f,18.0f) NC_SET("eqHfHz",eqHfHz,1500.0f,16000.0f)

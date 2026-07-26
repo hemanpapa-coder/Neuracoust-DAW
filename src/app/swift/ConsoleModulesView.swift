@@ -236,7 +236,7 @@ private struct ConsoleKnob: View {
                         .position(x: cx + r * sin(a), y: cy - r * cos(a))
                 } else {
                     Text(label)
-                        .font(.system(size: markFont, design: .monospaced))
+                        .font(.system(size: label == "∞" ? markFont * 2 : markFont, design: .monospaced))
                         .foregroundStyle(ConsoleKnobColor.bezel)
                         .position(x: cx + r * sin(a), y: cy - r * cos(a))
                 }
@@ -673,7 +673,7 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 66, cKnob("gateRangeDb", 0...40, 20, .green, ["0", "40"], "RNG", Self.intLabel, 1), size: sz)
-                placed(rx, 120, cKnob("gateThresholdDb", -30...0, -18, .orange, ["-30", "0"], "THR", Self.intLabel, 1), size: sz)
+                placed(rx, 120, cKnob("gateThresholdDb", -30...5, -18, .orange, ["-30", "+5"], "THR", Self.intLabel, 1), size: sz)
                 placed(lx, 176, cKnob("gateReleaseMs", 100...1500, 360, .green, [".1", "1.5"], "REL", Self.msLabel, 10), size: sz)
             }
             .frame(height: 258)

@@ -242,13 +242,14 @@ final class EngineController: ObservableObject {
     /// It is the configuration the recording engine will use — the engine does not yet
     /// capture input to disk, so choosing a mode stages it rather than arming a take.
     enum RecordMode: String, CaseIterable, Identifiable {
-        case newTake, loop, punch
+        case newTake, loop, punch, punchLoop
         var id: String { rawValue }
         var label: String {
             switch self {
             case .newTake: return "새 테이크"
             case .loop: return "루프 레코딩"
             case .punch: return "펀치 레코딩"
+            case .punchLoop: return "펀치 + 루프 레코딩"
             }
         }
     }
@@ -951,6 +952,7 @@ final class EngineController: ObservableObject {
         var roomEq: Bool
         // The REAL hardware this slot monitors on (speaker + its amp/cable), used by the correction.
         var realModel: String = ""
+        var realModelIsPassive: Bool = false   // active speakers have no external amp/cable
         var amp: String = ""
         var cable: String = ""
         var modelIsPassive: Bool = false
@@ -3859,7 +3861,8 @@ final class EngineController: ObservableObject {
     /// Selecting loop record turns the loop on so the two agree.
     func setRecordMode(_ mode: RecordMode) {
         recordMode = mode
-        if mode == .loop { setLoop(true) }
+        // Loop and Punch+Loop both drive over the loop range repeatedly.
+        if mode == .loop || mode == .punchLoop { setLoop(true) }
     }
 
     func toggleClick() {
@@ -7460,6 +7463,7 @@ final class EngineController: ObservableObject {
             let s = Int32(slot)
             let model = readString { nc_monitor_speaker_model(handle, s, $0, $1) }
             let bare = stripSlotPrefix(model)
+            let realM = readString { nc_monitor_speaker_real_model(handle, s, $0, $1) }
             return SpeakerSet(
                 id: slot,
                 letter: ["A", "B", "C"][slot],
@@ -7468,7 +7472,8 @@ final class EngineController: ObservableObject {
                 output: readString { nc_monitor_speaker_output(handle, s, $0, $1) },
                 simWeight: nc_monitor_speaker_sim_weight(handle, s),
                 roomEq: nc_monitor_speaker_room_eq(handle, s),
-                realModel: readString { nc_monitor_speaker_real_model(handle, s, $0, $1) },
+                realModel: realM,
+                realModelIsPassive: !realM.isEmpty && realM.withCString { nc_speaker_model_is_passive($0) },
                 amp: readString { nc_monitor_speaker_amp(handle, s, $0, $1) },
                 cable: readString { nc_monitor_speaker_cable(handle, s, $0, $1) },
                 modelIsPassive: !bare.isEmpty && bare.withCString { nc_speaker_model_is_passive($0) }
@@ -9158,6 +9163,13 @@ final class EngineController: ObservableObject {
     func setSpeakerRealModel(_ slot: Int, _ model: String) {
         guard let handle else { return }
         _ = model.withCString { nc_monitor_set_speaker_real_model(handle, Int32(slot), $0) }
+        // An active speaker has no external power amp / cable — clear them so they neither show
+        // nor colour the sim.
+        let passive = !model.isEmpty && model.withCString { nc_speaker_model_is_passive($0) }
+        if !passive {
+            _ = "".withCString { nc_monitor_set_speaker_amp(handle, Int32(slot), $0) }
+            _ = "".withCString { nc_monitor_set_speaker_cable(handle, Int32(slot), $0) }
+        }
         reloadMonitorState()
         refreshHistory()
     }
