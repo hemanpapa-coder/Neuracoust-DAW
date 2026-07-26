@@ -79,6 +79,7 @@ private struct ConsoleKnob: View {
     var centerFormat: ((Float) -> String)? = nil   // live readout drawn on the knob face
     var wheelStep: Float = 0            // value change per wheel notch (0 = proportional, span/100)
     var wheelLog: Bool = false          // if true, wheelStep is octaves/notch, applied multiplicatively
+    var logScale: Bool = false          // pointer + drag map logarithmically (frequency knobs)
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
@@ -90,7 +91,12 @@ private struct ConsoleKnob: View {
     @State private var fadeWork: DispatchWorkItem?
 
     private var normalized: Double {
-        Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
+        let v = Double(liveValue ?? value)
+        let lo = Double(range.lowerBound), hi = Double(range.upperBound)
+        if logScale && lo > 0 && hi > lo {
+            return (log(max(lo, min(hi, v))) - log(lo)) / (log(hi) - log(lo))
+        }
+        return (v - lo) / max(0.0001, hi - lo)
     }
     private var valueDeg: Double { markStart + normalized * (markEnd - markStart) }
 
@@ -132,8 +138,15 @@ private struct ConsoleKnob: View {
             .onChanged { drag in
                 let start = dragStart ?? value
                 if dragStart == nil { dragStart = start }
-                let span = range.upperBound - range.lowerBound
-                let next = min(range.upperBound, max(range.lowerBound, start + Float(-drag.translation.height / 90) * span))
+                let lo = range.lowerBound, hi = range.upperBound
+                var next: Float
+                if logScale && lo > 0 && hi > lo {
+                    let startNorm = (log(Double(start)) - log(Double(lo))) / (log(Double(hi)) - log(Double(lo)))
+                    let nextNorm = min(1, max(0, startNorm + Double(-drag.translation.height / 200)))
+                    next = Float(Double(lo) * pow(Double(hi) / Double(lo), nextNorm))
+                } else {
+                    next = min(hi, max(lo, start + Float(-drag.translation.height / 90) * (hi - lo)))
+                }
                 liveValue = next; onChange(next); flashValue()
             }
             .onEnded { _ in dragStart = nil; liveValue = nil; onCommit() })
@@ -356,13 +369,13 @@ struct NeuracoustConsoleModulesView: View {
                       diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5,
                       unitAtZero: Bool = false, dotDiameter: CGFloat = 0, dimpleSize: CGFloat = 8,
                       extraBottom: CGFloat = 0, centerFormat: ((Float) -> String)? = nil,
-                      wheelStep: Float = 0, wheelLog: Bool = false) -> some View {
+                      wheelStep: Float = 0, wheelLog: Bool = false, logScale: Bool = false) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
                     diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero,
                     dotDiameter: dotDiameter, dimpleSize: dimpleSize,
                     extraBottom: extraBottom, centerFormat: centerFormat,
-                    wheelStep: wheelStep, wheelLog: wheelLog,
+                    wheelStep: wheelStep, wheelLog: wheelLog, logScale: logScale,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -391,15 +404,15 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
-                placed(rx, 106, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
+                placed(rx, 106, eqFreq("eqHfHz", 1500...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
                 placed(lx, 162, eqGain("eqHmfGainDb", .green), size: sz)
-                placed(rx, 216, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "7"], "kHz"), size: sz)
+                placed(rx, 216, eqFreq("eqHmfHz", 600...7000, 3000, .green, [".6", "7"], "kHz"), size: sz)
                 placed(lx, 272, eqQ("eqHmfQ", .green), size: sz)
                 placed(rx, 326, eqQ("eqLmfQ", .blue), size: sz)
                 placed(lx, 382, eqGain("eqLmfGainDb", .blue), size: sz)
                 placed(rx, 436, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
                 placed(lx, 492, eqGain("eqLfGainDb", .brown), size: sz)
-                placed(rx, 546, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
+                placed(rx, 546, eqFreq("eqLfHz", 30...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
                 bellButton("eqHfBell", on: engine.consoleBool(trackId, "eqHfBell")).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 560)
             }
@@ -416,7 +429,7 @@ struct NeuracoustConsoleModulesView: View {
                         _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
         knob(param, range, def, color, marks: marks, unit: unit, markRadius: 14,
              diameter: 73, markFont: 15, unitFont: 15,
-             centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
+             centerFormat: Self.freqLabel, wheelLog: true, logScale: true)   // log pointer + semitone wheel
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
@@ -428,7 +441,7 @@ struct NeuracoustConsoleModulesView: View {
                        _ ends: [String], _ name: String, _ fmt: @escaping (Float) -> String,
                        _ step: Float, log: Bool = false) -> some View {
         knob(param, range, def, color, marks: ends, unit: name, markRadius: 14,
-             diameter: 73, markFont: 15, unitFont: 15, centerFormat: fmt, wheelStep: step, wheelLog: log)
+             diameter: 73, markFont: 15, unitFont: 15, centerFormat: fmt, wheelStep: step, wheelLog: log, logScale: log)
     }
 
     static func dbLabel(_ v: Float) -> String { String(format: "%+.0f", v) }
