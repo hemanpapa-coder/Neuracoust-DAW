@@ -888,38 +888,11 @@ struct ChannelStrip: View {
     /// same choice to every strip through `globalModuleFocusRevision`.
     private var moduleFocusPanel: some View {
         let order = moduleDisplayOrder
-        let leftCount = (order.count + 1) / 2
-        let left = Array(order.prefix(leftCount))
-        let right = Array(order.dropFirst(leftCount))
-        let rowCount = max(left.count, right.count)
-        let panelHeight = CGFloat(rowCount * 16 + 6)
-        return ZStack {
-            // Signal flow is deliberately a quiet background guide. It must not read as
-            // another control or consume vertical room when the mixer strip grows.
-            Canvas { context, size in
-                guard rowCount > 0 else { return }
-                let x = size.width / 2
-                var route = Path()
-                route.move(to: CGPoint(x: x, y: 4))
-                route.addLine(to: CGPoint(x: x, y: size.height - 4))
-                context.stroke(route, with: .color(accent.opacity(0.18)),
-                               style: StrokeStyle(lineWidth: 5, lineCap: .round))
-            }
-            .allowsHitTesting(false)
-
-            HStack(alignment: .top, spacing: 2) {
-                VStack(spacing: 2) {
-                    ForEach(left) { module in moduleFocusButton(module) }
-                }
-                .frame(maxWidth: .infinity)
-                VStack(spacing: 2) {
-                    ForEach(right) { module in moduleFocusButton(module) }
-                }
-                .frame(maxWidth: .infinity)
+        return VStack(spacing: 2) {
+            ForEach(Array(order.enumerated()), id: \.element) { idx, module in
+                moduleRow(module, index: idx, count: order.count)
             }
         }
-        .frame(height: panelHeight, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 5)
@@ -931,61 +904,51 @@ struct ChannelStrip: View {
         )
     }
 
-    private func moduleFocusButton(_ module: MixerModuleFocus) -> some View {
+    /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).
+    private func moduleRow(_ module: MixerModuleFocus, index: Int, count: Int) -> some View {
         let enabled = moduleIsEnabled(module)
         let focused = selectedModules.contains(module)
-        return Button {
-            moduleFocus = module
-            if NSEvent.modifierFlags.contains(.shift) {
-                if selectedModules.contains(module) {
-                    if selectedModules.count > 1 { selectedModules.remove(module) }
-                } else {
-                    selectedModules.insert(module)
-                }
-            } else {
-                selectedModules = [module]
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.45))
+                .frame(width: 5, height: 5)
+            Text(module.label)
+                .font(Theme.Font.ui(9, focused || enabled ? .bold : .semibold))
+                .foregroundStyle(focused ? Color(hex: 0xf4d9b8)
+                                         : (enabled ? Theme.Palette.textBright : Theme.Palette.textDim))
+                .lineLimit(1).minimumScaleFactor(0.8).allowsTightening(true)
+            Spacer(minLength: 2)
+            VStack(spacing: 0) {
+                reorderArrow(up: true, module, disabled: index == 0)
+                reorderArrow(up: false, module, disabled: index == count - 1)
             }
-        } label: {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.45))
-                    .frame(width: 4, height: 4)
-                Text(module.label)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .allowsTightening(true)
-                Spacer(minLength: 0)
-            }
-                .font(Theme.Font.ui(7.5, enabled || focused ? .bold : .regular))
-                .foregroundStyle(enabled ? Theme.Palette.textBright
-                                         : (focused ? accent : Theme.Palette.textDim))
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity)
-                .frame(height: 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(enabled
-                              ? accent.opacity(0.40)
-                              : Theme.Palette.background.opacity(0.88))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 3)
-                                .stroke(focused ? accent.opacity(0.82) : Color.clear,
-                                        lineWidth: 1)
-                        )
+        }
+        .padding(.horizontal, 6)
+        .frame(height: 20)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(focused ? accent.opacity(0.30)
+                              : (enabled ? Theme.Palette.background.opacity(0.55) : Color.clear))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(focused ? accent.opacity(0.82) : Color.clear, lineWidth: 1)
                 )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { selectModule(module) }
+        .helpTip("\(module.label) 채널 영역을 표시합니다. ▲▼로 순서를 바꿉니다.")
+    }
+
+    private func reorderArrow(up: Bool, _ module: MixerModuleFocus, disabled: Bool) -> some View {
+        Button { moveModule(module, by: up ? -1 : 1) } label: {
+            Image(systemName: up ? "chevron.up" : "chevron.down")
+                .font(.system(size: 6, weight: .bold))
+                .foregroundStyle(disabled ? Theme.Palette.textFainter.opacity(0.3) : Theme.Palette.textFaint)
+                .frame(width: 13, height: 8)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onDrag { NSItemProvider(object: module.rawValue as NSString) }
-        .onDrop(of: [.plainText], isTargeted: nil) { providers in
-            guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-                guard let raw = object as? String,
-                      let source = MixerModuleFocus(rawValue: raw) else { return }
-                DispatchQueue.main.async { moveModule(source, before: module) }
-            }
-            return true
-        }
-        .helpTip("\(module.label) 채널 영역을 표시합니다.")
+        .disabled(disabled)
     }
 
     private func moduleIsEnabled(_ module: MixerModuleFocus) -> Bool {
@@ -1019,6 +982,29 @@ struct ChannelStrip: View {
         order.remove(at: from)
         order.insert(source, at: from < to ? max(0, to - 1) : to)
         engine.setConsoleModuleOrder(track.id, order.map(\.rawValue))
+    }
+
+    // Reorder via the row's ▲▼ arrows: swap with the neighbour above/below.
+    private func moveModule(_ module: MixerModuleFocus, by delta: Int) {
+        var order = moduleDisplayOrder
+        guard let i = order.firstIndex(of: module) else { return }
+        let j = i + delta
+        guard j >= 0, j < order.count else { return }
+        order.swapAt(i, j)
+        engine.setConsoleModuleOrder(track.id, order.map(\.rawValue))
+    }
+
+    private func selectModule(_ module: MixerModuleFocus) {
+        moduleFocus = module
+        if NSEvent.modifierFlags.contains(.shift) {
+            if selectedModules.contains(module) {
+                if selectedModules.count > 1 { selectedModules.remove(module) }
+            } else {
+                selectedModules.insert(module)
+            }
+        } else {
+            selectedModules = [module]
+        }
     }
 
     private func consoleToggle(_ title: String, parameter: String, enabled: Bool) -> some View {
