@@ -841,10 +841,27 @@ struct ChannelStrip: View {
                 instrumentSlotSection
             }
             if showInserts && selectedModules.contains(.insert) && track.kind.showsInserts { insertSection }
-            if selectedModules.contains(.eq) { consoleEqSection }
-            if selectedModules.contains(.filter) { consoleFilterSection }
-            if selectedModules.contains(.comp) { consoleCompSection }
-            if selectedModules.contains(.gate) { consoleGateSection }
+            // New Claude Design SSL modules (wired to the same console params), scaled to the strip.
+            if selectedModules.contains(.eq) {
+                NeuracoustConsoleModulesView(module: .eq, width: stripWidth, engine: engine, trackId: track.id,
+                    inOn: track.consoleEqEnabled,
+                    onToggleIn: { engine.setConsoleBool(track.id, "eqEnabled", !track.consoleEqEnabled) })
+            }
+            if selectedModules.contains(.filter) {
+                NeuracoustConsoleModulesView(module: .filter, width: stripWidth, engine: engine, trackId: track.id,
+                    inOn: track.consoleFilterEnabled,
+                    onToggleIn: { engine.setConsoleBool(track.id, "filterEnabled", !track.consoleFilterEnabled) })
+            }
+            if selectedModules.contains(.comp) {
+                NeuracoustConsoleModulesView(module: .comp, width: stripWidth, engine: engine, trackId: track.id,
+                    inOn: track.consoleCompEnabled,
+                    onToggleIn: { engine.setConsoleBool(track.id, "compEnabled", !track.consoleCompEnabled) })
+            }
+            if selectedModules.contains(.gate) {
+                NeuracoustConsoleModulesView(module: .gate, width: stripWidth, engine: engine, trackId: track.id,
+                    inOn: track.consoleGateEnabled,
+                    onToggleIn: { engine.setConsoleBool(track.id, "gateEnabled", !track.consoleGateEnabled) })
+            }
             if selectedModules.contains(.saturator) { consoleSaturatorSection }
             if (selectedModules.contains(.deEss) || selectedModules.contains(.denoise))
                 && showInserts && track.kind.showsInserts { insertSection }
