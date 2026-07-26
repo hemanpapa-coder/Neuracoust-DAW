@@ -404,7 +404,7 @@ struct NeuracoustConsoleModulesView: View {
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
-             diameter: 66, markFont: 15, unitFont: 15, wheelStep: 0.1)
+             diameter: 66, markFont: 15, unitFont: 15, wheelStep: 0.4)   // coarser Q per notch
     }
 
     static func freqLabel(_ v: Float) -> String {
