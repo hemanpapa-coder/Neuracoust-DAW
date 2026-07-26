@@ -143,37 +143,49 @@ private struct ConsoleMiniKnob: View {
     var body: some View {
         VStack(spacing: 1) {
             ZStack {
-                // The 4000E controls use a restrained 270° hardware scale.  The
-                // alternating long/short ticks keep the control readable at mixer size.
+                // Subtle tick ring, 270° hardware scale.
                 ForEach(0..<11, id: \.self) { tick in
                     Capsule()
-                        .fill(tick == 5 ? Color.white.opacity(0.9) : Color.white.opacity(0.55))
-                        .frame(width: tick == 5 ? 1.4 : 1,
-                               height: tick.isMultiple(of: 5) ? 4.2 : 3)
-                        .offset(y: -23)
+                        .fill(tick == 5 ? Color.white.opacity(0.85) : Color.white.opacity(0.45))
+                        .frame(width: tick == 5 ? 1.3 : 1, height: tick.isMultiple(of: 5) ? 4 : 2.6)
+                        .offset(y: -24)
                         .rotationEffect(.degrees(-135 + Double(tick) * 27))
                 }
+                // Machined aluminium bezel — spun collar with chamfered edges (SSL E-series look).
                 Circle()
-                    .fill(Color.black.opacity(0.75))
+                    .fill(RadialGradient(colors: [Color(hex: 0x6a6b64), Color(hex: 0x232420), Color(hex: 0x08090a)],
+                                         center: UnitPoint(x: 0.40, y: 0.24), startRadius: 1, endRadius: 24))
+                    .overlay(
+                        AngularGradient(gradient: Gradient(colors: [
+                            .white.opacity(0.20), .black.opacity(0.28), .white.opacity(0.13),
+                            .black.opacity(0.30), .white.opacity(0.20)]), center: .center, angle: .degrees(208))
+                            .clipShape(Circle()).opacity(0.6))
+                    .overlay(Circle().stroke(.black, lineWidth: 1))
                     .frame(width: 46, height: 46)
+                    .shadow(color: .black.opacity(0.5), radius: 3, y: 2)
+                // Flat matte colored cap.
                 Circle()
-                    .fill(faceTint ?? Color(hex: 0xd8d6cf))
-                    .overlay(Circle().stroke(Color.black.opacity(0.8), lineWidth: 1.2))
-                    .frame(width: 40, height: 40)
+                    .fill(faceTint ?? Color(hex: 0xa29c8d))
+                    .overlay(Circle().fill(LinearGradient(colors: [.white.opacity(0.10), .clear, .black.opacity(0.34)],
+                                                          startPoint: .top, endPoint: .bottom)))
+                    .overlay(Circle().fill(RadialGradient(colors: [.white.opacity(0.16), .clear],
+                                                          center: UnitPoint(x: 0.5, y: 0.30), startRadius: 0, endRadius: 20)))
+                    .overlay(Circle().stroke(.white.opacity(0.07), lineWidth: 1))
+                    .frame(width: 38, height: 38)
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                // Carved dimple pointer with a bright cream fill.
                 Circle()
-                    .stroke(faceTint == nil ? Color.black.opacity(0.9) : tint,
-                            lineWidth: 0.8)
-                    .frame(width: 5, height: 5)
-                    .offset(y: -14.5)
+                    .fill(Color.black.opacity(0.55))
+                    .overlay(Circle().fill(Color(hex: 0xf7f4ea)).frame(width: 3.5, height: 3.5))
+                    .frame(width: 7, height: 7)
+                    .offset(y: -13)
                     .rotationEffect(.degrees(-135 + normalized * 270))
                 Text(display(liveValue ?? value))
                     .font(Theme.Font.mono(7.5, .bold))
-                    .foregroundStyle(faceTint == nil ? Color.black.opacity(0.9)
-                                                     : Color(hex: 0xf7f4ea))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .frame(width: 28)
-                    .shadow(color: faceTint == nil ? .clear : .black.opacity(0.75), radius: 1)
+                    .foregroundStyle(Color(hex: 0xf4f1e8))
+                    .lineLimit(1).minimumScaleFactor(0.6).frame(width: 26)
+                    .shadow(color: .black.opacity(0.8), radius: 1)
+                    .offset(y: 1)
             }
             .frame(width: 53, height: 53)
         }

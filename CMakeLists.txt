@@ -395,6 +395,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/ChatPanel.swift
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift
+        src/app/swift/ConsoleModulesView.swift
         src/app/swift/TrackInspector.swift
         src/app/swift/PianoRoll.swift
         src/app/swift/VirtualKeyboard.swift
