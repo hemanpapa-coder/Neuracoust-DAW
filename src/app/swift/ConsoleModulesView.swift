@@ -314,10 +314,8 @@ private struct EqGraphView: View {
     let trackId: Int
     private let minF = 20.0, maxF = 20000.0, dbRange = 18.0
     private let steps = 96
-    // Cached response curve (dB per column). Recomputed only when a knob moves, not every frame.
-    @State private var curveDb: [Double] = []
 
-    private func rebuild() {
+    private func sections() -> [Biquad] {
         let fs = (engine.sampleRate > 0 ? engine.sampleRate : 48000)
         func v(_ p: String) -> Double { Double(engine.consoleValue(trackId, p)) }
         var s: [Biquad] = []
@@ -329,12 +327,7 @@ private struct EqGraphView: View {
         s.append(engine.consoleBool(trackId, "eqLfBell") ? .peak(lfF, lfG, 0.9, fs) : .lowShelf(lfF, lfG, fs))
         let hp = v("highPassHz"); if hp > 21 { s.append(.highPass(hp, fs)) }
         let lp = v("lowPassHz"); if lp < 11900 { s.append(.lowPass(lp, fs)) }
-        var out = [Double](repeating: 0, count: steps + 1)
-        for i in 0...steps {
-            let f = minF * pow(maxF / minF, Double(i) / Double(steps))
-            out[i] = max(-dbRange, min(dbRange, s.reduce(0.0) { $0 + $1.magDb(f, fs) }))
-        }
-        curveDb = out
+        return s
     }
 
     var body: some View {
@@ -368,22 +361,20 @@ private struct EqGraphView: View {
                 ctx.fill(sp, with: .color(Color(hex: 0x5bd6a0).opacity(0.16)))
             }
 
-            // Cached EQ response curve (no per-frame biquad math).
-            if curveDb.count > 1 {
-                var curve = Path()
-                for i in 0..<curveDb.count {
-                    let pt = CGPoint(x: CGFloat(Double(i) / Double(curveDb.count - 1)) * W, y: yAtDb(curveDb[i]))
-                    if i == 0 { curve.move(to: pt) } else { curve.addLine(to: pt) }
-                }
-                ctx.stroke(curve, with: .color(Color(hex: 0xffd166)), lineWidth: 1.6)
+            // EQ response curve, computed from the live params each draw (cheap at 96 points).
+            let secs = sections()
+            var curve = Path()
+            for i in 0...steps {
+                let f = minF * pow(maxF / minF, Double(i) / Double(steps))
+                let db = max(-dbRange, min(dbRange, secs.reduce(0.0) { $0 + $1.magDb(f, fs) }))
+                let pt = CGPoint(x: CGFloat(Double(i) / Double(steps)) * W, y: yAtDb(db))
+                if i == 0 { curve.move(to: pt) } else { curve.addLine(to: pt) }
             }
+            ctx.stroke(curve, with: .color(Color(hex: 0xffd166)), lineWidth: 1.6)
         }
         .background(Color.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
-        .onAppear { rebuild() }
-        .onChange(of: engine.consoleRevision) { _ in rebuild() }
-        .onChange(of: engine.sampleRate) { _ in rebuild() }
     }
 }
 

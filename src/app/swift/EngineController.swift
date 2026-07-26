@@ -4187,13 +4187,12 @@ final class EngineController: ObservableObject {
         reloadTracks(); refreshHistory()
     }
 
-    // Bumped on any console parameter change so the EQ curve graph redraws live.
-    @Published var consoleRevision: Int = 0
-
     func setConsoleValue(_ id: Int, _ parameter: String, _ value: Float) {
         guard let handle else { return }
         parameter.withCString { nc_track_set_console_value(handle, Int32(id), $0, value) }
-        consoleRevision &+= 1
+        // No @Published bump here: doing so re-rendered the whole mixer at ~60Hz during an EQ
+        // drag, which could disturb the audio. The curve graph reads live params each draw
+        // instead (it redraws with the ~30Hz status poll while audio is flowing).
     }
 
     // MARK: Automation modes (Off / Read / Touch / Latch / Write)

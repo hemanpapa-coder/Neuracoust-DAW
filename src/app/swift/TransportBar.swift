@@ -201,12 +201,6 @@ struct TransportBar: View {
                             Text("10초 링아웃").tag(10.0)
                         }
                     }
-                transportOptionButton("arrow.uturn.backward",
-                                      selected: engine.stopBehavior == .returnToStart,
-                                      tint: Theme.Palette.accent) {
-                    engine.stopBehavior = engine.stopBehavior == .returnToStart ? .inPlace : .returnToStart
-                }
-                .help("Auto Return — 정지하면 재생을 시작한 위치로 돌아갑니다")
             }
             VStack(spacing: 2) {
                 // A green PLAY key, Sony-recorder style: lit bright green while playing, an
@@ -228,20 +222,6 @@ struct TransportBar: View {
                     Text(String(format: "Pre %.3fs · Post %.3fs",
                                 engine.preRollSeconds, engine.postRollSeconds))
                 }
-                Menu {
-                    transportModeItem("일반 재생", selected: !engine.loopEnabled) { engine.setLoop(false) }
-                    transportModeItem("루프 재생", selected: engine.loopEnabled) { engine.setLoop(true) }
-                    Divider()
-                    Button("프리/포스트롤 설정…") { engine.presentLoopRollSettings() }
-                } label: {
-                    transportOptionLabel(engine.loopEnabled ? "repeat" : "arrow.forward",
-                                         selected: engine.loopEnabled,
-                                         tint: Theme.Palette.green)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("재생 모드")
             }
             VStack(spacing: 2) {
                 // A red RECORD key: lit bright red while recording, dark red otherwise.
@@ -255,17 +235,6 @@ struct TransportBar: View {
                 .contextMenu {
                     recordModeMenuItems
                 }
-                Menu {
-                    recordModeMenuItems
-                } label: {
-                    transportOptionLabel(recordModeShortLabel,
-                                         selected: engine.recordMode != .newTake,
-                                         tint: Theme.Palette.red)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("레코드 모드 / 기록할 MIDI 컨트롤러")
             }
         }
     }
