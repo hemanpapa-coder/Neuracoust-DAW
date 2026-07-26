@@ -189,6 +189,8 @@ struct NeuracoustConsoleModulesView: View {
     let onToggleIn: () -> Void
 
     private let dbMarks = ["-15", "12", "9", "6", "3", "0", "3", "6", "9", "12", "+15"]
+    // Gain knobs: dots for the steps, "-"/"+" at the extremes, "0" at unity.
+    private let dbDotMarks = ["–", "·", "·", "·", "·", "0", "·", "·", "·", "·", "+"]
 
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
@@ -253,15 +255,15 @@ struct NeuracoustConsoleModulesView: View {
             let d: CGFloat = 60, mf: CGFloat = 12, uf: CGFloat = 12, lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 100
             ZStack {
                 eqSpine
-                placed(lx, 52, knob("eqHfGainDb", -18...18, 0, .red, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 52, knob("eqHfGainDb", -18...18, 0, .red, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
                 placed(rx, 86, knob("eqHfHz", 4000...16000, 8000, .red, marks: ["1.5", "3", "5", "8", "10", "14", "16"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 138, knob("eqHmfGainDb", -18...18, 0, .green, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 138, knob("eqHmfGainDb", -18...18, 0, .green, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
                 placed(rx, 172, knob("eqHmfHz", 1200...7500, 3000, .green, marks: [".6", "1", "2", "3", "4", "5", "7"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
                 placed(lx, 224, knob("eqHmfQ", 0.2...10, 1, .green, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
                 placed(rx, 258, knob("eqLmfQ", 0.2...10, 1, .blue, marks: ["3", "2", "1.5", "1", ".5"], unit: "Q", markRadius: 10, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 310, knob("eqLmfGainDb", -18...18, 0, .blue, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 310, knob("eqLmfGainDb", -18...18, 0, .blue, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
                 placed(rx, 344, knob("eqLmfHz", 400...2500, 1000, .blue, marks: [".4", ".8", "1", "1.5", "2.5"], unit: "kHz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
-                placed(lx, 396, knob("eqLfGainDb", -18...18, 0, .brown, marks: dbMarks, unit: "dB", diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
+                placed(lx, 396, knob("eqLfGainDb", -18...18, 0, .brown, marks: dbDotMarks, unit: "", diameter: d, markFont: mf, unitFont: uf, unitAtZero: false), size: sz)
                 placed(rx, 430, knob("eqLfHz", 90...450, 200, .brown, marks: ["30", "50", "100", "200", "300", "400", "450"], unit: "Hz", markRadius: 11, diameter: d, markFont: mf, unitFont: uf, unitAtZero: true), size: sz)
                 bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 461)
