@@ -144,8 +144,11 @@ private struct ConsoleKnob: View {
     private func applyScroll(_ delta: CGFloat, _ precise: Bool) {
         var notches = 0
         if precise {
+            // Reversing direction starts fresh, so up-then-down responds at once instead of first
+            // having to cancel leftover travel from the previous direction.
+            if scrollAccum != 0 && (delta > 0) != (scrollAccum > 0) { scrollAccum = 0 }
             scrollAccum += delta
-            let perNotch: CGFloat = 45          // trackpad: ~45pt of travel per step, one step max per event
+            let perNotch: CGFloat = 25          // trackpad: ~25pt of travel per step, one step max per event
             if abs(scrollAccum) >= perNotch {
                 notches = scrollAccum > 0 ? 1 : -1
                 scrollAccum -= CGFloat(notches) * perNotch
