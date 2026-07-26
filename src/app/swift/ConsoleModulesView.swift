@@ -5,7 +5,7 @@ import AppKit
 // clicks/drags), and reports wheel deltas only while the cursor is over the knob, via a local
 // scroll-event monitor.
 private struct KnobScrollWheel: NSViewRepresentable {
-    var onScroll: (CGFloat) -> Void
+    var onScroll: (CGFloat, Bool) -> Void   // (delta, isPreciseTrackpad)
     func makeNSView(context: Context) -> NSView {
         let v = Catcher(); v.onScroll = onScroll; return v
     }
@@ -13,7 +13,7 @@ private struct KnobScrollWheel: NSViewRepresentable {
         (nsView as? Catcher)?.onScroll = onScroll
     }
     final class Catcher: NSView {
-        var onScroll: ((CGFloat) -> Void)?
+        var onScroll: ((CGFloat, Bool) -> Void)?
         private var monitor: Any?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }   // mouse passes straight through
         override func viewDidMoveToWindow() {
@@ -24,8 +24,9 @@ private struct KnobScrollWheel: NSViewRepresentable {
                 guard let self, let win = self.window, event.window === win else { return event }
                 let rect = self.convert(self.bounds, to: nil)
                 if rect.contains(event.locationInWindow) {
-                    let dy = event.scrollingDeltaY
-                    if dy != 0 { self.onScroll?(dy); return nil }
+                    let precise = event.hasPreciseScrollingDeltas
+                    let dy = precise ? event.scrollingDeltaY : event.deltaY
+                    if dy != 0 { self.onScroll?(dy, precise); return nil }
                 }
                 return event
             }
@@ -71,11 +72,14 @@ private struct ConsoleKnob: View {
     var dimpleSize: CGFloat = 8         // pointer dimple outer diameter (inner = half)
     var extraBottom: CGFloat = 0        // extra frame height so the unit clears the rim below
     var centerFormat: ((Float) -> String)? = nil   // live readout drawn on the knob face
+    var wheelStep: Float = 0            // value change per wheel notch (0 = proportional, span/100)
+    var wheelLog: Bool = false          // if true, wheelStep is octaves/notch, applied multiplicatively
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
     @State private var liveValue: Float?
     @State private var scrollCommit: DispatchWorkItem?
+    @State private var scrollAccum: CGFloat = 0
 
     private var normalized: Double {
         Double(((liveValue ?? value) - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
@@ -105,12 +109,11 @@ private struct ConsoleKnob: View {
                 .overlay(Circle().stroke(.white.opacity(0.07), lineWidth: 1))
                 .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
                 .frame(width: diameter - 8, height: diameter - 8)
-            // Carved dimple pointer.
-            Circle()
-                .fill(Color.black.opacity(0.55))
-                .overlay(Circle().fill(color.dot).frame(width: dimpleSize / 2, height: dimpleSize / 2))
-                .frame(width: dimpleSize, height: dimpleSize)
-                .offset(y: -(diameter / 2 - dimpleSize / 2 - 4))
+            // Pointer line (5×2), near the rim, in the cap's marker color.
+            RoundedRectangle(cornerRadius: 1)
+                .fill(color.dot)
+                .frame(width: 2, height: 5)
+                .offset(y: -(diameter / 2 - 6))
                 .rotationEffect(.degrees(valueDeg))
             // Live value on the knob face (e.g. current frequency).
             if let centerFormat {
@@ -123,7 +126,7 @@ private struct ConsoleKnob: View {
         }
         .frame(width: diameter + markRadius * 2 + 12, height: diameter + markRadius * 2 + 10 + extraBottom)
         .overlay(marksOverlay)
-        .overlay(KnobScrollWheel { dy in applyScroll(dy) }.frame(width: diameter, height: diameter))
+        .overlay(KnobScrollWheel { dy, precise in applyScroll(dy, precise) }.frame(width: diameter, height: diameter))
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 1)
             .onChanged { drag in
@@ -139,11 +142,30 @@ private struct ConsoleKnob: View {
         })
     }
 
-    // Wheel over the knob: change live, then record one undo step once scrolling settles.
-    private func applyScroll(_ dy: CGFloat) {
-        let span = range.upperBound - range.lowerBound
+    // Wheel over the knob: one detent = one step (1 dB for gain, a semitone for freq, etc.);
+    // change live, then record one undo step once scrolling settles.
+    private func applyScroll(_ delta: CGFloat, _ precise: Bool) {
+        var notches = 0
+        if precise {
+            scrollAccum += delta
+            let perNotch: CGFloat = 10          // ~10pt of trackpad travel = one step
+            let n = (scrollAccum / perNotch).rounded(.towardZero)
+            if n != 0 { scrollAccum -= n * perNotch; notches = Int(n) }
+        } else {
+            notches = delta > 0 ? 1 : -1        // one mouse detent = one step (no acceleration)
+        }
+        guard notches != 0 else { return }
+        let dir = Float(notches)
         let base = liveValue ?? value
-        let next = min(range.upperBound, max(range.lowerBound, base + Float(dy) * span / 500))
+        var next: Float
+        if wheelLog {
+            let oct = wheelStep > 0 ? wheelStep : 1.0 / 12    // default one semitone per notch
+            next = base * powf(2, dir * oct)
+        } else {
+            let inc = wheelStep > 0 ? wheelStep : (range.upperBound - range.lowerBound) / 100
+            next = base + dir * inc
+        }
+        next = min(range.upperBound, max(range.lowerBound, next))
         liveValue = next
         onChange(next)
         scrollCommit?.cancel()
@@ -281,8 +303,8 @@ struct NeuracoustConsoleModulesView: View {
     let inOn: Bool
     let onToggleIn: () -> Void
 
-    // Gain knobs: dots for the steps, "-"/"+" at the extremes, "0" at unity.
-    private let dbDotMarks = ["–", "·", "·", "·", "·", "0", "·", "·", "·", "·", "+"]
+    // Gain knobs: "-" / "0" / "+" only, no dots.
+    private let gainMarks = ["–", "0", "+"]
 
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
@@ -316,12 +338,14 @@ struct NeuracoustConsoleModulesView: View {
                       _ color: ConsoleKnobColor, marks: [String], unit: String, markRadius: CGFloat = 12,
                       diameter: CGFloat = 50, markFont: CGFloat = 7, unitFont: CGFloat = 6.5,
                       unitAtZero: Bool = false, dotDiameter: CGFloat = 0, dimpleSize: CGFloat = 8,
-                      extraBottom: CGFloat = 0, centerFormat: ((Float) -> String)? = nil) -> some View {
+                      extraBottom: CGFloat = 0, centerFormat: ((Float) -> String)? = nil,
+                      wheelStep: Float = 0, wheelLog: Bool = false) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
                     diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero,
                     dotDiameter: dotDiameter, dimpleSize: dimpleSize,
                     extraBottom: extraBottom, centerFormat: centerFormat,
+                    wheelStep: wheelStep, wheelLog: wheelLog,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -351,15 +375,15 @@ struct NeuracoustConsoleModulesView: View {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
                 placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
-                placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "·", "·", "·", "·", "·", "16"], "kHz"), size: sz)
+                placed(rx, 86, eqFreq("eqHfHz", 4000...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
                 placed(lx, 162, eqGain("eqHmfGainDb", .green), size: sz)
-                placed(rx, 196, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "·", "·", "·", "·", "·", "7"], "kHz"), size: sz)
+                placed(rx, 196, eqFreq("eqHmfHz", 1200...7500, 3000, .green, [".6", "7"], "kHz"), size: sz)
                 placed(lx, 272, eqQ("eqHmfQ", .green), size: sz)
                 placed(rx, 306, eqQ("eqLmfQ", .blue), size: sz)
                 placed(lx, 382, eqGain("eqLmfGainDb", .blue), size: sz)
-                placed(rx, 416, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "·", "·", "·", "2.5"], "kHz"), size: sz)
+                placed(rx, 416, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
                 placed(lx, 492, eqGain("eqLfGainDb", .brown), size: sz)
-                placed(rx, 526, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "·", "·", "·", "·", "·", "450"], "Hz"), size: sz)
+                placed(rx, 526, eqFreq("eqLfHz", 90...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
                 bellButton("eqHfBell", on: engine.consoleValue(trackId, "eqHfBell") > 0.5).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleValue(trackId, "eqLfBell") > 0.5).position(x: lx, y: 555)
             }
@@ -369,19 +393,19 @@ struct NeuracoustConsoleModulesView: View {
 
     // EQ knob categories. Shared: 60pt body, 14pt labels, 5pt dots 2pt off the rim.
     private func eqGain(_ param: String, _ color: ConsoleKnobColor) -> some View {
-        knob(param, -18...18, 0, color, marks: dbDotMarks, unit: "",
-             diameter: 66, markFont: 15, dotDiameter: 5.5, dimpleSize: 18)
+        knob(param, -18...18, 0, color, marks: gainMarks, unit: "",
+             diameter: 66, markFont: 15, wheelStep: 1)                 // 1 dB per notch
     }
     private func eqFreq(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
                         _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
         // Live frequency in the knob face; unit dropped clear of the rim below.
         knob(param, range, def, color, marks: marks, unit: unit,
-             diameter: 66, markFont: 15, unitFont: 15, dotDiameter: 5.5, dimpleSize: 9,
-             extraBottom: 15, centerFormat: Self.freqLabel)
+             diameter: 66, markFont: 15, unitFont: 15,
+             extraBottom: 15, centerFormat: Self.freqLabel, wheelLog: true)   // one semitone per notch
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         knob(param, 0.2...10, 1, color, marks: ["QN", "QW"], unit: "",
-             diameter: 66, markFont: 15, unitFont: 15, dotDiameter: 5.5, dimpleSize: 9)
+             diameter: 66, markFont: 15, unitFont: 15, wheelStep: 0.1)
     }
 
     static func freqLabel(_ v: Float) -> String {
