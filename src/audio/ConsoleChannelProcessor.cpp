@@ -65,6 +65,56 @@ float softKnee(float overDb, float kneeDb) {
     const float x = overDb + kneeDb * 0.5f;
     return x * x / (2.0f * kneeDb);
 }
+// Deterministic per-channel "component tolerance": a bounded value in [-1,1] from the channel seed
+// and a per-parameter salt, so every strip differs but the same strip is stable across renders.
+float biasVal(int seed, int salt) {
+    unsigned h = static_cast<unsigned>(seed) * 2654435761u ^ static_cast<unsigned>(salt) * 40503u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return static_cast<float>(h & 0xffffu) / 32767.5f - 1.0f;
+}
+// Nudge a model's character by the channel bias (no-op at depth 0). The salt base keeps comp / gate
+// / saturator from all drifting the same way.
+void biasModel(ConsoleModelChar& c, int seed, float depth, int salt) {
+    if (depth <= 0.0f) return;
+    c.harmonic   = clamp(c.harmonic + biasVal(seed, salt + 0) * depth * 0.06f, 0.0f, 1.0f);
+    c.compAtkMul *= 1.0f + biasVal(seed, salt + 1) * depth * 0.04f;
+    c.compRelMul *= 1.0f + biasVal(seed, salt + 2) * depth * 0.04f;
+    c.compDrive  *= 1.0f + biasVal(seed, salt + 3) * depth * 0.05f;
+    c.gateAtkMul *= 1.0f + biasVal(seed, salt + 4) * depth * 0.04f;
+    c.gateRelMul *= 1.0f + biasVal(seed, salt + 5) * depth * 0.04f;
+}
+}
+
+// The harmonic spectrum the saturator currently adds. A test sine is pushed through the exact
+// saturate() math at the live drive/mix/model/circuit settings and a small DFT reads the level of
+// each harmonic relative to the fundamental — so the picture is what is actually heard, not a guess.
+void consoleSaturatorHarmonics(const ConsoleChannelState& p, float* out, int count) {
+    for (int i = 0; i < count; ++i) out[i] = 0.0f;
+    if (out == nullptr || count <= 0 || !p.saturatorEnabled) return;
+    ConsoleModelChar mc = modelChar(p.model);
+    biasModel(mc, p.channelBiasSeed, p.channelBiasDepth, 20);
+    const float drive = dbToGain(p.saturatorDriveDb) * (0.85f + 0.35f * mc.harmonic);
+    const float mix = clamp(p.saturatorMix, 0.0f, 1.0f);
+    // One full period is exact for a memoryless waveshaper driven by a sine, so a short window
+    // is enough — this runs per UI frame, per visible strip.
+    constexpr int N = 512;
+    const float amp = 0.5f;                       // moderate test level so drive actually bites
+    const int H = count + 1;                      // harmonics 2..count+1 (index 1 is fundamental)
+    std::vector<float> re(H + 1, 0.0f), im(H + 1, 0.0f);
+    for (int s = 0; s < N; ++s) {
+        const float ph = 2.0f * pi * static_cast<float>(s) / N;
+        const float x = amp * std::sin(ph);
+        const float wet = saturate(x, drive, p.saturatorCircuitMode, mc.harmonic);
+        const float y = x * (1.0f - mix) + wet * mix;
+        for (int h = 1; h <= H; ++h) { re[h] += y * std::cos(h * ph); im[h] += y * std::sin(h * ph); }
+    }
+    auto mag = [&](int h) { return std::sqrt(re[h] * re[h] + im[h] * im[h]); };
+    const float fund = std::max(1e-9f, mag(1));
+    for (int h = 2; h <= H; ++h) {
+        const float rel = mag(h) / fund;
+        const float db = 20.0f * std::log10(std::max(1e-6f, rel));
+        out[h - 2] = clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);   // -60..0 dB → 0..1 bar height
+    }
 }
 
 float ConsoleChannelProcessor::Biquad::process(float x) {
@@ -142,25 +192,31 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
          !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR)) return;
     if (sampleRate_ != sr) reset(sr);
+    // Analog-console channel variation: a tiny per-strip EQ-frequency drift and an output trim,
+    // both deterministic from the channel seed (no-op at depth 0). modelChar gets nudged too below.
+    const float bd = clamp(p.channelBiasDepth, 0.0f, 1.0f);
+    const float freqBias = 1.0f + biasVal(p.channelBiasSeed, 30) * bd * 0.01f;   // ±1% EQ centres
+    const float gainTrim = dbToGain(biasVal(p.channelBiasSeed, 31) * bd * 0.2f); // ±0.2 dB trim
     // Coefficients are set from the live params here; the Biquad ramps to them per sample.
     for (auto& ch : eq_) {
-        ch[0].highPass(sr, p.highPassHz);
-        ch[1].lowPass(sr, p.lowPassHz);
-        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz, 0.7f, p.eqHfGainDb);
-        else ch[2].shelf(sr, p.eqHfHz, p.eqHfGainDb, true);
+        ch[0].highPass(sr, p.highPassHz * freqBias);
+        ch[1].lowPass(sr, p.lowPassHz * freqBias);
+        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz * freqBias, 0.7f, p.eqHfGainDb);
+        else ch[2].shelf(sr, p.eqHfHz * freqBias, p.eqHfGainDb, true);
         const float hmfQ = p.eqEMode ? p.eqHmfQ : std::max(0.2f, p.eqHmfQ * 0.7f);
         const float lmfQ = p.eqEMode ? p.eqLmfQ : std::max(0.2f, p.eqLmfQ * 0.7f);
-        ch[3].peak(sr, p.eqHmfHz, hmfQ, p.eqHmfGainDb);
-        ch[4].peak(sr, p.eqLmfHz, lmfQ, p.eqLmfGainDb);
-        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz, 0.7f, p.eqLfGainDb);
-        else ch[5].shelf(sr, p.eqLfHz, p.eqLfGainDb, false);
+        ch[3].peak(sr, p.eqHmfHz * freqBias, hmfQ, p.eqHmfGainDb);
+        ch[4].peak(sr, p.eqLmfHz * freqBias, lmfQ, p.eqLmfGainDb);
+        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz * freqBias, 0.7f, p.eqLfGainDb);
+        else ch[5].shelf(sr, p.eqLfHz * freqBias, p.eqLfGainDb, false);
     }
-    // Per-model DSP character voices the shared comp/gate as a named classic (SSL E/G, Neve, API, …).
-    const ConsoleModelChar cc = modelChar(p.compType);
-    const ConsoleModelChar gc = modelChar(p.gateType);
+    // Per-model DSP character voices the shared comp/gate as a named classic (SSL E/G, Neve, API, …),
+    // then the channel bias nudges each so no two strips are bit-identical.
+    ConsoleModelChar cc = modelChar(p.compType); biasModel(cc, p.channelBiasSeed, bd, 0);
+    ConsoleModelChar gc = modelChar(p.gateType); biasModel(gc, p.channelBiasSeed, bd, 10);
     // The strip's overall console model voices the saturator and the filter/EQ circuit colour
     // (the modules that share the console-model plate, as opposed to comp/gate's own models).
-    const ConsoleModelChar mc = modelChar(p.model);
+    ConsoleModelChar mc = modelChar(p.model); biasModel(mc, p.channelBiasSeed, bd, 20);
     const float cDet = coeff(sr, 8), gDet = coeff(sr, 5);
     const float cAtk = coeff(sr, (p.compFastAttack ? 3.0f : p.compAttackMs) * cc.compAtkMul);
     const float cRel = coeff(sr, p.compReleaseMs * cc.compRelMul);
@@ -249,6 +305,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         }
         if (p.phaseInvertL) l = -l;               // channel polarity (Ø), per side, end of chain
         if (p.phaseInvertR) r = -r;
+        l *= gainTrim; r *= gainTrim;             // per-channel output trim (analog bias, ±0.2 dB)
         audio[i]=l; audio[i+1]=r;
     }
 }

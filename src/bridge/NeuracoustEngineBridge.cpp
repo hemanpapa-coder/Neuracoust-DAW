@@ -1,6 +1,7 @@
 #include "bridge/NeuracoustEngineBridge.h"
 
 #include "ai/AiAssistant.h"
+#include "audio/ConsoleChannelProcessor.h"
 #include "audio/ParametricEq.h"
 #include "audio/MonitorCorrection.h"
 #include "audio/OutputChainModeling.h"
@@ -1278,6 +1279,49 @@ void nc_track_set_console_model(NCEngine* engine, int index, const char* name) {
     t->consoleChannel.model = name;
     engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);   // live, no rebuild
     engine->recordStep("Console model");
+}
+// Harmonic spectrum the saturator adds right now (2nd..count+1), each 0..1. Drives the strip's
+// harmonics visualiser; computed from the live console params so it tracks Drive/Mix/model.
+void nc_track_console_harmonics(NCEngine* engine, int index, float* out, int count) {
+    for (int i = 0; i < count; ++i) if (out != nullptr) out[i] = 0.0f;
+    const auto* t = trackAt(engine, index);
+    if (t == nullptr || out == nullptr || count <= 0) return;
+    neuracoust::daw::consoleSaturatorHarmonics(t->consoleChannel, out, count);
+}
+// --- Analog channel bias: per-strip variation reproduced digitally, up to 512 tracks -------------
+int nc_track_console_bias_seed(NCEngine* engine, int index) {
+    const auto* t = trackAt(engine, index); return t != nullptr ? t->consoleChannel.channelBiasSeed : 0;
+}
+float nc_track_console_bias_depth(NCEngine* engine, int index) {
+    const auto* t = trackAt(engine, index); return t != nullptr ? t->consoleChannel.channelBiasDepth : 0.0f;
+}
+// Auto: seed every strip from its channel index at the given depth (0..1). One undo step.
+void nc_console_bias_auto(NCEngine* engine, float depth) {
+    if (engine == nullptr) return;
+    const float d = depth < 0.0f ? 0.0f : (depth > 1.0f ? 1.0f : depth);
+    for (size_t i = 0; i < engine->project.tracks.size(); ++i) {
+        auto& t = engine->project.tracks[i];
+        t.consoleChannel.channelBiasSeed = static_cast<int>(i) + 1;
+        t.consoleChannel.channelBiasDepth = d;
+        engine->engine.updateTrackConsoleChannel(t.name, t.consoleChannel);
+    }
+    engine->recordStep("Channel bias (auto)");
+}
+// Off: matched channels (depth 0) — a pure digital console.
+void nc_console_bias_off(NCEngine* engine) {
+    if (engine == nullptr) return;
+    for (auto& t : engine->project.tracks) {
+        t.consoleChannel.channelBiasDepth = 0.0f;
+        engine->engine.updateTrackConsoleChannel(t.name, t.consoleChannel);
+    }
+    engine->recordStep("Channel bias (off)");
+}
+// Manual: re-roll one strip's character (keeps its current depth).
+void nc_track_set_console_bias_seed(NCEngine* engine, int index, int seed) {
+    auto* t = trackAt(engine, index); if (t == nullptr) return;
+    t->consoleChannel.channelBiasSeed = seed;
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);
+    engine->recordStep("Channel bias (manual)");
 }
 // Per-module model (comp / gate) — the model library. Each voices the DSP as a named classic.
 void nc_track_console_comp_type(NCEngine* engine, int index, char* out, size_t outLen) {

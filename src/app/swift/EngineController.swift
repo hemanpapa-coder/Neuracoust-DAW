@@ -4202,6 +4202,40 @@ final class EngineController: ObservableObject {
         return parameter.withCString { nc_track_console_value(handle, Int32(id), $0) }
     }
 
+    /// Harmonic levels (2nd..count+1) the saturator adds right now, each 0..1. Feeds the strip's
+    /// harmonics visualiser; recomputed from live console params so it tracks Drive/Mix/model.
+    func consoleHarmonics(_ id: Int, count: Int = 7) -> [Double] {
+        guard let handle else { return Array(repeating: 0, count: count) }
+        var out = [Float](repeating: 0, count: count)
+        nc_track_console_harmonics(handle, Int32(id), &out, Int32(count))
+        return out.map { Double($0) }
+    }
+
+    // Analog-console channel bias: each strip gets a tiny, deterministic variation so 512 channels
+    // are not bit-identical. Auto is the default; the depth dials how much; off = matched channels.
+    @Published var consoleBiasOn: Bool = false
+    @Published var consoleBiasDepth: Double = 0.5   // remembered depth for the auto apply
+    /// Apply per-channel bias to every strip, seeded by channel index, at `depth` (0..1).
+    func applyConsoleBiasAuto(_ depth: Double) {
+        guard let handle else { return }
+        nc_console_bias_auto(handle, Float(depth))
+        consoleBiasDepth = depth; consoleBiasOn = depth > 0
+        reloadTracks(); refreshHistory()
+    }
+    /// Matched channels — a pure digital console (bias off).
+    func disableConsoleBias() {
+        guard let handle else { return }
+        nc_console_bias_off(handle)
+        consoleBiasOn = false
+        reloadTracks(); refreshHistory()
+    }
+    /// Manually re-roll one channel's character (keeps the current depth).
+    func rerollConsoleBias(_ id: Int, seed: Int) {
+        guard let handle else { return }
+        nc_track_set_console_bias_seed(handle, Int32(id), Int32(seed))
+        reloadTracks(); refreshHistory()
+    }
+
     func consoleBool(_ id: Int, _ parameter: String) -> Bool {
         guard let handle else { return false }
         return parameter.withCString { nc_track_console_bool(handle, Int32(id), $0) }

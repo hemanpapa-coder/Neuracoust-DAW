@@ -2149,6 +2149,8 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"consolePhaseInvert\":" << (track.consoleChannel.phaseInvert ? "true" : "false")
             << ",\"consolePhaseInvertL\":" << (track.consoleChannel.phaseInvertL ? "true" : "false")
             << ",\"consolePhaseInvertR\":" << (track.consoleChannel.phaseInvertR ? "true" : "false")
+            << ",\"consoleChannelBiasSeed\":" << track.consoleChannel.channelBiasSeed
+            << ",\"consoleChannelBiasDepth\":" << track.consoleChannel.channelBiasDepth
             << ",\"consoleEqType\":\"" << escapeJsonString(track.consoleChannel.eqType) << "\""
             << ",\"channelFormat\":\"" << escapeJsonString(track.channelFormat == "mono" ? "mono" : "stereo") << "\""
             << ",\"pan\":" << track.pan << ",\"muted\":" << (track.muted ? "true" : "false")
@@ -2914,6 +2916,8 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         const bool legacyPhase = track.consoleChannel.phaseInvert;
         track.consoleChannel.phaseInvertL = boolAfterKey(body, "consolePhaseInvertL", legacyPhase);
         track.consoleChannel.phaseInvertR = boolAfterKey(body, "consolePhaseInvertR", legacyPhase);
+        track.consoleChannel.channelBiasSeed = (int)numberAfterKey(body, "consoleChannelBiasSeed", 0);
+        track.consoleChannel.channelBiasDepth = finiteRange((float)numberAfterKey(body, "consoleChannelBiasDepth", 0), 0.0f, 0.0f, 1.0f);
         track.consoleChannel.eqType = trim(stringAfterKey(body, "consoleEqType"));
         if (track.consoleChannel.eqType.empty() || track.consoleChannel.eqType == "ssl_4001e")
             track.consoleChannel.eqType = "ssl_4000e";

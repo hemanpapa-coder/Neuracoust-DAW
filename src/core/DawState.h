@@ -143,6 +143,12 @@ struct ConsoleChannelState {
     bool phaseInvert = false;
     bool phaseInvertL = false;
     bool phaseInvertR = false;
+    /// Analog-console channel variation, digitally reproduced: each strip gets tiny, deterministic
+    /// offsets (from the seed) to EQ frequency, saturation harmonic, comp/gate timing and output
+    /// trim, so 512 channels are not bit-identical the way a pure digital console is. `seed` is
+    /// normally the channel index (auto), user-overridable (manual); `depth` 0 = off (matched).
+    int channelBiasSeed = 0;
+    float channelBiasDepth = 0.0f;
 };
 
 struct TrackState {

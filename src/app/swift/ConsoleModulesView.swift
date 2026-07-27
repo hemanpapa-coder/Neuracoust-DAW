@@ -517,6 +517,174 @@ private struct EqGraphView: View {
     }
 }
 
+// The saturator's live harmonic spectrum — a bar per harmonic (2nd..8th) it adds, warm (even)
+// vs cool (odd) so the model/drive character is visible, not just audible. Recomputed each draw
+// from the same saturate() math the engine runs (engine.consoleHarmonics).
+private struct HarmonicsGraphView: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    private let count = 7   // 2nd .. 8th
+
+    var body: some View {
+        Canvas { ctx, size in
+            let W = size.width, H = size.height
+            let vals = engine.consoleHarmonics(trackId, count: count)
+            var base = Path(); base.move(to: CGPoint(x: 0, y: H - 0.5)); base.addLine(to: CGPoint(x: W, y: H - 0.5))
+            ctx.stroke(base, with: .color(.white.opacity(0.12)), lineWidth: 1)
+            guard !vals.isEmpty else { return }
+            let slot = W / CGFloat(vals.count)
+            let barW = slot * 0.5
+            for i in 0..<vals.count {
+                let v = CGFloat(max(0, min(1, vals[i])))
+                let barH = v * (H - 12)
+                let x = slot * CGFloat(i) + (slot - barW) / 2
+                let rect = CGRect(x: x, y: H - barH - 9, width: barW, height: max(0.5, barH))
+                let even = (i % 2 == 0)   // i=0 → 2nd, i=2 → 4th …  even harmonics read warm
+                let col = even ? Color(hex: 0xffb454) : Color(hex: 0x5bd6a0)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(col.opacity(0.92)))
+                ctx.draw(Text("\(i + 2)").font(.system(size: 7, weight: .semibold)).foregroundColor(.white.opacity(0.45)),
+                         at: CGPoint(x: x + barW / 2, y: H - 4))
+            }
+        }
+        .background(Color.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
+    }
+}
+
+// The comp + gate static transfer curve (input dB → output dB): the gate/expander pulls the low
+// end down below its threshold, the compressor flattens the top above its threshold. Steady-state
+// gain from the same target math the processor uses, so the shape matches the sound.
+private struct DynamicsGraphView: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    private let lo = -60.0, hi = 0.0
+    private let steps = 96
+
+    var body: some View {
+        Canvas { ctx, size in
+            let W = size.width, H = size.height
+            let compOn = engine.consoleBool(trackId, "compEnabled")
+            let gateOn = engine.consoleBool(trackId, "gateEnabled")
+            let expander = engine.consoleBool(trackId, "expanderMode")
+            let compThr = Double(engine.consoleValue(trackId, "compThresholdDb"))
+            let ratio = max(1.0, Double(engine.consoleValue(trackId, "compRatio")))
+            let gateThr = Double(engine.consoleValue(trackId, "gateThresholdDb"))
+            let range = max(0.0, Double(engine.consoleValue(trackId, "gateRangeDb")))
+            func x(_ db: Double) -> CGFloat { CGFloat((db - lo) / (hi - lo)) * W }
+            func y(_ db: Double) -> CGFloat { H - CGFloat((db - lo) / (hi - lo)) * H }
+
+            for d in stride(from: -50.0, through: -10.0, by: 20.0) {
+                var p = Path(); p.move(to: CGPoint(x: x(d), y: 0)); p.addLine(to: CGPoint(x: x(d), y: H))
+                ctx.stroke(p, with: .color(.white.opacity(0.06)), lineWidth: 1)
+            }
+            var diag = Path(); diag.move(to: CGPoint(x: x(lo), y: y(lo))); diag.addLine(to: CGPoint(x: x(hi), y: y(hi)))
+            ctx.stroke(diag, with: .color(.white.opacity(0.14)), lineWidth: 1)
+            if compOn { var p = Path(); p.move(to: CGPoint(x: x(compThr), y: 0)); p.addLine(to: CGPoint(x: x(compThr), y: H)); ctx.stroke(p, with: .color(Color(hex: 0xffd166).opacity(0.35)), lineWidth: 1) }
+            if gateOn { var p = Path(); p.move(to: CGPoint(x: x(gateThr), y: 0)); p.addLine(to: CGPoint(x: x(gateThr), y: H)); ctx.stroke(p, with: .color(Color(hex: 0x5bd6a0).opacity(0.35)), lineWidth: 1) }
+
+            func outDb(_ inDb: Double) -> Double {
+                var g = 0.0
+                if gateOn {
+                    let below = max(0.0, gateThr - inDb)
+                    var shape = min(1.0, max(0.0, below / 24.0))
+                    if !expander { shape = below > 4.0 ? pow(shape, 0.35) : 0.0 }
+                    g += -min(40.0, range) * shape
+                }
+                if compOn {
+                    let over = max(0.0, inDb - compThr)
+                    g += -over * (1.0 - 1.0 / min(20.0, ratio))
+                }
+                return inDb + g
+            }
+            var curve = Path()
+            for i in 0...steps {
+                let inDb = lo + (hi - lo) * Double(i) / Double(steps)
+                let o = max(lo, min(hi, outDb(inDb)))
+                let pt = CGPoint(x: x(inDb), y: y(o))
+                if i == 0 { curve.move(to: pt) } else { curve.addLine(to: pt) }
+            }
+            ctx.stroke(curve, with: .color(Color(hex: 0xffb454)), lineWidth: 1.6)
+        }
+        .background(Color.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
+    }
+}
+
+/// The per-strip function visualisers, listed under the console modules in signal-path order and
+/// only for enabled modules. Grouped like the strip's routing: filter+EQ → frequency, comp+gate →
+/// dynamics, saturator → harmonics (up to three panels). Panels are added per phase.
+struct ConsoleVizStrip: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    let width: CGFloat
+    /// Mixer-wide height so every strip's fader still lines up when only some strips show panels.
+    /// Computed (not measured): these Canvases redraw at 30 Hz, and a GeometryReader whose result
+    /// feeds back as a height constraint storms the layout — that froze the mixer once already.
+    var alignedHeight: CGFloat? = nil
+
+    private enum Panel { case freq, dynamics, harmonics }
+    private var track: EngineController.Track? { engine.tracks.first { $0.id == trackId } }
+
+    private static let graphHeight: CGFloat = 60
+    private static let panelHeight: CGFloat = 73    // label + gap + graph
+    private static let panelGap: CGFloat = 6
+
+    /// Deterministic height for `n` panels — the mixer maxes this across its strips.
+    static func height(panels n: Int) -> CGFloat {
+        n <= 0 ? 0 : 2 + CGFloat(n) * panelHeight + CGFloat(n - 1) * panelGap
+    }
+
+    /// How many panels a track would show. Mirrors `panels()`, for the mixer's height alignment.
+    static func panelCount(_ t: EngineController.Track) -> Int {
+        var n = 0
+        if t.consoleFilterEnabled || t.consoleEqEnabled { n += 1 }
+        if t.consoleCompEnabled || t.consoleGateEnabled { n += 1 }
+        if t.consoleSaturatorEnabled { n += 1 }
+        return n
+    }
+
+    private func panels() -> [Panel] {
+        guard let t = track else { return [] }
+        let order = t.consoleModuleOrder.split(separator: ",").map(String.init)
+        func pos(_ members: [(String, Bool)]) -> Int? {
+            members.filter { $0.1 }.compactMap { order.firstIndex(of: $0.0) }.min()
+        }
+        var items: [(Int, Panel)] = []
+        if let p = pos([("filter", t.consoleFilterEnabled), ("eq", t.consoleEqEnabled)]) { items.append((p, .freq)) }
+        if let p = pos([("comp", t.consoleCompEnabled), ("gate", t.consoleGateEnabled)]) { items.append((p, .dynamics)) }
+        if let p = pos([("saturator", t.consoleSaturatorEnabled)]) { items.append((p, .harmonics)) }
+        return items.sorted { $0.0 < $1.0 }.map { $0.1 }
+    }
+
+    var body: some View {
+        let ps = panels()
+        if !ps.isEmpty || (alignedHeight ?? 0) > 0 {
+            VStack(spacing: 6) {
+                ForEach(Array(ps.enumerated()), id: \.offset) { pair in
+                    switch pair.element {
+                    case .freq: vizPanel("EQ · 스펙트럼") { EqGraphView(engine: engine, trackId: trackId) }
+                    case .dynamics: vizPanel("다이나믹스") { DynamicsGraphView(engine: engine, trackId: trackId) }
+                    case .harmonics: vizPanel("하모닉스") { HarmonicsGraphView(engine: engine, trackId: trackId) }
+                    }
+                }
+            }
+            .frame(width: width)
+            .padding(.top, 2)
+            .frame(height: alignedHeight, alignment: .top)
+        }
+    }
+
+    @ViewBuilder private func vizPanel<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
+            content().frame(height: Self.graphHeight)
+        }
+        .frame(height: Self.panelHeight, alignment: .top)
+    }
+}
+
 // The compressor's parallel-MIX bar: a horizontal fader driven by the actual bar width (so drag
 // tracks the cursor exactly), a live drag state (smooth), and wheel support.
 /// Horizontal gain-reduction meter for the comp / gate — a right-anchored amber bar that grows left

@@ -503,10 +503,59 @@ struct MixerView: View {
 
             globalModuleMenu
             panLawMenu
+            channelBiasMenu
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 34)
         .background(Theme.Palette.ruler)
+    }
+
+    private static let biasDepths: [(id: String, label: String, depth: Double)] = [
+        ("light", "약", 0.25), ("std", "표준", 0.5), ("strong", "강", 0.8), ("max", "최대", 1.0),
+    ]
+
+    private var channelBiasMenu: some View {
+        Menu {
+            Text("채널 바이어스 (아날로그 편차)")
+            Button {
+                engine.applyConsoleBiasAuto(engine.consoleBiasDepth > 0 ? engine.consoleBiasDepth : 0.5)
+            } label: {
+                if engine.consoleBiasOn { Label("자동 (채널마다 편차)", systemImage: "checkmark") }
+                else { Text("자동 (채널마다 편차)") }
+            }
+            Button { engine.disableConsoleBias() } label: {
+                if engine.consoleBiasOn { Text("끔 (완전 매칭)") }
+                else { Label("끔 (완전 매칭)", systemImage: "checkmark") }
+            }
+            Divider()
+            Menu("편차 세기") {
+                ForEach(Self.biasDepths, id: \.id) { item in
+                    Button { engine.applyConsoleBiasAuto(item.depth) } label: {
+                        if engine.consoleBiasOn && abs(engine.consoleBiasDepth - item.depth) < 0.001 {
+                            Label(item.label, systemImage: "checkmark")
+                        } else { Text(item.label) }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "dial.medium")
+                Text("바이어스 · \(engine.consoleBiasOn ? "자동" : "끔")")
+            }
+            .font(Theme.Font.ui(9, .semibold))
+            .foregroundStyle(Theme.Palette.textMuted)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .fill(Theme.Palette.button)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button).stroke(Theme.Palette.divider, lineWidth: 1))
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .helpTip("아날로그 콘솔처럼 채널마다 EQ 주파수·새추레이션·타이밍·출력을 미세하게 다르게 합니다. 자동은 채널 번호로 결정(최대 512채널), '편차 세기'로 정도를 조절하거나 끌 수 있습니다.")
     }
 
     private var globalModuleMenu: some View {
@@ -695,7 +744,9 @@ struct MixerView: View {
             mixerHasInstrument: engine.tracks.contains { $0.kind == .instrument },
             globalModuleFocus: globalModuleFocus,
             globalModuleFocusRevision: globalModuleFocusRevision,
-            alignedPrePanHeight: prePanHeights.values.max()
+            alignedPrePanHeight: prePanHeights.values.max(),
+            alignedVizHeight: ConsoleVizStrip.height(
+                panels: engine.tracks.map { ConsoleVizStrip.panelCount($0) }.max() ?? 0)
         )
         // Every mixer strip shares the tallest one's height (Master included), so adding
         // inserts/sends to one channel grows them all together.
@@ -763,6 +814,8 @@ struct ChannelStrip: View {
     var globalModuleFocus: MixerModuleFocus? = nil
     var globalModuleFocusRevision: Int = 0
     var alignedPrePanHeight: CGFloat? = nil
+    /// Mixer-wide visualiser height, computed from panel counts (never measured — see ConsoleVizStrip).
+    var alignedVizHeight: CGFloat = 0
 
     private var accent: Color { track.kind.accent }
 
@@ -773,6 +826,12 @@ struct ChannelStrip: View {
             VStack(spacing: Theme.Space.md) {
                 prePanSection
                     .frame(minHeight: alignedPrePanHeight, alignment: .top)
+                // Function visualisers under the modules, in signal-path order, active modules only.
+                // Deliberately OUTSIDE prePanSection: that section measures its own height and gets
+                // the mixer-wide maximum fed back as minHeight, so a child that redraws at 30 Hz
+                // (these Canvases) would republish the height every frame and storm the layout.
+                ConsoleVizStrip(engine: engine, trackId: track.id, width: stripWidth,
+                                alignedHeight: alignedVizHeight)
                 panSection
                 if selectedModules.contains(.inRec) { buttonRow }
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
@@ -1726,6 +1785,10 @@ struct ChannelStrip: View {
                 )
             }
         }
+        // Span the strip edge-to-edge like the console modules, which render at stripWidth and
+        // so overflow the strip's 6 pt inset. Without this the slots sat 6 pt narrower on each side.
+        .padding(.horizontal, 3)
+        .frame(width: stripWidth)
     }
 
     /// Five fixed send slots (A–E), a pre-allocated region like the inserts above: an
@@ -1765,6 +1828,9 @@ struct ChannelStrip: View {
                 }
             }
         }
+        // Edge-to-edge like the console modules and the insert slots above.
+        .padding(.horizontal, 3)
+        .frame(width: stripWidth)
     }
 
     /// A reserved, dashed send slot — the same look as an empty insert `SlotChip`.

@@ -47,4 +47,9 @@ private:
     double sampleRate_ = 0;
 };
 
+/// The harmonic spectrum the saturator currently adds (harmonics 2..count+1), each normalised
+/// 0..1 over a −60..0 dB window relative to the fundamental. Computed from the same saturate()
+/// math the processor uses, so the display matches what is heard; zero-filled when disabled.
+void consoleSaturatorHarmonics(const ConsoleChannelState& parameters, float* out, int count);
+
 } // namespace neuracoust::daw
