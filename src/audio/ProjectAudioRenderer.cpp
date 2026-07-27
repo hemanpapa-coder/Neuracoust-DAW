@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <string_view>
+#include <unordered_map>
 #include <mutex>
 #include <tuple>
 #include <vector>
@@ -2081,14 +2083,48 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     }
     std::map<std::string, std::vector<float>> busBlocks;
     const auto blockSampleCount = static_cast<size_t>(frameCount) * 2u;
+    // Resolve every route and track by name ONCE. Both lookups used to be linear scans run inside
+    // the per-route loop, so a session's cost grew with the square of its track count: 100 empty
+    // tracks took 5.5 ms a block — past the 5.3 ms deadline with no audio and no DSP in the
+    // session at all. Keys are views into the plan's own strings, which outlive this call.
+    std::unordered_map<std::string_view, const MixerRouteNode*> routeByName;
+    routeByName.reserve(graph->routes.size() * 2u);
+    for (const auto& candidate : graph->routes) routeByName.emplace(candidate.name, &candidate);
+    std::unordered_map<std::string_view, const TrackState*> trackByName;
+    trackByName.reserve(plan.tracks.size() * 2u);
+    for (const auto& candidate : plan.tracks) trackByName.emplace(candidate.name, &candidate);
+    // Clips grouped by the track they play on. The sample loop below used to walk EVERY clip and
+    // compare its track name once per sample per route — 256 string compares a block for each
+    // clip and route, and a track with no clips still spun the whole loop. Group once instead.
+    std::unordered_map<std::string_view, std::vector<const ProjectRenderClip*>> clipsByTrack;
+    clipsByTrack.reserve(plan.tracks.size() * 2u);
+    for (const auto& renderClip : plan.clips) {
+        clipsByTrack[renderClip.clip.trackName].push_back(&renderClip);
+    }
+    static const std::vector<const ProjectRenderClip*> kNoClips;
+    // Edges grouped by the route they leave. The mix-down below walked EVERY edge once per SAMPLE
+    // per route — routes x frames x edges, so 100 tracks meant 2.5 million string compares and
+    // string-keyed map lookups per block, which is what pushed an empty 100-track session past
+    // the deadline. Group here, then resolve each route's destinations once per block.
+    std::unordered_map<std::string_view, std::vector<const MixerGraphEdge*>> edgesBySource;
+    edgesBySource.reserve(graph->edges.size() * 2u);
+    for (const auto& edge : graph->edges) {
+        if (edge.send) continue;
+        edgesBySource[edge.sourceRoute].push_back(&edge);
+    }
+    static const std::vector<const MixerGraphEdge*> kNoEdges;
+    // Destination buffers for the route being mixed. std::map nodes are stable, so a pointer taken
+    // here stays valid while later routes add their own buses.
+    std::vector<std::pair<std::vector<float>*, bool>> routeEdgeTargets;   // (bus, physicalOutput)
+
     for (const auto& routeName : graph->renderOrder) {
-        const auto route = std::find_if(graph->routes.begin(), graph->routes.end(), [&](const MixerRouteNode& candidate) {
-            return candidate.name == routeName;
-        });
-        if (route == graph->routes.end() || !route->audioCarrying) {
+        const auto routeIt = routeByName.find(routeName);
+        const MixerRouteNode* route = routeIt == routeByName.end() ? nullptr : routeIt->second;
+        if (route == nullptr || !route->audioCarrying) {
             continue;
         }
-        const TrackState* track = findTrack(plan, route->name);
+        const auto trackIt = trackByName.find(route->name);
+        const TrackState* track = trackIt == trackByName.end() ? nullptr : trackIt->second;
         const bool trackMuted = track != nullptr && trackPlaybackMuted(plan, *track, soloMode);
         std::vector<InsertState> routeInserts;
         if (plan.renderTrackVst3Inserts && track != nullptr && routeMayProcessInserts(route->kind)) {
@@ -2112,17 +2148,16 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         // still-active insert render (always-on tail, or an instrument track keeping the render
         // alive) re-samples the same parked clip window every block and it loops audibly, so
         // "stop" never goes quiet. Inserts then ring out / meter on silence, which is correct.
-        if (!timelinePlaybackSuppressed && transportRunning &&
+        const auto routeClipsIt = clipsByTrack.find(route->name);
+        const auto& routeClips = routeClipsIt == clipsByTrack.end() ? kNoClips : routeClipsIt->second;
+        if (!routeClips.empty() && !timelinePlaybackSuppressed && transportRunning &&
             (route->kind == MixerRouteKind::Audio || route->kind == MixerRouteKind::Instrument)) {
             for (int64_t frameOffset = 0; frameOffset < frameCount; ++frameOffset) {
                 const int64_t timelineFrame = timelineFrameForPlaybackFrame(plan, startFrame + frameOffset);
                 float left = 0.0f;
                 float right = 0.0f;
-                for (const auto& renderClip : plan.clips) {
-                    if (renderClip.clip.trackName != route->name) {
-                        continue;
-                    }
-                    const auto [clipLeft, clipRight] = dryClipSampleAtTimelineFrame(renderClip, timelineFrame, plan.sampleRate);
+                for (const auto* renderClip : routeClips) {
+                    const auto [clipLeft, clipRight] = dryClipSampleAtTimelineFrame(*renderClip, timelineFrame, plan.sampleRate);
                     left += clipLeft;
                     right += clipRight;
                 }
@@ -2267,6 +2302,24 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             std::fill(routeInput.begin(), routeInput.end(), 0.0f);
         }
 
+        // Resolve where this route's output goes once, not once per sample (see edgesBySource).
+        routeEdgeTargets.clear();
+        {
+            const auto edgesIt = edgesBySource.find(route->name);
+            const auto& routeEdges = edgesIt == edgesBySource.end() ? kNoEdges : edgesIt->second;
+            for (const auto* edge : routeEdges) {
+                if (edge->physicalOutput) {
+                    routeEdgeTargets.emplace_back(nullptr, true);
+                    continue;
+                }
+                auto& sum = busBlocks[edge->busName];
+                if (sum.size() < blockSampleCount) {
+                    sum.resize(blockSampleCount, 0.0f);
+                }
+                routeEdgeTargets.emplace_back(&sum, false);
+            }
+        }
+
         for (int64_t frameOffset = 0; frameOffset < frameCount; ++frameOffset) {
             const int64_t timelineFrame = timelineFrameForPlaybackFrame(plan, startFrame + frameOffset);
             const double timelineSeconds = static_cast<double>(timelineFrame) / plan.sampleRate;
@@ -2328,19 +2381,13 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 }
             }
 
-            for (const auto& edge : graph->edges) {
-                if (edge.sourceRoute != route->name || edge.send) {
-                    continue;
-                }
-                if (edge.physicalOutput) {
+            for (const auto& target : routeEdgeTargets) {
+                if (target.second) {
                     interleavedStereo[index] += delayedRouteFrame.left;
                     interleavedStereo[index + 1u] += delayedRouteFrame.right;
                     continue;
                 }
-                auto& sum = busBlocks[edge.busName];
-                if (sum.size() < blockSampleCount) {
-                    sum.resize(blockSampleCount, 0.0f);
-                }
+                auto& sum = *target.first;
                 sum[index] += delayedRouteFrame.left;
                 sum[index + 1u] += delayedRouteFrame.right;
             }

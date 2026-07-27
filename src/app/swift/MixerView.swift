@@ -829,7 +829,6 @@ struct ChannelStrip: View {
                 panSection
                 if selectedModules.contains(.inRec) { buttonRow }
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
-                channelGainReductionMeter
                 // Output (post-plugin) meter — horizontal, right above the fader. The one
                 // under the input is the incoming meter; this one is after the inserts.
                 HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)

@@ -9,6 +9,8 @@
 
 #include "audio/ConsoleChannelProcessor.h"
 #include "audio/MonitorFirEq.h"
+#include "audio/ProjectAudioRenderer.h"
+#include "project/ProjectDocument.h"
 
 #include <chrono>
 #include <cmath>
@@ -115,6 +117,42 @@ int main() {
             report("monitor FIR " + std::to_string(fir.numTaps()) + " taps (stereo)", perBlock);
         }
     }
+    std::printf("\n");
+
+    // --- The renderer itself, with N tracks --------------------------------------------------
+    // The two sections above measure DSP in isolation, which is not what a session costs: the
+    // route loop runs per track per block whether or not the track has audio on it. A session of
+    // empty tracks is exactly the case that reported 100%, so measure that.
+    for (int trackCount : {8, 32, 100, 200}) {
+        ProjectDocument project;
+        project.sampleRate = kSampleRate;
+        TrackState master;
+        master.name = "Master";
+        master.trackType = "master";
+        project.tracks.push_back(master);
+        for (int i = 0; i < trackCount; ++i) {
+            TrackState track;
+            track.name = "Audio " + std::to_string(i + 1);
+            track.trackType = "audio";
+            track.outputBus = "Master";
+            project.tracks.push_back(track);
+        }
+        ProjectAudioRenderPlan plan;
+        std::string error;
+        if (!makeProjectAudioRenderPlan(project, plan, error)) {
+            std::printf("plan failed for %d tracks: %s\n", trackCount, error.c_str());
+            continue;
+        }
+        ProjectAudioRenderState state;
+        std::vector<float> out(static_cast<size_t>(kBlockFrames) * 2u, 0.0f);
+        int64_t frame = 0;
+        const double perBlock = timeBlocksUs(1000, [&](int) {
+            renderProjectAudioBlockWithStateAndMeters(plan, state, frame, kBlockFrames, out, nullptr);
+            frame += kBlockFrames;
+        });
+        report("renderer, " + std::to_string(trackCount) + " empty tracks", perBlock);
+    }
+
     std::printf("\nBudget is one core. Anything at or over 100%% cannot run in time.\n");
     return 0;
 }
