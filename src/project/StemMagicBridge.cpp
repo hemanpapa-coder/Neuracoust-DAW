@@ -120,8 +120,7 @@ std::vector<std::filesystem::path> stemMagicBatchBridgeCandidates(const std::fil
     if (!stemMagicResourcesPath.empty()) {
         paths.push_back(stemMagicResourcesPath / "stem_magic_mps_batch.py");
     }
-    paths.push_back("/Volumes/Program Dev/DAW/resources/stem_magic_mps_batch.py");
-    paths.push_back("/Volumes/Program Dev/DAW/build/dev/Neuracoust DAW.app/Contents/Resources/stem_magic_mps_batch.py");
+    paths.push_back("/Volumes/Program Dev/DW/resources/stem_magic_mps_batch.py");
     return paths;
 }
 
@@ -137,8 +136,7 @@ std::vector<std::filesystem::path> stemMagicCoreMlBatchBridgeCandidates(const st
     if (!stemMagicResourcesPath.empty()) {
         paths.push_back(stemMagicResourcesPath / "stem_magic_coreml_batch.py");
     }
-    paths.push_back("/Volumes/Program Dev/DAW/resources/stem_magic_coreml_batch.py");
-    paths.push_back("/Volumes/Program Dev/DAW/build/dev/Neuracoust DAW.app/Contents/Resources/stem_magic_coreml_batch.py");
+    paths.push_back("/Volumes/Program Dev/DW/resources/stem_magic_coreml_batch.py");
     return paths;
 }
 

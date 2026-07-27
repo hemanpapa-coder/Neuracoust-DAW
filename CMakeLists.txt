@@ -41,9 +41,15 @@ endif()
 set(NEURACOUST_DAW_VERSION "${NEURACOUST_DAW_VERSION}" CACHE STRING "Neuracoust date build version")
 add_compile_definitions(NEURACOUST_DAW_VERSION="${NEURACOUST_DAW_VERSION}")
 
-# The VST3 SDK is a large external checkout with its own git metadata. Reference the
-# sibling DAW project's copy in place rather than duplicating ~half a million files.
-set(NEURACOUST_VST3_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../DAW/third_party/vst3sdk"
+# The VST3 SDK is a large external checkout with its own git metadata (~40 MB). Prefer a
+# local copy under this project's third_party/ (kept out of git via .gitignore) so the build
+# is self-contained; fall back to the sibling DAW project's copy if the local one is absent.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/vst3sdk/CMakeLists.txt")
+    set(_NEURACOUST_VST3_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/vst3sdk")
+else()
+    set(_NEURACOUST_VST3_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/../DAW/third_party/vst3sdk")
+endif()
+set(NEURACOUST_VST3_SDK_DIR "${_NEURACOUST_VST3_DEFAULT}"
     CACHE PATH "Path to Steinberg VST3 SDK")
 set(NEURACOUST_LISTEN_SOURCE_DIR "/Volumes/Program Dev/Neuracoust Listen" CACHE PATH "Path to Neuracoust Listen source for bundling the browser relay")
 option(NEURACOUST_DAW_ENABLE_NATIVE_WEBRTC "Enable DAW-side native WebRTC sender integration when libwebrtc is available" OFF)
