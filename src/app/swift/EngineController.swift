@@ -2900,6 +2900,13 @@ final class EngineController: ObservableObject {
         var memoryMb = 0
         var coreCount = 0
         var roundTripMs: Double = 0
+        /// Busiest core on the NODE (‑1 when it does not report), its temperature, and the packet
+        /// counters — badPackets is the node-side equivalent of a dropout.
+        var cpuLoadPercent: Double = -1
+        var temperatureC: Double = 0
+        var packetsIn: UInt64 = 0
+        var packetsOut: UInt64 = 0
+        var badPackets: UInt64 = 0
     }
     @Published private(set) var remoteNodeSpecs: RemoteNodeSpecs? = nil
 
@@ -7710,7 +7717,12 @@ final class EngineController: ObservableObject {
                 cpuMhz: info.cpuMhz,
                 memoryMb: Int(info.memoryMb),
                 coreCount: Int(info.coreCount),
-                roundTripMs: info.roundTripMs)
+                roundTripMs: info.roundTripMs,
+                cpuLoadPercent: info.cpuLoadPercent,
+                temperatureC: info.temperatureC,
+                packetsIn: info.packetsIn,
+                packetsOut: info.packetsOut,
+                badPackets: info.badPackets)
         } else {
             remoteNodeSpecs = nil
         }

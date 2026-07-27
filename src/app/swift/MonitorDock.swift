@@ -1415,6 +1415,27 @@ struct MonitorDock: View {
             if specs.memoryMb > 0 {
                 specRow("메모리", String(format: "%.0f GB", Double(specs.memoryMb) / 1024.0))
             }
+
+            // What the NODE is doing. The rows above describe the hardware; these say whether it is
+            // keeping up, which is the reason to watch a remote core at all. The node reports a
+            // load per core, so this is its busiest one; bad packets are its dropout signal.
+            if specs.cpuLoadPercent >= 0 || specs.packetsIn > 0 {
+                Divider().overlay(Theme.Palette.divider).padding(.vertical, 2)
+                if specs.cpuLoadPercent >= 0 {
+                    StatRow(label: "노드 DSP 부하",
+                            value: String(format: "%.0f%%", specs.cpuLoadPercent),
+                            valueColor: specs.cpuLoadPercent > 80 ? Theme.Palette.red : Theme.Palette.textSecondary)
+                    MeterBar(fraction: min(1, specs.cpuLoadPercent / 100), gradient: Theme.Gradient.dspLoad)
+                }
+                StatRow(label: "노드 왕복", value: String(format: "%.2f ms", specs.roundTripMs))
+                StatRow(label: "노드 드롭아웃",
+                        value: specs.badPackets == 0 ? "0 · 안전" : "\(specs.badPackets)회",
+                        valueColor: specs.badPackets == 0 ? Theme.Palette.green : Theme.Palette.red)
+                if specs.temperatureC > 0 {
+                    StatRow(label: "노드 온도", value: String(format: "%.1f°C", specs.temperatureC))
+                }
+                specRow("패킷", "\(specs.packetsIn) in · \(specs.packetsOut) out")
+            }
         }
         .padding(Theme.Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)

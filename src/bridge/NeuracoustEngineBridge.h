@@ -1269,6 +1269,13 @@ typedef struct {
     double cpuMhz;          // CPU clock in MHz; 0 if unknown (e.g. Apple Silicon)
     int memoryMb;           // physical RAM in MB; 0 if unknown
     int coreCount;          // reported logical cores
+    // Live telemetry, so the monitor station can show what the NODE is doing rather than only
+    // what this Mac is doing. The node reports per-core load, not a single figure.
+    double cpuLoadPercent;  // busiest reported core, 0..100; -1 when the node does not report
+    double temperatureC;    // node CPU temperature; 0 if unknown
+    unsigned long long packetsIn;
+    unsigned long long packetsOut;
+    unsigned long long badPackets;   // malformed/rejected — the node-side dropout signal
 } NCRemoteNodeInfo;
 
 // Probe the current remote host for its identity + specs. Returns 1 and fills `out` if a node

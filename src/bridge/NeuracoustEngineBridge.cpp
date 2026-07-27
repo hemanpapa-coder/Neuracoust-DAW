@@ -7179,6 +7179,15 @@ int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out) {
     out->cpuMhz = info.cpuMhz;
     out->memoryMb = static_cast<int>(info.memoryMb);
     out->coreCount = static_cast<int>(info.coreCount);
+    // The node reports a load per core; the monitor station wants one number, and the busiest core
+    // is the one that decides whether the node can keep up.
+    out->cpuLoadPercent = info.cpuCoreLoads.empty()
+        ? -1.0
+        : *std::max_element(info.cpuCoreLoads.begin(), info.cpuCoreLoads.end());
+    out->temperatureC = info.temperatureC;
+    out->packetsIn = info.packetsIn;
+    out->packetsOut = info.packetsOut;
+    out->badPackets = info.badPackets;
     return 1;
 }
 
