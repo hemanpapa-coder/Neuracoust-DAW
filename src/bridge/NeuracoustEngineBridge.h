@@ -249,6 +249,7 @@ void nc_track_set_solo(NCEngine* engine, int index, bool solo);
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
 void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_console_model(NCEngine* engine, int index, const char* name);
 void nc_track_console_comp_type(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_set_console_comp_type(NCEngine* engine, int index, const char* name);
 void nc_track_console_gate_type(NCEngine* engine, int index, char* out, size_t outLen);

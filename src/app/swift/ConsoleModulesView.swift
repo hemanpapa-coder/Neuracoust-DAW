@@ -694,7 +694,7 @@ struct NeuracoustConsoleModulesView: View {
         switch module {
         case .comp: name = tk?.consoleCompType ?? "SSL 4000E"; models = EngineController.compModels; pick = { engine.setCompModel(trackId, $0) }
         case .gate: name = tk?.consoleGateType ?? "SSL 4000E"; models = EngineController.gateModels; pick = { engine.setGateModel(trackId, $0) }
-        default:    name = engine.consoleModel; models = EngineController.consoleModels; pick = { engine.setConsoleModel($0) }
+        default:    name = EngineController.displayConsoleModel(tk?.consoleModel ?? ""); models = EngineController.consoleModels; pick = { engine.setConsoleModel(trackId, $0) }
         }
         return Menu {
             ForEach(models, id: \.self) { m in

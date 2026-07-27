@@ -19,9 +19,13 @@ float circuitStage(float x, float amount = 1.0f, float harmonic = 0.5f) {
     const float asymmetric = x * drive + even * x * std::abs(x);
     return std::tanh(asymmetric) / std::tanh(drive);
 }
-float saturate(float x, float drive, bool circuit) {
-    if (circuit) return circuitStage(x * drive, 1.8f);
-    return std::tanh(x * drive) / std::max(0.0001f, std::tanh(drive));
+// `harmonic` biases the tone: higher = more 2nd-harmonic (warm, asymmetric), lower = cleaner
+// odd-harmonic tanh. Each console model passes a different value so the plate is audible, not cosmetic.
+float saturate(float x, float drive, bool circuit, float harmonic = 0.5f) {
+    if (circuit) return circuitStage(x * drive, 1.8f, harmonic);
+    const float xd = x * drive;
+    const float even = 0.06f * harmonic * xd * std::abs(xd);   // 2nd-harmonic warmth
+    return std::tanh(xd + even) / std::max(0.0001f, std::tanh(drive));
 }
 
 // A console model's DSP "character" — bounded multipliers that voice the shared comp/gate algorithm
@@ -154,6 +158,9 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
     // Per-model DSP character voices the shared comp/gate as a named classic (SSL E/G, Neve, API, …).
     const ConsoleModelChar cc = modelChar(p.compType);
     const ConsoleModelChar gc = modelChar(p.gateType);
+    // The strip's overall console model voices the saturator and the filter/EQ circuit colour
+    // (the modules that share the console-model plate, as opposed to comp/gate's own models).
+    const ConsoleModelChar mc = modelChar(p.model);
     const float cDet = coeff(sr, 8), gDet = coeff(sr, 5);
     const float cAtk = coeff(sr, (p.compFastAttack ? 3.0f : p.compAttackMs) * cc.compAtkMul);
     const float cRel = coeff(sr, p.compReleaseMs * cc.compRelMul);
@@ -177,11 +184,11 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 if (p.lowPassEnabled) {
                     l=eq_[0][1].process(l); r=eq_[1][1].process(r);
                 }
-                if (p.filterCircuitMode) { l=circuitStage(l,0.35f); r=circuitStage(r,0.35f); }
+                if (p.filterCircuitMode) { l=circuitStage(l,0.35f,mc.harmonic); r=circuitStage(r,0.35f,mc.harmonic); }
             } else if (module=="eq" && p.eqEnabled) {
                 for(size_t b=2;b<6;++b)l=eq_[0][b].process(l);
                 for(size_t b=2;b<6;++b)r=eq_[1][b].process(r);
-                if (p.eqCircuitMode) { l=circuitStage(l,0.55f); r=circuitStage(r,0.55f); }
+                if (p.eqCircuitMode) { l=circuitStage(l,0.55f,mc.harmonic); r=circuitStage(r,0.55f,mc.harmonic); }
             } else if (module=="comp" && p.compEnabled) {
                 const float dryL = l, dryR = r;
                 const float mix=clamp(p.compMix,0.0f,1.0f);
@@ -232,10 +239,12 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 if (p.gateCircuitMode) { l=circuitStage(l, 0.4f, gc.harmonic); r=circuitStage(r, 0.4f, gc.harmonic); }
             } else if (module=="saturator" && p.saturatorEnabled) {
                 const float dryL=l, dryR=r;
-                const float drive=dbToGain(p.saturatorDriveDb);
+                // Warm models (high harmonic) reach saturation a touch sooner; clean models later —
+                // a bounded drive trim so the model choice is clearly audible, not just a nameplate.
+                const float drive=dbToGain(p.saturatorDriveDb) * (0.85f + 0.35f*mc.harmonic);
                 const float mix=clamp(p.saturatorMix,0.0f,1.0f);
-                l=dryL*(1.0f-mix)+saturate(dryL,drive,p.saturatorCircuitMode)*mix;
-                r=dryR*(1.0f-mix)+saturate(dryR,drive,p.saturatorCircuitMode)*mix;
+                l=dryL*(1.0f-mix)+saturate(dryL,drive,p.saturatorCircuitMode,mc.harmonic)*mix;
+                r=dryR*(1.0f-mix)+saturate(dryR,drive,p.saturatorCircuitMode,mc.harmonic)*mix;
             }
         }
         if (p.phaseInvertL) l = -l;               // channel polarity (Ø), per side, end of chain

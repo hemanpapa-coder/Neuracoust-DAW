@@ -4169,6 +4169,13 @@ final class EngineController: ObservableObject {
     static let consoleModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 8078", "API Vision", "Neuracoust NC"]
     @Published var consoleModel: String = "SSL 4000E"
     func setConsoleModel(_ name: String) { consoleModel = name }
+    /// Set a track's overall console model (saturator + filter/EQ circuit voicing). Comp/gate keep
+    /// their own models via setCompModel/setGateModel.
+    func setConsoleModel(_ id: Int, _ name: String) {
+        guard let handle else { return }
+        _ = name.withCString { nc_track_set_console_model(handle, Int32(id), $0) }
+        reloadTracks(); refreshHistory()
+    }
 
     // Per-module model libraries. Each name maps to a DSP character in ConsoleChannelProcessor
     // (modelChar): attack/release, knee, drive, harmonic. The gate plate picks a gate model, the

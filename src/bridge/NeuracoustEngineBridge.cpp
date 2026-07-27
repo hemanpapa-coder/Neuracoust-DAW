@@ -1270,6 +1270,15 @@ void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLe
     const auto* track = trackAt(engine, index);
     copyText(out, outLen, track != nullptr ? track->consoleChannel.model : std::string{});
 }
+// The strip's overall console model (voices the saturator + filter/EQ circuit colour). Comp and
+// gate carry their own models; this is the shared one behind their plates.
+void nc_track_set_console_model(NCEngine* engine, int index, const char* name) {
+    auto* t = trackAt(engine, index); if (t == nullptr || name == nullptr) return;
+    if (t->consoleChannel.model == name) return;
+    t->consoleChannel.model = name;
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);   // live, no rebuild
+    engine->recordStep("Console model");
+}
 // Per-module model (comp / gate) — the model library. Each voices the DSP as a named classic.
 void nc_track_console_comp_type(NCEngine* engine, int index, char* out, size_t outLen) {
     const auto* t = trackAt(engine, index);
