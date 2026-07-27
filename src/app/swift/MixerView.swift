@@ -315,11 +315,10 @@ private struct InsertSlotChipView: View {
                     if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
                     else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
                 }
-                Divider()
-                Menu("DSP 실행 모드") {
-                    dspModeButton("Native · 인프로세스", "native", checked: badge == "NAT")
-                    dspModeButton("Internal DSP · 격리 코어", "internal", checked: badge == "INT")
-                }
+                // No "DSP 실행 모드" picker: its only two entries were Native and "Internal DSP ·
+                // 격리 코어", and there is no internal DSP engine — internal renders exactly like
+                // native (see InsertDspPolicy). Offloading to a remote node is chosen per node in
+                // the monitor dock, not per insert here.
                 Divider()
                 if !isMaster {
                     Menu("슬롯으로 이동") {

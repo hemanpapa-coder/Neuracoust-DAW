@@ -1022,17 +1022,32 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
                reinterpret_cast<const char*>(&enabled),
                static_cast<SocketLength>(sizeof(enabled)));
 
+    // Always probe the broadcast address as well as any configured hosts. Previously a configured
+    // host made `targets` non-empty and suppressed the broadcast, and the address was parsed with
+    // inet_pton alone — which accepts numeric IPs only, so a hostname like "studio.local" was
+    // skipped outright and the probe sent nothing at all while the node sat there answering.
     std::vector<std::string> targets = broadcastHosts;
-    if (targets.empty()) {
-        targets.push_back("255.255.255.255");
-    }
+    targets.push_back("255.255.255.255");
     const char request[] = "NA_DISCOVER\n";
+    std::set<std::string> probed;
     for (const auto& host : targets) {
+        if (host.empty() || !probed.insert(host).second) {
+            continue;
+        }
         sockaddr_in target {};
         target.sin_family = AF_INET;
         target.sin_port = htons(settings.statusPort);
         if (inet_pton(AF_INET, host.c_str(), &target.sin_addr) != 1) {
-            continue;
+            // Not a literal address — resolve it (mDNS ".local" names included).
+            addrinfo hints {};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            addrinfo* resolved = nullptr;
+            if (getaddrinfo(host.c_str(), nullptr, &hints, &resolved) != 0 || resolved == nullptr) {
+                continue;
+            }
+            target.sin_addr = reinterpret_cast<sockaddr_in*>(resolved->ai_addr)->sin_addr;
+            freeaddrinfo(resolved);
         }
         sendto(socketHandle,
                request,

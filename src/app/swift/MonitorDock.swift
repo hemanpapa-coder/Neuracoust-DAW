@@ -1361,26 +1361,12 @@ struct MonitorDock: View {
 
             Divider().overlay(Theme.Palette.divider)
 
-            // Internal DSP core allocation. Isolation keeps a floor of 4.
-            HStack {
-                Toggle("", isOn: Binding(
-                    get: { engine.coreIsolationEnabled },
-                    set: { engine.setCoreIsolation($0) }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .scaleEffect(0.7)
-                    .frame(width: 34)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("내부 코어 격리")
-                        .font(Theme.Font.ui(9, .medium))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                    Text(engine.coreIsolationEnabled ? "DSP 우선 배정" : "Native 실행")
-                        .font(Theme.Font.mono(7))
-                        .foregroundStyle(Theme.Palette.textFaint)
-                }
-                Spacer()
-                internalCoreStepper
-            }
+            // No internal core-isolation control: macOS cannot reserve cores for a process.
+            // THREAD_AFFINITY_POLICY returns KERN_NOT_SUPPORTED on Apple Silicon (measured), and
+            // the render already runs on CoreAudio's IO thread, which the OS gives time-constraint
+            // priority and audio-workgroup membership. The toggle and its core count changed
+            // nothing but a status string. The EXTERNAL reserve below is real — it is a hint to a
+            // remote DSP node, which does have its own cores.
 
             // The external DSP Manager's core reserve. Settable here or in the manager
             // itself; a connected node's own report wins over this hint. The switch is the
