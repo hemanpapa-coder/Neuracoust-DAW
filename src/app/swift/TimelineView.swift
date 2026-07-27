@@ -535,7 +535,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     /// Progressive-disclosure thresholds for the inline lane-header strip. Shrinking a
     /// lane hides its controls in tiers rather than clipping them: full (fader+pan+meter)
     /// → buttons only (M/S/R/I + automation chips) → name only.
-    static let laneFaderMinHeight: CGFloat = 90
+    /// The fader/pan/meter stack ends 83 pt below the lane top and the resize grip occupies the
+    /// last 7 pt, so a lane shorter than this drew them into each other at the bottom edge.
+    static let laneFaderMinHeight: CGFloat = 96
     static let laneButtonsMinHeight: CGFloat = 50
     /// The fader / pan / meter row is only drawn (and hit-tested) at/above this height.
     func laneShowsFaderRow(_ index: Int) -> Bool { laneHeight(index) >= Self.laneFaderMinHeight }
@@ -2664,13 +2666,13 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     // Inline volume fader, pan bar and stereo meter, drawn horizontally under the buttons.
     private func headerFaderRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 52, width: Self.headerWidth - 24, height: 8)
+        NSRect(x: 12, y: laneTop(index) + 50, width: Self.headerWidth - 24, height: 8)
     }
     private func headerPanRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 66, width: Self.headerWidth - 24, height: 8)
+        NSRect(x: 12, y: laneTop(index) + 63, width: Self.headerWidth - 24, height: 8)
     }
     private func headerMeterRect(_ index: Int) -> NSRect {
-        NSRect(x: 12, y: laneTop(index) + 80, width: Self.headerWidth - 24, height: 7)
+        NSRect(x: 12, y: laneTop(index) + 76, width: Self.headerWidth - 24, height: 7)
     }
     /// Same console taper as the mixer fader (0 dB ~78% along).
     private func headerFaderFraction(_ db: Float) -> CGFloat { CGFloat(FaderScale.position(forDb: db)) }

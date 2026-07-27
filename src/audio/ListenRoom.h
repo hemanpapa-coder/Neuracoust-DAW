@@ -101,6 +101,11 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     ListenRoomSettings settings_;
+    /// The share URL is rebuilt only when the settings that shape it change. Building it resolves
+    /// the machine's LAN address by opening a UDP socket, and status() is polled at ~30 Hz — doing
+    /// that per poll cost as much CPU as the entire audio render.
+    mutable std::string shareUrlCache_;
+    mutable std::string shareUrlKey_;
     std::deque<Block> queue_;
     std::thread worker_;
     double sampleRate_ = 48000.0;

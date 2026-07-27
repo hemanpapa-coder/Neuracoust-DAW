@@ -554,7 +554,17 @@ ListenRoomStatus ListenRoomSender::status() const {
         status.nativeWebRtcFramesQueued = status.packetsQueued *
             static_cast<uint64_t>(std::max(1, status.packetFrames));
     }
-    status.shareUrl = listenRoomPublicShareUrl(settings_);
+    // Rebuild only when an input to the URL changed (see shareUrlCache_ in the header).
+    {
+        const std::string key = settings_.relayHost + "|" + std::to_string(settings_.relayHttpPort) + "|" +
+            settings_.sessionName + "|" + settings_.quality + "|" + settings_.latencyMode + "|" +
+            settings_.transportMode + "|" + settings_.accessToken;
+        if (key != shareUrlKey_ || shareUrlCache_.empty()) {
+            shareUrlCache_ = listenRoomPublicShareUrl(settings_);
+            shareUrlKey_ = key;
+        }
+        status.shareUrl = shareUrlCache_;
+    }
     status.nativeWebRtcSignalingUrl = nativeStatus.signalingUrl;
     status.activeCodec = listenRoomEffectiveCodec(settings_);
     status.qualityLabel = listenRoomQualityLabel(settings_);
