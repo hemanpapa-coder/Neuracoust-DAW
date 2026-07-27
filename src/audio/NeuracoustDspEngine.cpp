@@ -346,6 +346,21 @@ void mergeBlockMeters(ProjectAudioBlockMeters& destination, const ProjectAudioBl
         if (destinationIndex < destination.trackPeakRight.size() && index < source.trackPeakRight.size()) {
             destination.trackPeakRight[destinationIndex] = std::max(destination.trackPeakRight[destinationIndex], source.trackPeakRight[index]);
         }
+        // Gain reduction has to merge too. Only the peaks did, so when a block rendered in more
+        // than one segment the GR kept whatever the FIRST segment saw — reading ~0 while the
+        // compressor was audibly working.
+        if (destinationIndex < destination.trackConsoleGainReductionDb.size() &&
+            index < source.trackConsoleGainReductionDb.size()) {
+            destination.trackConsoleGainReductionDb[destinationIndex] =
+                std::max(destination.trackConsoleGainReductionDb[destinationIndex],
+                         source.trackConsoleGainReductionDb[index]);
+        }
+        if (destinationIndex < destination.trackConsoleGateGainReductionDb.size() &&
+            index < source.trackConsoleGateGainReductionDb.size()) {
+            destination.trackConsoleGateGainReductionDb[destinationIndex] =
+                std::max(destination.trackConsoleGateGainReductionDb[destinationIndex],
+                         source.trackConsoleGateGainReductionDb[index]);
+        }
     }
     destination.masterPeakLeft = std::max(destination.masterPeakLeft, source.masterPeakLeft);
     destination.masterPeakRight = std::max(destination.masterPeakRight, source.masterPeakRight);

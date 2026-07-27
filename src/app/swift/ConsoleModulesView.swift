@@ -690,18 +690,15 @@ private struct DynamicsGraphView: View {
             let inNow = outNow + gr
             guard inNow > lo else { return }
             let px = x(min(hi, inNow)), py = y(max(lo, min(hi, outNow)))
-            // Guides down to the axes, so the level is readable even when the dot sits on the line.
-            var guides = Path()
-            guides.move(to: CGPoint(x: px, y: H)); guides.addLine(to: CGPoint(x: px, y: py))
-            guides.move(to: CGPoint(x: 0, y: py)); guides.addLine(to: CGPoint(x: px, y: py))
-            ctx.stroke(guides, with: .color(Color(hex: 0x5bd6a0).opacity(0.30)), lineWidth: 1)
-            let r: CGFloat = 3.2
+            // Just the dot. The axis guides that used to hang off it read as clutter, and the GR
+            // strip below the graph already says how far the signal is being pulled down.
+            let r: CGFloat = 2.2
             ctx.fill(Path(ellipseIn: CGRect(x: px - r, y: py - r, width: r * 2, height: r * 2)),
                      with: .color(Color(hex: 0x8ff0c0)))
-            if gr > 0.2 {   // the amount being pulled down, drawn as the drop from the unity line
+            if gr > 0.2 {   // the drop from unity, the one line that carries information
                 var pull = Path()
                 pull.move(to: CGPoint(x: px, y: y(min(hi, inNow)))); pull.addLine(to: CGPoint(x: px, y: py))
-                ctx.stroke(pull, with: .color(Color(hex: 0xff6b6b).opacity(0.75)), lineWidth: 2)
+                ctx.stroke(pull, with: .color(Color(hex: 0xff6b6b).opacity(0.7)), lineWidth: 1.5)
             }
         }
         .background(Color.black.opacity(0.55))
@@ -729,7 +726,7 @@ struct ConsoleVizStrip: View {
 
     private static let graphHeight: CGFloat = 40    // a third shorter than the original 60
     private static let panelHeight: CGFloat = 53    // label + gap + graph
-    private static let grMeterHeight: CGFloat = 14  // the dynamics panel carries the GR meter
+    private static let grMeterHeight: CGFloat = 8   // the dynamics panel carries the (thin) GR meter
     private static let panelGap: CGFloat = 6
 
     /// Deterministic height for a track's panels — the mixer maxes this across its strips and
@@ -770,7 +767,7 @@ struct ConsoleVizStrip: View {
                                 DynamicsGraphView(engine: engine, trackId: trackId)
                                 GrMeter(label: "GR", gr: max(track?.consoleCompGainReductionDb ?? 0,
                                                              track?.consoleGateGainReductionDb ?? 0))
-                                    .frame(height: 13)
+                                    .frame(height: 7)
                             }
                         }
                     case .harmonics: vizPanel("하모닉스") { HarmonicsGraphView(engine: engine, trackId: trackId) }
@@ -814,26 +811,27 @@ private struct GrMeter: View {
     let gr: Float                 // gain reduction, dB (positive)
     var maxGr: Float = 30
     var body: some View {
+        // A thin, wide strip: it sits under the dynamics curve, where height is scarce and the
+        // useful information is how far the bar has travelled, not how tall it is.
         let frac = CGFloat(max(0, min(1, gr / maxGr)))
-        HStack(spacing: 7) {
-            Text(label).font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(0.5)
+        HStack(spacing: 4) {
+            Text(label).font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(0.4)
                 .foregroundStyle(Color(hex: 0xa39c8b)).fixedSize()
             GeometryReader { g in
                 ZStack(alignment: .trailing) {
                     Capsule().fill(Color(hex: 0x140a06))
-                        .overlay(Capsule().stroke(.black, lineWidth: 1))
+                        .overlay(Capsule().stroke(.black, lineWidth: 0.5))
                     Capsule()
                         .fill(LinearGradient(colors: [Color(hex: 0xf0b23a), Color(hex: 0xd9691c)], startPoint: .trailing, endPoint: .leading))
                         .frame(width: frac * g.size.width)
-                        .shadow(color: Color(hex: 0xf0902e).opacity(0.55), radius: 2)
                 }
-            }.frame(height: 11)
+            }.frame(height: 5)
             Text(gr > 0.1 ? String(format: "-%.0f", gr) : "0")
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
                 .foregroundStyle(gr > 0.1 ? Color(hex: 0xe0c33e) : Color(hex: 0x6a6456))
-                .frame(width: 26, alignment: .trailing)
+                .frame(width: 16, alignment: .trailing)
         }
-        .padding(.horizontal, 8).padding(.top, 5).padding(.bottom, 3)
+        .padding(.horizontal, 2).padding(.vertical, 0)
     }
 }
 
