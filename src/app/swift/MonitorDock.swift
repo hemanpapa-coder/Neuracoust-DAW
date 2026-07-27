@@ -660,8 +660,54 @@ struct MonitorDock: View {
                     .help("보정 지우기")
                 }
             }
+            if !engine.vrStatusMessage.isEmpty {
+                Text(engine.vrStatusMessage)
+                    .font(Theme.Font.mono(8.5))
+                    .foregroundStyle(engine.vrCorrectionActive ? Theme.Palette.green : Theme.Palette.textFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !engine.vrHasMeasurement {
+                Text("먼저 모니터 측정(룸/헤드셋)을 실행해야 활성화됩니다")
+                    .font(Theme.Font.mono(8.5))
+                    .foregroundStyle(Theme.Palette.textFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.top, 2)
+        .helpTip("""
+        VR 헤드셋 보정
+        헤드셋을 쓰고 실물 스피커로 모니터할 때 생기는
+        음색 변화를 측정해 상쇄하는 보정 EQ입니다.
+
+        [사용법]
+        1) 헤드셋을 벗고 룸 측정 → '기준(벗음)'
+        2) 헤드셋을 쓰고 다시 룸 측정 → '착용 보정'
+           (두 측정의 차이 = 기준−착용 이 보정 커브)
+        3) 스위치로 켜고 끄기, 휴지통으로 초기화
+        ※ 측정 마이크(UMIK-1 등)가 있어야 작동합니다.
+
+        [이 기능의 범위와 한계]
+        · 헤드셋이 입히는 '음색(주파수응답) 착색'만
+          되돌립니다. 크기(magnitude) 커브만 다루며
+          위상·시간영역·좌우 개별 보정은 없습니다.
+        · 공간을 만드는 '바이너럴/HRTF'가 아닙니다.
+          (Sennheiser AMBEO·Smyth Realiser 같은
+          '헤드폰 위 가상 스튜디오'와는 방향이 다름)
+
+        [규격만으로 되는 것 / 안 되는 것]
+        · 헤드셋의 기기 주파수응답은 규격·실측으로
+          추론 가능 — 이 보정이 다루는 영역입니다.
+        · HRTF는 기기 규격이 아니라 '듣는 사람의
+          신체'에 대한 함수라, 헤드셋 스펙만으론
+          추론할 수 없습니다.
+
+        [가상 스튜디오로 확장한다면 (로드맵)]
+        · 개인 측정 없이도 시작 가능합니다:
+          공개 범용 HRTF(KEMAR/SADIE/CIPIC)
+          + 우리 룸·스피커 시뮬
+          + VR 런타임의 헤드 트래킹(공짜)을 결합.
+        · 범용 HRTF는 '쓸만함' 수준(사람에 따라
+          앞뒤 혼동), 레퍼런스급은 개인화가 필요합니다.
+        """)
     }
 
     /// The right-click menu for an A/B/C speaker set: choose its modelled speaker, or a

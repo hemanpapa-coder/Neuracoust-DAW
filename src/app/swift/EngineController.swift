@@ -8733,6 +8733,16 @@ final class EngineController: ObservableObject {
     @Published private(set) var vrCorrectionEnabled = false
     @Published private(set) var vrCorrectionActive = false
     @Published private(set) var vrHasBaseline = false
+    // A short line shown under the VR buttons explaining the last capture's outcome — the
+    // capture silently returns false when no room measurement exists, which reads as "the
+    // feature does nothing"; this makes the prerequisite visible.
+    @Published private(set) var vrStatusMessage = ""
+
+    /// VR correction reads the current room measurement; without one, capture cannot proceed.
+    var vrHasMeasurement: Bool {
+        guard let handle else { return false }
+        return nc_measure_has_curve(handle, 0) || nc_measure_has_curve(handle, 1)
+    }
 
     func reloadVrState() {
         guard let handle else { return }
@@ -8743,12 +8753,17 @@ final class EngineController: ObservableObject {
     @discardableResult func vrCaptureBaseline() -> Bool {
         guard let handle else { return false }
         let ok = nc_vr_capture_baseline(handle)
+        vrStatusMessage = ok ? "기준(벗음) 저장됨 — 헤드셋을 쓰고 다시 측정하세요"
+                             : "먼저 룸 측정을 실행하세요 (측정 데이터가 없습니다)"
         reloadVrState()
         return ok
     }
     @discardableResult func vrCaptureWorn() -> Bool {
         guard let handle else { return false }
         let ok = nc_vr_capture_worn(handle)
+        vrStatusMessage = ok ? "착용 보정 생성됨 — 적용 중"
+                             : (vrHasBaseline ? "헤드셋을 쓰고 룸 측정을 다시 실행한 뒤 눌러주세요"
+                                              : "먼저 기준(벗음)을 잡으세요")
         syncMonitorEqToContext()
         reloadVrState()
         return ok
@@ -8762,6 +8777,7 @@ final class EngineController: ObservableObject {
     func vrClearCorrection() {
         guard let handle else { return }
         nc_vr_clear_correction(handle)
+        vrStatusMessage = ""
         syncMonitorEqToContext()
         reloadVrState()
     }

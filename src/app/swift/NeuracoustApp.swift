@@ -319,17 +319,7 @@ struct RootView: View {
         // help mode is on. Rendered here so it is never clipped by a toolbar's bounds.
         .overlay {
             if let hover = engine.helpHover, engine.helpMode {
-                Text(hover.text)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.92)))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                    .fixedSize()
-                    .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
-                    .position(x: hover.frame.midX, y: hover.frame.maxY + 16)
-                    .allowsHitTesting(false)
-                    .transition(.opacity.animation(.easeOut(duration: 0.08)))
+                HelpTooltipOverlay(hover: hover)
             }
         }
         .overlay {
@@ -540,6 +530,51 @@ private struct HelpTipModifier: ViewModifier {
 extension View {
     /// Custom help tooltip (shown only in help mode), replacing the unreliable native .help.
     func helpTip(_ text: String) -> some View { modifier(HelpTipModifier(text: text)) }
+}
+
+/// The single help tooltip drawn beside the hovered control in help mode. Sizes to its
+/// content (multi-line text keeps its own line breaks via `.fixedSize()`), measures itself,
+/// and clamps its position so a long tip anchored in the right-hand dock still lands fully
+/// on screen — flipping above the control if there is no room below.
+private struct HelpTooltipOverlay: View {
+    let hover: EngineController.HelpHover
+    @State private var tip: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            Text(hover.text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.leading)
+                .fixedSize()
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.92)))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { tip = g.size }
+                        .onChange(of: g.size) { _, s in tip = s }
+                })
+                .position(x: centerX(container: geo.size.width),
+                          y: centerY(container: geo.size.height))
+                .allowsHitTesting(false)
+                .transition(.opacity.animation(.easeOut(duration: 0.08)))
+        }
+    }
+
+    private func centerX(container: CGFloat) -> CGFloat {
+        let half = tip.width / 2
+        guard container > tip.width + 16 else { return container / 2 }
+        return min(max(hover.frame.midX, half + 8), container - half - 8)
+    }
+
+    private func centerY(container: CGFloat) -> CGFloat {
+        let below = hover.frame.maxY + 8 + tip.height / 2   // preferred: just under the control
+        if below + tip.height / 2 + 8 <= container { return below }
+        let above = hover.frame.minY - 8 - tip.height / 2   // no room below → flip above
+        return max(above, tip.height / 2 + 8)
+    }
 }
 
 // The three regions below are structural stubs. They hold the layout the design
