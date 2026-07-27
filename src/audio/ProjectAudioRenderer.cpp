@@ -2055,6 +2055,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         meters->trackInsertMeterSlotIndices.clear();
         meters->trackInsertInputPeak.clear();
         meters->trackInsertOutputPeak.clear();
+        meters->masterPeakLeft = 0.0f;
+        meters->masterPeakRight = 0.0f;
         for (const auto& track : plan.tracks) {
             if (track.trackType == "master" || track.trackType == "monitor" || track.name == "Master" || track.name == "Monitor") {
                 continue;
@@ -2373,6 +2375,10 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                                     automationLaneValueAt(*master, "track.pan", timelineSeconds, master->pan));
                 interleavedStereo[index] = masterFrame.left;
                 interleavedStereo[index + 1u] = masterFrame.right;
+            }
+            if (meters != nullptr) {
+                meters->masterPeakLeft = std::max(meters->masterPeakLeft, std::abs(interleavedStereo[index]));
+                meters->masterPeakRight = std::max(meters->masterPeakRight, std::abs(interleavedStereo[index + 1u]));
             }
         }
     }

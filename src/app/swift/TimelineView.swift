@@ -324,6 +324,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     private enum Drag {
         case none
         case seeking
+        /// Dragging the vertical / horizontal scrollbar thumb. `grab` is where inside the thumb the
+        /// press landed, so the thumb does not jump under the cursor.
+        case scrollingLanes(grab: CGFloat)
+        case scrollingTime(grab: CGFloat)
         case marquee(origin: NSPoint, current: NSPoint)
         case rangingFrom(seconds: Double)
         /// Pro Tools selector: dragging in a lane's empty space makes a time-range edit selection
@@ -848,6 +852,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             window?.makeFirstResponder(self)
         }
 
+        // The scrollbars sit above everything and are checked first, so a press on one never
+        // reaches the lanes underneath.
+        if scrollbarHit(point) { return }
+
         // Clicking a lane header selects that track; the bottom-left disclosure folds automation out;
         // the inline strip mutes/solos/arms or drags the volume fader.
         if point.x < Self.headerWidth {
@@ -1112,11 +1120,14 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if scrollbarDrag(point) { return }
         let time = max(0, seconds(atX: point.x))
 
         switch drag {
         case .none:
             break
+        case .scrollingLanes, .scrollingTime:
+            break                       // handled above by scrollbarDrag
         case .seeking:
             onSeek?(snapped(time))
         case .movingRegion(let id, let grabOffset):
@@ -1245,6 +1256,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         let point = convert(event.locationInWindow, from: nil)
 
         switch drag {
+        case .scrollingLanes, .scrollingTime:
+            break                       // a scrollbar drag records nothing
         case .moving(let clipId, _, _, _):
             // Dropping past the last lane in empty space makes a new track and lands the
             // clip (or the option-drag copy) there. Dropping on another lane relocates it;
@@ -1609,6 +1622,133 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
 
         drawMarquee(context)
         drawReorderIndicator(context)
+        drawScrollbars(context)
+    }
+
+    // MARK: Scrollbars
+    //
+    // The timeline owns its own offset (the lanes scroll under a fixed ruler, so it is not inside an
+    // NSScrollView), which means it has to draw its own bars: a vertical one for the lanes and a
+    // horizontal one for time. Both are also grab handles — see `scrollbarHit`.
+
+    static let scrollbarThickness: CGFloat = 11
+
+    /// Full horizontal extent the timeline can show, in seconds: the content, with the current view
+    /// always inside it so the thumb never overflows its track.
+    private var timeSpanSeconds: Double {
+        let contentEnd = model.clips.reduce(0.0) { max($0, $1.startSeconds + $1.durationSeconds) }
+        let regionEnd = model.midiRegions.reduce(0.0) { max($0, $1.startSeconds + $1.durationSeconds) }
+        return max(max(contentEnd, regionEnd) * 1.05,
+                   model.visibleStart + model.visibleDuration) + 1.0
+    }
+
+    private var verticalScrollbarRect: NSRect {
+        NSRect(x: bounds.width - Self.scrollbarThickness, y: rulerHeight,
+               width: Self.scrollbarThickness,
+               height: max(0, bounds.height - rulerHeight - Self.scrollbarThickness))
+    }
+
+    private var horizontalScrollbarRect: NSRect {
+        NSRect(x: Self.headerWidth, y: bounds.height - Self.scrollbarThickness,
+               width: max(0, bounds.width - Self.headerWidth - Self.scrollbarThickness),
+               height: Self.scrollbarThickness)
+    }
+
+    /// (thumb, track) for the lane scrollbar, or nil when everything already fits.
+    private func verticalThumb() -> (NSRect, NSRect)? {
+        let track = verticalScrollbarRect
+        let visible = bounds.height - rulerHeight
+        guard maximumScrollY > 0, contentHeight > 0, track.height > 20 else { return nil }
+        let fraction = max(0.08, min(1.0, visible / contentHeight))
+        let thumbHeight = max(24, track.height * fraction)
+        let travel = track.height - thumbHeight
+        let progress = maximumScrollY > 0 ? min(1, max(0, scrollY / maximumScrollY)) : 0
+        let thumb = NSRect(x: track.minX + 2, y: track.minY + travel * progress,
+                           width: track.width - 4, height: thumbHeight)
+        return (thumb, track)
+    }
+
+    private func horizontalThumb() -> (NSRect, NSRect)? {
+        let track = horizontalScrollbarRect
+        let span = timeSpanSeconds
+        guard span > 0, track.width > 20 else { return nil }
+        let fraction = max(0.06, min(1.0, model.visibleDuration / span))
+        let thumbWidth = max(28, track.width * fraction)
+        let travel = track.width - thumbWidth
+        let maxStart = max(0.0001, span - model.visibleDuration)
+        let progress = min(1, max(0, model.visibleStart / maxStart))
+        let thumb = NSRect(x: track.minX + travel * CGFloat(progress), y: track.minY + 2,
+                           width: thumbWidth, height: track.height - 4)
+        return (thumb, track)
+    }
+
+    private func drawScrollbars(_ context: CGContext) {
+        func bar(_ thumb: NSRect, _ track: NSRect, active: Bool) {
+            NSColor(hex: 0x1a1613).withAlphaComponent(0.9).setFill()
+            track.fill()
+            let radius = min(thumb.width, thumb.height) / 2
+            let path = NSBezierPath(roundedRect: thumb, xRadius: radius, yRadius: radius)
+            NSColor(hex: active ? 0xd8d2c4 : 0x8d867a).withAlphaComponent(active ? 0.95 : 0.7).setFill()
+            path.fill()
+        }
+        if let (thumb, track) = verticalThumb() {
+            if case .scrollingLanes = drag { bar(thumb, track, active: true) } else { bar(thumb, track, active: false) }
+        }
+        if let (thumb, track) = horizontalThumb() {
+            if case .scrollingTime = drag { bar(thumb, track, active: true) } else { bar(thumb, track, active: false) }
+        }
+    }
+
+    /// Press inside a scrollbar: grab the thumb, or page toward the click. Returns true when handled.
+    private func scrollbarHit(_ point: NSPoint) -> Bool {
+        if let (thumb, track) = verticalThumb(), track.contains(point) {
+            if thumb.contains(point) {
+                drag = .scrollingLanes(grab: point.y - thumb.minY)
+            } else {
+                let travel = max(1, track.height - thumb.height)
+                let target = min(1, max(0, (point.y - track.minY - thumb.height / 2) / travel))
+                scrollY = maximumScrollY * target
+                drag = .scrollingLanes(grab: thumb.height / 2)
+                needsDisplay = true
+            }
+            return true
+        }
+        if let (thumb, track) = horizontalThumb(), track.contains(point) {
+            let span = timeSpanSeconds
+            let maxStart = max(0.0001, span - model.visibleDuration)
+            if thumb.contains(point) {
+                drag = .scrollingTime(grab: point.x - thumb.minX)
+            } else {
+                let travel = max(1, track.width - thumb.width)
+                let target = min(1, max(0, (point.x - track.minX - thumb.width / 2) / travel))
+                onZoom?(maxStart * Double(target), model.visibleDuration)
+                drag = .scrollingTime(grab: thumb.width / 2)
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Continue a scrollbar drag. Returns true when it consumed the event.
+    private func scrollbarDrag(_ point: NSPoint) -> Bool {
+        switch drag {
+        case .scrollingLanes(let grab):
+            guard let (thumb, track) = verticalThumb() else { return true }
+            let travel = max(1, track.height - thumb.height)
+            let target = min(1, max(0, (point.y - grab - track.minY) / travel))
+            scrollY = maximumScrollY * target
+            needsDisplay = true
+            return true
+        case .scrollingTime(let grab):
+            guard let (thumb, track) = horizontalThumb() else { return true }
+            let travel = max(1, track.width - thumb.width)
+            let target = min(1, max(0, (point.x - grab - track.minX) / travel))
+            let maxStart = max(0.0001, timeSpanSeconds - model.visibleDuration)
+            onZoom?(maxStart * Double(target), model.visibleDuration)
+            return true
+        default:
+            return false
+        }
     }
 
     /// While a lane header is dragged up/down, a bright bar marks where the track will

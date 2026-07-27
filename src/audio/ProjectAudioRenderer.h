@@ -89,6 +89,11 @@ struct ProjectAudioBlockMeters {
     std::vector<int> trackInsertMeterSlotIndices;
     std::vector<float> trackInsertInputPeak;
     std::vector<float> trackInsertOutputPeak;
+    /// The mix as it leaves the master fader — before anything the monitor path does (monitor EQ,
+    /// speaker sim, monitor volume/dim/mute). The mixer's Master meter reads this, so turning the
+    /// monitor knob no longer moves it.
+    float masterPeakLeft = 0.0f;
+    float masterPeakRight = 0.0f;
 };
 
 struct ProjectAudioRenderState {

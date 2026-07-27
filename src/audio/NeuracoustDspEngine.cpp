@@ -347,6 +347,8 @@ void mergeBlockMeters(ProjectAudioBlockMeters& destination, const ProjectAudioBl
             destination.trackPeakRight[destinationIndex] = std::max(destination.trackPeakRight[destinationIndex], source.trackPeakRight[index]);
         }
     }
+    destination.masterPeakLeft = std::max(destination.masterPeakLeft, source.masterPeakLeft);
+    destination.masterPeakRight = std::max(destination.masterPeakRight, source.masterPeakRight);
     for (size_t index = 0; index < source.trackInsertMeterTrackNames.size(); ++index) {
         destination.trackInsertMeterTrackNames.push_back(source.trackInsertMeterTrackNames[index]);
         destination.trackInsertMeterSlotIndices.push_back(index < source.trackInsertMeterSlotIndices.size() ? source.trackInsertMeterSlotIndices[index] : -1);
@@ -2161,6 +2163,8 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         // meters to silence instead of freezing them at the last playing value.
         for (auto& peak : projectMeters_.trackPeakLeft) peak = 0.0f;
         for (auto& peak : projectMeters_.trackPeakRight) peak = 0.0f;
+        projectMeters_.masterPeakLeft = 0.0f;
+        projectMeters_.masterPeakRight = 0.0f;
     }
 
     const double increment = kTwoPi * settings_.testToneFrequency / std::max(1.0, settings_.sampleRate);
@@ -2372,6 +2376,8 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.loudnessRange = loudnessMeter_.loudnessRange();
     status.truePeakDb = loudnessMeter_.truePeakDb();
     status.trackMeterNames = projectMeters_.trackNames;
+    status.masterBusPeakLeft = projectMeters_.masterPeakLeft;
+    status.masterBusPeakRight = projectMeters_.masterPeakRight;
     status.trackPeakLeft = projectMeters_.trackPeakLeft;
     status.trackPeakRight = projectMeters_.trackPeakRight;
     status.trackConsoleGainReductionDb = projectMeters_.trackConsoleGainReductionDb;

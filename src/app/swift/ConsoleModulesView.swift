@@ -678,6 +678,31 @@ private struct DynamicsGraphView: View {
                 if i == 0 { curve.move(to: pt) } else { curve.addLine(to: pt) }
             }
             ctx.stroke(curve, with: .color(Color(hex: 0xffb454)), lineWidth: 1.6)
+
+            // Live operating point, the way a Waves / FabFilter dynamics display moves with the
+            // signal: the track's output peak is where the curve is being driven right now, and
+            // input = output + gain reduction, so the dot rides the curve as the music plays.
+            guard let t = engine.tracks.first(where: { $0.id == trackId }) else { return }
+            let peak = max(t.peakLeft, t.peakRight)
+            guard peak > 0.00002 else { return }
+            let outNow = Double(20 * log10f(peak))
+            let gr = Double(max(t.consoleCompGainReductionDb, t.consoleGateGainReductionDb))
+            let inNow = outNow + gr
+            guard inNow > lo else { return }
+            let px = x(min(hi, inNow)), py = y(max(lo, min(hi, outNow)))
+            // Guides down to the axes, so the level is readable even when the dot sits on the line.
+            var guides = Path()
+            guides.move(to: CGPoint(x: px, y: H)); guides.addLine(to: CGPoint(x: px, y: py))
+            guides.move(to: CGPoint(x: 0, y: py)); guides.addLine(to: CGPoint(x: px, y: py))
+            ctx.stroke(guides, with: .color(Color(hex: 0x5bd6a0).opacity(0.30)), lineWidth: 1)
+            let r: CGFloat = 3.2
+            ctx.fill(Path(ellipseIn: CGRect(x: px - r, y: py - r, width: r * 2, height: r * 2)),
+                     with: .color(Color(hex: 0x8ff0c0)))
+            if gr > 0.2 {   // the amount being pulled down, drawn as the drop from the unity line
+                var pull = Path()
+                pull.move(to: CGPoint(x: px, y: y(min(hi, inNow)))); pull.addLine(to: CGPoint(x: px, y: py))
+                ctx.stroke(pull, with: .color(Color(hex: 0xff6b6b).opacity(0.75)), lineWidth: 2)
+            }
         }
         .background(Color.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 4))
@@ -704,19 +729,17 @@ struct ConsoleVizStrip: View {
 
     private static let graphHeight: CGFloat = 40    // a third shorter than the original 60
     private static let panelHeight: CGFloat = 53    // label + gap + graph
+    private static let grMeterHeight: CGFloat = 14  // the dynamics panel carries the GR meter
     private static let panelGap: CGFloat = 6
 
-    /// Deterministic height for `n` panels — the mixer maxes this across its strips.
-    static func height(panels n: Int) -> CGFloat {
-        n <= 0 ? 0 : 2 + CGFloat(n) * panelHeight + CGFloat(n - 1) * panelGap
-    }
-
-    /// How many panels a track would show. Mirrors `panels()`, for the mixer's height alignment.
-    static func panelCount(_ t: EngineController.Track) -> Int {
+    /// Deterministic height for a track's panels — the mixer maxes this across its strips and
+    /// hands every strip the same number, so nothing here is ever measured. Mirrors `panels()`.
+    static func height(for t: EngineController.Track) -> CGFloat {
+        var h: CGFloat = 0
         var n = 0
-        if t.consoleFilterEnabled || t.consoleEqEnabled { n += 1 }
-        if t.consoleCompEnabled || t.consoleGateEnabled { n += 1 }
-        return n
+        if t.consoleFilterEnabled || t.consoleEqEnabled { h += panelHeight; n += 1 }
+        if t.consoleCompEnabled || t.consoleGateEnabled { h += panelHeight + grMeterHeight; n += 1 }
+        return n == 0 ? 0 : 2 + h + CGFloat(n - 1) * panelGap
     }
 
     private func panels() -> [Panel] {
@@ -737,29 +760,48 @@ struct ConsoleVizStrip: View {
         if !ps.isEmpty || (alignedHeight ?? 0) > 0 {
             VStack(spacing: 6) {
                 ForEach(Array(ps.enumerated()), id: \.offset) { pair in
+                    Group {
                     switch pair.element {
                     case .freq: vizPanel("EQ · 스펙트럼") { EqGraphView(engine: engine, trackId: trackId) }
-                    case .dynamics: vizPanel("다이나믹스") { DynamicsGraphView(engine: engine, trackId: trackId) }
+                    case .dynamics:
+                        // The GR meter rides under the curve it belongs to, not up in the module.
+                        vizPanel("다이나믹스", extra: Self.grMeterHeight) {
+                            VStack(spacing: 1) {
+                                DynamicsGraphView(engine: engine, trackId: trackId)
+                                GrMeter(label: "GR", gr: max(track?.consoleCompGainReductionDb ?? 0,
+                                                             track?.consoleGateGainReductionDb ?? 0))
+                                    .frame(height: 13)
+                            }
+                        }
                     case .harmonics: vizPanel("하모닉스") { HarmonicsGraphView(engine: engine, trackId: trackId) }
                     }
+                    }
+                    .transition(.opacity)
                 }
             }
             .frame(width: width)
             .padding(.top, 2)
-            // Fall back to this strip's own natural height: the Inspector renders a strip without
-            // the mixer's alignment value, and a literal 0 there would clip the panels to nothing
-            // while they still drew — they overlapped the module below.
-            .frame(height: max(alignedHeight ?? 0, Self.height(panels: ps.count)), alignment: .top)
+            // Panels fade rather than snapping in. Opacity only, never height: this block sits in
+            // the strip's height-measured section, and animating its height republishes that
+            // measurement every frame, which is exactly what stormed the layout before.
+            .animation(.easeOut(duration: 0.18), value: ps.count)
+            // Inside the mixer this MUST be the supplied constant and nothing content-derived: the
+            // section around it measures itself and takes the mixer-wide maximum back as its own
+            // minHeight, and a child that resizes with its content makes that loop oscillate and
+            // stick (the mixer froze until the view was rebuilt by visiting the Edit tab).
+            // The Inspector passes nil and gets its own natural height — it has no such loop.
+            .frame(height: alignedHeight ?? (track.map { Self.height(for: $0) } ?? 0), alignment: .top)
         }
     }
 
-    @ViewBuilder private func vizPanel<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+    @ViewBuilder private func vizPanel<Content: View>(_ title: String, extra: CGFloat = 0,
+                                                     @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
-            content().frame(height: Self.graphHeight)
+            content().frame(height: Self.graphHeight + extra)
         }
         .padding(.horizontal, 3)      // keep the graphs off the strip edge
-        .frame(height: Self.panelHeight, alignment: .top)
+        .frame(height: Self.panelHeight + extra, alignment: .top)
     }
 }
 
@@ -1300,7 +1342,8 @@ struct NeuracoustConsoleModulesView: View {
                     circuitChip(.comp).position(x: 148, y: 200)
                 }
                 .frame(height: 240)
-                GrMeter(label: "GR", gr: gr)
+                // The GR meter moved to the bottom of the strip's 다이나믹스 visualiser panel,
+                // where the curve it belongs to lives.
                 Spacer(minLength: 5)   // 5pt more room at the bottom
             }
         }
@@ -1322,7 +1365,6 @@ struct NeuracoustConsoleModulesView: View {
                 circuitChip(.gate).position(x: 150, y: 208)                                  // circuit further down (swapped)
             }
             .frame(height: 250)
-            GrMeter(label: "GR", gr: gr)
           }
         }
     }

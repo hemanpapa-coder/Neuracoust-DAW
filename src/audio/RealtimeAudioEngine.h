@@ -77,6 +77,11 @@ struct AudioEngineStatus {
     int outputChannels = 0;
     float outputPeakLeft = 0.0f;
     float outputPeakRight = 0.0f;
+    /// The mix leaving the master fader, BEFORE the monitor path (monitor EQ, speaker sim,
+    /// monitor volume/dim/mute). outputPeak* is the device output and therefore follows the
+    /// monitor knob; the mixer's Master meter must not, so it reads these instead.
+    float masterBusPeakLeft = 0.0f;
+    float masterBusPeakRight = 0.0f;
     float phaseCorrelation = 0.0f;
     float spectrumLow = 0.0f;
     float spectrumMid = 0.0f;

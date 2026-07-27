@@ -745,8 +745,7 @@ struct MixerView: View {
             globalModuleFocus: globalModuleFocus,
             globalModuleFocusRevision: globalModuleFocusRevision,
             alignedPrePanHeight: prePanHeights.values.max(),
-            alignedVizHeight: ConsoleVizStrip.height(
-                panels: engine.tracks.map { ConsoleVizStrip.panelCount($0) }.max() ?? 0)
+            alignedVizHeight: engine.tracks.map { ConsoleVizStrip.height(for: $0) }.max() ?? 0
         )
         // Every mixer strip shares the tallest one's height (Master included), so adding
         // inserts/sends to one channel grows them all together.
@@ -815,7 +814,8 @@ struct ChannelStrip: View {
     var globalModuleFocusRevision: Int = 0
     var alignedPrePanHeight: CGFloat? = nil
     /// Mixer-wide visualiser height, computed from panel counts (never measured — see ConsoleVizStrip).
-    var alignedVizHeight: CGFloat = 0
+    /// nil in the Inspector, where the strip stands alone and can size to its own content.
+    var alignedVizHeight: CGFloat? = nil
 
     private var accent: Color { track.kind.accent }
 
@@ -861,6 +861,17 @@ struct ChannelStrip: View {
             }
         }
         .frame(width: stripWidth)
+        // Select a module, then ↑/↓ reorders it (the per-row ▲▼ arrows are gone). Kept out at the
+        // strip level: focus machinery inside the height-measured prePanSection churns its layout.
+        .focusable()
+        .focusEffectDisabled()
+        .onMoveCommand { direction in
+            switch direction {
+            case .up:   moveModule(moduleFocus, by: -1)
+            case .down: moveModule(moduleFocus, by: 1)
+            default:    break
+            }
+        }
         .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(stripBackground))
         // Clip content to the rounded card so the header's accent bar doesn't poke square
         // corners out past the (rounded) selection outline.
@@ -895,6 +906,7 @@ struct ChannelStrip: View {
             // this section's measured height every Canvas redraw and storm the layout.
             ConsoleVizStrip(engine: engine, trackId: track.id, width: stripWidth,
                             alignedHeight: alignedVizHeight)
+                .transition(.opacity)
             if showInserts && selectedModules.contains(.insert)
                 && (track.kind == .instrument || mixerHasInstrument) {
                 instrumentSlotSection
@@ -940,6 +952,9 @@ struct ChannelStrip: View {
                                        value: [track.id: proxy.size.height])
             }
         )
+        // Modules fade in/out instead of appearing abruptly. Opacity only — this section's height
+        // is measured and fed back as its own minHeight, so animating the height storms the layout.
+        .animation(.easeOut(duration: 0.18), value: selectedModules)
     }
 
     /// Compact two-column selector inspired by Harrison's channel-strip module picker.
@@ -961,17 +976,6 @@ struct ChannelStrip: View {
                         .stroke(Theme.Palette.coolDivider, lineWidth: 1)
                 )
         )
-        // Select a module, then ↑/↓ reorders it — replaces the per-row arrows. Scoped to focus so
-        // the arrow keys keep doing their timeline job everywhere else.
-        .focusable()
-        .focusEffectDisabled()
-        .onMoveCommand { direction in
-            switch direction {
-            case .up:   moveModule(moduleFocus, by: -1)
-            case .down: moveModule(moduleFocus, by: 1)
-            default:    break
-            }
-        }
     }
 
     /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).
@@ -2114,8 +2118,11 @@ struct ChannelStrip: View {
 
     // The Master strip has no per-track signal of its own — it is the sum bus, so its
     // meter reads the engine's summed output peak (the same thing MASTER METER shows).
-    private var meterPeakLeft: Float { track.kind == .master ? engine.outputPeakLeft : track.peakLeft }
-    private var meterPeakRight: Float { track.kind == .master ? engine.outputPeakRight : track.peakRight }
+    // Master reads the master BUS (post fader, pre monitor path). The device output peak follows
+    // the monitor volume knob, so metering it here made the Master meter move when only the
+    // monitoring level changed — the mix itself had not.
+    private var meterPeakLeft: Float { track.kind == .master ? engine.masterBusPeakLeft : track.peakLeft }
+    private var meterPeakRight: Float { track.kind == .master ? engine.masterBusPeakRight : track.peakRight }
 
     /// Master-only: an auto fade-out over the last N seconds, with a curve preview and
     /// picker. The seconds and curve write master volume automation in the engine.

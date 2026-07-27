@@ -32,6 +32,10 @@ final class EngineController: ObservableObject {
     // Engine-derived state, refreshed each tick.
     @Published private(set) var running = false
     @Published private(set) var transportRunning = false
+    /// Post master fader, pre monitor path — what the mixer's Master strip meters. The device
+    /// output peak below follows the monitor volume knob, which must not move the Master meter.
+    @Published private(set) var masterBusPeakLeft: Float = 0
+    @Published private(set) var masterBusPeakRight: Float = 0
     @Published private(set) var outputPeakLeft: Float = 0
     @Published private(set) var outputPeakRight: Float = 0
     /// Full FFT spectrum magnitude bins (0..1, low→high frequency) for the analyzer.
@@ -3253,6 +3257,7 @@ final class EngineController: ObservableObject {
         static let t: UInt16 = 17
         static let r: UInt16 = 15               // Pro Tools single-key zoom out (horizontal)
         static let h: UInt16 = 4
+        static let equal: UInt16 = 24           // Pro Tools ⌘= toggles Edit ↔ Mix
         static let space: UInt16 = 49
         static let delete: UInt16 = 51
         static let forwardDelete: UInt16 = 117
@@ -3392,6 +3397,9 @@ final class EngineController: ObservableObject {
             // Pro Tools: ⌘E = Separate Clip (split at the playhead / selection).
             if let regionId = selectedRegionId { splitRegionAtPlayhead(regionId) }
             else { splitSelectedClipsAtPlayhead() }
+        case KeyCode.equal:
+            // Pro Tools: ⌘= switches between the Edit and Mix windows.
+            viewTab = (viewTab == .edit) ? .mix : .edit
         case KeyCode.h:
             healSelectedClips()                 // Pro Tools: ⌘H = Heal Separation
         case KeyCode.c where !selectedClipIds.isEmpty:
@@ -9689,6 +9697,8 @@ final class EngineController: ObservableObject {
             setIfChanged(\.spectrumMid, status.spectrumMid)
             setIfChanged(\.spectrumHigh, status.spectrumHigh)
             // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
+            setIfChanged(\.masterBusPeakLeft, Self.decayedMeter(status.masterBusPeakLeft, masterBusPeakLeft))
+            setIfChanged(\.masterBusPeakRight, Self.decayedMeter(status.masterBusPeakRight, masterBusPeakRight))
             setIfChanged(\.outputPeakLeft, Self.decayedMeter(status.outputPeakLeft, outputPeakLeft))
             setIfChanged(\.outputPeakRight, Self.decayedMeter(status.outputPeakRight, outputPeakRight))
             updateSpectrumBins(handle)

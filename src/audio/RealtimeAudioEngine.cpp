@@ -557,6 +557,8 @@ public:
         copy.spectrumMid = spectrumMid_.load();
         copy.spectrumHigh = spectrumHigh_.load();
         copy.trackMeterNames = projectMeters_.trackNames;
+        copy.masterBusPeakLeft = projectMeters_.masterPeakLeft;
+        copy.masterBusPeakRight = projectMeters_.masterPeakRight;
         copy.trackPeakLeft = projectMeters_.trackPeakLeft;
         copy.trackPeakRight = projectMeters_.trackPeakRight;
         copy.trackConsoleGainReductionDb = projectMeters_.trackConsoleGainReductionDb;
