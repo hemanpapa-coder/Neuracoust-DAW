@@ -315,10 +315,17 @@ private struct InsertSlotChipView: View {
                     if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
                     else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
                 }
-                // No "DSP 실행 모드" picker: its only two entries were Native and "Internal DSP ·
-                // 격리 코어", and there is no internal DSP engine — internal renders exactly like
-                // native (see InsertDspPolicy). Offloading to a remote node is chosen per node in
-                // the monitor dock, not per insert here.
+                // Where this insert runs. The old picker offered Native and "Internal DSP · 격리
+                // 코어", which render identically — there is no internal DSP engine. The choice
+                // that does change something is the remote node, so it is offered only while one
+                // is connected (it can only host the Neuracoust modules it was built with).
+                if engine.remoteDspActive {
+                    Divider()
+                    Menu("DSP 실행 위치") {
+                        dspModeButton("이 맥 (네이티브)", "native", checked: badge == "NAT" || badge == "INT")
+                        dspModeButton("원격 노드", "external", checked: badge == "EXT" || badge == "RINT")
+                    }
+                }
                 Divider()
                 if !isMaster {
                     Menu("슬롯으로 이동") {
