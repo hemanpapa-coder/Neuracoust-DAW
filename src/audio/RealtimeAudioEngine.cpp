@@ -1411,10 +1411,13 @@ private:
         const double loadFraction = renderDurationUs / std::max(1.0, expectedPeriodUs);
         const double previousLoad = realtimeMaxRenderLoad_.load();
         realtimeMaxRenderLoad_.store(std::max(loadFraction, previousLoad * 0.985));
-        // A late wake alone is not a dropout: SoundGrid wakes in bursts, so the interval is
-        // irregular by design and this counter used to climb into the hundreds on a healthy
-        // session. Count it only when the render also failed to finish inside its own period.
-        if (jitterUs > expectedPeriodUs * 0.5 && loadFraction >= 1.0) {
+        // What actually drops audio is the render not finishing inside the period it was given —
+        // the wake being early or late does not, and on a burst-delivering driver (SoundGrid) the
+        // interval is irregular by design, which is why counting jitter alone reported hundreds of
+        // dropouts on a healthy session. Requiring BOTH went too far the other way and stayed
+        // silent through real ones: a render can overrun while the wake was perfectly on time.
+        // Count the overrun itself, which is the event.
+        if (loadFraction >= 1.0) {
             realtimeLateWakeCount_.fetch_add(1);
         }
     }
