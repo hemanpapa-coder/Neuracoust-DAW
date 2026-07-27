@@ -9097,6 +9097,11 @@ final class EngineController: ObservableObject {
             readString { nc_headphone_profile_name(handle, Int32(i), $0, $1) }
         }
     }()
+    /// The measured-target names as a Set. The monitor dock's menus ask "is this model measured?"
+    /// for every catalog row, and SwiftUI rebuilds that menu content on every 30 Hz body pass —
+    /// building the Set there re-hashed the whole list each time.
+    lazy var measuredMonitorTargetSet: Set<String> = Set(virtualMonitorTargets)
+    lazy var measuredHeadphoneTargetSet: Set<String> = Set(headphoneMonitorTargets)
     func headphoneModelHasCurve(_ model: String) -> Bool {
         headphoneMonitorTargets.contains { $0 == model || stripSpeakerSlotPrefix($0) == stripSpeakerSlotPrefix(model) }
     }

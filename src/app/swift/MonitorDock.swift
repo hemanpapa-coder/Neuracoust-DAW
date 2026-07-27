@@ -443,7 +443,7 @@ struct MonitorDock: View {
         }
         modelMenu("실물 헤드폰 모델", catalog: engine.headphoneModelCatalog,
                   selected: engine.physicalHeadphoneModel,
-                  measured: Set(engine.headphoneMonitorTargets)) { engine.setPhysicalHeadphoneModel($0) }
+                  measured: engine.measuredHeadphoneTargetSet) { engine.setPhysicalHeadphoneModel($0) }
         audioInterfaceMenuGroup
     }
 
@@ -726,7 +726,7 @@ struct MonitorDock: View {
         // you want to hear, room EQ, and the physical output pair it drives.
         modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
                   selected: set.realModel,
-                  measured: Set(engine.virtualMonitorTargets)) { engine.setSpeakerRealModel(set.id, $0) }
+                  measured: engine.measuredMonitorTargetSet) { engine.setSpeakerRealModel(set.id, $0) }
         // The REAL speaker's amp + cable — only for a PASSIVE real speaker (an active monitor has
         // them built in). This is the chain you actually hear on; the correction flattens it.
         if set.realModelIsPassive {
@@ -740,11 +740,11 @@ struct MonitorDock: View {
         // headphone (mutually exclusive — picking one replaces the other).
         modelMenu("스피커 시뮬레이터", catalog: engine.speakerModelCatalog,
                   selected: (modelled && !isHeadphone) ? bare : "",
-                  measured: Set(engine.virtualMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
+                  measured: engine.measuredMonitorTargetSet) { engine.setSpeakerModel(set.id, $0) }
         if engine.outputMode == .headphone {
             modelMenu("헤드폰 시뮬레이터", catalog: engine.headphoneModelCatalog,
                       selected: (modelled && isHeadphone) ? bare : "",
-                      measured: Set(engine.headphoneMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
+                      measured: engine.measuredHeadphoneTargetSet) { engine.setSpeakerModel(set.id, $0) }
         }
         // The MODELING (target) speaker's amp + cable — only for a PASSIVE modeled speaker. These
         // colour the simulation (added), independent of the real speaker's amp/cable above.
