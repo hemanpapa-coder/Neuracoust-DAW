@@ -644,6 +644,11 @@ target_link_libraries(neuracoust_vst3_realtime_bridge_smoke PRIVATE neuracoust_d
 add_executable(neuracoust_meter_plugin_fixture_host tools/meter_plugin_fixture_host.cpp)
 target_link_libraries(neuracoust_meter_plugin_fixture_host PRIVATE neuracoust_daw_core)
 
+# Times the console strip and the linear-phase monitor FIR against the realtime budget. Wall-clock,
+# so it is a hand-run tool rather than a ctest.
+add_executable(neuracoust_dsp_load_bench tools/dsp_load_bench.cpp)
+target_link_libraries(neuracoust_dsp_load_bench PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
 

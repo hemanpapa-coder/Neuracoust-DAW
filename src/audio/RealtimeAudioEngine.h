@@ -148,6 +148,11 @@ struct AudioEngineStatus {
     unsigned long long referenceUnderrunBlocks = 0;
     unsigned long long referenceOverrunDrops = 0;
     double realtimeMaxRenderDurationUs = 0.0;
+    /// Worst recent render pass as a FRACTION of the time that pass was allowed — its own frame
+    /// count, not the configured buffer size. A driver that delivers in bursts (Waves SoundGrid)
+    /// hands the callback more frames than the buffer setting, so dividing the raw duration by the
+    /// configured period reported a load several times the truth and pinned the meter at 100%.
+    double realtimeMaxRenderLoad = 0.0;
     int realtimeLateWakeCount = 0;
     int activeRealtimeVst3MasterInsertCount = 0;
     int activeRealtimeVst3TrackInsertCount = 0;

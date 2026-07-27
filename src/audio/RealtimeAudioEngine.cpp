@@ -569,6 +569,7 @@ public:
         copy.realtimeAverageWakeJitterUs = realtimeAverageWakeJitterUs_.load();
         copy.realtimeMaxWakeJitterUs = realtimeMaxWakeJitterUs_.load();
         copy.realtimeMaxRenderDurationUs = realtimeMaxRenderDurationUs_.load();
+        copy.realtimeMaxRenderLoad = realtimeMaxRenderLoad_.load();
         copy.realtimeLateWakeCount = realtimeLateWakeCount_.load();
         copy.activeRealtimeVst3MasterInsertCount = static_cast<int>(realtimeInsertChain_.activeVst3Count());
         copy.activeRealtimeVst3TrackInsertCount = 0;
@@ -1367,6 +1368,7 @@ private:
         realtimeAverageWakeJitterUs_.store(0.0);
         realtimeMaxWakeJitterUs_.store(0.0);
         realtimeMaxRenderDurationUs_.store(0.0);
+        realtimeMaxRenderLoad_.store(0.0);
         realtimeLateWakeCount_.store(0);
         lastRenderWakeTime_ = {};
     }
@@ -1404,7 +1406,15 @@ private:
         realtimeMaxWakeJitterUs_.store(std::max(jitterUs, previousWakePeak * 0.985));
         const double previousRenderPeak = realtimeMaxRenderDurationUs_.load();
         realtimeMaxRenderDurationUs_.store(std::max(renderDurationUs, previousRenderPeak * 0.985));
-        if (jitterUs > expectedPeriodUs * 0.5) {
+        // Normalise against the period THIS callback was given. With a burst-delivering driver the
+        // frame count varies, and measuring against the configured buffer size overstates the load.
+        const double loadFraction = renderDurationUs / std::max(1.0, expectedPeriodUs);
+        const double previousLoad = realtimeMaxRenderLoad_.load();
+        realtimeMaxRenderLoad_.store(std::max(loadFraction, previousLoad * 0.985));
+        // A late wake alone is not a dropout: SoundGrid wakes in bursts, so the interval is
+        // irregular by design and this counter used to climb into the hundreds on a healthy
+        // session. Count it only when the render also failed to finish inside its own period.
+        if (jitterUs > expectedPeriodUs * 0.5 && loadFraction >= 1.0) {
             realtimeLateWakeCount_.fetch_add(1);
         }
     }
@@ -1628,6 +1638,7 @@ private:
     std::atomic<double> realtimeAverageWakeJitterUs_ {0.0};
     std::atomic<double> realtimeMaxWakeJitterUs_ {0.0};
     std::atomic<double> realtimeMaxRenderDurationUs_ {0.0};
+    std::atomic<double> realtimeMaxRenderLoad_ {0.0};
     std::atomic<int> realtimeLateWakeCount_ {0};
     std::atomic<int> realtimeTelemetrySuppressCallbacks_ {0};
     std::chrono::steady_clock::time_point lastRenderWakeTime_ {};

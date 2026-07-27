@@ -56,6 +56,9 @@ final class EngineController: ObservableObject {
     @Published private(set) var bufferSize: Int = 0
     @Published private(set) var delayCompensationMs: Double = 0
     @Published private(set) var maxRenderDurationUs: Double = 0
+    /// Worst recent render pass as a fraction of the period it was allowed. The engine normalises
+    /// against the callback's OWN frame count, so a burst-delivering driver no longer reads 100%.
+    @Published private(set) var maxRenderLoad: Double = 0
     // Cumulative render-deadline misses (late wakes) — each is a potential audible dropout even when
     // playback keeps rolling. A safe session should hold this at (or near) 0.
     @Published private(set) var lateWakeCount: Int = 0
@@ -2911,11 +2914,7 @@ final class EngineController: ObservableObject {
     /// Fraction of the buffer period consumed by the worst recent render pass.
     /// This is render headroom, which is what actually predicts dropouts — raw
     /// wake jitter reads ~1 buffer period even when idle on Waves SoundGrid.
-    var dspLoadFraction: Double {
-        guard sampleRate > 0, bufferSize > 0 else { return 0 }
-        let bufferPeriodUs = Double(bufferSize) / sampleRate * 1_000_000
-        return min(1.0, maxRenderDurationUs / bufferPeriodUs)
-    }
+    var dspLoadFraction: Double { min(1.0, max(0.0, maxRenderLoad)) }
 
     /// `NCEngine` is opaque in C, so Swift imports the handle as an OpaquePointer.
     /// Marked nonisolated so `deinit` can free it; nothing else ever holds it.
@@ -9671,6 +9670,7 @@ final class EngineController: ObservableObject {
             setIfChanged(\.referenceTapFaults,
                          Int(status.referenceUnderrunBlocks) + Int(status.referenceOverrunDrops))
             setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
+            setIfChanged(\.maxRenderLoad, (status.realtimeMaxRenderLoad * 1000).rounded() / 1000)
             setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
