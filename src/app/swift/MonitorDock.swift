@@ -594,7 +594,74 @@ struct MonitorDock: View {
                 }
                 .help("녹음 대기·인풋 모니터 중인 트랙이 있으면 선형위상 대신 최소위상으로 — 같은 커브, 지연 0. 연주는 제때, 믹스는 정확하게.")
             }
+
+            vrCorrectionSection
         }
+    }
+
+    /// VR / headset-worn monitor correction. Wearing a Meta Quest 3 (or any headset) while
+    /// monitoring on real speakers reshapes the sound at the ears; this measures that change
+    /// (a room sweep with the headset OFF, then ON) and undoes it in the monitor EQ.
+    private var vrCorrectionSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Label("VR 헤드셋 보정", systemImage: "visionpro")
+                    .font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
+                Spacer(minLength: 0)
+                if engine.vrCorrectionActive {
+                    Text(engine.vrCorrectionEnabled ? "적용 중" : "꺼짐")
+                        .font(Theme.Font.mono(9))
+                        .foregroundStyle(engine.vrCorrectionEnabled ? Theme.Palette.green : Theme.Palette.textFaint)
+                }
+                Toggle("", isOn: Binding(get: { engine.vrCorrectionEnabled },
+                                         set: { engine.setVrCorrectionEnabled($0) }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    .disabled(!engine.vrCorrectionActive)
+            }
+            .help("헤드셋을 쓰고 실물 스피커로 모니터할 때의 음색 변화를 상쇄합니다. 먼저 룸 측정을 실행한 뒤 기준/착용을 잡으세요.")
+
+            HStack(spacing: 6) {
+                Button {
+                    _ = engine.vrCaptureBaseline()
+                } label: {
+                    Text(engine.vrHasBaseline ? "기준 ✓" : "기준(벗음)")
+                        .font(Theme.Font.mono(8.5))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 3)
+                }
+                .buttonStyle(.plain)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.button))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(engine.vrHasBaseline ? Theme.Palette.green.opacity(0.5) : Theme.Palette.divider, lineWidth: 1))
+                .help("헤드셋을 벗은 상태에서 룸 측정을 실행한 뒤 눌러 기준으로 저장합니다.")
+
+                Button {
+                    _ = engine.vrCaptureWorn()
+                } label: {
+                    Text("착용 보정")
+                        .font(Theme.Font.mono(8.5))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 3)
+                }
+                .buttonStyle(.plain)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.button))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.Palette.divider, lineWidth: 1))
+                .disabled(!engine.vrHasBaseline)
+                .opacity(engine.vrHasBaseline ? 1 : 0.4)
+                .help("헤드셋을 쓰고 다시 룸 측정을 실행한 뒤 눌러 보정 커브(기준−착용)를 만듭니다.")
+
+                if engine.vrCorrectionActive {
+                    Button { engine.vrClearCorrection() } label: {
+                        Image(systemName: "trash").font(.system(size: 9))
+                            .frame(width: 22).padding(.vertical, 3)
+                    }
+                    .buttonStyle(.plain)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.button))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.Palette.divider, lineWidth: 1))
+                    .help("보정 지우기")
+                }
+            }
+        }
+        .padding(.top, 2)
     }
 
     /// The right-click menu for an A/B/C speaker set: choose its modelled speaker, or a
@@ -612,14 +679,15 @@ struct MonitorDock: View {
         // and cable, for a passive one — leave empty for an active speaker), then the SIMULATOR
         // you want to hear, room EQ, and the physical output pair it drives.
         modelMenu("실물 스피커 모델", catalog: engine.speakerModelCatalog,
-                  selected: set.realModel) { engine.setSpeakerRealModel(set.id, $0) }
-        // Power amp + cable are only meaningful for a PASSIVE speaker — whether that's the real
-        // speaker or a passive modelled/sim target. Active speakers have them built in, so hide them.
-        if set.realModelIsPassive || set.modelIsPassive {
-            modelMenu("파워앰프", catalog: engine.powerAmpModelCatalog,
-                      selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
-            modelMenu("스피커 케이블", catalog: engine.speakerCableModelCatalog,
-                      selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
+                  selected: set.realModel,
+                  measured: Set(engine.virtualMonitorTargets)) { engine.setSpeakerRealModel(set.id, $0) }
+        // The REAL speaker's amp + cable — only for a PASSIVE real speaker (an active monitor has
+        // them built in). This is the chain you actually hear on; the correction flattens it.
+        if set.realModelIsPassive {
+            modelMenu("실물 파워앰프", catalog: engine.powerAmpModelCatalog,
+                      selected: set.realAmp) { engine.setSpeakerRealAmp(set.id, $0) }
+            modelMenu("실물 스피커 케이블", catalog: engine.speakerCableModelCatalog,
+                      selected: set.realCable) { engine.setSpeakerRealCable(set.id, $0) }
         }
         Divider()
         // The SIMULATOR this slot voices toward. In HEADPHONE mode it may instead model a
@@ -631,6 +699,14 @@ struct MonitorDock: View {
             modelMenu("헤드폰 시뮬레이터", catalog: engine.headphoneModelCatalog,
                       selected: (modelled && isHeadphone) ? bare : "",
                       measured: Set(engine.headphoneMonitorTargets)) { engine.setSpeakerModel(set.id, $0) }
+        }
+        // The MODELING (target) speaker's amp + cable — only for a PASSIVE modeled speaker. These
+        // colour the simulation (added), independent of the real speaker's amp/cable above.
+        if set.modelIsPassive && !isHeadphone {
+            modelMenu("모델링 파워앰프", catalog: engine.powerAmpModelCatalog,
+                      selected: set.amp) { engine.setSpeakerAmp(set.id, $0) }
+            modelMenu("모델링 스피커 케이블", catalog: engine.speakerCableModelCatalog,
+                      selected: set.cable) { engine.setSpeakerCable(set.id, $0) }
         }
         Divider()
         Menu("물리 출력") {

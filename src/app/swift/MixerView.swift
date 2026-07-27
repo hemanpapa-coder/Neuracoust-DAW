@@ -1630,6 +1630,20 @@ struct ChannelStrip: View {
                         .background(RoundedRectangle(cornerRadius: 2).fill(accent.opacity(0.22)))
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                // Dual-mono is a channel property (the console's comp/gate stereo-link), standard on
+                // every stereo channel. DUAL = L/R detected independently; LINK = detected together.
+                if track.isStereo {
+                    Button { engine.setConsoleBool(track.id, "dualMono", !track.consoleDualMono) } label: {
+                        Text(track.consoleDualMono ? "DM" : "LK")   // Dual Mono / Link (stereo)
+                            .font(Theme.Font.mono(6.5, .semibold))
+                            .foregroundStyle(track.consoleDualMono ? Color(hex: 0x0e1b24) : Theme.Palette.textDim)
+                            .padding(.horizontal, 4).frame(height: 12)
+                            .background(RoundedRectangle(cornerRadius: 2)
+                                .fill(track.consoleDualMono ? Color(hex: 0x5bb6df) : Theme.Palette.recess))
+                    }
+                    .buttonStyle(.plain)
+                    .helpTip("듀얼 모노 — 좌우 채널의 다이내믹(컴프·게이트) 검출을 독립 처리합니다. 끄면 스테레오 링크.")
+                }
             }
             .padding(.horizontal, Theme.Space.md)
             .frame(height: 18)

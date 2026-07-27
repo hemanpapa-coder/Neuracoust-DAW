@@ -86,9 +86,16 @@ struct ConsoleChannelState {
     bool compEnabled = false;
     bool gateEnabled = false;
     bool saturatorEnabled = false;
-    /// Linked stereo when false; independent L/R dynamics detectors when true.
-    /// EQ/filter/saturation already maintain independent channel signal paths.
+    /// Linked stereo when false; independent L/R dynamics detectors when true. Per-module so each
+    /// SSL block toggles independently (only comp/gate act on it — the detector linking; eq/filter/
+    /// saturator already run independent L/R paths, so their flag is stored but tonally inert today).
+    /// `dualMono` is the legacy shared field, kept only to migrate old projects into the per-module set.
     bool dualMono = false;
+    bool filterDualMono = false;
+    bool eqDualMono = false;
+    bool compDualMono = false;
+    bool gateDualMono = false;
+    bool saturatorDualMono = false;
     bool filterCircuitMode = false;
     bool eqCircuitMode = false;
     bool compCircuitMode = false;
@@ -130,6 +137,12 @@ struct ConsoleChannelState {
     bool eqLfBell = false;
     bool eqEMode = true;
     std::string eqType = "ssl_4000e";
+    /// Channel polarity (Ø), per side — invert L and/or R independently at the end of the console
+    /// chain, surfaced as ØL/ØR on the saturator panel. `phaseInvert` is the legacy both-channels
+    /// field, kept only to migrate old projects into the per-side pair.
+    bool phaseInvert = false;
+    bool phaseInvertL = false;
+    bool phaseInvertR = false;
 };
 
 struct TrackState {

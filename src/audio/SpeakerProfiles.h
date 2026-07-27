@@ -18,4 +18,10 @@ ResponseCurve speakerProfileCurve(const std::string& catalogName);
 // Every catalog name that has a measured curve.
 std::vector<std::string> speakerProfilesWithCurve();
 
+// Spec-sheet-DERIVED approximate curve (never a measurement) for a model with no measured profile —
+// physically motivated from the model's field class + brand voicing. Empty for Flat/Off/empty.
+// A measured profile always takes precedence; this only fills the gap so the graph/sim is never
+// blank for a named speaker. See MonitorSpecCurves.cpp.
+ResponseCurve speakerSpecCurve(const std::string& catalogName);
+
 } // namespace neuracoust::daw

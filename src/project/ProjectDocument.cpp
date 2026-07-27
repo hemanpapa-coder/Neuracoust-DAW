@@ -2109,6 +2109,11 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"consoleGateCircuitMode\":" << (track.consoleChannel.gateCircuitMode ? "true" : "false")
             << ",\"consoleSaturatorEnabled\":" << (track.consoleChannel.saturatorEnabled ? "true" : "false")
             << ",\"consoleDualMono\":" << (track.consoleChannel.dualMono ? "true" : "false")
+            << ",\"consoleFilterDualMono\":" << (track.consoleChannel.filterDualMono ? "true" : "false")
+            << ",\"consoleEqDualMono\":" << (track.consoleChannel.eqDualMono ? "true" : "false")
+            << ",\"consoleCompDualMono\":" << (track.consoleChannel.compDualMono ? "true" : "false")
+            << ",\"consoleGateDualMono\":" << (track.consoleChannel.gateDualMono ? "true" : "false")
+            << ",\"consoleSaturatorDualMono\":" << (track.consoleChannel.saturatorDualMono ? "true" : "false")
             << ",\"consoleSaturatorCircuitMode\":" << (track.consoleChannel.saturatorCircuitMode ? "true" : "false")
             << ",\"consoleSaturatorDriveDb\":" << track.consoleChannel.saturatorDriveDb
             << ",\"consoleSaturatorMix\":" << track.consoleChannel.saturatorMix
@@ -2141,6 +2146,9 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"consoleEqLfHz\":" << track.consoleChannel.eqLfHz
             << ",\"consoleEqLfBell\":" << (track.consoleChannel.eqLfBell ? "true" : "false")
             << ",\"consoleEqEPattern\":" << (track.consoleChannel.eqEMode ? "true" : "false")
+            << ",\"consolePhaseInvert\":" << (track.consoleChannel.phaseInvert ? "true" : "false")
+            << ",\"consolePhaseInvertL\":" << (track.consoleChannel.phaseInvertL ? "true" : "false")
+            << ",\"consolePhaseInvertR\":" << (track.consoleChannel.phaseInvertR ? "true" : "false")
             << ",\"consoleEqType\":\"" << escapeJsonString(track.consoleChannel.eqType) << "\""
             << ",\"channelFormat\":\"" << escapeJsonString(track.channelFormat == "mono" ? "mono" : "stereo") << "\""
             << ",\"pan\":" << track.pan << ",\"muted\":" << (track.muted ? "true" : "false")
@@ -2461,6 +2469,12 @@ std::string serializeProject(const ProjectDocument& inputProject) {
 	            << "\",\"realModelA\":\"" << escapeJsonString(module.realModelA)
 	            << "\",\"realModelB\":\"" << escapeJsonString(module.realModelB)
 	            << "\",\"realModelC\":\"" << escapeJsonString(module.realModelC)
+	            << "\",\"realAmpA\":\"" << escapeJsonString(module.realAmpA)
+	            << "\",\"realAmpB\":\"" << escapeJsonString(module.realAmpB)
+	            << "\",\"realAmpC\":\"" << escapeJsonString(module.realAmpC)
+	            << "\",\"realCableA\":\"" << escapeJsonString(module.realCableA)
+	            << "\",\"realCableB\":\"" << escapeJsonString(module.realCableB)
+	            << "\",\"realCableC\":\"" << escapeJsonString(module.realCableC)
 	            << "\",\"streamingPreview\":\"" << escapeJsonString(module.streamingPreview)
 	            << "\",\"activeTargetSlot\":" << std::max(0, std::min(2, module.activeTargetSlot))
 	            << ",\"speakerRoomEqA\":" << (module.speakerRoomEqA ? "true" : "false")
@@ -2853,6 +2867,14 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.consoleChannel.gateCircuitMode = boolAfterKey(body, "consoleGateCircuitMode", false);
         track.consoleChannel.saturatorEnabled = boolAfterKey(body, "consoleSaturatorEnabled", false);
         track.consoleChannel.dualMono = boolAfterKey(body, "consoleDualMono", false);
+        // Per-module dual/stereo — default from the legacy shared field so old projects keep their
+        // comp/gate stereo-link state, then let a per-module key override if present.
+        const bool legacyDual = track.consoleChannel.dualMono;
+        track.consoleChannel.filterDualMono = boolAfterKey(body, "consoleFilterDualMono", legacyDual);
+        track.consoleChannel.eqDualMono = boolAfterKey(body, "consoleEqDualMono", legacyDual);
+        track.consoleChannel.compDualMono = boolAfterKey(body, "consoleCompDualMono", legacyDual);
+        track.consoleChannel.gateDualMono = boolAfterKey(body, "consoleGateDualMono", legacyDual);
+        track.consoleChannel.saturatorDualMono = boolAfterKey(body, "consoleSaturatorDualMono", legacyDual);
         track.consoleChannel.saturatorCircuitMode = boolAfterKey(body, "consoleSaturatorCircuitMode", false);
         track.consoleChannel.saturatorDriveDb = finiteRange((float)numberAfterKey(body, "consoleSaturatorDriveDb", 6), 6.0f, 0.0f, 24.0f);
         track.consoleChannel.saturatorMix = finiteRange((float)numberAfterKey(body, "consoleSaturatorMix", 1), 1.0f, 0.0f, 1.0f);
@@ -2887,6 +2909,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.consoleChannel.eqLfHz = finiteRange((float)numberAfterKey(body, "consoleEqLfHz", 200), 200.0f, 90.0f, 450.0f);
         track.consoleChannel.eqLfBell = boolAfterKey(body, "consoleEqLfBell", false);
         track.consoleChannel.eqEMode = boolAfterKey(body, "consoleEqEPattern", true);
+        track.consoleChannel.phaseInvert = boolAfterKey(body, "consolePhaseInvert", false);
+        // Per-side polarity — default from the legacy both-channels field so old projects keep it.
+        const bool legacyPhase = track.consoleChannel.phaseInvert;
+        track.consoleChannel.phaseInvertL = boolAfterKey(body, "consolePhaseInvertL", legacyPhase);
+        track.consoleChannel.phaseInvertR = boolAfterKey(body, "consolePhaseInvertR", legacyPhase);
         track.consoleChannel.eqType = trim(stringAfterKey(body, "consoleEqType"));
         if (track.consoleChannel.eqType.empty() || track.consoleChannel.eqType == "ssl_4001e")
             track.consoleChannel.eqType = "ssl_4000e";
@@ -3590,6 +3617,12 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
 	            found->realModelA = stringAfterKey(body, "realModelA");
 	            found->realModelB = stringAfterKey(body, "realModelB");
 	            found->realModelC = stringAfterKey(body, "realModelC");
+	            found->realAmpA = stringAfterKey(body, "realAmpA");
+	            found->realAmpB = stringAfterKey(body, "realAmpB");
+	            found->realAmpC = stringAfterKey(body, "realAmpC");
+	            found->realCableA = stringAfterKey(body, "realCableA");
+	            found->realCableB = stringAfterKey(body, "realCableB");
+	            found->realCableC = stringAfterKey(body, "realCableC");
 	            if (!streamingPreview.empty()) {
 	                found->streamingPreview = streamingPreview;
 	            }

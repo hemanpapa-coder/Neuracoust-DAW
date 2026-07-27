@@ -141,7 +141,12 @@ struct SpeakerComparisonView: View {
     private var simulatorName: String { activeSet.map { stripSlotPrefix($0.model) } ?? "" }
     private var simulatorIsHeadphone: Bool { engine.headphoneModelHasCurve(simulatorName) }
     private var physicalName: String {
-        stripSlotPrefix(headphoneMode ? engine.physicalHeadphoneModel : engine.physicalSpeakerModel)
+        if headphoneMode { return stripSlotPrefix(engine.physicalHeadphoneModel) }
+        // Prefer the per-slot (A/B/C) real speaker; fall back to the legacy global field when the
+        // slot has none set (empty / Flat / Off), so a real speaker configured either way shows.
+        let slotReal = activeSet.map { stripSlotPrefix($0.realModel) } ?? ""
+        let hasSlotReal = !slotReal.isEmpty && slotReal != "Flat" && slotReal != "Off"
+        return hasSlotReal ? slotReal : stripSlotPrefix(engine.physicalSpeakerModel)
     }
     private func entry(_ name: String) -> SpeakerDatasetEntry? {
         name.isEmpty ? nil : entries.first { $0.catalogName == name }
@@ -154,16 +159,17 @@ struct SpeakerComparisonView: View {
         return zip(freqs, mags).map { [$0, $1] }
     }
     private var physicalPoints: [[Double]]? {
-        // In headphone mode the "physical" curve is the measured headphone response (from the
-        // engine's headphone profiles), not a speaker-dataset entry.
+        // In headphone mode the "physical" curve is the measured headphone response; otherwise it is
+        // the REAL speaker's FR — measured profile, else the spec approximation (matches the EQ).
         if headphoneMode { return smooth(engine.headphoneCurvePoints(physicalName)) }
-        return smooth(entry(physicalName)?.responseCurve.points)
+        return smooth(engine.speakerCurvePoints(physicalName))
     }
     private var simulatorPoints: [[Double]]? {
-        // The active slot models a speaker OR a headphone — look the name up in whichever dataset.
-        guard !isPhysicalRoute else { return nil }
-        if let e = entry(simulatorName) { return smooth(e.responseCurve.points) }
-        return smooth(engine.headphoneCurvePoints(simulatorName))
+        // The active slot may model a speaker OR headphone — even alongside a physical output route,
+        // so it is shown regardless of the route. Headphone first, then the speaker FR.
+        if simulatorName.isEmpty { return nil }
+        if let hp = engine.headphoneCurvePoints(simulatorName) { return smooth(hp) }
+        return smooth(engine.speakerCurvePoints(simulatorName))
     }
     /// Fractional-octave smoothing for display, mirroring the engine's fit-time smoothing so the
     /// raw measured dataset curves read as clean lines instead of the jagged source data.

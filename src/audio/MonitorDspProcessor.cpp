@@ -527,7 +527,11 @@ StereoFrame MonitorDspProcessor::applySpeakerSimulation(StereoFrame frame, const
     // catalogs so the guard is symmetric with the bridge — otherwise a headphone slot gets its
     // measured curve in the EQ AND this heuristic speaker voicing on top (the double-colour Codex flagged).
     const std::string key = speakerModelCatalogKey(activeTargetModel(module));
-    if (!speakerProfileCurve(key).empty() || !headphoneProfileCurve(key).empty()) {
+    // A model voiced by the single monitor EQ — measured OR spec-derived (the bridge loads that
+    // curve) — passes through here untouched, so this heuristic chain never double-colours it. Only
+    // Flat/Off/empty (no spec curve either) still take the name-heuristic voicing below.
+    if (!speakerProfileCurve(key).empty() || !headphoneProfileCurve(key).empty() ||
+        !speakerSpecCurve(key).empty()) {
         return frame;
     }
     const StereoFrame dry = frame;

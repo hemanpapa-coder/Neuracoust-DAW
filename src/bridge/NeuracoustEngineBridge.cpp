@@ -201,6 +201,14 @@ struct NCEngine {
     std::string pluginScanSignature;                              // .vst3 inventory at last scan
     neuracoust::daw::ResponseCurve measuredCurveL;                // room measurement, per channel
     neuracoust::daw::ResponseCurve measuredCurveR;
+    // VR/헤드셋 착용 보정: monitoring on real speakers while wearing a VR headset (Meta Quest 3)
+    // colours the sound because the headset mass + facepad reshape the acoustics at the ears. Capture
+    // a reference measurement with the headset OFF (baseline), then one with it ON; the correction is
+    // (baseline − worn), added to the monitor EQ to undo the worn coloring. Session state, the same
+    // tier as the room measurement above (re-captured per session).
+    neuracoust::daw::ResponseCurve vrHeadsetBaseline;
+    neuracoust::daw::ResponseCurve vrHeadsetCorrection;
+    bool vrHeadsetCorrectionEnabled = false;
     // Melodyne-mode pitch edit: notes detected for the clip most recently opened in the editor, with
     // the user's per-note offsets. Detect populates it; the editor sets offsets; apply consumes it.
     std::vector<neuracoust::daw::DetectedNote> pitchEditNotes;
@@ -358,7 +366,11 @@ struct NCEngine {
         if (name.empty()) return {};
         const auto it = measuredInterfaces.find(name);
         if (it != measuredInterfaces.end() && !it->second.curve.empty()) return it->second.curve;
-        return neuracoust::daw::audioInterfaceProfileCurve(name);
+        auto profile = neuracoust::daw::audioInterfaceProfileCurve(name);
+        if (!profile.empty()) return profile;
+        // No measurement, no baked profile → spec-derived approximation, so a selected interface
+        // still voices the monitor path (and real vs modeling interfaces read differently).
+        return neuracoust::daw::audioInterfaceSpecCurve(name);
     }
     std::vector<double> interfaceHarmonicsFor(const std::string& name) const {
         if (name.empty()) return {};
@@ -1258,6 +1270,29 @@ void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLe
     const auto* track = trackAt(engine, index);
     copyText(out, outLen, track != nullptr ? track->consoleChannel.model : std::string{});
 }
+// Per-module model (comp / gate) — the model library. Each voices the DSP as a named classic.
+void nc_track_console_comp_type(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* t = trackAt(engine, index);
+    copyText(out, outLen, t != nullptr ? t->consoleChannel.compType : std::string{});
+}
+void nc_track_set_console_comp_type(NCEngine* engine, int index, const char* name) {
+    auto* t = trackAt(engine, index); if (t == nullptr || name == nullptr) return;
+    if (t->consoleChannel.compType == name) return;
+    t->consoleChannel.compType = name;
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);   // live, no rebuild
+    engine->recordStep("Compressor model");
+}
+void nc_track_console_gate_type(NCEngine* engine, int index, char* out, size_t outLen) {
+    const auto* t = trackAt(engine, index);
+    copyText(out, outLen, t != nullptr ? t->consoleChannel.gateType : std::string{});
+}
+void nc_track_set_console_gate_type(NCEngine* engine, int index, const char* name) {
+    auto* t = trackAt(engine, index); if (t == nullptr || name == nullptr) return;
+    if (t->consoleChannel.gateType == name) return;
+    t->consoleChannel.gateType = name;
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);
+    engine->recordStep("Gate model");
+}
 void nc_track_console_module_order(NCEngine* engine, int index, char* out, size_t outLen) {
     const auto* t=trackAt(engine,index); copyText(out,outLen,t?t->consoleChannel.moduleOrder:std::string{});
 }
@@ -1286,9 +1321,17 @@ bool nc_track_console_bool(NCEngine* engine, int index, const char* parameter) {
     if (p == "gateCircuitMode") return t->consoleChannel.gateCircuitMode;
     if (p == "saturatorEnabled") return t->consoleChannel.saturatorEnabled;
     if (p == "dualMono") return t->consoleChannel.dualMono;
+    if (p == "filterDualMono") return t->consoleChannel.filterDualMono;
+    if (p == "eqDualMono") return t->consoleChannel.eqDualMono;
+    if (p == "compDualMono") return t->consoleChannel.compDualMono;
+    if (p == "gateDualMono") return t->consoleChannel.gateDualMono;
+    if (p == "saturatorDualMono") return t->consoleChannel.saturatorDualMono;
     if (p == "saturatorCircuitMode") return t->consoleChannel.saturatorCircuitMode;
     if (p == "gateFastAttack") return t->consoleChannel.gateFastAttack;
     if (p == "expanderMode") return t->consoleChannel.expanderMode;
+    if (p == "phaseInvert") return t->consoleChannel.phaseInvert;
+    if (p == "phaseInvertL") return t->consoleChannel.phaseInvertL;
+    if (p == "phaseInvertR") return t->consoleChannel.phaseInvertR;
     return false;
 }
 
@@ -1333,9 +1376,17 @@ void nc_track_set_console_bool(NCEngine* engine, int index, const char* paramete
     else if(p=="gateEnabled")t->consoleChannel.gateEnabled=value; else if(p=="gateCircuitMode")t->consoleChannel.gateCircuitMode=value;
     else if(p=="saturatorEnabled")t->consoleChannel.saturatorEnabled=value;
     else if(p=="dualMono")t->consoleChannel.dualMono=value;
+    else if(p=="filterDualMono")t->consoleChannel.filterDualMono=value;
+    else if(p=="eqDualMono")t->consoleChannel.eqDualMono=value;
+    else if(p=="compDualMono")t->consoleChannel.compDualMono=value;
+    else if(p=="gateDualMono")t->consoleChannel.gateDualMono=value;
+    else if(p=="saturatorDualMono")t->consoleChannel.saturatorDualMono=value;
     else if(p=="saturatorCircuitMode")t->consoleChannel.saturatorCircuitMode=value;
     else if(p=="expanderMode")t->consoleChannel.expanderMode=value;
     else if(p=="gateFastAttack")t->consoleChannel.gateFastAttack=value;
+    else if(p=="phaseInvert")t->consoleChannel.phaseInvert=value;
+    else if(p=="phaseInvertL")t->consoleChannel.phaseInvertL=value;
+    else if(p=="phaseInvertR")t->consoleChannel.phaseInvertR=value;
     else return;
     engine->reconcileProject(); engine->recordStep("Console channel");
 }
@@ -7470,6 +7521,12 @@ std::string* speakerRealModelFieldForSlot(MonitorDspModule& m, int slot) {
 std::string* speakerCableFieldForSlot(MonitorDspModule& m, int slot) {
     return slot == 1 ? &m.speakerCableB : slot == 2 ? &m.speakerCableC : &m.speakerCableA;
 }
+std::string* speakerRealAmpFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.realAmpB : slot == 2 ? &m.realAmpC : &m.realAmpA;
+}
+std::string* speakerRealCableFieldForSlot(MonitorDspModule& m, int slot) {
+    return slot == 1 ? &m.realCableB : slot == 2 ? &m.realCableC : &m.realCableA;
+}
 
 // The speaker-model catalog, ported from the old UI's speakerModelBaseCatalog(). The
 // (NF/MF/LF) suffix is the field category. The name drives the monitor tone model.
@@ -8010,6 +8067,70 @@ void nc_measure_curve_response(NCEngine* engine, int channel, double* out, int c
     }
 }
 
+// --- VR / headset-worn monitor correction --------------------------------------------------
+// Capture the room measurement with the headset OFF, then ON; the correction is (baseline − worn),
+// added to the monitor EQ to undo how the worn headset reshapes the sound at the ears.
+namespace {
+neuracoust::daw::ResponseCurve currentMeasurementAvg(NCEngine* engine) {
+    const auto& L = engine->measuredCurveL;
+    const auto& R = engine->measuredCurveR;
+    if (L.empty() && R.empty()) return {};
+    if (R.empty()) return L;
+    if (L.empty()) return R;
+    neuracoust::daw::ResponseCurve avg;
+    avg.reserve(L.size());
+    for (const auto& [f, db] : L) {
+        avg.push_back({f, (db + neuracoust::daw::interpolateCurveDb(R, f)) * 0.5});
+    }
+    return avg;
+}
+}  // namespace
+
+// Snapshot the current measurement as the headset-OFF reference. Run a room measurement first.
+bool nc_vr_capture_baseline(NCEngine* engine) {
+    if (engine == nullptr) return false;
+    auto avg = currentMeasurementAvg(engine);
+    if (avg.empty()) return false;
+    engine->vrHeadsetBaseline = std::move(avg);
+    return true;
+}
+
+// With a baseline captured and a fresh headset-ON measurement present, build the correction.
+bool nc_vr_capture_worn(NCEngine* engine) {
+    if (engine == nullptr || engine->vrHeadsetBaseline.empty()) return false;
+    auto worn = currentMeasurementAvg(engine);
+    if (worn.empty()) return false;
+    neuracoust::daw::ResponseCurve corr;
+    corr.reserve(worn.size());
+    for (const auto& [f, wdb] : worn) {
+        const double bdb = neuracoust::daw::interpolateCurveDb(engine->vrHeadsetBaseline, f);
+        corr.push_back({f, bdb - wdb});   // add this to undo the worn headset's coloring
+    }
+    engine->vrHeadsetCorrection = neuracoust::daw::normalizeCurveMidband(corr);
+    engine->vrHeadsetCorrectionEnabled = true;
+    return true;
+}
+
+bool nc_vr_correction_enabled(NCEngine* engine) { return engine != nullptr && engine->vrHeadsetCorrectionEnabled; }
+bool nc_vr_correction_active(NCEngine* engine) { return engine != nullptr && !engine->vrHeadsetCorrection.empty(); }
+bool nc_vr_has_baseline(NCEngine* engine) { return engine != nullptr && !engine->vrHeadsetBaseline.empty(); }
+void nc_vr_set_correction_enabled(NCEngine* engine, bool on) { if (engine != nullptr) engine->vrHeadsetCorrectionEnabled = on; }
+void nc_vr_clear_correction(NCEngine* engine) {
+    if (engine == nullptr) return;
+    engine->vrHeadsetCorrection.clear();
+    engine->vrHeadsetBaseline.clear();
+    engine->vrHeadsetCorrectionEnabled = false;
+}
+void nc_vr_correction_response(NCEngine* engine, double* out, int count, double minHz, double maxHz) {
+    for (int i = 0; i < count; ++i) out[i] = 0.0;
+    if (engine == nullptr || out == nullptr || count <= 0 || engine->vrHeadsetCorrection.empty()) return;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz), ratio = std::log(hi / lo);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::exp(ratio * (count > 1 ? static_cast<double>(i) / (count - 1) : 0.0));
+        out[i] = neuracoust::daw::interpolateCurveDb(engine->vrHeadsetCorrection, f);
+    }
+}
+
 // --- Audio-interface loopback measurement (②d) --------------------------------------------
 // Patch the interface's DAC output back to its ADC input, sweep, and one ESS capture gives BOTH
 // the D/A frequency response (→ FIR compensation) and the harmonic coefficients (→ waveshaper).
@@ -8294,13 +8415,31 @@ bool nc_headphone_profile_response(NCEngine*, const char* name, double* outMagsD
     }
     return true;
 }
-// The measured D/A FR of an audio-interface model (for the response window overlay).
+// The FR curve of a speaker model — measured profile, else the spec-derived approximation — so the
+// response-window overlay matches what actually voices the monitor EQ. Empty only for Flat/Off.
+bool nc_speaker_profile_response(NCEngine*, const char* name, double* outMagsDb, int count,
+                                 double minHz, double maxHz) {
+    if (outMagsDb == nullptr || count <= 0) return false;
+    for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
+    if (name == nullptr) return false;
+    auto curve = neuracoust::daw::speakerProfileCurve(name);
+    if (curve.empty()) curve = neuracoust::daw::speakerSpecCurve(name);
+    if (curve.empty()) return false;
+    const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
+    for (int i = 0; i < count; ++i) {
+        const double f = lo * std::pow(hi / lo, count > 1 ? static_cast<double>(i) / (count - 1) : 0.0);
+        outMagsDb[i] = neuracoust::daw::interpolateCurveDb(curve, f);
+    }
+    return true;
+}
+// The D/A FR of an audio-interface model — measured profile, else spec approximation (matches the EQ).
 bool nc_audio_interface_profile_response(NCEngine*, const char* name, double* outMagsDb, int count,
                                          double minHz, double maxHz) {
     if (outMagsDb == nullptr || count <= 0) return false;
     for (int i = 0; i < count; ++i) outMagsDb[i] = 0.0;
     if (name == nullptr) return false;
-    const auto curve = neuracoust::daw::audioInterfaceProfileCurve(name);
+    auto curve = neuracoust::daw::audioInterfaceProfileCurve(name);
+    if (curve.empty()) curve = neuracoust::daw::audioInterfaceSpecCurve(name);
     if (curve.empty()) return false;
     const double lo = std::max(1.0, minHz), hi = std::max(lo + 1.0, maxHz);
     for (int i = 0; i < count; ++i) {
@@ -8407,7 +8546,13 @@ void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* cor
     bool slotIsHeadphone = false;
     if (slotModel != nullptr && slotModel[0] != '\0') {
         slot = neuracoust::daw::speakerProfileCurve(slotModel);
-        if (slot.empty()) { slot = neuracoust::daw::headphoneProfileCurve(slotModel); slotIsHeadphone = !slot.empty(); }
+        if (slot.empty()) {
+            slot = neuracoust::daw::headphoneProfileCurve(slotModel);
+            slotIsHeadphone = !slot.empty();
+            // A speaker with no measured profile falls back to its spec-derived curve, so the graph
+            // and the monitor EQ voice it instead of leaving the target blank.
+            if (slot.empty()) slot = neuracoust::daw::speakerSpecCurve(slotModel);
+        }
     }
     if (slotIsHeadphone && engine->monitorEqHeadphoneOeTarget) {
         for (auto& [f, db] : slot) db -= neuracoust::daw::harmanHeadphoneOeTargetDb(f);
@@ -8437,6 +8582,12 @@ void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* cor
     if (applyRoom) {
         room = neuracoust::daw::roomCorrectionCurve(engine->measuredCurveL, engine->measuredCurveR);
     }
+    // VR/headset-worn correction (added): the stored (baseline − worn) curve, undoing the acoustic
+    // change the headset makes at the ears. Independent of room correction.
+    neuracoust::daw::ResponseCurve vrCorrection;
+    if (engine->vrHeadsetCorrectionEnabled && !engine->vrHeadsetCorrection.empty()) {
+        vrCorrection = engine->vrHeadsetCorrection;
+    }
     // Passive speaker → its power amp and cable colour the output too (name heuristic, honest,
     // until measured). Only when the physical speaker is passive; active monitors have no amp/cable.
     neuracoust::daw::ResponseCurve ampCurve, cableCurve;
@@ -8455,11 +8606,31 @@ void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* cor
             slotCableCurve = speakerCableToneCurve(*speakerCableFieldForSlot(*sim, as));
         }
     }
+    // The REAL speaker (active A/B/C slot): if the speaker you actually monitor on is passive, its
+    // own amp + cable colour the chain you hear — SUBTRACTED, so the correction flattens them (the
+    // mirror of the modeled speaker's amp/cable, which are added). Independent of the modeled ones.
+    neuracoust::daw::ResponseCurve realAmpCurve, realCableCurve;
+    if (MonitorDspModule* sim = engine->speakerSimulation()) {
+        const int as = std::max(0, std::min(2, sim->activeTargetSlot));
+        std::string realSpeaker = as == 1 ? sim->realModelB : as == 2 ? sim->realModelC : sim->realModelA;
+        if (realSpeaker.empty()) realSpeaker = sim->realModel;   // old-project fallback
+        if (!realSpeaker.empty() && speakerModelIsPassive(realSpeaker)) {
+            realAmpCurve = powerAmpToneCurve(*speakerRealAmpFieldForSlot(*sim, as));
+            realCableCurve = speakerCableToneCurve(*speakerRealCableFieldForSlot(*sim, as));
+        }
+    }
+    // NOTE: the REAL speaker's full response is deliberately NOT subtracted here. "target − real" is
+    // right for midband voicing but a full subtraction tries to EQ a sealed/ported speaker's own
+    // bass rolloff back to flat — a huge (+20 dB) LF boost that clips and adds noise (the NS-10 boost
+    // trap). Spec models therefore impose the TARGET absolutely, exactly like measured models; the
+    // real speaker is assumed handled by room correction. Bounded target−real is future measured work.
     // Combine slot (+) + physical-headphone correction (target − worn) + room on a shared log grid.
     neuracoust::daw::ResponseCurve combined;
     if (!slot.empty() || !correction.empty() || !room.empty() || !interfaceFr.empty() ||
         !interfaceTargetFr.empty() || !ampCurve.empty() || !cableCurve.empty() ||
-        !slotAmpCurve.empty() || !slotCableCurve.empty()) {
+        !slotAmpCurve.empty() || !slotCableCurve.empty() ||
+        !realAmpCurve.empty() || !realCableCurve.empty() ||
+        !vrCorrection.empty()) {
         const int points = 96;
         for (int i = 0; i < points; ++i) {
             const double f = 20.0 * std::pow(1000.0, static_cast<double>(i) / (points - 1));
@@ -8468,12 +8639,15 @@ void nc_monitor_eq_sync(NCEngine* engine, const char* slotModel, const char* cor
             if (!correction.empty()) db += (oe ? neuracoust::daw::harmanHeadphoneOeTargetDb(f) : 0.0)
                                           - neuracoust::daw::interpolateCurveDb(correction, f);
             if (!room.empty()) db += neuracoust::daw::interpolateCurveDb(room, f);
+            if (!vrCorrection.empty()) db += neuracoust::daw::interpolateCurveDb(vrCorrection, f);   // undo headset-worn coloring
             if (!interfaceFr.empty()) db -= neuracoust::daw::interpolateCurveDb(interfaceFr, f);         // flatten own D/A
             if (!interfaceTargetFr.empty()) db += neuracoust::daw::interpolateCurveDb(interfaceTargetFr, f); // colour as target
             if (!ampCurve.empty()) db += neuracoust::daw::interpolateCurveDb(ampCurve, f);              // power amp voicing
             if (!cableCurve.empty()) db += neuracoust::daw::interpolateCurveDb(cableCurve, f);          // cable HF loss
             if (!slotAmpCurve.empty()) db += neuracoust::daw::interpolateCurveDb(slotAmpCurve, f);      // modeled speaker's amp
             if (!slotCableCurve.empty()) db += neuracoust::daw::interpolateCurveDb(slotCableCurve, f);  // modeled speaker's cable
+            if (!realAmpCurve.empty()) db -= neuracoust::daw::interpolateCurveDb(realAmpCurve, f);       // flatten real speaker's amp
+            if (!realCableCurve.empty()) db -= neuracoust::daw::interpolateCurveDb(realCableCurve, f);   // flatten real speaker's cable
             combined.push_back({f, db});
         }
     }
@@ -8810,6 +8984,37 @@ void nc_monitor_set_speaker_cable(NCEngine* engine, int slot, const char* model)
     if (*field == model) return;
     *field = model;
     engine->recordStep("Set speaker cable");
+    engine->pushModules();
+}
+
+// Per-slot power amp / cable for a passive REAL speaker (the chain you actually hear on — it is
+// SUBTRACTED in eq_sync, flattening the real chain, unlike the modeled speaker's amp/cable above).
+void nc_monitor_speaker_real_amp(NCEngine* engine, int slot, char* out, size_t outLen) {
+    MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    copyText(out, outLen, (module != nullptr && slot >= 0 && slot <= 2) ? *speakerRealAmpFieldForSlot(*module, slot) : std::string{});
+}
+void nc_monitor_speaker_real_cable(NCEngine* engine, int slot, char* out, size_t outLen) {
+    MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    copyText(out, outLen, (module != nullptr && slot >= 0 && slot <= 2) ? *speakerRealCableFieldForSlot(*module, slot) : std::string{});
+}
+void nc_monitor_set_speaker_real_amp(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    std::string* field = speakerRealAmpFieldForSlot(*module, slot);
+    if (*field == model) return;
+    *field = model;
+    engine->recordStep("Set real speaker amp");
+    engine->pushModules();
+}
+void nc_monitor_set_speaker_real_cable(NCEngine* engine, int slot, const char* model) {
+    if (engine == nullptr || model == nullptr || slot < 0 || slot > 2) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr) return;
+    std::string* field = speakerRealCableFieldForSlot(*module, slot);
+    if (*field == model) return;
+    *field = model;
+    engine->recordStep("Set real speaker cable");
     engine->pushModules();
 }
 

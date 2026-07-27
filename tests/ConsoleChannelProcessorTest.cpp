@@ -60,7 +60,7 @@ int main() {
     auto linkedCompressed = asymmetric;
     processor.processInterleavedStereo(linkedCompressed, comp, sr);
     processor.reset(sr);
-    auto dualComp = comp; dualComp.dualMono = true;
+    auto dualComp = comp; dualComp.dualMono = true;   // channel-level dual (comp + gate detectors)
     auto dualCompressed = asymmetric;
     processor.processInterleavedStereo(dualCompressed, dualComp, sr);
     assert(tailChannelPeak(dualCompressed, 1) > tailChannelPeak(linkedCompressed, 1) * 1.5f);

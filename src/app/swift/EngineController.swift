@@ -315,6 +315,8 @@ final class EngineController: ObservableObject {
         var instrumentLayers: [InstrumentLayer] = []
         var sends: [TrackSend]
         var consoleModel: String = "4000e"
+        var consoleCompType: String = "SSL 4000E"    // per-module model (comp)
+        var consoleGateType: String = "SSL 4000E"    // per-module model (gate)
         var consoleModuleOrder: String = "filter,eq,gate,comp,saturator"
         var consoleFilterEnabled = false
         var consoleFilterCircuitMode = false
@@ -953,9 +955,11 @@ final class EngineController: ObservableObject {
         // The REAL hardware this slot monitors on (speaker + its amp/cable), used by the correction.
         var realModel: String = ""
         var realModelIsPassive: Bool = false   // active speakers have no external amp/cable
-        var amp: String = ""
-        var cable: String = ""
+        var amp: String = ""                   // modeling (target) speaker's amp — shown if modelIsPassive
+        var cable: String = ""                 // modeling (target) speaker's cable
         var modelIsPassive: Bool = false
+        var realAmp: String = ""               // REAL speaker's amp — shown if realModelIsPassive
+        var realCable: String = ""             // REAL speaker's cable
 
         /// The engine stores models as "Speaker B: Yamaha NS-10M Studio (NF)".
         /// The slot letter is already on the tab, so drop the prefix.
@@ -4106,6 +4110,8 @@ final class EngineController: ObservableObject {
                               preFader: nc_track_send_pre_fader(handle, i, Int32(slot)))
                 },
                 consoleModel: readEngineString { nc_track_console_model(handle, i, $0, $1) },
+                consoleCompType: Self.displayConsoleModel(readEngineString { nc_track_console_comp_type(handle, i, $0, $1) }),
+                consoleGateType: Self.displayConsoleModel(readEngineString { nc_track_console_gate_type(handle, i, $0, $1) }),
                 consoleModuleOrder: readEngineString { nc_track_console_module_order(handle, i, $0, $1) },
                 consoleFilterEnabled: "filterEnabled".withCString { nc_track_console_bool(handle, i, $0) },
                 consoleFilterCircuitMode: "filterCircuitMode".withCString { nc_track_console_bool(handle, i, $0) },
@@ -4159,11 +4165,30 @@ final class EngineController: ObservableObject {
         syncTrack(id)
     }
 
-    // Console model shown on each module's name plate. UI/label only for now — the per-model
-    // DSP character is future work; this is the switch that will drive it.
+    // Console model shown on each module's name plate.
     static let consoleModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 8078", "API Vision", "Neuracoust NC"]
     @Published var consoleModel: String = "SSL 4000E"
     func setConsoleModel(_ name: String) { consoleModel = name }
+
+    // Per-module model libraries. Each name maps to a DSP character in ConsoleChannelProcessor
+    // (modelChar): attack/release, knee, drive, harmonic. The gate plate picks a gate model, the
+    // comp plate a comp model — independently per track.
+    static let compModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 33609", "API 2500", "Neuracoust NC"]
+    static let gateModels = ["SSL 4000E", "SSL 4000G", "Neve 88R", "API 2500", "Neuracoust NC"]
+    /// The internal default "ssl" reads back as the flagship SSL 4000E name.
+    static func displayConsoleModel(_ raw: String) -> String {
+        raw.isEmpty || raw == "ssl" || raw == "4000e" ? "SSL 4000E" : raw
+    }
+    func setCompModel(_ id: Int, _ name: String) {
+        guard let handle else { return }
+        _ = name.withCString { nc_track_set_console_comp_type(handle, Int32(id), $0) }
+        reloadTracks(); refreshHistory()
+    }
+    func setGateModel(_ id: Int, _ name: String) {
+        guard let handle else { return }
+        _ = name.withCString { nc_track_set_console_gate_type(handle, Int32(id), $0) }
+        reloadTracks(); refreshHistory()
+    }
 
     func consoleValue(_ id: Int, _ parameter: String) -> Float {
         guard let handle else { return 0 }
@@ -7447,6 +7472,7 @@ final class EngineController: ObservableObject {
     private func reloadMonitorState() {
         guard let handle else { return }
 
+        reloadVrState()
         monitorModules = (0..<Int(nc_monitor_module_count(handle))).map { index in
             let i = Int32(index)
             return MonitorModule(
@@ -7476,7 +7502,9 @@ final class EngineController: ObservableObject {
                 realModelIsPassive: !realM.isEmpty && realM.withCString { nc_speaker_model_is_passive($0) },
                 amp: readString { nc_monitor_speaker_amp(handle, s, $0, $1) },
                 cable: readString { nc_monitor_speaker_cable(handle, s, $0, $1) },
-                modelIsPassive: !bare.isEmpty && bare.withCString { nc_speaker_model_is_passive($0) }
+                modelIsPassive: !bare.isEmpty && bare.withCString { nc_speaker_model_is_passive($0) },
+                realAmp: readString { nc_monitor_speaker_real_amp(handle, s, $0, $1) },
+                realCable: readString { nc_monitor_speaker_real_cable(handle, s, $0, $1) }
             )
         }
 
@@ -8699,6 +8727,51 @@ final class EngineController: ObservableObject {
         nc_measure_curve_response(handle, Int32(channel), &out, Int32(count), 20.0, 20000.0)
         return out
     }
+    // VR / headset-worn monitor correction. Capture a room measurement with the headset OFF
+    // (baseline), then ON; the correction (baseline − worn) is added to the monitor EQ so the
+    // real speakers sound the same whether or not the headset is on the head.
+    @Published private(set) var vrCorrectionEnabled = false
+    @Published private(set) var vrCorrectionActive = false
+    @Published private(set) var vrHasBaseline = false
+
+    func reloadVrState() {
+        guard let handle else { return }
+        vrCorrectionEnabled = nc_vr_correction_enabled(handle)
+        vrCorrectionActive = nc_vr_correction_active(handle)
+        vrHasBaseline = nc_vr_has_baseline(handle)
+    }
+    @discardableResult func vrCaptureBaseline() -> Bool {
+        guard let handle else { return false }
+        let ok = nc_vr_capture_baseline(handle)
+        reloadVrState()
+        return ok
+    }
+    @discardableResult func vrCaptureWorn() -> Bool {
+        guard let handle else { return false }
+        let ok = nc_vr_capture_worn(handle)
+        syncMonitorEqToContext()
+        reloadVrState()
+        return ok
+    }
+    func setVrCorrectionEnabled(_ on: Bool) {
+        guard let handle else { return }
+        nc_vr_set_correction_enabled(handle, on)
+        syncMonitorEqToContext()
+        reloadVrState()
+    }
+    func vrClearCorrection() {
+        guard let handle else { return }
+        nc_vr_clear_correction(handle)
+        syncMonitorEqToContext()
+        reloadVrState()
+    }
+    func vrCorrectionResponse(count: Int = 160) -> [Double] {
+        guard let handle else { return Array(repeating: 0, count: count) }
+        var out = [Double](repeating: 0, count: count)
+        nc_vr_correction_response(handle, &out, Int32(count), 20.0, 20000.0)
+        return out
+    }
+
     /// Flatten the measured in-room response toward the Harman target (room correction, ③).
     /// In the single-EQ design this turns room tuning ON for the active slot; the correction
     /// then rides on top of that slot's model curve when the EQ is re-derived (one combined EQ).
@@ -8982,6 +9055,17 @@ final class EngineController: ObservableObject {
     }
     func audioInterfaceHasProfile(_ model: String) -> Bool { audioInterfaceCurvePoints(model, count: 8) != nil }
 
+    /// A speaker model's FR curve — measured profile, else the spec-derived approximation (matches
+    /// what voices the monitor EQ). nil only for Flat/Off/empty. Used by the response-window overlay.
+    func speakerCurvePoints(_ model: String, count: Int = 200) -> [[Double]]? {
+        guard let handle, !model.isEmpty else { return nil }
+        var out = [Double](repeating: 0, count: count)
+        let ok = model.withCString { nc_speaker_profile_response(handle, $0, &out, Int32(count), 20.0, 20000.0) }
+        guard ok else { return nil }
+        let freqs = EngineController.monitorCurveFrequencies(count: count)
+        return zip(freqs, out).map { [$0, $1] }
+    }
+
     /// Model a target speaker on the physical monitor — loads its fitted curve into the monitor
     /// EQ so the output takes on that speaker's tonal character.
     func applyVirtualMonitor(_ catalogName: String) {
@@ -9171,6 +9255,20 @@ final class EngineController: ObservableObject {
         _ = model.withCString { nc_monitor_set_speaker_cable(handle, Int32(slot), $0) }
         reloadMonitorState()
         reloadRecordControllerState()
+        refreshHistory()
+    }
+
+    /// A passive REAL speaker's own amp / cable — the chain you hear, flattened by the correction.
+    func setSpeakerRealAmp(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_speaker_real_amp(handle, Int32(slot), $0) }
+        reloadMonitorState()
+        refreshHistory()
+    }
+    func setSpeakerRealCable(_ slot: Int, _ model: String) {
+        guard let handle else { return }
+        _ = model.withCString { nc_monitor_set_speaker_real_cable(handle, Int32(slot), $0) }
+        reloadMonitorState()
         refreshHistory()
     }
 

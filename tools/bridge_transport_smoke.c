@@ -613,14 +613,16 @@ int main(void) {
         nc_monitor_speaker_output(engine, 0, buf, sizeof buf);
         if (strcmp(buf, "None") != 0) { fprintf(stderr, "FAIL: model set left output '%s', expected None\n", buf); failures++; }
 
-        // Routing slot A to a physical pair forces its model to Flat and room EQ off.
+        // A slot may carry a physical output pair AND a modeled speaker at once (you monitor the
+        // modeled speaker THROUGH that output), so setting an output no longer forces the model to
+        // Flat or room EQ off — both are preserved.
         nc_monitor_set_speaker_room_eq(engine, 0, true);
         nc_monitor_set_speaker_output(engine, 0, "Output 3-4");
         nc_monitor_speaker_output(engine, 0, buf, sizeof buf);
         if (strcmp(buf, "Output 3-4") != 0) { fprintf(stderr, "FAIL: output set -> '%s'\n", buf); failures++; }
         nc_monitor_speaker_model(engine, 0, buf, sizeof buf);
-        if (strcmp(buf, "Speaker A: Flat") != 0) { fprintf(stderr, "FAIL: physical output did not force Flat (%s)\n", buf); failures++; }
-        if (nc_monitor_speaker_room_eq(engine, 0)) { fprintf(stderr, "FAIL: physical output left room EQ on\n"); failures++; }
+        if (strcmp(buf, "Speaker A: Genelec 8040B (NF)") != 0) { fprintf(stderr, "FAIL: physical output did not preserve model (%s)\n", buf); failures++; }
+        if (!nc_monitor_speaker_room_eq(engine, 0)) { fprintf(stderr, "FAIL: physical output cleared room EQ\n"); failures++; }
 
         // Slot B is untouched by slot A edits.
         nc_monitor_speaker_output(engine, 1, buf, sizeof buf);
@@ -715,8 +717,8 @@ int main(void) {
     }
 
     // Single monitor EQ, context-driven (the "one EQ, values swap" design). nc_monitor_eq_sync
-    // imposes a measured model's curve, and clears the bands when there is neither a curve nor
-    // room tuning — so a physical route or a non-measured model leaves the one EQ flat.
+    // imposes a model's curve — measured when one exists, else a spec-derived approximation — and
+    // clears the bands only when there is no model at all and no room tuning.
     {
         int measuredCount = nc_virtual_monitor_count(engine);
         if (measuredCount <= 0) {
@@ -728,6 +730,12 @@ int main(void) {
             nc_monitor_eq_sync(engine, measured, "", false);
             if (nc_monitor_eq_band_count(engine) <= 0) {
                 fprintf(stderr, "FAIL: eq sync '%s' produced no bands\n", measured); failures++;
+            }
+            // A NON-measured model now voices the EQ too, from its spec-derived curve (fills the
+            // response graph + colours the sound instead of leaving it flat).
+            nc_monitor_eq_sync(engine, "Yamaha NS-10M Studio (NF)", "", false);
+            if (nc_monitor_eq_band_count(engine) <= 0) {
+                fprintf(stderr, "FAIL: eq sync spec model produced no bands\n"); failures++;
             }
             // Empty slot + empty correction, no room → the single EQ is cleared flat.
             nc_monitor_eq_sync(engine, "", "", false);

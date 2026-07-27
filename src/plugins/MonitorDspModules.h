@@ -42,6 +42,15 @@ struct MonitorDspModule {
     std::string realModelA;
     std::string realModelB;
     std::string realModelC;
+    // The REAL speaker's own power amp + cable, per slot — only meaningful when that real speaker
+    // is PASSIVE. Independent of the modeling speaker's powerAmp/speakerCable above: the real chain
+    // is subtracted (flattened) while the modeled chain is added. Kept LAST for aggregate-init order.
+    std::string realAmpA;
+    std::string realAmpB;
+    std::string realAmpC;
+    std::string realCableA;
+    std::string realCableB;
+    std::string realCableC;
 };
 
 std::vector<MonitorDspModule> defaultMonitorDspModules();

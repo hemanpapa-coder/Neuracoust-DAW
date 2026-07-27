@@ -11,14 +11,55 @@ float gainToDb(float g) { return 20.0f * std::log10(std::max(g, 0.0000316228f));
 float coeff(double sr, float ms) {
     return std::exp(-1.0f / static_cast<float>(sr * std::max(0.001f, ms) * 0.001f));
 }
-float circuitStage(float x, float amount = 1.0f) {
+// `harmonic` 0..1 biases the coloration: lower = more 3rd-harmonic edge (symmetric),
+// higher = more 2nd-harmonic warmth (asymmetric). 0.5 is the neutral console tone.
+float circuitStage(float x, float amount = 1.0f, float harmonic = 0.5f) {
     const float drive = 1.0f + 0.16f * amount;
-    const float asymmetric = x * drive + 0.018f * amount * x * std::abs(x);
+    const float even = 0.036f * amount * harmonic;              // 2nd-harmonic (warm) asymmetry
+    const float asymmetric = x * drive + even * x * std::abs(x);
     return std::tanh(asymmetric) / std::tanh(drive);
 }
 float saturate(float x, float drive, bool circuit) {
     if (circuit) return circuitStage(x * drive, 1.8f);
     return std::tanh(x * drive) / std::max(0.0001f, std::tanh(drive));
+}
+
+// A console model's DSP "character" — bounded multipliers that voice the shared comp/gate algorithm
+// as a named classic. These are created here (there was no per-model DSP before); each is a small,
+// realtime-safe modulation, not a separate algorithm.
+struct ConsoleModelChar {
+    float compAtkMul = 1.0f, compRelMul = 1.0f;
+    float compKneeDb = 1.5f;      // soft-knee width (0 = hard)
+    float compDrive = 0.8f;       // circuit colour amount for the compressor stage
+    float gateAtkMul = 1.0f, gateRelMul = 1.0f;
+    float harmonic = 0.5f;        // 0 = edgy/3rd, 1 = warm/2nd
+};
+bool has(const std::string& s, const char* k) { return s.find(k) != std::string::npos; }
+ConsoleModelChar modelChar(const std::string& m) {
+    ConsoleModelChar c;
+    if (has(m, "4000G") || has(m, "4000 G") || has(m, "G Series") || has(m, "9000")) {
+        // SSL G/9K: smoother than the E — a touch slower, softer knee, gentler drive.
+        c = {1.15f, 1.35f, 3.0f, 0.62f, 1.2f, 1.3f, 0.55f};
+    } else if (has(m, "Neve") || has(m, "33609") || has(m, "88") || has(m, "8078") || has(m, "1073")) {
+        // Neve diode-bridge: slow musical attack, long program-dependent release, soft knee, warm.
+        c = {1.7f, 1.9f, 5.0f, 0.95f, 1.5f, 1.7f, 0.85f};
+    } else if (has(m, "API") || has(m, "2500") || has(m, "Vision")) {
+        // API VCA "thrust": fast, punchy, hard-ish knee, edgy 3rd-harmonic.
+        c = {0.7f, 0.85f, 0.8f, 0.85f, 0.8f, 0.9f, 0.30f};
+    } else if (has(m, "Neuracoust") || has(m, "NC") || has(m, "Clean") || has(m, "Transparent")) {
+        // Neuracoust NC: clean/transparent — minimal colour, medium knee.
+        c = {1.0f, 1.0f, 2.0f, 0.20f, 1.0f, 1.0f, 0.5f};
+    }
+    // default (SSL 4000E): punchy VCA — the previous baseline.
+    return c;
+}
+
+float softKnee(float overDb, float kneeDb) {
+    if (kneeDb <= 0.01f) return std::max(0.0f, overDb);
+    if (overDb <= -kneeDb * 0.5f) return 0.0f;
+    if (overDb >= kneeDb * 0.5f) return overDb;
+    const float x = overDb + kneeDb * 0.5f;
+    return x * x / (2.0f * kneeDb);
 }
 }
 
@@ -95,7 +136,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
     // channel model was renamed. Keep it render-compatible on first load.
     if ((p.model != "4000e" && p.model != "4001e") ||
         (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
-         !p.saturatorEnabled)) return;
+         !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR)) return;
     if (sampleRate_ != sr) reset(sr);
     // Coefficients are set from the live params here; the Biquad ramps to them per sample.
     for (auto& ch : eq_) {
@@ -110,11 +151,14 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz, 0.7f, p.eqLfGainDb);
         else ch[5].shelf(sr, p.eqLfHz, p.eqLfGainDb, false);
     }
+    // Per-model DSP character voices the shared comp/gate as a named classic (SSL E/G, Neve, API, …).
+    const ConsoleModelChar cc = modelChar(p.compType);
+    const ConsoleModelChar gc = modelChar(p.gateType);
     const float cDet = coeff(sr, 8), gDet = coeff(sr, 5);
-    const float cAtk = coeff(sr, p.compFastAttack ? 3.0f : p.compAttackMs);
-    const float cRel = coeff(sr, p.compReleaseMs);
-    const float gAtk = coeff(sr, p.gateFastAttack ? 0.1f : p.gateAttackMs);
-    const float gRel = coeff(sr, p.gateReleaseMs);
+    const float cAtk = coeff(sr, (p.compFastAttack ? 3.0f : p.compAttackMs) * cc.compAtkMul);
+    const float cRel = coeff(sr, p.compReleaseMs * cc.compRelMul);
+    const float gAtk = coeff(sr, (p.gateFastAttack ? 0.1f : p.gateAttackMs) * gc.gateAtkMul);
+    const float gRel = coeff(sr, p.gateReleaseMs * gc.gateRelMul);
     const int holdSamples = static_cast<int>(sr * std::max(0.0f, p.gateHoldMs) * 0.001);
     std::vector<std::string> order;
     size_t start=0;
@@ -153,7 +197,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                     else compDetector_[ch] = d*d + cDet*(compDetector_[ch] - d*d);
                     const float detectorLevel = p.compPeakMode
                         ? compDetector_[ch] : std::sqrt(std::max(0.0f, compDetector_[ch]));
-                    const float over = std::max(0.0f, gainToDb(detectorLevel) - p.compThresholdDb);
+                    const float over = softKnee(gainToDb(detectorLevel) - p.compThresholdDb, cc.compKneeDb);
                     const float target = -over*(1.0f - 1.0f/clamp(p.compRatio, 1.0f, 20.0f));
                     const float c = target < compGainDb_[ch] ? cAtk : cRel;
                     compGainDb_[ch] = target + c*(compGainDb_[ch] - target);
@@ -161,7 +205,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 }
                 l=dryL*(1.0f-mix)+(dryL*gain[0])*mix;
                 r=dryR*(1.0f-mix)+(dryR*gain[1])*mix;
-                if (p.compCircuitMode) { l=circuitStage(l,0.8f); r=circuitStage(r,0.8f); }
+                if (p.compCircuitMode) { l=circuitStage(l, cc.compDrive, cc.harmonic); r=circuitStage(r, cc.compDrive, cc.harmonic); }
             } else if (module=="gate" && p.gateEnabled) {
                 const float linked = std::max(std::abs(l), std::abs(r));
                 const std::array<float, 2> detectorInput {
@@ -185,7 +229,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                     gain[ch] = dbToGain(gateGainDb_[ch]);
                 }
                 l*=gain[0]; r*=gain[1];
-                if (p.gateCircuitMode) { l=circuitStage(l,0.4f); r=circuitStage(r,0.4f); }
+                if (p.gateCircuitMode) { l=circuitStage(l, 0.4f, gc.harmonic); r=circuitStage(r, 0.4f, gc.harmonic); }
             } else if (module=="saturator" && p.saturatorEnabled) {
                 const float dryL=l, dryR=r;
                 const float drive=dbToGain(p.saturatorDriveDb);
@@ -194,6 +238,8 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 r=dryR*(1.0f-mix)+saturate(dryR,drive,p.saturatorCircuitMode)*mix;
             }
         }
+        if (p.phaseInvertL) l = -l;               // channel polarity (Ø), per side, end of chain
+        if (p.phaseInvertR) r = -r;
         audio[i]=l; audio[i+1]=r;
     }
 }

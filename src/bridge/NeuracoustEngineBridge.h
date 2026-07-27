@@ -249,6 +249,10 @@ void nc_track_set_solo(NCEngine* engine, int index, bool solo);
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed);
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring);
 void nc_track_console_model(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_console_comp_type(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_console_comp_type(NCEngine* engine, int index, const char* name);
+void nc_track_console_gate_type(NCEngine* engine, int index, char* out, size_t outLen);
+void nc_track_set_console_gate_type(NCEngine* engine, int index, const char* name);
 void nc_track_console_module_order(NCEngine* engine, int index, char* out, size_t outLen);
 void nc_track_set_console_module_order(NCEngine* engine, int index, const char* order);
 bool nc_track_console_bool(NCEngine* engine, int index, const char* parameter);
@@ -1453,6 +1457,17 @@ bool   nc_measure_finish(NCEngine* engine, int channel);
 bool   nc_measure_has_curve(NCEngine* engine, int channel);
 void   nc_measure_curve_response(NCEngine* engine, int channel, double* out, int count, double minHz, double maxHz);
 
+// VR / headset-worn monitor correction. Measure the room with the headset OFF → capture_baseline,
+// then with it ON → capture_worn builds (baseline − worn) and enables it. Added to the monitor EQ.
+bool   nc_vr_capture_baseline(NCEngine* engine);
+bool   nc_vr_capture_worn(NCEngine* engine);
+bool   nc_vr_correction_enabled(NCEngine* engine);
+bool   nc_vr_correction_active(NCEngine* engine);
+bool   nc_vr_has_baseline(NCEngine* engine);
+void   nc_vr_set_correction_enabled(NCEngine* engine, bool on);
+void   nc_vr_clear_correction(NCEngine* engine);
+void   nc_vr_correction_response(NCEngine* engine, double* out, int count, double minHz, double maxHz);
+
 // Audio-interface loopback measurement (②d): patch the interface DAC output back to its ADC
 // input, run nc_measure_start (channel 0), then nc_measure_interface_finish. One ESS capture
 // yields the D/A frequency response AND the harmonic coefficients, stored for the currently
@@ -1498,6 +1513,7 @@ void nc_virtual_monitor_name(NCEngine* engine, int index, char* out, size_t outL
 int  nc_headphone_profile_count(NCEngine* engine);
 void nc_headphone_profile_name(NCEngine* engine, int index, char* out, size_t outLen);
 bool nc_headphone_profile_response(NCEngine* engine, const char* name, double* outMagsDb, int count, double minHz, double maxHz);
+bool nc_speaker_profile_response(NCEngine* engine, const char* name, double* outMagsDb, int count, double minHz, double maxHz);
 bool nc_audio_interface_profile_response(NCEngine* engine, const char* name, double* outMagsDb, int count, double minHz, double maxHz);
 bool nc_monitor_eq_apply_virtual_monitor(NCEngine* engine, const char* catalogName);
 // Room correction (③): flatten the measured in-room curve toward the Harman target.
@@ -1533,6 +1549,11 @@ void nc_monitor_speaker_amp(NCEngine* engine, int slot, char* out, size_t outLen
 void nc_monitor_speaker_cable(NCEngine* engine, int slot, char* out, size_t outLen);
 void nc_monitor_set_speaker_amp(NCEngine* engine, int slot, const char* model);
 void nc_monitor_set_speaker_cable(NCEngine* engine, int slot, const char* model);
+// Per-slot amp/cable for a passive REAL speaker (subtracted — flattens the chain you hear on).
+void nc_monitor_speaker_real_amp(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_monitor_speaker_real_cable(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_monitor_set_speaker_real_amp(NCEngine* engine, int slot, const char* model);
+void nc_monitor_set_speaker_real_cable(NCEngine* engine, int slot, const char* model);
 
 // Live MIDI input: monitor a keyboard through armed/input-monitoring instrument tracks.
 // Enumerate sources, start on one (empty = first available), then call

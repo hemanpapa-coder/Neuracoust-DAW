@@ -23,4 +23,10 @@ std::vector<double> audioInterfaceHarmonics(const std::string& catalogName);
 // Every audio-interface catalog name that has a measured FR curve.
 std::vector<std::string> audioInterfaceProfilesWithCurve();
 
+// Spec-DERIVED approximate D/A curve (never a measurement) for an interface with no measured
+// profile. Converters are nearly flat, so this is a tiny per-model deterministic voicing (tenths of
+// a dB) — enough that real vs modeling interfaces differ honestly instead of both reading flat.
+// A measured profile always takes precedence. See MonitorSpecCurves.cpp.
+ResponseCurve audioInterfaceSpecCurve(const std::string& catalogName);
+
 } // namespace neuracoust::daw

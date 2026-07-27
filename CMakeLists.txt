@@ -101,6 +101,7 @@ add_library(neuracoust_daw_core
     src/audio/HeadphoneProfiles.generated.cpp
     src/audio/AudioInterfaceCatalog.generated.cpp
     src/audio/AudioInterfaceProfiles.generated.cpp
+    src/audio/MonitorSpecCurves.cpp
     src/audio/AudioInterfaceModeler.cpp
     src/audio/OfflineBounce.cpp
     src/license/LicenseAgentClient.cpp

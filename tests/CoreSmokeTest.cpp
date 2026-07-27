@@ -599,6 +599,12 @@ int main() {
     for (auto& module : flatSpeakerModules) {
         module.enabled = module.id == "speaker-simulation";
     }
+    // Single-EQ architecture: a target speaker with a measured OR spec-derived curve is voiced
+    // entirely by the one monitor parametric EQ (loaded by the bridge from nc_monitor_eq_sync), so
+    // the sim PROCESSOR passes it through here — the tone is never applied twice. Every named model
+    // has a spec curve, so the sim's speaker stage is a pass-through for them; flat and modeled come
+    // out the same at THIS stage. That the spec/measured curve actually colours the sound is covered
+    // by bridge_transport_smoke's monitor-EQ-response check, at the level where it now happens.
     auto modeledSpeakerModules = flatSpeakerModules;
     modeledSpeakerModules.front().realModel = "Real Speaker: Nearfield";
     modeledSpeakerModules.front().targetModelA = "Speaker A: Laptop";
@@ -613,14 +619,7 @@ int main() {
     const auto modeledSpeakerFrame = modeledSpeakerDsp.process({0.31f, -0.18f});
     const float modeledSpeakerDelta = std::abs(flatSpeakerFrame.left - modeledSpeakerFrame.left) +
         std::abs(flatSpeakerFrame.right - modeledSpeakerFrame.right);
-    assert(modeledSpeakerDelta > 0.015f);
-    auto speakerSlotBModules = modeledSpeakerModules;
-    speakerSlotBModules.front().activeTargetSlot = 1;
-    neuracoust::daw::MonitorDspProcessor speakerSlotBDsp;
-    speakerSlotBDsp.configure(48000.0, speakerSlotBModules);
-    const auto speakerSlotBFrame = speakerSlotBDsp.process({0.31f, -0.18f});
-    assert(std::abs(modeledSpeakerFrame.left - speakerSlotBFrame.left) > 0.00001f ||
-           std::abs(modeledSpeakerFrame.right - speakerSlotBFrame.right) > 0.00001f);
+    assert(modeledSpeakerDelta < 0.01f);   // spec target voiced by the EQ; sim stage passes through
     auto identitySpeakerModules = flatSpeakerModules;
     identitySpeakerModules.front().realModel = "Real Speaker: Avantone CLA-10A (NF)";
     identitySpeakerModules.front().targetModelA = "Speaker A: CLA10A Active";
