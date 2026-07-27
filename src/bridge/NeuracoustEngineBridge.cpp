@@ -1447,7 +1447,7 @@ void nc_track_set_console_bool(NCEngine* engine, int index, const char* paramete
 void nc_track_set_console_value(NCEngine* engine, int index, const char* parameter, float value) {
     auto* t=trackAt(engine,index); if(t==nullptr||parameter==nullptr)return; auto& c=t->consoleChannel; const std::string p(parameter);
 #define NC_SET(name, field, lo, hi) if(p==name)c.field=std::max(lo,std::min(hi,value));else
-    NC_SET("highPassHz",highPassHz,20.0f,350.0f) NC_SET("lowPassHz",lowPassHz,3000.0f,12000.0f)
+    NC_SET("highPassHz",highPassHz,20.0f,350.0f) NC_SET("lowPassHz",lowPassHz,3000.0f,20000.0f)
     NC_SET("compThresholdDb",compThresholdDb,-20.0f,10.0f) NC_SET("compRatio",compRatio,1.0f,25.0f)
     NC_SET("compAttackMs",compAttackMs,0.1f,100.0f) NC_SET("compReleaseMs",compReleaseMs,40.0f,4000.0f)
     NC_SET("compMix",compMix,0.0f,1.0f)

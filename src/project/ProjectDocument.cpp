@@ -2860,7 +2860,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.consoleChannel.highPassEnabled = boolAfterKey(body, "consoleHighPassEnabled", track.consoleChannel.filterEnabled);
         track.consoleChannel.lowPassEnabled = boolAfterKey(body, "consoleLowPassEnabled", track.consoleChannel.filterEnabled);
         track.consoleChannel.highPassHz = finiteRange((float)numberAfterKey(body, "consoleHighPassHz", 20), 20.0f, 20.0f, 350.0f);
-        track.consoleChannel.lowPassHz = finiteRange((float)numberAfterKey(body, "consoleLowPassHz", 12000), 12000.0f, 3000.0f, 12000.0f);
+        track.consoleChannel.lowPassHz = finiteRange((float)numberAfterKey(body, "consoleLowPassHz", 12000), 12000.0f, 3000.0f, 20000.0f);
         track.consoleChannel.eqEnabled = boolAfterKey(body, "consoleEqEnabled", false);
         track.consoleChannel.eqCircuitMode = boolAfterKey(body, "consoleEqCircuitMode", false);
         track.consoleChannel.compEnabled = boolAfterKey(body, "consoleCompEnabled", false);

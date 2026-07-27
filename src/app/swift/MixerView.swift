@@ -826,12 +826,6 @@ struct ChannelStrip: View {
             VStack(spacing: Theme.Space.md) {
                 prePanSection
                     .frame(minHeight: alignedPrePanHeight, alignment: .top)
-                // Function visualisers under the modules, in signal-path order, active modules only.
-                // Deliberately OUTSIDE prePanSection: that section measures its own height and gets
-                // the mixer-wide maximum fed back as minHeight, so a child that redraws at 30 Hz
-                // (these Canvases) would republish the height every frame and storm the layout.
-                ConsoleVizStrip(engine: engine, trackId: track.id, width: stripWidth,
-                                alignedHeight: alignedVizHeight)
                 panSection
                 if selectedModules.contains(.inRec) { buttonRow }
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
@@ -895,6 +889,12 @@ struct ChannelStrip: View {
             if showIO && selectedModules.contains(.inRec) { inputSection }
             HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
             moduleFocusPanel
+            // Function visualisers directly under the module selector, in signal-path order, for
+            // enabled modules only. Its height is the mixer-wide COMPUTED maximum (identical on
+            // every strip, constant across frames) — a content-sized child here would republish
+            // this section's measured height every Canvas redraw and storm the layout.
+            ConsoleVizStrip(engine: engine, trackId: track.id, width: stripWidth,
+                            alignedHeight: alignedVizHeight)
             if showInserts && selectedModules.contains(.insert)
                 && (track.kind == .instrument || mixerHasInstrument) {
                 instrumentSlotSection
@@ -947,12 +947,12 @@ struct ChannelStrip: View {
     /// same choice to every strip through `globalModuleFocusRevision`.
     private var moduleFocusPanel: some View {
         let order = moduleDisplayOrder
-        return VStack(spacing: 2) {
+        return VStack(spacing: 0) {
             ForEach(Array(order.enumerated()), id: \.element) { idx, module in
                 moduleRow(module, index: idx, count: order.count)
             }
         }
-        .padding(3)
+        .padding(2)
         .background(
             RoundedRectangle(cornerRadius: 5)
                 .fill(Theme.Palette.background.opacity(0.72))
@@ -961,6 +961,17 @@ struct ChannelStrip: View {
                         .stroke(Theme.Palette.coolDivider, lineWidth: 1)
                 )
         )
+        // Select a module, then ↑/↓ reorders it — replaces the per-row arrows. Scoped to focus so
+        // the arrow keys keep doing their timeline job everywhere else.
+        .focusable()
+        .focusEffectDisabled()
+        .onMoveCommand { direction in
+            switch direction {
+            case .up:   moveModule(moduleFocus, by: -1)
+            case .down: moveModule(moduleFocus, by: 1)
+            default:    break
+            }
+        }
     }
 
     /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).
@@ -968,22 +979,23 @@ struct ChannelStrip: View {
         let enabled = moduleIsEnabled(module)
         let focused = selectedModules.contains(module)
         return HStack(spacing: 5) {
+            // The lamp is the module's on/off switch (the ▲▼ reorder arrows are gone — a selected
+            // module is moved with the ↑/↓ keys instead).
             Circle()
                 .fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.45))
-                .frame(width: 5, height: 5)
+                .frame(width: 7, height: 7)
+                .contentShape(Rectangle().inset(by: -4))
+                .onTapGesture { toggleModuleEnabled(module) }
+                .help(canToggle(module) ? "켜기 / 끄기" : "")
             Text(module.label)
                 .font(Theme.Font.ui(9, focused || enabled ? .bold : .semibold))
                 .foregroundStyle(focused ? Color(hex: 0xf4d9b8)
                                          : (enabled ? Theme.Palette.textBright : Theme.Palette.textDim))
                 .lineLimit(1).minimumScaleFactor(0.8).allowsTightening(true)
             Spacer(minLength: 2)
-            VStack(spacing: 0) {
-                reorderArrow(up: true, module, disabled: index == 0)
-                reorderArrow(up: false, module, disabled: index == count - 1)
-            }
         }
         .padding(.horizontal, 6)
-        .frame(height: 20)
+        .frame(height: 17)
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(focused ? accent.opacity(0.30)
@@ -1019,6 +1031,25 @@ struct ChannelStrip: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .help(up ? "위로 이동" : "아래로 이동")
+    }
+
+    /// Only the built-in console modules carry an on/off flag; insert/send/inRec lamps just report.
+    private func canToggle(_ module: MixerModuleFocus) -> Bool {
+        switch module {
+        case .filter, .eq, .gate, .comp, .saturator: return true
+        default: return false
+        }
+    }
+
+    private func toggleModuleEnabled(_ module: MixerModuleFocus) {
+        switch module {
+        case .filter:    engine.setConsoleBool(track.id, "filterEnabled", !track.consoleFilterEnabled)
+        case .eq:        engine.setConsoleBool(track.id, "eqEnabled", !track.consoleEqEnabled)
+        case .gate:      engine.setConsoleBool(track.id, "gateEnabled", !track.consoleGateEnabled)
+        case .comp:      engine.setConsoleBool(track.id, "compEnabled", !track.consoleCompEnabled)
+        case .saturator: engine.setConsoleBool(track.id, "saturatorEnabled", !track.consoleSaturatorEnabled)
+        default: break
+        }
     }
 
     private func moduleIsEnabled(_ module: MixerModuleFocus) -> Bool {
@@ -2191,6 +2222,14 @@ struct ChannelStrip: View {
 
     /// Double-click to rename. A rejected name (Master, Monitor, a duplicate) simply
     /// snaps back rather than reporting an error the user cannot act on.
+    /// 1-based lane number, matching the timeline. Master/monitor sit outside the lane list.
+    private var trackNumber: Int? {
+        guard track.kind != .master, track.kind != .monitor else { return nil }
+        guard let i = engine.tracks.filter({ $0.kind != .master && $0.kind != .monitor })
+                                   .firstIndex(where: { $0.id == track.id }) else { return nil }
+        return i + 1
+    }
+
     private var nameplate: some View {
         Group {
             if renaming {
@@ -2204,7 +2243,16 @@ struct ChannelStrip: View {
                         if !focused { commitRename() }
                     }
             } else {
-                Text(track.name).lineLimit(1)
+                // Track number ahead of the name, the way the timeline lane headers show it, so a
+                // strip can be matched to its lane at a glance. Master/aux have no lane number.
+                HStack(spacing: 4) {
+                    if let n = trackNumber {
+                        Text("\(n)")
+                            .font(Theme.Font.mono(9))
+                            .foregroundStyle(Theme.Palette.textFaint)
+                    }
+                    Text(track.name).lineLimit(1)
+                }
             }
         }
         .font(Theme.Font.ui(10, .bold))

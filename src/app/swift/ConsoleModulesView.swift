@@ -152,7 +152,11 @@ private struct ConsoleKnob: View {
                 var next: Float
                 if logScale && lo > 0 && hi > lo {
                     let startNorm = (log(Double(start)) - log(Double(lo))) / (log(Double(hi)) - log(Double(lo)))
-                    let nextNorm = min(1, max(0, startNorm + Double(-drag.translation.height / 200)))
+                    // `reverse` mirrors the pointer (see `n` above), so the drag has to mirror too —
+                    // the linear branch below already did, and the wheel does; this branch did not,
+                    // which made the reversed log knob (Hi-cut) track backwards on drag only.
+                    let dn = Double(-drag.translation.height / 200) * (reverse ? -1 : 1)
+                    let nextNorm = min(1, max(0, startNorm + dn))
                     next = Float(Double(lo) * pow(Double(hi) / Double(lo), nextNorm))
                 } else {
                     let dv = Float(-drag.translation.height / 90) * (hi - lo)
@@ -465,7 +469,7 @@ private struct EqGraphView: View {
         let lfF = v("eqLfHz"), lfG = v("eqLfGainDb")
         s.append(engine.consoleBool(trackId, "eqLfBell") ? .peak(lfF, lfG, 0.9, fs) : .lowShelf(lfF, lfG, fs))
         let hp = v("highPassHz"); if hp > 21 { s.append(.highPass(hp, fs)) }
-        let lp = v("lowPassHz"); if lp < 11900 { s.append(.lowPass(lp, fs)) }
+        let lp = v("lowPassHz"); if lp < 19900 { s.append(.lowPass(lp, fs)) }   // 20 kHz = fully open
         return s
     }
 
@@ -524,11 +528,23 @@ private struct HarmonicsGraphView: View {
     @ObservedObject var engine: EngineController
     let trackId: Int
     private let count = 7   // 2nd .. 8th
+    @State private var vals: [Double] = []
+
+    /// Cheap to read every frame; the DFT behind `consoleHarmonics` is not — so it only re-runs
+    /// when one of these actually changes, instead of once per 30 Hz redraw.
+    private var signature: String {
+        let t = engine.tracks.first { $0.id == trackId }
+        return [String(engine.consoleValue(trackId, "saturatorDriveDb")),
+                String(engine.consoleValue(trackId, "saturatorMix")),
+                engine.consoleBool(trackId, "saturatorEnabled") ? "1" : "0",
+                engine.consoleBool(trackId, "saturatorCircuitMode") ? "1" : "0",
+                t?.consoleModel ?? ""].joined(separator: "|")
+    }
 
     var body: some View {
         Canvas { ctx, size in
             let W = size.width, H = size.height
-            let vals = engine.consoleHarmonics(trackId, count: count)
+            let vals = self.vals
             var base = Path(); base.move(to: CGPoint(x: 0, y: H - 0.5)); base.addLine(to: CGPoint(x: W, y: H - 0.5))
             ctx.stroke(base, with: .color(.white.opacity(0.12)), lineWidth: 1)
             guard !vals.isEmpty else { return }
@@ -549,6 +565,51 @@ private struct HarmonicsGraphView: View {
         .background(Color.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
+        .onAppear { vals = engine.consoleHarmonics(trackId, count: count) }
+        .onChange(of: signature) { _, _ in vals = engine.consoleHarmonics(trackId, count: count) }
+    }
+}
+
+/// The same harmonics, shrunk to a row of little bars that sits above the saturator's DRIVE knob —
+/// a glance-level readout of the colour the model and drive are adding, not a full panel.
+private struct HarmonicsMiniBars: View {
+    @ObservedObject var engine: EngineController
+    let trackId: Int
+    var width: CGFloat = 66
+    var height: CGFloat = 20
+    private let count = 6   // 2nd .. 7th
+
+    @State private var vals: [Double] = []
+    private var signature: String {
+        let t = engine.tracks.first { $0.id == trackId }
+        return [String(engine.consoleValue(trackId, "saturatorDriveDb")),
+                String(engine.consoleValue(trackId, "saturatorMix")),
+                engine.consoleBool(trackId, "saturatorEnabled") ? "1" : "0",
+                engine.consoleBool(trackId, "saturatorCircuitMode") ? "1" : "0",
+                t?.consoleModel ?? ""].joined(separator: "|")
+    }
+
+    var body: some View {
+        Canvas { ctx, size in
+            let W = size.width, H = size.height
+            guard !vals.isEmpty else { return }
+            let slot = W / CGFloat(vals.count)
+            let barW = max(2, slot * 0.56)
+            for i in 0..<vals.count {
+                let v = CGFloat(max(0, min(1, vals[i])))
+                let barH = max(1, v * (H - 2))
+                let x = slot * CGFloat(i) + (slot - barW) / 2
+                let rect = CGRect(x: x, y: H - barH - 1, width: barW, height: barH)
+                let col = (i % 2 == 0) ? Color(hex: 0xffb454) : Color(hex: 0x5bd6a0)   // even = warm
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(col.opacity(0.9)))
+            }
+        }
+        .frame(width: width, height: height)
+        .background(Color.black.opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(.black.opacity(0.55), lineWidth: 1))
+        .onAppear { vals = engine.consoleHarmonics(trackId, count: count) }
+        .onChange(of: signature) { _, _ in vals = engine.consoleHarmonics(trackId, count: count) }
     }
 }
 
@@ -561,16 +622,28 @@ private struct DynamicsGraphView: View {
     private let lo = -60.0, hi = 0.0
     private let steps = 96
 
+    /// The curve only moves when one of these does, so it is rebuilt on change rather than per frame.
+    private struct Params: Equatable {
+        var compOn = false, gateOn = false, expander = true
+        var compThr = 0.0, ratio = 1.0, gateThr = 0.0, range = 0.0
+    }
+    @State private var p = Params()
+
+    private var live: Params {
+        Params(compOn: engine.consoleBool(trackId, "compEnabled"),
+               gateOn: engine.consoleBool(trackId, "gateEnabled"),
+               expander: engine.consoleBool(trackId, "expanderMode"),
+               compThr: Double(engine.consoleValue(trackId, "compThresholdDb")),
+               ratio: max(1.0, Double(engine.consoleValue(trackId, "compRatio"))),
+               gateThr: Double(engine.consoleValue(trackId, "gateThresholdDb")),
+               range: max(0.0, Double(engine.consoleValue(trackId, "gateRangeDb"))))
+    }
+
     var body: some View {
         Canvas { ctx, size in
             let W = size.width, H = size.height
-            let compOn = engine.consoleBool(trackId, "compEnabled")
-            let gateOn = engine.consoleBool(trackId, "gateEnabled")
-            let expander = engine.consoleBool(trackId, "expanderMode")
-            let compThr = Double(engine.consoleValue(trackId, "compThresholdDb"))
-            let ratio = max(1.0, Double(engine.consoleValue(trackId, "compRatio")))
-            let gateThr = Double(engine.consoleValue(trackId, "gateThresholdDb"))
-            let range = max(0.0, Double(engine.consoleValue(trackId, "gateRangeDb")))
+            let compOn = p.compOn, gateOn = p.gateOn, expander = p.expander
+            let compThr = p.compThr, ratio = p.ratio, gateThr = p.gateThr, range = p.range
             func x(_ db: Double) -> CGFloat { CGFloat((db - lo) / (hi - lo)) * W }
             func y(_ db: Double) -> CGFloat { H - CGFloat((db - lo) / (hi - lo)) * H }
 
@@ -609,6 +682,8 @@ private struct DynamicsGraphView: View {
         .background(Color.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.5), lineWidth: 1))
+        .onAppear { p = live }
+        .onChange(of: live) { _, v in p = v }
     }
 }
 
@@ -627,8 +702,8 @@ struct ConsoleVizStrip: View {
     private enum Panel { case freq, dynamics, harmonics }
     private var track: EngineController.Track? { engine.tracks.first { $0.id == trackId } }
 
-    private static let graphHeight: CGFloat = 60
-    private static let panelHeight: CGFloat = 73    // label + gap + graph
+    private static let graphHeight: CGFloat = 40    // a third shorter than the original 60
+    private static let panelHeight: CGFloat = 53    // label + gap + graph
     private static let panelGap: CGFloat = 6
 
     /// Deterministic height for `n` panels — the mixer maxes this across its strips.
@@ -641,7 +716,6 @@ struct ConsoleVizStrip: View {
         var n = 0
         if t.consoleFilterEnabled || t.consoleEqEnabled { n += 1 }
         if t.consoleCompEnabled || t.consoleGateEnabled { n += 1 }
-        if t.consoleSaturatorEnabled { n += 1 }
         return n
     }
 
@@ -654,7 +728,7 @@ struct ConsoleVizStrip: View {
         var items: [(Int, Panel)] = []
         if let p = pos([("filter", t.consoleFilterEnabled), ("eq", t.consoleEqEnabled)]) { items.append((p, .freq)) }
         if let p = pos([("comp", t.consoleCompEnabled), ("gate", t.consoleGateEnabled)]) { items.append((p, .dynamics)) }
-        if let p = pos([("saturator", t.consoleSaturatorEnabled)]) { items.append((p, .harmonics)) }
+        // No harmonics panel: the saturator shows its harmonics as small bars above its DRIVE knob.
         return items.sorted { $0.0 < $1.0 }.map { $0.1 }
     }
 
@@ -672,7 +746,10 @@ struct ConsoleVizStrip: View {
             }
             .frame(width: width)
             .padding(.top, 2)
-            .frame(height: alignedHeight, alignment: .top)
+            // Fall back to this strip's own natural height: the Inspector renders a strip without
+            // the mixer's alignment value, and a literal 0 there would clip the panels to nothing
+            // while they still drew — they overlapped the module below.
+            .frame(height: max(alignedHeight ?? 0, Self.height(panels: ps.count)), alignment: .top)
         }
     }
 
@@ -681,6 +758,7 @@ struct ConsoleVizStrip: View {
             Text(title).font(Theme.Font.mono(9)).foregroundStyle(Theme.Palette.textSecondary)
             content().frame(height: Self.graphHeight)
         }
+        .padding(.horizontal, 3)      // keep the graphs off the strip edge
         .frame(height: Self.panelHeight, alignment: .top)
     }
 }
@@ -831,7 +909,7 @@ struct NeuracoustConsoleModulesView: View {
     private func moduleHeight(_ m: MixerModuleFocus) -> CGFloat {
         switch m {
         case .filter:    return 244
-        case .eq:        return 798
+        case .eq:        return 660    // 798 − the 138 pt response graph, now in the viz strip
         case .comp:      return 336
         case .gate:      return 308
         case .saturator: return 244
@@ -872,13 +950,13 @@ struct NeuracoustConsoleModulesView: View {
             Text(name)
                 .font(.system(size: 10, weight: .bold)).tracking(0.6).lineLimit(1).minimumScaleFactor(0.7)
                 .foregroundStyle(Color(hex: 0x1d1e20))
-                .frame(maxWidth: .infinity).frame(height: 22)
+                .frame(maxWidth: .infinity).frame(height: 17)
                 .background(LinearGradient(colors: [Color(hex: 0xdedad0), Color(hex: 0xb8b4a9)], startPoint: .top, endPoint: .bottom))
                 .clipShape(RoundedRectangle(cornerRadius: 3))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(.black, lineWidth: 1))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .padding(.horizontal, 6).padding(.top, 3).padding(.bottom, 6)
+        .padding(.horizontal, 6).padding(.top, 1).padding(.bottom, 2)
         .frame(width: width)
     }
 
@@ -962,8 +1040,8 @@ struct NeuracoustConsoleModulesView: View {
     private var equaliser: some View {
         ConsoleModuleChrome(title: "EQUALISER", modelName: engine.consoleModel, models: EngineController.consoleModels, onSelectModel: { engine.setConsoleModel($0) }, inOn: inOn, onToggleIn: onToggleIn) {
           VStack(spacing: 0) {
-            EqGraphView(engine: engine, trackId: trackId)
-                .frame(height: 132).padding(.horizontal, 6).padding(.bottom, 6)
+            // The response curve lives in the strip's "EQ · 스펙트럼" visualiser panel now
+            // (ConsoleVizStrip), which draws filter + EQ together — one graph, not two.
             // Gain: -/0/+ text. Freq: two end numbers + live value. Q: narrow/wide bell icons.
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
@@ -1254,6 +1332,8 @@ struct NeuracoustConsoleModulesView: View {
           VStack(spacing: 0) {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
+                // The harmonics this saturator is adding, right above the knob that drives them.
+                HarmonicsMiniBars(engine: engine, trackId: trackId).position(x: lx, y: 20)
                 placed(lx, 72, cKnob("saturatorDriveDb", 0...24, 6, .orange, ["0", "24"], "DRIVE", Self.intLabel, 1), size: sz)
                 placed(rx, 126, cKnob("saturatorMix", 0...1, 1, .orange, ["0", "100"], "MIX", Self.pctLabel, 0.05), size: sz)
                 // Channel polarity per side (ØL / ØR) as symbols; circuit glyph below the DRIVE knob.
