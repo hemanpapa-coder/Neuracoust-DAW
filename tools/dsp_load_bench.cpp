@@ -64,16 +64,32 @@ ConsoleChannelState fullyLoadedConsole() {
     return console;
 }
 
+double gLastMaxUs = 0.0;   // worst single block of the last timing run
+
+/// Mean per block, and (via gLastMaxUs) the worst single block. Jitter lives in the worst case:
+/// a heap allocation on the audio thread is cheap on average and occasionally very expensive, so
+/// the mean hides exactly the thing that drops audio.
 double timeBlocksUs(int iterations, const std::function<void(int)>& body) {
-    const auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < iterations; ++i) body(i);
-    const auto end = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::micro>(end - start).count() / iterations;
+    double total = 0.0, worst = 0.0;
+    for (int i = 0; i < iterations; ++i) {
+        const auto blockStart = std::chrono::steady_clock::now();
+        body(i);
+        const double us = std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - blockStart).count();
+        total += us;
+        if (i > 0 && us > worst) worst = us;   // skip the first, which warms caches and capacity
+    }
+    gLastMaxUs = worst;
+    return total / iterations;
 }
 
-void report(const std::string& label, double perBlockUs) {
-    std::printf("%-46s %8.1f us/block   %6.2f%% of budget\n",
-                label.c_str(), perBlockUs, 100.0 * perBlockUs / kBlockBudgetUs);
+void report(const std::string& label, double perBlockUs, bool withWorst = false) {
+    std::printf("%-46s %8.1f us/block   %6.2f%% of budget", label.c_str(),
+                perBlockUs, 100.0 * perBlockUs / kBlockBudgetUs);
+    if (withWorst) {
+        std::printf("   worst %8.1f us  (%6.2f%%)", gLastMaxUs, 100.0 * gLastMaxUs / kBlockBudgetUs);
+    }
+    std::printf("\n");
 }
 
 } // namespace
@@ -150,7 +166,7 @@ int main() {
             renderProjectAudioBlockWithStateAndMeters(plan, state, frame, kBlockFrames, out, nullptr);
             frame += kBlockFrames;
         });
-        report("renderer, " + std::to_string(trackCount) + " empty tracks", perBlock);
+        report("renderer, " + std::to_string(trackCount) + " empty tracks", perBlock, true);
     }
 
     std::printf("\nBudget is one core. Anything at or over 100%% cannot run in time.\n");

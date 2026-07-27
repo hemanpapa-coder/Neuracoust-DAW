@@ -2116,6 +2116,12 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     // Destination buffers for the route being mixed. std::map nodes are stable, so a pointer taken
     // here stays valid while later routes add their own buses.
     std::vector<std::pair<std::vector<float>*, bool>> routeEdgeTargets;   // (bus, physicalOutput)
+    // Scratch buffers reused across routes. These used to be constructed inside the route loop,
+    // so a 100-track session performed ~19,000 heap allocations a second ON THE AUDIO THREAD.
+    // malloc can take a lock, which is exactly the unbounded pause that shows up as jitter.
+    // assign() keeps the capacity once it has grown, so steady state allocates nothing.
+    std::vector<float> routeInput;
+    std::vector<float> dryRouteInput;
 
     for (const auto& routeName : graph->renderOrder) {
         const auto routeIt = routeByName.find(routeName);
@@ -2143,7 +2149,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             continue;
         }
 
-        std::vector<float> routeInput(blockSampleCount, 0.0f);
+        routeInput.assign(blockSampleCount, 0.0f);
         // When the transport is stopped, timeline clips must contribute silence — otherwise a
         // still-active insert render (always-on tail, or an instrument track keeping the render
         // alive) re-samples the same parked clip window every block and it loops audibly, so
@@ -2203,7 +2209,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
 
         bool routeProcessedWet = false;   // did an insert actually run on this block (vs dry)?
         if (!routeInserts.empty()) {
-            const auto dryRouteInput = routeInput;
+            dryRouteInput.assign(routeInput.begin(), routeInput.end());
             const float insertInputPeak = blockPeakAbs(dryRouteInput);
             std::string insertError;
             const std::vector<RealtimeMasterInsertChain::InsertProcessMeter>* processMeters = nullptr;
