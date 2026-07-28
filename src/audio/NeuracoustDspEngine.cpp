@@ -65,20 +65,23 @@ std::string effectiveTrackInsertDspExecutionMode(const TrackInsertSlot& insert) 
     return insert.dspExecutionMode.empty() ? "native" : insert.dspExecutionMode;
 }
 
+/// What a trip to a remote machine costs, in samples, for delay compensation.
+///
+/// DECLARED, NOT MEASURED — the way Pro Tools HDX charges a host crossing. This used to add the
+/// measured round trip, so the compensation moved whenever the network did: every other path in
+/// the mix was realigned against a number that drifts, which is a phase shift you can hear and
+/// cannot predict. A fixed budget is the whole point. The round trip on a LAN is ~0.6 ms against
+/// a 5.3 ms buffer at 48 k, so two buffers plus a block is a budget the trip fits inside with
+/// room to spare; a block that misses it is a dropout to report, never a delay to renegotiate.
+constexpr int kRemoteDspCrossingBuffers = 2;
+
 unsigned int estimatedRemoteDspLatencySamples(const RemoteDspServerSettings& settings,
-                                              double sampleRate,
-                                              int maxBlockSize,
-                                              double measuredRoundTripMs) {
-    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+                                              double /*sampleRate*/,
+                                              int maxBlockSize) {
     const uint16_t networkBufferFrames = static_cast<uint16_t>(
         std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames)));
-    const double measuredSamples = std::isfinite(measuredRoundTripMs) && measuredRoundTripMs > 0.0
-        ? measuredRoundTripMs * sr / 1000.0
-        : 0.0;
-    const double safetyBlock = static_cast<double>(std::max(1, maxBlockSize));
-    return static_cast<unsigned int>(std::ceil(std::max<double>(
-        networkBufferFrames,
-        static_cast<double>(networkBufferFrames) + measuredSamples + safetyBlock)));
+    return static_cast<unsigned int>(kRemoteDspCrossingBuffers * static_cast<int>(networkBufferFrames) +
+                                     std::max(1, maxBlockSize));
 }
 
 float dbToGain(float db) {
@@ -2774,10 +2777,7 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             trackChain.slotIndex = group.slotIndices.empty() ? firstActiveSlotIndex : group.slotIndices.front();
             trackChain.slotIndices = std::move(group.slotIndices);
             trackChain.latencySamples = settings_.delayCompensationEnabled
-                ? estimatedRemoteDspLatencySamples(plan.settings,
-                                                   settings_.sampleRate,
-                                                   maxBlockSize,
-                                                   remoteDspRoundTripMs_)
+                ? estimatedRemoteDspLatencySamples(plan.settings, settings_.sampleRate, maxBlockSize)
                 : 0u;
             delayCompensationSamples_ = std::max(delayCompensationSamples_, trackChain.latencySamples);
             trackChain.transitionSamplesTotal = std::max<int64_t>(1, static_cast<int64_t>(settings_.sampleRate * 0.08));
