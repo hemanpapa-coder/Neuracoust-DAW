@@ -432,6 +432,11 @@ private:
     std::string message_ = "Neuracoust DSP engine ready.";
     std::atomic<int64_t> playbackFrameForStatus_ {0};
     std::atomic<double> sampleRateForStatus_ {48000.0};
+    // The monitor bus as the listener hears it in SHAPE — after listen mode (mono / M-S / phase),
+    // the monitor DSP and the speaker sim — but before the monitor level (volume, dim, mute). The
+    // transport meter reads this, so turning the monitor knob moves the sound, not the meter.
+    std::atomic<float> monitorPrePeakLeft_ {0.0f};
+    std::atomic<float> monitorPrePeakRight_ {0.0f};
     std::atomic<float> outputPeakLeft_ {0.0f};
     std::atomic<float> outputPeakRight_ {0.0f};
     std::atomic<float> phaseCorrelation_ {0.0f};

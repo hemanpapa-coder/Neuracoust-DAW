@@ -80,6 +80,11 @@ struct AudioEngineStatus {
     /// The mix leaving the master fader, BEFORE the monitor path (monitor EQ, speaker sim,
     /// monitor volume/dim/mute). outputPeak* is the device output and therefore follows the
     /// monitor knob; the mixer's Master meter must not, so it reads these instead.
+    /// The monitor bus after its shaping (listen mode, monitor DSP, speaker sim) but BEFORE the
+    /// monitor level. The transport's L/R meter reads this: solo and mono/stereo move it, the
+    /// monitor volume knob does not.
+    float monitorPrePeakLeft = 0.0f;
+    float monitorPrePeakRight = 0.0f;
     float masterBusPeakLeft = 0.0f;
     float masterBusPeakRight = 0.0f;
     float phaseCorrelation = 0.0f;

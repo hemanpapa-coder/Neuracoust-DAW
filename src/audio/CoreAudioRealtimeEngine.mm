@@ -519,6 +519,8 @@ public:
         auto copy = status_;
         const auto dspStatus = dspEngine_.statusSnapshot();
         copy.transportRunning = dspStatus.transportRunning;
+        copy.monitorPrePeakLeft = dspStatus.monitorPrePeakLeft;
+        copy.monitorPrePeakRight = dspStatus.monitorPrePeakRight;
         copy.masterBusPeakLeft = dspStatus.masterBusPeakLeft;
         copy.masterBusPeakRight = dspStatus.masterBusPeakRight;
         copy.outputPeakLeft = dspStatus.outputPeakLeft;

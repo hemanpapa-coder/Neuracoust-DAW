@@ -557,6 +557,8 @@ public:
         copy.spectrumMid = spectrumMid_.load();
         copy.spectrumHigh = spectrumHigh_.load();
         copy.trackMeterNames = projectMeters_.trackNames;
+        copy.monitorPrePeakLeft = 0.0f;   // no monitor station in the non-CoreAudio path
+        copy.monitorPrePeakRight = 0.0f;
         copy.masterBusPeakLeft = projectMeters_.masterPeakLeft;
         copy.masterBusPeakRight = projectMeters_.masterPeakRight;
         copy.trackPeakLeft = projectMeters_.trackPeakLeft;

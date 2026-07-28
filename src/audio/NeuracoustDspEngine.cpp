@@ -2297,6 +2297,18 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
             sample = monitorSafetySoftClip(sample);
         }
     }
+    // Tap the meter here: everything that SHAPES the monitor signal has run (listen mode, monitor
+    // DSP, speaker sim), and the monitor level has not. Solo and mono/stereo therefore move this
+    // meter; the monitor volume knob does not.
+    {
+        float prePeakLeft = 0.0f, prePeakRight = 0.0f;
+        for (size_t i = 0; i + 1 < interleavedStereo.size(); i += 2) {
+            prePeakLeft = std::max(prePeakLeft, std::abs(interleavedStereo[i]));
+            prePeakRight = std::max(prePeakRight, std::abs(interleavedStereo[i + 1]));
+        }
+        monitorPrePeakLeft_.store(std::min(1.0f, prePeakLeft));
+        monitorPrePeakRight_.store(std::min(1.0f, prePeakRight));
+    }
     applyMonitorStationControlsLocked(interleavedStereo);
     // An async insert chain engaged/disengaged this block (dry↔wet). Re-arm the 80 ms output
     // crossfade NOW so it masks the real swap with the previous (dry) waveform — the edit-time
@@ -2372,6 +2384,8 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     // so this does not allocate in steady state.
     status.sampleRate = settings_.sampleRate;
     status.transportRunning = settings_.transportRunning;
+    status.monitorPrePeakLeft = monitorPrePeakLeft_.load();
+    status.monitorPrePeakRight = monitorPrePeakRight_.load();
     status.outputPeakLeft = outputPeakLeft_.load();
     status.outputPeakRight = outputPeakRight_.load();
     status.phaseCorrelation = phaseCorrelation_.load();
@@ -4214,6 +4228,8 @@ void NeuracoustDspEngine::publishListenRoomLocked(const std::vector<float>& inte
 }
 
 void NeuracoustDspEngine::resetMeteringLocked() {
+    monitorPrePeakLeft_.store(0.0f);
+    monitorPrePeakRight_.store(0.0f);
     outputPeakLeft_.store(0.0f);
     outputPeakRight_.store(0.0f);
     phaseCorrelation_.store(0.0f);

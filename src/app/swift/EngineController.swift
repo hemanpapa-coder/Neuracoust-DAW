@@ -34,6 +34,10 @@ final class EngineController: ObservableObject {
     @Published private(set) var transportRunning = false
     /// Post master fader, pre monitor path — what the mixer's Master strip meters. The device
     /// output peak below follows the monitor volume knob, which must not move the Master meter.
+    /// Monitor bus after its shaping but before the monitor level — what the transport's L/R
+    /// meter shows, so solo and mono/stereo move it while the monitor volume knob does not.
+    @Published private(set) var monitorPrePeakLeft: Float = 0
+    @Published private(set) var monitorPrePeakRight: Float = 0
     @Published private(set) var masterBusPeakLeft: Float = 0
     @Published private(set) var masterBusPeakRight: Float = 0
     @Published private(set) var outputPeakLeft: Float = 0
@@ -9714,6 +9718,8 @@ final class EngineController: ObservableObject {
             setIfChanged(\.spectrumMid, status.spectrumMid)
             setIfChanged(\.spectrumHigh, status.spectrumHigh)
             // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
+            setIfChanged(\.monitorPrePeakLeft, Self.decayedMeter(status.monitorPrePeakLeft, monitorPrePeakLeft))
+            setIfChanged(\.monitorPrePeakRight, Self.decayedMeter(status.monitorPrePeakRight, monitorPrePeakRight))
             setIfChanged(\.masterBusPeakLeft, Self.decayedMeter(status.masterBusPeakLeft, masterBusPeakLeft))
             setIfChanged(\.masterBusPeakRight, Self.decayedMeter(status.masterBusPeakRight, masterBusPeakRight))
             setIfChanged(\.outputPeakLeft, Self.decayedMeter(status.outputPeakLeft, outputPeakLeft))

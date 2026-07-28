@@ -692,8 +692,8 @@ struct TransportBar: View {
         HStack(spacing: Theme.Space.md) {
             compactMeter("오디오 입력", meterFraction(engine.inputPeak), Theme.Palette.green)
             compactMeter("미디 입력", Double(engine.midiActivity), Theme.Palette.purple)
-            compactMeter("L", meterFraction(engine.outputPeakLeft), Theme.Palette.yellow)
-            compactMeter("R", meterFraction(engine.outputPeakRight), Theme.Palette.yellow)
+            compactMeter("L", meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
+            compactMeter("R", meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
             Text(dbLabel)
                 .font(Theme.Font.mono(8, .semibold))
                 .foregroundStyle(Theme.Palette.yellow)
@@ -768,8 +768,8 @@ struct TransportBar: View {
                     .foregroundStyle(Theme.Palette.yellow)
                     .frame(width: 34, alignment: .trailing)
                 VStack(spacing: 2) {
-                    meterBar(meterFraction(engine.outputPeakLeft))
-                    meterBar(meterFraction(engine.outputPeakRight))
+                    meterBar(meterFraction(engine.monitorPrePeakLeft))
+                    meterBar(meterFraction(engine.monitorPrePeakRight))
                 }
                 .frame(width: 160)
             }
@@ -777,7 +777,7 @@ struct TransportBar: View {
     }
 
     private var dbLabel: String {
-        let peak = max(engine.outputPeakLeft, engine.outputPeakRight)
+        let peak = max(engine.monitorPrePeakLeft, engine.monitorPrePeakRight)
         return peak <= 0.00001 ? "-∞" : String(format: "%.1f", peakToDb(peak))
     }
 

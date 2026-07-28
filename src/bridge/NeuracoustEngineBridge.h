@@ -40,6 +40,9 @@ typedef struct {
     float outputPeakRight;
     /// Post master fader, pre monitor path — the mixer's Master meter (outputPeak* follows the
     /// monitor volume knob and must not drive it).
+    /// Monitor bus before the monitor level — the transport L/R meter (see the engine).
+    float monitorPrePeakLeft;
+    float monitorPrePeakRight;
     float masterBusPeakLeft;
     float masterBusPeakRight;
     float phaseCorrelation;

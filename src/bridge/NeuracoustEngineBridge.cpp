@@ -546,6 +546,8 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->requestedBufferSize = s.requestedBufferSize;
     out->outputPeakLeft = s.outputPeakLeft;
     out->outputPeakRight = s.outputPeakRight;
+    out->monitorPrePeakLeft = s.monitorPrePeakLeft;
+    out->monitorPrePeakRight = s.monitorPrePeakRight;
     out->masterBusPeakLeft = s.masterBusPeakLeft;
     out->masterBusPeakRight = s.masterBusPeakRight;
     out->phaseCorrelation = s.phaseCorrelation;
