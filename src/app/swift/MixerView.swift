@@ -1062,7 +1062,7 @@ struct ChannelStrip: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .padding(.top, 2)
-        .helpTip("이 채널의 콘솔 스트립(필터·EQ·게이트·컴프·새추레이터)을 어느 기계에서 처리할지 고릅니다. 기본은 모니터 독의 'DSP 역할 배정'을 따릅니다. 원격으로 보내면 노드가 같은 처리 코드를 실행하므로 소리는 같고, 네트워크 왕복만큼 지연이 붙습니다. 믹스다운(바운스)은 항상 이 맥에서 처리해 재현 가능하게 유지합니다.")
+        .helpTip("이 채널의 콘솔 스트립(필터·EQ·게이트·컴프·새추레이터)을 어느 기계에서 처리할지 고릅니다. 기본은 내장(이 맥의 모듈)입니다. 원격으로 보내면 노드가 같은 처리 코드를 실행하므로 소리는 같고, 네트워크 왕복만큼 지연이 붙습니다. 엄격 원격 바운스를 켜면 믹스다운도 이 배정을 따릅니다.")
     }
 
     /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).

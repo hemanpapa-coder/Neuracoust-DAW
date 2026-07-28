@@ -262,9 +262,18 @@ struct ProjectDocument {
     // Explicit assignment is the default because a path that changes under you mid-take is worse
     // than one that runs out of headroom predictably.
     std::string dspRoleMonitor = "internal";
+    // The strip / master / insert assignments are PER-SLOT now (each plug-in's DSP 실행 위치
+    // menu, each channel's DSP chip) — these globals stay only so older projects that saved a
+    // machine here keep resolving; the UI no longer edits them.
     std::string dspRoleChannelStrip = "internal";
     std::string dspRoleMaster = "internal";
     std::string dspRoleInserts = "internal";
+    // The DAW's own core functions, assignable ahead of the paths existing (재생/녹음/믹서/
+    // 트랙·버스). Stored intent: nothing routes by these yet, and the table says so in amber.
+    std::string dspRolePlayback = "internal";
+    std::string dspRoleRecording = "internal";
+    std::string dspRoleMixer = "internal";
+    std::string dspRoleBuses = "internal";
     // When set, the assignments above become starting points and work spills to the next machine
     // as the one before it runs short: internal -> NDS -> external node.
     bool dspAutoOverflow = false;

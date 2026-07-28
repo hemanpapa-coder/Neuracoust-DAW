@@ -2983,20 +2983,26 @@ final class EngineController: ObservableObject {
         }
     }
     enum DspJob: String, CaseIterable, Identifiable {
-        case monitor, channelStrip, master, inserts
+        // The strip / master / insert rows are GONE from this table by request: each plug-in's
+        // DSP 실행 위치 menu and each channel's DSP chip decide those automatically now — NDS on
+        // the plug-in runs it on NDS, 네이티브 runs it here, no global step in between. What the
+        // table assigns instead is the DAW itself: playback, recording, the mixer, and every
+        // audio bus — the paths the machine cards will grow into.
+        case monitor, playback, recording, mixer, buses
         var id: String { rawValue }
         var label: String {
             switch self {
             case .monitor: return "모니터"
-            case .channelStrip: return "채널 스트립"
-            case .master: return "마스터"
-            case .inserts: return "인서트"
+            case .playback: return "재생"
+            case .recording: return "녹음"
+            case .mixer: return "믹서"
+            case .buses: return "트랙·버스"
             }
         }
         /// Whether picking a machine for this job actually changes where the audio is processed.
-        /// All four route today; the flag stays so a future job can be added honestly rather than
-        /// shipped as a row that quietly does nothing.
-        var routed: Bool { true }
+        /// Only the monitor routes today; the others are stored intent (amber in the table) until
+        /// their engine paths exist — a row must never quietly do nothing while looking live.
+        var routed: Bool { self == .monitor }
     }
     /// Bounce through the node (strict). Persisted per user, not per project — it is a workflow
     /// choice about THIS machine's relationship to the node, not part of the song.
@@ -4452,11 +4458,12 @@ final class EngineController: ObservableObject {
     /// The picker's options, as (stored value, label). The empty value is first because following
     /// the project assignment is the normal case and an override is the exception.
     static let dspMachineChoices: [(String, String)] = [
-        ("", "기본 (전역 배정)"), ("internal", "내장"), ("nds", "NDS"), ("external", "외부 노드"),
+        ("", "내장 (기본)"), ("nds", "NDS"), ("external", "외부 노드"),
     ]
 
     static func dspMachineLabel(_ machine: String) -> String {
-        dspMachineChoices.first { $0.0 == machine }?.1 ?? "기본 (전역 배정)"
+        machine == "internal" ? "내장 (기본)"
+            : dspMachineChoices.first { $0.0 == machine }?.1 ?? "내장 (기본)"
     }
 
     // Per-module model libraries. Each name maps to a DSP character in ConsoleChannelProcessor
@@ -6840,6 +6847,24 @@ final class EngineController: ObservableObject {
     /// Musical key shown in the conductor bar. Engine has no key field yet, so this is
     /// app-level (saved with the settings), display context for now.
     @Published var musicalKey: String = "C"
+
+    /// Replace the 템포 marker at `seconds` (the transport pod edits the governing marker in
+    /// place — delete-then-add at the same time, one history step each from the bridge).
+    func setTempoMarker(at seconds: Double, bpm: Double) {
+        guard let handle else { return }
+        _ = nc_tempo_marker_delete(handle, seconds, markerTolerance)
+        _ = nc_tempo_marker_add(handle, seconds, bpm)
+        reloadConductor()
+        refreshHistory()
+    }
+
+    func setTimeSignatureMarker(at seconds: Double, numerator: Int, denominator: Int) {
+        guard let handle else { return }
+        _ = nc_time_sig_delete(handle, seconds, markerTolerance)
+        _ = nc_time_sig_add(handle, seconds, Int32(numerator), Int32(denominator))
+        reloadConductor()
+        refreshHistory()
+    }
 
     func addMarker(at seconds: Double, name: String) {
         guard let handle else { return }

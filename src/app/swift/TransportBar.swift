@@ -117,8 +117,6 @@ struct TransportBar: View {
     /// re-evaluated and re-laid-out the entire transport bar every frame. Only the two views
     /// that actually move — the numerals and the top playhead line — observe it, below.
     let clock: PlayheadClock
-    @State private var editingPod: String?
-    @State private var podDraft = ""
     @State private var barWidth: CGFloat = 0
 
     /// Below this the bar is too narrow to hold the position/time displays cleanly — hide them
@@ -137,10 +135,7 @@ struct TransportBar: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .top, spacing: Theme.Space.lg) {
                         displays
-                        VStack(alignment: .leading, spacing: 5) {
-                            tempoPods
-                            beatDots
-                        }
+                        TransportConductorPods(clock: clock)
                     }
                 }
             }
@@ -617,70 +612,6 @@ struct TransportBar: View {
             .padding(.horizontal, 1)
     }
 
-    /// Four dots under the tempo, one lit on the current beat — the design's way of showing the
-    /// meter without a second numeric readout.
-
-    private var beatDots: some View {
-        let beat = engine.barsBeats.beat
-        return HStack(spacing: 4) {
-            ForEach(1...max(1, engine.timeSignature.numerator), id: \.self) { i in
-                Rectangle()
-                    .fill(engine.transportRunning && i == beat ? Theme.Palette.accent
-                                                               : Theme.Palette.divider)
-                    .frame(width: 13, height: 3)
-            }
-        }
-    }
-
-    private var tempoPods: some View {
-        HStack(spacing: Theme.Space.xs) {
-            editablePod(String(format: "%.1f", Double(engine.tempoBpm)), "TEMPO") {
-                if let bpm = Double($0) { engine.setBaseTempo(Int(bpm.rounded())) }
-            }
-            editablePod("\(engine.timeSignature.numerator)/\(engine.timeSignature.denominator)", "SIG") {
-                engine.setBaseTimeSignature($0)
-            }
-        }
-        .padding(.leading, Theme.Space.lg)
-    }
-
-    /// TEMPO and SIG are editable: click to type a new value. Committing sets the base and its
-    /// t=0 conductor anchor, so the transport and the 템포 / 박자 lanes stay in sync.
-    private func editablePod(_ value: String, _ label: String, commit: @escaping (String) -> Void) -> some View {
-        pod(value, label)
-            .contentShape(Rectangle())
-            .onTapGesture { podDraft = value; editingPod = label }
-            .popover(isPresented: Binding(get: { editingPod == label },
-                                          set: { if !$0 { editingPod = nil } })) {
-                VStack(spacing: 8) {
-                    Text(label).font(Theme.Font.mono(8)).tracking(0.6).foregroundStyle(Theme.Palette.textFaint)
-                    TextField(label, text: $podDraft)
-                        .textFieldStyle(.roundedBorder).frame(width: 90)
-                        .font(Theme.Font.mono(13, .semibold))
-                        .onSubmit { commit(podDraft); editingPod = nil }
-                    Text(label == "TEMPO" ? "BPM (예: 128)" : "박자 (예: 3/4)")
-                        .font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textFaint)
-                }
-                .padding(14)
-            }
-    }
-
-    private func pod(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 1) {
-            Text(value)
-                .font(Theme.Font.mono(16, .semibold))
-                .foregroundStyle(Theme.Palette.textNumeric)
-            Text(label)
-                .font(Theme.Font.mono(6.5))
-                .tracking(0.6)
-                .foregroundStyle(Theme.Palette.textFaint)
-        }
-        .frame(width: 58, height: 40)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.display)
-                .fill(Theme.Palette.ruler)
-        )
-    }
 
     private func compactMeter(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
         HStack(spacing: 3) {
@@ -858,6 +789,131 @@ struct StatusStrip: View {
 /// indicators at the interface, and 컨트롤룸 (OUT, a stacked L/R pair) is the monitor bus read
 /// BEFORE its level — so solo and mono/stereo move it while the monitor knob does not. They live
 /// here, beside the monitor controls that shape them, and the transport bar gets its width back.
+/// TEMPO · SIG · beat dots as one aligned conductor block, and a clock leaf like the numerals —
+/// which also un-freezes the beat dots (they read the playhead, and the bar itself no longer
+/// re-renders on the clock).
+///
+/// The values shown are the EFFECTIVE tempo and meter at the playhead: the last 템포 / 박자 lane
+/// marker at or before it, or the base when none governs yet. Double-click either pod to type a
+/// new value — committing edits the GOVERNING thing: the marker under the playhead when one
+/// applies, the project base otherwise. So the transport numbers and the conductor lanes are two
+/// views of one map, never two stores.
+private struct TransportConductorPods: View {
+    @EnvironmentObject private var engine: EngineController
+    @ObservedObject var clock: PlayheadClock
+    @State private var editingPod: String?
+    @State private var podDraft = ""
+
+    private static let podWidth: CGFloat = 58
+
+    /// The 템포 marker governing the playhead, if any.
+    private var governingTempoMarker: EngineController.ConductorEvent? {
+        engine.tempoMarkers.filter { $0.timeSeconds <= clock.seconds + 0.0005 }
+            .max(by: { $0.timeSeconds < $1.timeSeconds })
+    }
+    private var governingMeterMarker: EngineController.ConductorEvent? {
+        engine.meterEvents.filter { $0.timeSeconds <= clock.seconds + 0.0005 }
+            .max(by: { $0.timeSeconds < $1.timeSeconds })
+    }
+
+    private var effectiveTempo: Double {
+        if let marker = governingTempoMarker, let bpm = Double(marker.label) { return bpm }
+        return Double(engine.tempoBpm)
+    }
+    private var effectiveSignature: (numerator: Int, denominator: Int) {
+        if let marker = governingMeterMarker {
+            let parts = marker.label.split(separator: "/")
+            if parts.count == 2, let n = Int(parts[0]), let d = Int(parts[1]) {
+                return (n, d)
+            }
+        }
+        return engine.timeSignature
+    }
+
+    var body: some View {
+        let signature = effectiveSignature
+        VStack(alignment: .center, spacing: 5) {
+            HStack(spacing: Theme.Space.xs) {
+                editablePod(String(format: "%.1f", effectiveTempo), "TEMPO") {
+                    guard let bpm = Double($0), bpm >= 20, bpm <= 999 else { return }
+                    if let marker = governingTempoMarker {
+                        engine.setTempoMarker(at: marker.timeSeconds, bpm: bpm)
+                    } else {
+                        engine.setBaseTempo(Int(bpm.rounded()))
+                    }
+                }
+                editablePod("\(signature.numerator)/\(signature.denominator)", "SIG") { text in
+                    let parts = text.split(separator: "/")
+                    guard parts.count == 2, let n = Int(parts[0]), let d = Int(parts[1]),
+                          (1...32).contains(n), [1, 2, 4, 8, 16, 32].contains(d) else { return }
+                    if let marker = governingMeterMarker {
+                        engine.setTimeSignatureMarker(at: marker.timeSeconds, numerator: n, denominator: d)
+                    } else {
+                        engine.setBaseTimeSignature(text)
+                    }
+                }
+            }
+            // The beat row spans exactly the two pods above, one segment per beat of the
+            // EFFECTIVE meter, so 3/4 shows three and 7/8 seven — aligned, not dangling.
+            beatDots(numerator: signature.numerator)
+                .frame(width: Self.podWidth * 2 + Theme.Space.xs)
+        }
+        .padding(.leading, Theme.Space.lg)
+    }
+
+    private func beatDots(numerator: Int) -> some View {
+        let beat = engine.barsBeats.beat
+        return HStack(spacing: 4) {
+            ForEach(1...max(1, numerator), id: \.self) { i in
+                Rectangle()
+                    .fill(engine.transportRunning && i == beat ? Theme.Palette.accent
+                                                               : Theme.Palette.divider)
+                    .frame(height: 3)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// Double-click to type. Single click stays inert so a stray click never opens an editor.
+    private func editablePod(_ value: String, _ label: String, commit: @escaping (String) -> Void) -> some View {
+        pod(value, label)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { podDraft = value; editingPod = label }
+            .popover(isPresented: Binding(get: { editingPod == label },
+                                          set: { if !$0 { editingPod = nil } })) {
+                VStack(spacing: 8) {
+                    Text(label).font(Theme.Font.mono(8)).tracking(0.6).foregroundStyle(Theme.Palette.textFaint)
+                    TextField(label, text: $podDraft)
+                        .textFieldStyle(.roundedBorder).frame(width: 90)
+                        .font(Theme.Font.mono(13, .semibold))
+                        .onSubmit { commit(podDraft); editingPod = nil }
+                    Text(label == "TEMPO" ? "BPM (예: 128)" : "박자 (예: 3/4)")
+                        .font(Theme.Font.mono(7)).foregroundStyle(Theme.Palette.textFaint)
+                }
+                .padding(14)
+            }
+            .helpTip("더블클릭해서 입력합니다. 플레이헤드가 \(label == "TEMPO" ? "템포" : "박자") 마커 뒤에 있으면 그 마커를, 아니면 곡 기본값을 바꿉니다.")
+    }
+
+    private func pod(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 1) {
+            Text(value)
+                .font(Theme.Font.mono(16, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.Palette.textNumeric)
+            Text(label)
+                .font(Theme.Font.mono(6.5))
+                .tracking(0.6)
+                .foregroundStyle(Theme.Palette.textFaint)
+        }
+        .frame(width: Self.podWidth, height: 40)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.display)
+                .fill(Theme.Palette.ruler)
+        )
+    }
+}
+
 /// The transport's moving numerals, split out so the 30 Hz playhead clock re-renders THIS and
 /// nothing else. Values still come off the engine (timecode/barsBeats are computed from the
 /// same playhead the clock mirrors); the clock is purely the invalidation signal.

@@ -7338,6 +7338,10 @@ std::string* dspRoleField(NCEngine* engine, const char* role) {
     if (name == "channelStrip") return &engine->project.dspRoleChannelStrip;
     if (name == "master") return &engine->project.dspRoleMaster;
     if (name == "inserts") return &engine->project.dspRoleInserts;
+    if (name == "playback") return &engine->project.dspRolePlayback;
+    if (name == "recording") return &engine->project.dspRoleRecording;
+    if (name == "mixer") return &engine->project.dspRoleMixer;
+    if (name == "buses") return &engine->project.dspRoleBuses;
     return nullptr;
 }
 }  // namespace
