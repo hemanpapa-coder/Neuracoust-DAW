@@ -59,6 +59,11 @@ struct ProjectAudioRenderPlan {
     double postRollSeconds = 0.0;
     bool hasActiveVst3Inserts = false;
     bool hasActiveTrackVst3Inserts = false;
+    /// An enabled signal-generator source on some track. The realtime engine's "is there anything
+    /// to render" gate counts VST3 inserts, clips, MIDI and instruments — a generator is none of
+    /// those, so on an empty timeline the whole render was skipped and a freshly added generator
+    /// played SILENCE (offline renders had no such gate, which is why the tests all passed).
+    bool hasActiveSourceGenerator = false;
     bool renderTrackVst3Inserts = true;
     bool renderMonitorDsp = false;
     float monitorInputTrimDb = -9.0f;

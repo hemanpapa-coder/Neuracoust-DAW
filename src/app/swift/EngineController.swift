@@ -33,32 +33,56 @@ final class EngineController: ObservableObject {
     @Published private(set) var running = false
     @Published private(set) var transportRunning = false
     /// Post master fader, pre monitor path — what the mixer's Master strip meters. The device
-    /// output peak below follows the monitor volume knob, which must not move the Master meter.
-    /// Monitor bus after its shaping but before the monitor level — what the transport's L/R
-    /// meter shows, so solo and mono/stereo move it while the monitor volume knob does not.
-    /// Per-side input peaks — the input is a stereo pair, so its meter is a stacked pair too.
-    @Published private(set) var inputPeakLeft: Float = 0
-    @Published private(set) var inputPeakRight: Float = 0
-    @Published private(set) var monitorPrePeakLeft: Float = 0
-    @Published private(set) var monitorPrePeakRight: Float = 0
-    @Published private(set) var masterBusPeakLeft: Float = 0
-    @Published private(set) var masterBusPeakRight: Float = 0
-    @Published private(set) var outputPeakLeft: Float = 0
-    @Published private(set) var outputPeakRight: Float = 0
-    /// Full FFT spectrum magnitude bins (0..1, low→high frequency) for the analyzer.
-    @Published private(set) var spectrumBins: [Float] = []
-    /// Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
-    @Published private(set) var goniometerSamples: [Float] = []
-    // ITU-R BS.1770 loudness. True-peak is 4× oversampled (inter-sample peaks).
-    @Published private(set) var momentaryLufs: Float = -70
-    @Published private(set) var shortTermLufs: Float = -70
-    @Published private(set) var integratedLufs: Float = -70
-    @Published private(set) var loudnessRange: Float = 0
-    @Published private(set) var truePeakDb: Float = -120
-    /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
-    /// smoothed with a decay so the meters fall back gently.
-    @Published private(set) var inputPeak: Float = 0
-    @Published private(set) var midiActivity: Float = 0
+    /// Every fast-moving level readout, deliberately OFF this controller.
+    ///
+    /// A @Published on EngineController invalidates every view observing the controller — the
+    /// mixer, the dock, the inspector, the browser — which is fine for a track list that changes
+    /// on user action and ruinous for meters that legitimately move ~15x a second whenever signal
+    /// flows. With the idle publish storms fixed, this fanout IS the remaining playback cost:
+    /// the meters must publish, so the fix is making a publish cheap. Only the leaf views that
+    /// actually draw a meter observe this object.
+    final class EngineMeters: ObservableObject {
+        /// Per-side input peaks — the input is a stereo pair, so its meter is a stacked pair too.
+        @Published fileprivate(set) var inputPeakLeft: Float = 0
+        @Published fileprivate(set) var inputPeakRight: Float = 0
+        /// Monitor bus after its shaping but before the monitor level — what the transport's L/R
+        /// meter shows, so solo and mono/stereo move it while the monitor volume knob does not.
+        @Published fileprivate(set) var monitorPrePeakLeft: Float = 0
+        @Published fileprivate(set) var monitorPrePeakRight: Float = 0
+        /// The mix at the master fader — before the monitor path, which must not move this meter.
+        @Published fileprivate(set) var masterBusPeakLeft: Float = 0
+        @Published fileprivate(set) var masterBusPeakRight: Float = 0
+        /// Full FFT spectrum magnitude bins (0..1, low→high frequency) for the analyzer.
+        @Published fileprivate(set) var spectrumBins: [Float] = []
+        /// Recent L/R sample pairs (interleaved) for the goniometer / vectorscope.
+        @Published fileprivate(set) var goniometerSamples: [Float] = []
+        // ITU-R BS.1770 loudness. True-peak is 4× oversampled (inter-sample peaks).
+        @Published fileprivate(set) var momentaryLufs: Float = -70
+        @Published fileprivate(set) var shortTermLufs: Float = -70
+        @Published fileprivate(set) var integratedLufs: Float = -70
+        @Published fileprivate(set) var loudnessRange: Float = 0
+        @Published fileprivate(set) var truePeakDb: Float = -120
+        /// Incoming audio-interface input peak (0..1) and MIDI-input activity (0..1), both
+        /// smoothed with a decay so the meters fall back gently.
+        @Published fileprivate(set) var inputPeak: Float = 0
+        @Published fileprivate(set) var midiActivity: Float = 0
+        @Published fileprivate(set) var phaseCorrelation: Float = 0
+        // 3-band spectrum summary (the transport's tiny tri-bar).
+        @Published fileprivate(set) var spectrumLow: Float = 0
+        @Published fileprivate(set) var spectrumMid: Float = 0
+        @Published fileprivate(set) var spectrumHigh: Float = 0
+
+        fileprivate func setIfChanged<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<EngineMeters, T>, _ value: T) {
+            if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+        }
+    }
+    let meters = EngineMeters()
+
+    /// Output peak after the monitor path. No view draws it (the OUT meter reads monitorPre) —
+    /// it feeds the clip-blink calculation only, so it is a plain var, not a publish.
+    private(set) var outputPeakLeft: Float = 0
+    private(set) var outputPeakRight: Float = 0
+
     @Published private(set) var sampleRate: Double = 0
     @Published private(set) var bufferSize: Int = 0
     @Published private(set) var delayCompensationMs: Double = 0
@@ -302,6 +326,37 @@ final class EngineController: ObservableObject {
         var soloed: Bool = false
     }
 
+    /// Track meter levels, deliberately NOT on `Track`.
+    ///
+    /// They move ~15x a second, and `tracks` is read by the mixer, the timeline and the inspector
+    /// — and `timelineModel` is a computed property built from it, so every lane, clip, automation
+    /// curve, insert chip and send chip was reconstructed fifteen times a second because a meter
+    /// twitched. Profiling put SwiftUI layout at well over a core while the audio engine sat at
+    /// 8%, and it kept running with the window hidden: invisible views were being re-laid-out for
+    /// meters nobody could see.
+    ///
+    /// Living in their own observable object means only the views that actually draw a meter are
+    /// invalidated when one moves.
+    final class TrackMeters: ObservableObject {
+        struct Level: Equatable {
+            var peakLeft: Float = 0
+            var peakRight: Float = 0
+            var compGainReductionDb: Float = 0
+            var gateGainReductionDb: Float = 0
+        }
+        @Published private(set) var levels: [String: Level] = [:]
+
+        func level(_ trackName: String) -> Level { levels[trackName] ?? Level() }
+
+        /// Publish only on a real change, so an idle mix settles to no publishing at all rather
+        /// than re-rendering every meter view forever on an asymptotic decay.
+        func apply(_ next: [String: Level]) {
+            if next != levels { levels = next }
+        }
+    }
+
+    let trackMeters = TrackMeters()
+
     struct Track: Identifiable {
         let id: Int
         let name: String
@@ -355,14 +410,10 @@ final class EngineController: ObservableObject {
         var consoleSaturatorCircuitMode = false
         var consoleExpanderMode = true
         var consoleGateFastAttack = false
-        var consoleGateGainReductionDb: Float = 0
 
         /// Plugin delay compensation applied to this track/bus, in samples (0 = none). Shown per
         /// strip when the mixer's PDC readout is on.
         var delayCompSamples: Int = 0
-
-        var peakLeft: Float = 0
-        var peakRight: Float = 0
 
         var panLabel: String {
             let value = Int((abs(pan) * 100).rounded())
@@ -2877,15 +2928,11 @@ final class EngineController: ObservableObject {
         currentInputDeviceId = readEngineString { nc_current_input_device_id(handle, $0, $1) }
     }
 
-    // Live meters, refreshed each tick.
-    @Published private(set) var phaseCorrelation: Float = 0
+    // Live meters (phase correlation, tri-band spectrum) live on `meters` — see EngineMeters.
     /// Plugin delay compensation: the enable flag and the engine's reported alignment.
     /// (`delayCompensationMs` is declared with the other status fields above.)
     @Published var delayCompensationEnabled: Bool = true
     @Published private(set) var delayCompensationSamples: Int = 0
-    @Published private(set) var spectrumLow: Float = 0
-    @Published private(set) var spectrumMid: Float = 0
-    @Published private(set) var spectrumHigh: Float = 0
     @Published private(set) var wakeJitterUs: Double = 0
     /// Reference-tap ("다른 앱") FIFO faults. The jitter figure above is the OUTPUT render thread
     /// only — a tap capture that starves or overflows crackles while jitter reads clean. This is
@@ -5191,8 +5238,6 @@ final class EngineController: ObservableObject {
                                               && track.kind.hasSolo && soloBlinkOn,
                                           volumeDb: track.volumeDb,
                                           pan: track.pan,
-                                          peakLeft: track.peakLeft,
-                                          peakRight: track.peakRight,
                                           automationMode: track.automationMode,
                                           automation: automation,
                                           inserts: track.inserts.prefix(4).map {
@@ -7617,24 +7662,21 @@ final class EngineController: ObservableObject {
             }
         }
 
-        for index in tracks.indices {
-            let (left, right, gainReduction, gateGainReduction) = peaks[tracks[index].name] ?? (0, 0, 0, 0)
+        // Into the meter store, never into `tracks` — see TrackMeters for why that distinction is
+        // the difference between invalidating four view trees and invalidating the meters.
+        var next: [String: TrackMeters.Level] = [:]
+        next.reserveCapacity(tracks.count)
+        for track in tracks {
+            let (left, right, gainReduction, gateGainReduction) = peaks[track.name] ?? (0, 0, 0, 0)
+            let previous = trackMeters.level(track.name)
             // Ballistic, so a track meter falls to silence on stop instead of freezing.
-            // Assign only on change: an idle strip must not republish tracks every tick, or
-            // every menu observing the controller flickers.
-            let nl = Self.decayedMeter(left, tracks[index].peakLeft)
-            let nr = Self.decayedMeter(right, tracks[index].peakRight)
-            if nl != tracks[index].peakLeft { tracks[index].peakLeft = nl }
-            if nr != tracks[index].peakRight { tracks[index].peakRight = nr }
-            let ngr = Self.decayedMeter(gainReduction, tracks[index].consoleCompGainReductionDb)
-            if ngr != tracks[index].consoleCompGainReductionDb {
-                tracks[index].consoleCompGainReductionDb = ngr
-            }
-            let nggr = Self.decayedMeter(gateGainReduction, tracks[index].consoleGateGainReductionDb)
-            if nggr != tracks[index].consoleGateGainReductionDb {
-                tracks[index].consoleGateGainReductionDb = nggr
-            }
+            next[track.name] = TrackMeters.Level(
+                peakLeft: Self.decayedMeter(left, previous.peakLeft),
+                peakRight: Self.decayedMeter(right, previous.peakRight),
+                compGainReductionDb: Self.decayedMeter(gainReduction, previous.compGainReductionDb),
+                gateGainReductionDb: Self.decayedMeter(gateGainReduction, previous.gateGainReductionDb))
         }
+        trackMeters.apply(next)
     }
 
     /// Per-tick meter release. At ~30 Hz this falls a held peak to silence in ~0.2 s.
@@ -7662,15 +7704,15 @@ final class EngineController: ObservableObject {
     private func updateSpectrumBins(_ handle: OpaquePointer) {
         let count = Int(nc_spectrum_bin_count(handle))
         guard count > 0 else {
-            if !spectrumBins.isEmpty { spectrumBins = [] }
+            if !meters.spectrumBins.isEmpty { meters.spectrumBins = [] }
             return
         }
         if spectrumScratch.count < count { spectrumScratch = [Float](repeating: 0, count: count) }
         _ = spectrumScratch.withUnsafeMutableBufferPointer {
             nc_spectrum_bins(handle, $0.baseAddress, Int32(count))
         }
-        if spectrumBins.count != count {
-            spectrumBins = Array(spectrumScratch[0..<count])
+        if meters.spectrumBins.count != count {
+            meters.spectrumBins = Array(spectrumScratch[0..<count])
             return
         }
         // Compute into scratch and publish the whole array once, only if something moved
@@ -7679,21 +7721,21 @@ final class EngineController: ObservableObject {
         var changed = false
         for i in 0..<count {
             let incoming = spectrumScratch[i]
-            let cur = spectrumBins[i]
+            let cur = meters.spectrumBins[i]
             let next = incoming > cur ? incoming : cur * 0.72 + incoming * 0.28
             spectrumScratch[i] = next
             // ~-52 dBFS: below this the bins are jitter/noise-floor, and republishing them
             // re-rendered the whole engine-observing tree (flickering open menus, high CPU).
             if abs(next - cur) > 0.0025 { changed = true }
         }
-        if changed { spectrumBins = Array(spectrumScratch[0..<count]) }
+        if changed { meters.spectrumBins = Array(spectrumScratch[0..<count]) }
     }
 
     private var goniometerScratch = [Float](repeating: 0, count: 1024)
     private func updateGoniometer(_ handle: OpaquePointer) {
         let count = Int(nc_goniometer_sample_count(handle))
         guard count > 0 else {
-            if !goniometerSamples.isEmpty { goniometerSamples = [] }
+            if !meters.goniometerSamples.isEmpty { meters.goniometerSamples = [] }
             return
         }
         if goniometerScratch.count < count { goniometerScratch = [Float](repeating: 0, count: count) }
@@ -7702,13 +7744,13 @@ final class EngineController: ObservableObject {
         }
         // Publish only on real change: a silent goniometer (all near zero) must not
         // republish every tick and flicker open menus.
-        var changed = goniometerSamples.count != count
+        var changed = meters.goniometerSamples.count != count
         if !changed {
-            for i in 0..<count where abs(goniometerScratch[i] - goniometerSamples[i]) > 0.0025 {
+            for i in 0..<count where abs(goniometerScratch[i] - meters.goniometerSamples[i]) > 0.0025 {
                 changed = true; break
             }
         }
-        if changed { goniometerSamples = Array(goniometerScratch[0..<count]) }
+        if changed { meters.goniometerSamples = Array(goniometerScratch[0..<count]) }
     }
 
     // MARK: - Monitor station
@@ -9956,27 +9998,29 @@ final class EngineController: ObservableObject {
         if visualTelemetryTick & 1 == 0 {
             // Phase correlation + the 3-band spectrum are meters too — publish them here (~15 Hz) rather
             // than every tick, so they don't re-render the engine-observing UI 30×/s during playback.
-            setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
-            setIfChanged(\.spectrumLow, status.spectrumLow)
-            setIfChanged(\.spectrumMid, status.spectrumMid)
-            setIfChanged(\.spectrumHigh, status.spectrumHigh)
+            // All into the meter store — publishing these on the controller re-rendered every
+            // engine-observing view, which is the whole reason EngineMeters exists.
+            meters.setIfChanged(\.phaseCorrelation, (status.phaseCorrelation * 100).rounded() / 100)
+            meters.setIfChanged(\.spectrumLow, status.spectrumLow)
+            meters.setIfChanged(\.spectrumMid, status.spectrumMid)
+            meters.setIfChanged(\.spectrumHigh, status.spectrumHigh)
             // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
-            setIfChanged(\.inputPeakLeft, Self.decayedMeter(status.inputPeakLeft, inputPeakLeft))
-            setIfChanged(\.inputPeakRight, Self.decayedMeter(status.inputPeakRight, inputPeakRight))
-            setIfChanged(\.monitorPrePeakLeft, Self.decayedMeter(status.monitorPrePeakLeft, monitorPrePeakLeft))
-            setIfChanged(\.monitorPrePeakRight, Self.decayedMeter(status.monitorPrePeakRight, monitorPrePeakRight))
-            setIfChanged(\.masterBusPeakLeft, Self.decayedMeter(status.masterBusPeakLeft, masterBusPeakLeft))
-            setIfChanged(\.masterBusPeakRight, Self.decayedMeter(status.masterBusPeakRight, masterBusPeakRight))
-            setIfChanged(\.outputPeakLeft, Self.decayedMeter(status.outputPeakLeft, outputPeakLeft))
-            setIfChanged(\.outputPeakRight, Self.decayedMeter(status.outputPeakRight, outputPeakRight))
+            meters.setIfChanged(\.inputPeakLeft, Self.decayedMeter(status.inputPeakLeft, meters.inputPeakLeft))
+            meters.setIfChanged(\.inputPeakRight, Self.decayedMeter(status.inputPeakRight, meters.inputPeakRight))
+            meters.setIfChanged(\.monitorPrePeakLeft, Self.decayedMeter(status.monitorPrePeakLeft, meters.monitorPrePeakLeft))
+            meters.setIfChanged(\.monitorPrePeakRight, Self.decayedMeter(status.monitorPrePeakRight, meters.monitorPrePeakRight))
+            meters.setIfChanged(\.masterBusPeakLeft, Self.decayedMeter(status.masterBusPeakLeft, meters.masterBusPeakLeft))
+            meters.setIfChanged(\.masterBusPeakRight, Self.decayedMeter(status.masterBusPeakRight, meters.masterBusPeakRight))
+            outputPeakLeft = Self.decayedMeter(status.outputPeakLeft, outputPeakLeft)
+            outputPeakRight = Self.decayedMeter(status.outputPeakRight, outputPeakRight)
             updateSpectrumBins(handle)
             updateGoniometer(handle)
-            setIfChanged(\.momentaryLufs, status.momentaryLufs)
-            setIfChanged(\.shortTermLufs, status.shortTermLufs)
-            setIfChanged(\.integratedLufs, status.integratedLufs)
-            setIfChanged(\.loudnessRange, status.loudnessRange)
-            setIfChanged(\.truePeakDb, status.truePeakDb)
-            setIfChanged(\.inputPeak, Self.decayedMeter(status.inputPeak, inputPeak))
+            meters.setIfChanged(\.momentaryLufs, status.momentaryLufs)
+            meters.setIfChanged(\.shortTermLufs, status.shortTermLufs)
+            meters.setIfChanged(\.integratedLufs, status.integratedLufs)
+            meters.setIfChanged(\.loudnessRange, status.loudnessRange)
+            meters.setIfChanged(\.truePeakDb, status.truePeakDb)
+            meters.setIfChanged(\.inputPeak, Self.decayedMeter(status.inputPeak, meters.inputPeak))
             applyTrackMeters(status)
         }
         if Self.diagTickStage == 2 { return }   // stage 2: + telemetry & meters
@@ -10009,7 +10053,7 @@ final class EngineController: ObservableObject {
         // 0 dBFS. Linear 0.98 ≈ -0.18 dB, just under the strip's red threshold, so a red
         // readout always has the blink running behind it.
         let clipping = outputPeakLeft >= 0.98 || outputPeakRight >= 0.98
-            || tracks.contains { max($0.peakLeft, $0.peakRight) >= 0.98 }
+            || trackMeters.levels.values.contains { max($0.peakLeft, $0.peakRight) >= 0.98 }
         let cb = clipping && Int(CACurrentMediaTime() * 2.6).isMultiple(of: 2)
         if cb != clipBlinkOn { clipBlinkOn = cb }
 
@@ -10017,7 +10061,7 @@ final class EngineController: ObservableObject {
         pumpLiveMidi(handle)
         serviceHui(handle)
         // The pump bumps the activity; read (which resets it) and decay for the meter.
-        setIfChanged(\.midiActivity, max(nc_midi_input_activity(handle), midiActivity - 0.07))
+        meters.setIfChanged(\.midiActivity, max(nc_midi_input_activity(handle), meters.midiActivity - 0.07))
 
         // Pick up hot-plugged interfaces (a UNiTE-2 connected mid-session) without a restart:
         // rescan the device lists a couple of times a second. refreshOutputDevices republishes

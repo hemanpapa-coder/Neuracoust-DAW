@@ -2119,7 +2119,11 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         insertTailSamplesRemaining_ = std::max<int64_t>(0, insertTailSamplesRemaining_ - frameCount);
     }
     const bool hasProjectRenderContent = (transportRunning && (!renderPlan.clips.empty() ||
-        !renderPlan.midiRegions.empty())) ||
+        !renderPlan.midiRegions.empty() ||
+        // A signal generator is a track SOURCE with no clip, no MIDI and no VST3 — none of the
+        // other terms see it, so on an empty timeline the render never ran and a fresh generator
+        // played silence while the transport rolled.
+        renderPlan.hasActiveSourceGenerator)) ||
         hasInstrumentTrack ||
         !projectRenderState_.liveMidiEvents.empty() ||
         hasRealtimeInsertRenderSource;

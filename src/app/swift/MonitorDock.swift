@@ -873,7 +873,7 @@ struct MonitorDock: View {
             // The level meters live here now rather than in the transport bar: the control-room
             // meter belongs beside the monitor controls that shape it, and moving them gives the
             // transport bar its width back.
-            ControlRoomMeters(engine: engine)
+            ControlRoomMeters(meters: engine.meters)
                 .padding(.top, 2)
         }
         .onAppear { engine.refreshInputDevices() }
@@ -1101,8 +1101,7 @@ struct MonitorDock: View {
                 }
             }
 
-            StatRow(label: "위상 상관", value: String(format: "%+.2f", engine.phaseCorrelation))
-            PhaseCorrelationDotMeter(correlation: engine.phaseCorrelation)
+            DockPhaseRows(meters: engine.meters)
 
             delayCompensationRow
 
@@ -1111,9 +1110,7 @@ struct MonitorDock: View {
                     .font(Theme.Font.mono(6.5))
                     .tracking(0.6)
                     .foregroundStyle(Theme.Palette.textFaint)
-                SpectrumAnalyzerView(bins: engine.spectrumBins,
-                                     sampleRate: engine.sampleRate,
-                                     compact: true)
+                DockSpectrumMini(meters: engine.meters, sampleRate: engine.sampleRate)
                     .frame(height: 40)
                     .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.35)))
                     .contentShape(Rectangle())
@@ -2006,5 +2003,26 @@ struct ModelPickerSheet: View {
         .padding(Theme.Space.xl)
         .frame(width: 340, height: 460)
         .background(Theme.Palette.panel)
+    }
+}
+
+
+/// Leaf views over the meter store: the dock's phase rows and mini spectrum redraw at meter rate,
+/// and observing the store HERE (not in MonitorDock) keeps the rest of the dock out of it.
+private struct DockPhaseRows: View {
+    @ObservedObject var meters: EngineController.EngineMeters
+
+    var body: some View {
+        StatRow(label: "위상 상관", value: String(format: "%+.2f", meters.phaseCorrelation))
+        PhaseCorrelationDotMeter(correlation: meters.phaseCorrelation)
+    }
+}
+
+private struct DockSpectrumMini: View {
+    @ObservedObject var meters: EngineController.EngineMeters
+    let sampleRate: Double
+
+    var body: some View {
+        SpectrumAnalyzerView(bins: meters.spectrumBins, sampleRate: sampleRate, compact: true)
     }
 }

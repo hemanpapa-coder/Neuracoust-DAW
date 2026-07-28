@@ -27,7 +27,10 @@ final class AnalyzerWindowManager {
 
     func open(kind: AnalyzerKind, engine: EngineController) {
         let host = NSHostingController(
-            rootView: AnalyzerWindowView(kind: kind).environmentObject(engine))
+            rootView: AnalyzerWindowView(kind: kind)
+                .environmentObject(engine)
+                .environmentObject(engine.trackMeters)
+                .environmentObject(engine.meters))
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.title = "분석 — \(kind.label)"
@@ -53,6 +56,7 @@ final class AnalyzerWindowManager {
 /// another popup — so analyzers can be arranged anywhere on screen.
 private struct AnalyzerWindowView: View {
     @EnvironmentObject private var engine: EngineController
+    @EnvironmentObject private var meters: EngineController.EngineMeters
     @State var kind: AnalyzerKind
     @StateObject private var spectrogram = SpectrogramModel()
 
@@ -63,7 +67,7 @@ private struct AnalyzerWindowView: View {
                 .padding(12)
         }
         .frame(minWidth: 320, minHeight: 160)
-        .onChange(of: engine.spectrumBins) { _, bins in
+        .onChange(of: meters.spectrumBins) { _, bins in
             if kind == .spectrogram { spectrogram.push(bins: bins, sampleRate: engine.sampleRate) }
         }
         .contextMenu {
@@ -88,15 +92,15 @@ private struct AnalyzerWindowView: View {
     @ViewBuilder private var content: some View {
         switch kind {
         case .spectrum:
-            SpectrumAnalyzerView(bins: engine.spectrumBins, sampleRate: engine.sampleRate)
+            SpectrumAnalyzerView(bins: meters.spectrumBins, sampleRate: engine.sampleRate)
         case .goniometer:
-            GoniometerView(samples: engine.goniometerSamples)
+            GoniometerView(samples: meters.goniometerSamples)
         case .loudness:
-            LoudnessView(momentary: engine.momentaryLufs,
-                         shortTerm: engine.shortTermLufs,
-                         integrated: engine.integratedLufs,
-                         range: engine.loudnessRange,
-                         truePeak: engine.truePeakDb)
+            LoudnessView(momentary: meters.momentaryLufs,
+                         shortTerm: meters.shortTermLufs,
+                         integrated: meters.integratedLufs,
+                         range: meters.loudnessRange,
+                         truePeak: meters.truePeakDb)
         case .spectrogram:
             SpectrogramView(model: spectrogram)
         }

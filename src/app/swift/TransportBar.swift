@@ -727,81 +727,6 @@ struct TransportBar: View {
         }
     }
 
-    /// Incoming audio-interface input and live MIDI-input activity, beside the master out.
-    private var inputMeters: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text("입력 미터")
-                .font(Theme.Font.mono(6.5))
-                .tracking(0.6)
-                .foregroundStyle(Theme.Palette.textFaint)
-            // Channel-independent input activity: audio interface in, and live MIDI in.
-            meterLabelRow("오디오", meterFraction(engine.inputPeak), Theme.Palette.green)
-            meterLabelRow("미디", Double(engine.midiActivity), Theme.Palette.purple)
-        }
-        .frame(width: 110)
-    }
-
-    private func meterLabelRow(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
-        HStack(spacing: Theme.Space.sm) {
-            Text(label)
-                .font(Theme.Font.mono(6.5))
-                .tracking(0.4)
-                .foregroundStyle(Theme.Palette.textFaint)
-                .frame(width: 30, alignment: .trailing)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
-                        .fill(Theme.Palette.recess)
-                    RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
-                        .fill(tint)
-                        .mask(alignment: .leading) {
-                            Rectangle().frame(width: geo.size.width * max(0, min(1, fraction)))
-                        }
-                }
-            }
-            .frame(height: 5)
-        }
-    }
-
-    private var masterMeter: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text("MASTER OUT")
-                .font(Theme.Font.mono(6.5))
-                .tracking(0.6)
-                .foregroundStyle(Theme.Palette.textFaint)
-            HStack(spacing: Theme.Space.md) {
-                Text(dbLabel)
-                    .font(Theme.Font.mono(9, .semibold))
-                    .foregroundStyle(Theme.Palette.yellow)
-                    .frame(width: 34, alignment: .trailing)
-                VStack(spacing: 2) {
-                    meterBar(meterFraction(engine.monitorPrePeakLeft))
-                    meterBar(meterFraction(engine.monitorPrePeakRight))
-                }
-                .frame(width: 160)
-            }
-        }
-    }
-
-    private var dbLabel: String {
-        let peak = max(engine.monitorPrePeakLeft, engine.monitorPrePeakRight)
-        return peak <= 0.00001 ? "-∞" : String(format: "%.1f", peakToDb(peak))
-    }
-
-    private func meterBar(_ fraction: Double) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
-                    .fill(Theme.Palette.recess)
-                RoundedRectangle(cornerRadius: Theme.Radius.meterCell)
-                    .fill(Theme.Gradient.masterMeter)
-                    .mask(alignment: .leading) {
-                        Rectangle().frame(width: geo.size.width * fraction)
-                    }
-            }
-        }
-        .frame(height: 6)
-    }
 
     /// Icon toggles for the side panels. Channel and Inspector are Edit-view only (they
     /// don't exist in the Mix tab); the Monitor dock shows in both, so its toggle stays.
@@ -960,7 +885,9 @@ struct StatusStrip: View {
 /// BEFORE its level — so solo and mono/stereo move it while the monitor knob does not. They live
 /// here, beside the monitor controls that shape them, and the transport bar gets its width back.
 struct ControlRoomMeters: View {
-    @ObservedObject var engine: EngineController
+    /// The meter store, not the controller: these bars redraw ~15x/s with signal, and observing
+    /// the controller would drag every transport re-render along with them.
+    @ObservedObject var meters: EngineController.EngineMeters
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -970,19 +897,19 @@ struct ControlRoomMeters: View {
                 HStack(spacing: 5) {
                     label("IN")
                     VStack(spacing: 2) {
-                        bar(meterFraction(engine.inputPeakLeft), Theme.Palette.green)
-                        bar(meterFraction(engine.inputPeakRight), Theme.Palette.green)
+                        bar(meterFraction(meters.inputPeakLeft), Theme.Palette.green)
+                        bar(meterFraction(meters.inputPeakRight), Theme.Palette.green)
                     }
                     Spacer(minLength: 32)
                 }
-                row("MIDI", Double(engine.midiActivity), Theme.Palette.purple)
+                row("MIDI", Double(meters.midiActivity), Theme.Palette.purple)
             }
             group("컨트롤룸") {
                 HStack(spacing: 5) {
                     label("OUT")
                     VStack(spacing: 2) {
-                        bar(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
-                        bar(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+                        bar(meterFraction(meters.monitorPrePeakLeft), Theme.Palette.yellow)
+                        bar(meterFraction(meters.monitorPrePeakRight), Theme.Palette.yellow)
                     }
                     Text(dbLabel)
                         .font(Theme.Font.mono(8, .semibold))
@@ -995,7 +922,7 @@ struct ControlRoomMeters: View {
     }
 
     private var dbLabel: String {
-        let peak = max(engine.monitorPrePeakLeft, engine.monitorPrePeakRight)
+        let peak = max(meters.monitorPrePeakLeft, meters.monitorPrePeakRight)
         return peak <= 0.00001 ? "-∞" : String(format: "%.1f", 20 * log10(Double(peak)))
     }
 

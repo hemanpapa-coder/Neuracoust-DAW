@@ -817,6 +817,21 @@ bool trackInsertShouldRunInLocalRouteGraph(const TrackInsertSlot& insert) {
         insert.serverModuleId.empty();
 }
 
+/// The track's enabled signal-generator inserts, as render inserts. Separate from
+/// activeLocalRouteInserts because a generator is Builtin — no plug-in path, not VST3 — so that
+/// filter rightly excludes it, and the route loop then skipped generator synthesis entirely
+/// whenever the track had no OTHER insert: a generator on a clean track played silence.
+std::vector<InsertState> activeSourceGeneratorInserts(const TrackState& track) {
+    std::vector<InsertState> inserts;
+    for (const auto& insert : track.inserts) {
+        if (insert.enabled && !insert.bypassed &&
+            isSignalGeneratorInsertName(insert.pluginName, insert.pluginClassName)) {
+            inserts.push_back(renderInsertForTrackInsert(insert));
+        }
+    }
+    return inserts;
+}
+
 std::vector<InsertState> activeLocalRouteInserts(const TrackState& track) {
     std::vector<InsertState> inserts;
     for (const auto& insert : track.inserts) {
@@ -1509,6 +1524,10 @@ bool makeProjectAudioRenderPlan(const ProjectDocument& project, ProjectAudioRend
             renderInsert.dspAvailable = insert.dspAvailable;
             renderInsert.dspLastError = insert.dspLastError;
             renderInsert.parameters = insert.parameters;
+            if (insert.enabled && !insert.bypassed &&
+                isSignalGeneratorInsertName(insert.pluginName, insert.pluginClassName)) {
+                plan.hasActiveSourceGenerator = true;
+            }
             if (insert.enabled && !insert.bypassed && isVst3MasterInsert(renderInsert)) {
                 plan.hasActiveTrackVst3Inserts = true;
                 plan.activeTrackVst3InsertLabels.push_back(track.name + ": " + insert.pluginName);
@@ -2266,6 +2285,19 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                     }
                     ++slotIndex;
                 }
+            }
+        }
+
+        // A signal generator on a track with no OTHER insert: the block above is skipped entirely
+        // (a Builtin generator is not a VST3 route insert), so synthesize here. Only into silence —
+        // a generator must never add on top of clip audio it was not asked to replace.
+        if (routeInserts.empty() && track != nullptr && plan.hasActiveSourceGenerator &&
+            blockPeakAbs(routeInput) <= 0.000001f) {
+            const auto sourceInserts = activeSourceGeneratorInserts(*track);
+            if (!sourceInserts.empty() &&
+                synthesizeSourceGeneratorFallback(state, route->name, sourceInserts,
+                                                  plan.sampleRate, frameCount, routeInput)) {
+                routeProcessedWet = true;
             }
         }
 
