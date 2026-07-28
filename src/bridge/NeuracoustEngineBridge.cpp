@@ -7195,11 +7195,10 @@ void nc_dsp_set_external_enabled(NCEngine* engine, int enabled) {
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
 }
 
-int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out) {
-    if (out == nullptr) return 0;
-    std::memset(out, 0, sizeof(*out));
-    if (engine == nullptr) return 0;
-    const auto settings = buildRemoteDspSettings(engine);
+namespace {
+
+// Shared by both node-info entry points: turn a reachable server report into the C struct.
+int fillNodeInfo(const neuracoust::daw::RemoteDspServerSettings& settings, NCRemoteNodeInfo* out) {
     const auto info = neuracoust::daw::queryRemoteDspServerInfo(settings);
     if (!info.reachable) return 0;
     const auto setField = [](char* dst, size_t cap, const std::string& s) {
@@ -7226,6 +7225,26 @@ int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out) {
     out->packetsOut = info.packetsOut;
     out->badPackets = info.badPackets;
     return 1;
+}
+
+} // namespace
+
+int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out) {
+    if (out == nullptr) return 0;
+    std::memset(out, 0, sizeof(*out));
+    if (engine == nullptr) return 0;
+    return fillNodeInfo(buildRemoteDspSettings(engine), out);
+}
+
+int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* out) {
+    if (out == nullptr) return 0;
+    std::memset(out, 0, sizeof(*out));
+    if (host == nullptr || *host == '\0') return 0;
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.nodes.clear();          // the address given is the target, not a starting point
+    settings.host = host;
+    settings.timeoutMs = timeoutMs > 0 ? timeoutMs : 150;
+    return fillNodeInfo(settings, out);
 }
 
 void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen) {

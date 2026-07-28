@@ -972,11 +972,14 @@ struct MonitorDock: View {
         }
     }
 
-    /// A remote kind's load: the node's own busiest core while it is carrying work, "사용 안 함"
-    /// when that source is not selected, "대기" when it is selected but nothing has answered.
-    private func remoteLoadText(active: Bool) -> String {
+    /// A machine's load: its own busiest core, read from that machine's own report — the two nodes
+    /// answer separately, so they cannot share one figure. "사용 안 함" when the machine is switched
+    /// off, "응답 없음" when it is on but nothing came back, "대기" when it answered but reports no
+    /// load yet.
+    private func remoteLoadText(_ machine: EngineController.DspMachine, active: Bool) -> String {
         guard active else { return "사용 안 함" }
-        guard let specs = engine.remoteNodeSpecs, specs.cpuLoadPercent >= 0 else { return "대기" }
+        guard let specs = engine.nodeSpecs(for: machine) else { return "응답 없음" }
+        guard specs.cpuLoadPercent >= 0 else { return "대기" }
         return String(format: "%.0f%%", specs.cpuLoadPercent)
     }
 
@@ -991,12 +994,14 @@ struct MonitorDock: View {
             // in use — a row that vanishes cannot tell you it is idle. NDS is the dedicated
             // appliance (its own OS and timing); 외부 노드 is a general-purpose machine, used when
             // the local engine and NDS together run short.
+            // Whether a machine is ON is its own switch, not whether the monitor happens to be
+            // pointed at it: a node carrying only track inserts still has a load worth reading.
             StatRow(label: "NDS 부하",
-                    value: remoteLoadText(active: engine.usesDspSource(.nds)),
-                    valueColor: engine.usesDspSource(.nds) ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+                    value: remoteLoadText(.nds, active: engine.ndsEnabled),
+                    valueColor: engine.ndsEnabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
             StatRow(label: "외부 노드 부하",
-                    value: remoteLoadText(active: engine.usesDspSource(.external)),
-                    valueColor: engine.usesDspSource(.external) ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+                    value: remoteLoadText(.external, active: engine.externalDspEnabled),
+                    valueColor: engine.externalDspEnabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
 
             StatRow(label: "지터 (Jitter)", value: String(format: "%.0f µs", engine.wakeJitterUs))
             // The jitter row above watches the OUTPUT render thread. A crackle while listening to
@@ -1438,25 +1443,22 @@ struct MonitorDock: View {
             // THREAD_AFFINITY_POLICY returns KERN_NOT_SUPPORTED on Apple Silicon (measured), and
             // the render already runs on CoreAudio's IO thread, which the OS gives
             // time-constraint priority and audio-workgroup membership.
-            machineCard(title: "NDS · 전용 어플라이언스",
-                        subtitle: "고정 지연 · OS 독립",
+            machineCard(title: "NDS",
+                        subtitle: "전용 어플라이언스 · 고정 지연 · OS 독립",
                         on: engine.ndsEnabled,
                         setOn: { engine.setNdsEnabled($0) },
                         host: RemoteHostField(kind: .nds),
-                        detail: engine.ndsEnabled ? (engine.usesDspSource(.nds) ? "작업 배정됨" : "배정 대기")
-                                                  : "사용 안 함")
+                        detail: machineDetail(.nds, on: engine.ndsEnabled))
 
-            machineCard(title: "외부 노드 · 범용 컴퓨터",
-                        subtitle: "여유 코어 빌려 쓰기",
+            machineCard(title: "외부 노드",
+                        subtitle: "범용 컴퓨터 · 여유 코어 빌려 쓰기",
                         on: engine.externalDspEnabled,
                         setOn: { engine.setExternalDspEnabled($0) },
                         host: RemoteHostField(kind: .external),
                         // No core-count stepper: a connected node reports its own core count and
                         // that report wins, so the number only ever applied to a node that was
                         // not answering — it read as control over something it did not control.
-                        detail: engine.externalDspEnabled
-                                    ? (engine.remoteNodeSpecs.map { "코어 \($0.coreCount)개 (노드 보고)" } ?? "노드 대기")
-                                    : "사용 안 함")
+                        detail: machineDetail(.external, on: engine.externalDspEnabled))
 
             // The discovered node's own hardware — shown once 검색 (or a refresh) gets a reply.
             if let specs = engine.remoteNodeSpecs {
@@ -1468,6 +1470,17 @@ struct MonitorDock: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(Theme.Palette.background)
         )
+    }
+
+    /// A machine card's one-line state, from that machine's own answer: what it is, or why it is
+    /// silent. Reading "노드 대기" while the node is plainly connected was the old panel's worst
+    /// lie, and it came from nobody ever asking the node anything after 검색.
+    private func machineDetail(_ machine: EngineController.DspMachine, on: Bool) -> String {
+        guard on else { return "사용 안 함" }
+        guard let specs = engine.nodeSpecs(for: machine) else { return "응답 없음" }
+        let jobs = EngineController.DspJob.allCases.filter { engine.dspRole($0) == machine }
+        let where_ = jobs.isEmpty ? "배정 대기" : jobs.map(\.label).joined(separator: " · ")
+        return "코어 \(specs.coreCount)개 · \(where_)"
     }
 
     /// One remote machine: name, what it is for, its master switch, its address, and one line of
@@ -1487,9 +1500,11 @@ struct MonitorDock: View {
                     Text(title)
                         .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(on ? Theme.Palette.text : Theme.Palette.textFaint)
+                        .lineLimit(1)
                     Text(subtitle)
                         .font(Theme.Font.mono(6.5))
                         .foregroundStyle(Theme.Palette.textFainter)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Text(detail)

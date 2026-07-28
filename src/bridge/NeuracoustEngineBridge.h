@@ -1305,6 +1305,12 @@ typedef struct {
 // answered, else 0. Blocks briefly on the network — call off the UI hot path.
 int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out);
 
+// Probe an arbitrary address, with no engine involved. This takes no NCEngine precisely so it can
+// be called from a background queue: the main-thread-only rule exists because engine calls touch
+// the project, and this one touches nothing but a socket. `timeoutMs` bounds the wait so a poll
+// against a dead address costs a known amount of time rather than the client default.
+int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* out);
+
 // The "use this node" master switch: whether the external DSP node participates at all. Off gates the
 // node out of the monitor/DAW/plugin core plan regardless of the requested reserve. Applies live.
 int nc_dsp_external_enabled(NCEngine* engine);

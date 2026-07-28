@@ -2996,6 +2996,72 @@ final class EngineController: ObservableObject {
     }
     @Published private(set) var remoteNodeSpecs: RemoteNodeSpecs? = nil
 
+    /// Each machine's own report, refreshed by a background poll. `remoteNodeSpecs` above is still
+    /// the 검색/refresh result for the external node; these two are what the load rows read, and
+    /// they are separate because the two machines answer separately — a connected NDS used to
+    /// report nothing at all, since only 검색 ever asked anyone for a load figure.
+    @Published private(set) var ndsNodeSpecs: RemoteNodeSpecs? = nil
+    @Published private(set) var externalNodeSpecs: RemoteNodeSpecs? = nil
+
+    func nodeSpecs(for machine: DspMachine) -> RemoteNodeSpecs? {
+        switch machine {
+        case .nds: return ndsNodeSpecs
+        case .external: return externalNodeSpecs
+        case .internalDsp: return nil
+        }
+    }
+
+    /// Serializes the probes so two never overlap, and keeps them off the main thread: the probe
+    /// is a blocking UDP round trip, and it takes no engine handle precisely so it is safe here.
+    private let nodeProbeQueue = DispatchQueue(label: "nc.node-probe", qos: .utility)
+    private var nodeProbeInFlight = false
+    private var lastNodeProbe = Date.distantPast
+
+    /// Ask each switched-on machine for its load, about every two seconds. Anything faster just
+    /// adds LAN traffic — a node's core load does not move meaningfully inside one UI frame.
+    private func pollRemoteNodeLoads() {
+        guard !nodeProbeInFlight, Date().timeIntervalSince(lastNodeProbe) >= 2.0 else { return }
+        let nds = ndsEnabled ? ndsHost : ""
+        let external = externalDspEnabled ? remoteDspHost : ""
+        guard !nds.isEmpty || !external.isEmpty else {
+            if ndsNodeSpecs != nil { ndsNodeSpecs = nil }
+            if externalNodeSpecs != nil { externalNodeSpecs = nil }
+            return
+        }
+        nodeProbeInFlight = true
+        lastNodeProbe = Date()
+        nodeProbeQueue.async { [weak self] in
+            let ndsResult = Self.probeNode(nds)
+            let externalResult = Self.probeNode(external)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.nodeProbeInFlight = false
+                self.setIfChanged(\.ndsNodeSpecs, ndsResult)
+                self.setIfChanged(\.externalNodeSpecs, externalResult)
+            }
+        }
+    }
+
+    /// One blocking probe of one address. 120 ms is long enough for a LAN answer and short enough
+    /// that both machines together stay well under the two-second poll period.
+    private static func probeNode(_ host: String) -> RemoteNodeSpecs? {
+        guard !host.isEmpty else { return nil }
+        var info = NCRemoteNodeInfo()
+        guard host.withCString({ nc_dsp_probe_node_info($0, 120, &info) }) != 0 else { return nil }
+        return RemoteNodeSpecs(
+            model: cStringField(&info.model),
+            cpuModel: cStringField(&info.cpuModel),
+            cpuMhz: info.cpuMhz,
+            memoryMb: Int(info.memoryMb),
+            coreCount: Int(info.coreCount),
+            roundTripMs: info.roundTripMs,
+            cpuLoadPercent: info.cpuLoadPercent,
+            temperatureC: info.temperatureC,
+            packetsIn: info.packetsIn,
+            packetsOut: info.packetsOut,
+            badPackets: info.badPackets)
+    }
+
     // Stem separation (Demucs helper subprocess). progress nil = idle, 0…1 = running.
     @Published private(set) var stemSeparationProgress: Double? = nil
     @Published private(set) var stemSeparationStatus: String = ""
@@ -9775,6 +9841,10 @@ final class EngineController: ObservableObject {
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)
+            // Ask each remote machine what it is doing. Self-rate-limited to ~2 s and run off
+            // the main thread; a connected node reported no load at all before this, because
+            // only a manual 검색 ever asked.
+            pollRemoteNodeLoads()
         }
         setIfChanged(\.delayCompensationSamples, Int(nc_delay_compensation_samples(handle)))
         setIfChanged(\.remoteDspActive, status.remoteDspMonitorActive)
