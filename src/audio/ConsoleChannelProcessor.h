@@ -52,4 +52,18 @@ private:
 /// math the processor uses, so the display matches what is heard; zero-filled when disabled.
 void consoleSaturatorHarmonics(const ConsoleChannelState& parameters, float* out, int count);
 
+/// The console strip as a flat parameter list, for sending a channel to a remote DSP node.
+///
+/// Values are NORMALISED 0..1, because that is what the NART wire carries — it clamps every
+/// parameter to that range, so a raw 8000 Hz would arrive as 1.0. Each index therefore has a
+/// range, and both ends go through this one mapping: the DAW packs with
+/// consoleChannelParameterValues() and the node unpacks with applyConsoleChannelParameter().
+/// Numbering and ranges physically cannot drift apart, so a strip sounds the same either side.
+struct ConsoleChannelParameter {
+    int index = 0;
+    float normalized = 0.0f;
+};
+std::vector<ConsoleChannelParameter> consoleChannelParameterValues(const ConsoleChannelState& parameters);
+void applyConsoleChannelParameter(ConsoleChannelState& parameters, int index, float normalized);
+
 } // namespace neuracoust::daw

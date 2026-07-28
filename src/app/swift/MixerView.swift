@@ -290,6 +290,8 @@ private struct InsertSlotChipView: View {
     let isEmpty: Bool
     let bypassed: Bool
     let badge: String
+    /// This plug-in's own machine assignment; empty follows the project's 인서트 배정.
+    let dspMachine: String
     let chainCount: Int
     let lit: Bool
 
@@ -315,15 +317,18 @@ private struct InsertSlotChipView: View {
                     if isMaster { engine.toggleMasterInsertBypass(slot: slot) }
                     else { engine.toggleInsertBypass(track: ownerId, slot: slot) }
                 }
-                // Where this insert runs. The old picker offered Native and "Internal DSP · 격리
-                // 코어", which render identically — there is no internal DSP engine. The choice
-                // that does change something is the remote node, so it is offered only while one
-                // is connected (it can only host the Neuracoust modules it was built with).
-                if engine.remoteDspActive {
+                // Where this one plug-in runs. Native means the VST3 in this process; the rest
+                // hand it to the Neuracoust DSP module of the same name on the chosen machine.
+                // Always offered, not only while a node answers — an assignment is intent, and
+                // you have to be able to set it before the node is up.
+                Divider()
+                Menu("DSP 실행 위치") {
+                    dspModeButton("이 맥 (네이티브)", "native", checked: badge == "NAT" || badge == "INT")
                     Divider()
-                    Menu("DSP 실행 위치") {
-                        dspModeButton("이 맥 (네이티브)", "native", checked: badge == "NAT" || badge == "INT")
-                        dspModeButton("원격 노드", "external", checked: badge == "EXT" || badge == "RINT")
+                    Section("누라쿠스트 DSP 모듈") {
+                        ForEach(EngineController.dspMachineChoices, id: \.0) { value, label in
+                            machineButton(label, value)
+                        }
                     }
                 }
                 Divider()
@@ -404,6 +409,26 @@ private struct InsertSlotChipView: View {
         } label: {
             if checked { Label(label, systemImage: "checkmark") } else { Text(label) }
         }
+    }
+
+    /// Pick the machine for this one insert. Picking any of them also puts the slot into the
+    /// remote-capable execution mode — otherwise the machine would be set on a plug-in that has
+    /// already been told to run natively, and nothing would change.
+    @ViewBuilder private func machineButton(_ label: String, _ machine: String) -> some View {
+        let checked = badge != "NAT" && dspMachine == machine
+        Button {
+            if isMaster {
+                engine.setMasterInsertDspMode(slot: slot, mode: "remote_internal")
+            } else {
+                engine.setInsertDspMode(track: ownerId, slot: slot, mode: "remote_internal")
+                engine.setInsertDspMachine(ownerId, slot, machine)
+            }
+        } label: {
+            if checked { Label(label, systemImage: "checkmark") } else { Text(label) }
+        }
+        // The master chain has no per-slot machine field yet; offering the choice there would
+        // set the mode and silently ignore the machine.
+        .disabled(isMaster && !machine.isEmpty)
     }
 
     /// Distinct non-empty values for a key, sorted — the submenu headings.
@@ -971,6 +996,7 @@ struct ChannelStrip: View {
             ForEach(Array(order.enumerated()), id: \.element) { idx, module in
                 moduleRow(module, index: idx, count: order.count)
             }
+            channelDspMachineRow
         }
         .padding(2)
         .background(
@@ -981,6 +1007,41 @@ struct ChannelStrip: View {
                         .stroke(Theme.Palette.coolDivider, lineWidth: 1)
                 )
         )
+    }
+
+    /// Which machine runs THIS channel's strip. It sits at the foot of the module list because
+    /// that list is exactly what it decides the execution of — the modules above are the work,
+    /// this row is where the work happens. Empty follows the project's 채널 스트립 배정, so a
+    /// session stays uniform until a channel is deliberately moved.
+    private var channelDspMachineRow: some View {
+        let assigned = track.consoleDspMachine
+        let overridden = !assigned.isEmpty
+        return Menu {
+            Section("이 채널의 스트립 실행 위치") {
+                ForEach(EngineController.dspMachineChoices, id: \.0) { value, label in
+                    Button {
+                        engine.setTrackConsoleDspMachine(track.id, value)
+                    } label: {
+                        if assigned == value { Label(label, systemImage: "checkmark") } else { Text(label) }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: overridden ? "cpu.fill" : "cpu")
+                Text(overridden ? EngineController.dspMachineLabel(assigned) : "DSP 전역")
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(Theme.Font.mono(6.5, .semibold))
+            .foregroundStyle(overridden ? accent : Theme.Palette.textFainter)
+            .padding(.horizontal, 3)
+            .frame(height: 14)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .padding(.top, 2)
+        .helpTip("이 채널의 콘솔 스트립(필터·EQ·게이트·컴프·새추레이터)을 어느 기계에서 처리할지 고릅니다. 기본은 모니터 독의 'DSP 역할 배정'을 따릅니다. 원격으로 보내면 노드가 같은 처리 코드를 실행하므로 소리는 같고, 네트워크 왕복만큼 지연이 붙습니다. 믹스다운(바운스)은 항상 이 맥에서 처리해 재현 가능하게 유지합니다.")
     }
 
     /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).
@@ -1820,6 +1881,7 @@ struct ChannelStrip: View {
                     isEmpty: insert?.isEmpty ?? true,
                     bypassed: insert?.bypassed ?? false,
                     badge: insert?.modeBadge ?? "",
+                    dspMachine: insert?.dspMachine ?? "",
                     chainCount: chain.count,
                     lit: editors.isOpen(.init(trackId: ownerId, insertIndex: slot))
                 )

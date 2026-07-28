@@ -328,6 +328,8 @@ final class EngineController: ObservableObject {
         /// rest are layers), all fed the same MIDI and summed. Empty when there's no instrument.
         var instrumentLayers: [InstrumentLayer] = []
         var sends: [TrackSend]
+        /// Which machine runs THIS channel's console strip; empty follows the 채널 스트립 배정.
+        var consoleDspMachine: String = ""
         var consoleModel: String = "4000e"
         var consoleCompType: String = "SSL 4000E"    // per-module model (comp)
         var consoleGateType: String = "SSL 4000E"    // per-module model (gate)
@@ -375,6 +377,8 @@ final class EngineController: ObservableObject {
         var bypassed: Bool
         /// "NAT", "INT", "RINT" or "EXT" — where this insert actually runs.
         let modeBadge: String
+        /// Which machine this one plug-in is assigned to; empty follows the 인서트 배정.
+        var dspMachine: String = ""
 
         var isEmpty: Bool { name.isEmpty || name == "No Insert" }
     }
@@ -4252,7 +4256,8 @@ final class EngineController: ObservableObject {
                         id: slot,
                         name: readEngineString { nc_track_insert_name(handle, i, s, $0, $1) },
                         bypassed: nc_track_insert_bypassed(handle, i, s),
-                        modeBadge: readEngineString { nc_track_insert_mode_badge(handle, i, s, $0, $1) }
+                        modeBadge: readEngineString { nc_track_insert_mode_badge(handle, i, s, $0, $1) },
+                        dspMachine: readEngineString { nc_track_insert_dsp_machine(handle, i, s, $0, $1) }
                     )
                 },
                 instrumentName: {
@@ -4275,6 +4280,7 @@ final class EngineController: ObservableObject {
                               pan: nc_track_send_pan(handle, i, Int32(slot)),
                               preFader: nc_track_send_pre_fader(handle, i, Int32(slot)))
                 },
+                consoleDspMachine: readEngineString { nc_track_console_dsp_machine(handle, i, $0, $1) },
                 consoleModel: readEngineString { nc_track_console_model(handle, i, $0, $1) },
                 consoleCompType: Self.displayConsoleModel(readEngineString { nc_track_console_comp_type(handle, i, $0, $1) }),
                 consoleGateType: Self.displayConsoleModel(readEngineString { nc_track_console_gate_type(handle, i, $0, $1) }),
@@ -4341,6 +4347,30 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
         _ = name.withCString { nc_track_set_console_model(handle, Int32(id), $0) }
         reloadTracks(); refreshHistory()
+    }
+
+    /// Which machine runs one channel's console strip. "" follows the project's 채널 스트립 배정.
+    func setTrackConsoleDspMachine(_ id: Int, _ machine: String) {
+        guard let handle else { return }
+        machine.withCString { nc_track_set_console_dsp_machine(handle, Int32(id), $0) }
+        reloadTracks(); refreshHistory()
+    }
+
+    /// Which machine runs one insert. "" follows the project's 인서트 배정.
+    func setInsertDspMachine(_ id: Int, _ slot: Int, _ machine: String) {
+        guard let handle else { return }
+        machine.withCString { nc_track_set_insert_dsp_machine(handle, Int32(id), Int32(slot), $0) }
+        reloadTracks(); refreshHistory()
+    }
+
+    /// The picker's options, as (stored value, label). The empty value is first because following
+    /// the project assignment is the normal case and an override is the exception.
+    static let dspMachineChoices: [(String, String)] = [
+        ("", "기본 (전역 배정)"), ("internal", "내장"), ("nds", "NDS"), ("external", "외부 노드"),
+    ]
+
+    static func dspMachineLabel(_ machine: String) -> String {
+        dspMachineChoices.first { $0.0 == machine }?.1 ?? "기본 (전역 배정)"
     }
 
     // Per-module model libraries. Each name maps to a DSP character in ConsoleChannelProcessor

@@ -111,4 +111,93 @@ int main() {
     for (size_t i = circuitSaturated.size() / 2; i < circuitSaturated.size(); ++i)
         difference += std::abs(circuitSaturated[i] - saturated[i]);
     assert(difference > 1.0f);
+
+    // The wire format a channel travels over to a remote DSP node. The NART protocol clamps every
+    // parameter to 0..1, so raw Hz and dB have to be normalised and put back — and both ends of
+    // the wire share this one mapping. A silent mismatch here would not fail anything; it would
+    // just make a remote strip sound different from the local one, which is the whole promise.
+    ConsoleChannelState packed;
+    packed.filterEnabled = true;
+    packed.highPassEnabled = true;
+    packed.highPassHz = 82.0f;
+    packed.lowPassEnabled = true;
+    packed.lowPassHz = 14500.0f;
+    packed.eqEnabled = true;
+    packed.eqHfGainDb = -4.5f;
+    packed.eqHfHz = 11000.0f;
+    packed.eqHmfGainDb = 3.25f;
+    packed.eqHmfHz = 2400.0f;
+    packed.eqHmfQ = 2.5f;
+    packed.eqLmfGainDb = -2.0f;
+    packed.eqLmfHz = 640.0f;
+    packed.eqLmfQ = 0.8f;
+    packed.eqLfGainDb = 5.0f;
+    packed.eqLfHz = 90.0f;
+    packed.compEnabled = true;
+    packed.compThresholdDb = -22.5f;
+    packed.compRatio = 6.0f;
+    packed.compAttackMs = 12.0f;
+    packed.compReleaseMs = 480.0f;
+    packed.compMix = 0.75f;
+    packed.gateEnabled = true;
+    packed.gateThresholdDb = -44.0f;
+    packed.gateRangeDb = 32.0f;
+    packed.gateAttackMs = 2.5f;
+    packed.gateReleaseMs = 250.0f;
+    packed.saturatorEnabled = true;
+    packed.saturatorDriveDb = 9.0f;
+    packed.saturatorMix = 0.6f;
+    packed.expanderMode = false;
+    packed.compFastAttack = true;
+    packed.compCircuitMode = true;
+    packed.channelBiasSeed = 137;
+    packed.channelBiasDepth = 0.4f;
+
+    ConsoleChannelState unpacked;
+    for (const auto& parameter : consoleChannelParameterValues(packed)) {
+        // Everything on the wire must already be normalised — an out-of-range value would be
+        // clamped in transit and arrive as something else entirely.
+        assert(parameter.normalized >= 0.0f && parameter.normalized <= 1.0f);
+        applyConsoleChannelParameter(unpacked, parameter.index, parameter.normalized);
+    }
+    const auto close = [](float a, float b, float tolerance) { return std::abs(a - b) <= tolerance; };
+    assert(unpacked.filterEnabled && unpacked.highPassEnabled && unpacked.lowPassEnabled);
+    assert(close(unpacked.highPassHz, packed.highPassHz, 0.1f));
+    assert(close(unpacked.lowPassHz, packed.lowPassHz, 1.0f));
+    assert(unpacked.eqEnabled);
+    assert(close(unpacked.eqHfGainDb, packed.eqHfGainDb, 0.01f));
+    assert(close(unpacked.eqHfHz, packed.eqHfHz, 1.0f));
+    assert(close(unpacked.eqHmfHz, packed.eqHmfHz, 0.5f));
+    assert(close(unpacked.eqHmfQ, packed.eqHmfQ, 0.01f));
+    assert(close(unpacked.eqLmfHz, packed.eqLmfHz, 0.2f));
+    assert(close(unpacked.eqLfHz, packed.eqLfHz, 0.1f));
+    assert(unpacked.compEnabled && unpacked.compFastAttack && unpacked.compCircuitMode);
+    assert(close(unpacked.compThresholdDb, packed.compThresholdDb, 0.01f));
+    assert(close(unpacked.compRatio, packed.compRatio, 0.01f));
+    assert(close(unpacked.compAttackMs, packed.compAttackMs, 0.01f));
+    assert(close(unpacked.compReleaseMs, packed.compReleaseMs, 0.5f));
+    assert(close(unpacked.compMix, packed.compMix, 0.001f));
+    assert(unpacked.gateEnabled && !unpacked.expanderMode);
+    assert(close(unpacked.gateThresholdDb, packed.gateThresholdDb, 0.01f));
+    assert(close(unpacked.gateRangeDb, packed.gateRangeDb, 0.01f));
+    assert(close(unpacked.gateAttackMs, packed.gateAttackMs, 0.01f));
+    assert(unpacked.saturatorEnabled);
+    assert(close(unpacked.saturatorDriveDb, packed.saturatorDriveDb, 0.01f));
+    assert(close(unpacked.saturatorMix, packed.saturatorMix, 0.001f));
+    assert(unpacked.channelBiasSeed == packed.channelBiasSeed);
+    assert(close(unpacked.channelBiasDepth, packed.channelBiasDepth, 0.001f));
+
+    // And the round trip must be audibly identical, not merely close on paper.
+    ConsoleChannelProcessor local, remoteSide;
+    local.reset(sr);
+    remoteSide.reset(sr);
+    auto localOut = tone;
+    auto remoteOut = tone;
+    local.processInterleavedStereo(localOut, packed, sr);
+    remoteSide.processInterleavedStereo(remoteOut, unpacked, sr);
+    float worst = 0.0f;
+    for (size_t i = localOut.size() / 2; i < localOut.size(); ++i) {
+        worst = std::max(worst, std::abs(localOut[i] - remoteOut[i]));
+    }
+    assert(worst < 1e-4f);
 }

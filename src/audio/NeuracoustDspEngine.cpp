@@ -2570,6 +2570,7 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         }
     }
     activeRemoteDspTrackInsertCount_ = 0;
+    prepareRemoteConsoleStripsLocked();
     delayCompensationSamples_ = 0;
     if (projectPlan_.hasActiveVst3Inserts &&
         !realtimeInsertChain_.prepare(projectPlan_, settings_.sampleRate, std::max(1, maxBlockSize), error)) {
@@ -2613,16 +2614,6 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             break;
         }
     }
-    // Track inserts go to whichever machine the 인서트 job is assigned to. An insert only
-    // declares that it *can* run remotely ("remote_internal"); it does not name a machine, so
-    // the assignment is the only thing that can. Assigned to 내장, nothing leaves the host.
-    const std::string trackInsertMode =
-        remoteDspModeForRole(settings_.remoteDspServer, settings_.remoteDspServer.roleInserts);
-    RemoteDspServerSettings remotePlanSettings =
-        remoteDspSettingsForMode(settings_.remoteDspServer, trackInsertMode);
-    if (!remoteDspModeAvailable(settings_.remoteDspServer, trackInsertMode)) {
-        remotePlanSettings.enabled = false;
-    }
     // Never resolve a hostname on the realtime render thread: getaddrinfo() for an
     // mDNS ".local" name can block for seconds if the node is absent, freezing audio
     // (the app then looks crashed). Only probe when the host is a numeric IPv4, which
@@ -2637,42 +2628,61 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         }
         return dots == 3;
     };
-    if (remotePlanSettings.enabled && hasRemoteCapableTrackInsert) {
-        remotePlanSettings.pluginDspEnabled = true;
+
+    // One plan per machine, built only for machines an insert actually asks for. Each machine
+    // has its own address, its own core report and its own loaded module, so a single shared
+    // plan could only ever be right for one of them. An insert names its machine in
+    // assignedDspServerId; empty follows the project's 인서트 배정.
+    struct RemoteInsertPlan {
+        RemoteDspServerSettings settings;
+        bool available = false;
+        std::string unavailableReason;
+    };
+    std::map<std::string, RemoteInsertPlan> remoteInsertPlans;
+    auto planForMode = [&](const std::string& mode) -> const RemoteInsertPlan& {
+        auto existing = remoteInsertPlans.find(mode);
+        if (existing != remoteInsertPlans.end()) {
+            return existing->second;
+        }
+        RemoteInsertPlan plan;
+        plan.settings = remoteDspSettingsForMode(settings_.remoteDspServer, mode);
+        if (!remoteDspModeAvailable(settings_.remoteDspServer, mode)) {
+            plan.settings.enabled = false;
+            plan.unavailableReason = mode == "internal"
+                ? std::string("내장 DSP에 배정됨")
+                : ("배정된 " + mode + " 노드가 꺼져 있거나 주소가 없음");
+            return remoteInsertPlans.emplace(mode, std::move(plan)).first->second;
+        }
+        plan.settings.pluginDspEnabled = true;
         double measuredRemoteRoundTripMs = 0.0;
-        if (remotePlanSettings.loadedPluginIdHint.empty() &&
-            hostIsNumericIpv4(remotePlanSettings.host)) {
-            RemoteDspServerSettings infoSettings = remotePlanSettings;
+        if (plan.settings.loadedPluginIdHint.empty() && hostIsNumericIpv4(plan.settings.host)) {
+            RemoteDspServerSettings infoSettings = plan.settings;
             infoSettings.timeoutMs = infoSettings.timeoutMs > 0 ? std::min(infoSettings.timeoutMs, 150) : 150;
             const auto serverInfo = queryRemoteDspServerInfo(infoSettings);
             if (serverInfo.reachable) {
-                remotePlanSettings.loadedPluginIdHint = serverInfo.pluginId;
+                plan.settings.loadedPluginIdHint = serverInfo.pluginId;
                 measuredRemoteRoundTripMs = serverInfo.roundTripMs;
             }
         }
         if (measuredRemoteRoundTripMs > 0.0) {
             recordRemoteDspRoundTripLocked(measuredRemoteRoundTripMs);
         }
-    }
-    const auto remoteCorePlan = makeRemoteDspCorePlan(remotePlanSettings,
-                                                      remotePlanSettings.totalCoreHint,
-                                                      remoteMonitorDspRequestedLocked());
-    const bool pluginRemoteDspAvailable =
-        remotePlanSettings.enabled &&
-        remotePlanSettings.pluginDspEnabled &&
-        remoteCorePlan.pluginCores > 0;
-    std::vector<std::string> skippedRemoteInserts;
-    if (hasRemoteCapableTrackInsert && !pluginRemoteDspAvailable) {
-        if (!remotePlanSettings.enabled) {
-            skippedRemoteInserts.push_back(trackInsertMode == "internal"
-                ? std::string("인서트가 내장 DSP에 배정됨")
-                : ("배정된 " + trackInsertMode + " 노드가 꺼져 있거나 주소가 없음"));
-        } else if (!remotePlanSettings.pluginDspEnabled) {
-            skippedRemoteInserts.push_back("plugin DSP disabled");
-        } else if (remoteCorePlan.pluginCores == 0) {
-            skippedRemoteInserts.push_back("no plugin DSP core assigned");
+        const auto corePlan = makeRemoteDspCorePlan(plan.settings,
+                                                    plan.settings.totalCoreHint,
+                                                    remoteMonitorDspRequestedLocked());
+        plan.available = plan.settings.enabled && corePlan.pluginCores > 0;
+        if (!plan.available) {
+            plan.unavailableReason = "배정된 " + mode + " 노드에 플러그인 코어가 없음";
         }
-    }
+        return remoteInsertPlans.emplace(mode, std::move(plan)).first->second;
+    };
+    // The machine an insert resolves to, with auto-overflow folding every answer into "auto".
+    auto modeForInsert = [&](const TrackInsertSlot& insert) {
+        return remoteDspModeForRole(
+            settings_.remoteDspServer,
+            effectiveDspMachine(insert.assignedDspServerId, settings_.remoteDspServer.roleInserts));
+    };
+    std::vector<std::string> skippedRemoteInserts;
     for (const auto& track : projectPlan_.tracks) {
         if (track.inserts.empty() ||
             track.trackType == "folder" ||
@@ -2684,38 +2694,56 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         }
         ProjectAudioRenderPlan trackInsertPlan;
         trackInsertPlan.sampleRate = projectPlan_.sampleRate;
-        std::vector<std::string> remoteModuleIds;
-        std::vector<RemoteDspParameterValue> remoteParameters;
-        std::vector<int> remoteSlotIndices;
+        // Remote inserts collected per machine: two plug-ins on one track can be assigned to
+        // different nodes, and each node needs its own stream. Chains are additive deltas onto
+        // the mix, so several on one track coexist the same way remote and local already do.
+        struct RemoteGroup {
+            std::vector<std::string> moduleIds;
+            std::vector<int> slotIndices;
+            std::vector<RemoteDspParameterValue> parameters;
+        };
+        std::map<std::string, RemoteGroup> remoteGroups;
         std::vector<int> localSlotIndices;
         int firstActiveSlotIndex = -1;
         bool protectLocalDryWhenSilent = false;
         for (size_t insertIndex = 0; insertIndex < track.inserts.size(); ++insertIndex) {
             const auto& insert = track.inserts[insertIndex];
             InsertState renderInsert = trackInsertToRenderInsert(insert);
-            const auto remoteCapability = remoteDspCapabilityForInsert(insert, pluginRemoteDspAvailable, true);
+            const std::string insertMode = modeForInsert(insert);
+            const auto& plan = planForMode(insertMode);
+            const auto remoteCapability = remoteDspCapabilityForInsert(insert, plan.available, true);
             const std::string effectiveMode = effectiveTrackInsertDspExecutionMode(insert);
-            const bool serverModuleMatches = remotePlanSettings.loadedPluginIdHint.empty() ||
-                remotePlanSettings.loadedPluginIdHint == remoteCapability.moduleId;
+            const bool serverModuleMatches = plan.settings.loadedPluginIdHint.empty() ||
+                plan.settings.loadedPluginIdHint == remoteCapability.moduleId;
             if (isRemoteInternalDspExecutionMode(effectiveMode) &&
-                pluginRemoteDspAvailable &&
+                plan.available &&
                 remoteCapability.mode == RemoteDspInsertMode::RemoteActive &&
                 serverModuleMatches) {
+                auto& group = remoteGroups[insertMode];
+                if (group.parameters.empty()) {
+                    group.parameters = remoteParametersForInsert(insert);
+                }
                 if (firstActiveSlotIndex < 0) {
                     firstActiveSlotIndex = static_cast<int>(insertIndex);
-                    remoteParameters = remoteParametersForInsert(insert);
                 }
-                remoteModuleIds.push_back(remoteCapability.moduleId);
-                remoteSlotIndices.push_back(static_cast<int>(insertIndex));
+                group.moduleIds.push_back(remoteCapability.moduleId);
+                group.slotIndices.push_back(static_cast<int>(insertIndex));
                 continue;
             }
             if (isRemoteInternalDspExecutionMode(effectiveMode) &&
                 !remoteCapability.moduleId.empty() &&
-                pluginRemoteDspAvailable &&
+                !plan.available &&
+                !plan.unavailableReason.empty()) {
+                skippedRemoteInserts.push_back(track.name + ": " + insert.pluginName +
+                    " — " + plan.unavailableReason);
+            }
+            if (isRemoteInternalDspExecutionMode(effectiveMode) &&
+                !remoteCapability.moduleId.empty() &&
+                plan.available &&
                 !serverModuleMatches) {
                 skippedRemoteInserts.push_back(track.name + ": " + insert.pluginName +
                     " requires " + remoteCapability.moduleId +
-                    ", server loaded " + remotePlanSettings.loadedPluginIdHint);
+                    ", server loaded " + plan.settings.loadedPluginIdHint);
             }
             if (!insert.enabled || !isVst3MasterInsert(renderInsert)) {
                 continue;
@@ -2733,17 +2761,20 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             trackInsertPlan.hasActiveVst3Inserts = true;
             trackInsertPlan.activeVst3Inserts.push_back(renderInsert);
         }
-        if (!remoteModuleIds.empty()) {
+        for (auto& [groupMode, group] : remoteGroups) {
+            if (group.moduleIds.empty()) continue;
+            const auto& plan = planForMode(groupMode);
             RealtimeTrackInsertChain trackChain;
             trackChain.trackName = track.name;
             trackChain.remoteDsp = true;
-            trackChain.remoteModuleId = remoteModuleIds.front();
-            trackChain.remoteParameters = std::move(remoteParameters);
+            trackChain.remoteMode = groupMode;
+            trackChain.remoteModuleId = group.moduleIds.front();
+            trackChain.remoteParameters = std::move(group.parameters);
             trackChain.remoteStream = std::make_unique<RemoteDspAsyncStream>();
-            trackChain.slotIndex = remoteSlotIndices.empty() ? firstActiveSlotIndex : remoteSlotIndices.front();
-            trackChain.slotIndices = std::move(remoteSlotIndices);
+            trackChain.slotIndex = group.slotIndices.empty() ? firstActiveSlotIndex : group.slotIndices.front();
+            trackChain.slotIndices = std::move(group.slotIndices);
             trackChain.latencySamples = settings_.delayCompensationEnabled
-                ? estimatedRemoteDspLatencySamples(remotePlanSettings,
+                ? estimatedRemoteDspLatencySamples(plan.settings,
                                                    settings_.sampleRate,
                                                    maxBlockSize,
                                                    remoteDspRoundTripMs_)
@@ -2751,8 +2782,8 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             delayCompensationSamples_ = std::max(delayCompensationSamples_, trackChain.latencySamples);
             trackChain.transitionSamplesTotal = std::max<int64_t>(1, static_cast<int64_t>(settings_.sampleRate * 0.08));
             trackChain.transitionSamplesRemaining = trackChain.transitionSamplesTotal;
+            activeRemoteDspTrackInsertCount_ += static_cast<int>(trackChain.slotIndices.size());
             realtimeTrackInsertChains_.push_back(std::move(trackChain));
-            activeRemoteDspTrackInsertCount_ += static_cast<int>(remoteModuleIds.size());
         }
         if (!localSlotIndices.empty()) {
             RealtimeTrackInsertChain trackChain;
@@ -2909,11 +2940,10 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
         }
         const float insertInputPeak = stereoPeak(trackInsertProcessedBlock_);
         if (trackChain.remoteDsp) {
-            // Same machine the plan picked for the 인서트 job, resolved again here so the
-            // stream keeps talking to the address the assignment names.
-            RemoteDspServerSettings remoteSettings = remoteDspSettingsForMode(
-                settings_.remoteDspServer,
-                remoteDspModeForRole(settings_.remoteDspServer, settings_.remoteDspServer.roleInserts));
+            // The machine this chain was built for, so the stream keeps talking to the address
+            // its inserts named rather than to whatever the project-wide assignment says now.
+            RemoteDspServerSettings remoteSettings =
+                remoteDspSettingsForMode(settings_.remoteDspServer, trackChain.remoteMode);
             const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
             remoteSettings.channelCount = 2;
             remoteSettings.frameCount = static_cast<uint16_t>(std::min<int64_t>(frameCount, networkBufferFrames));
@@ -3076,6 +3106,90 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
 
 bool NeuracoustDspEngine::remoteMonitorDspRequestedLocked() const {
     return monitorDspModeRequestsRemoteLocked(settings_.monitorDspPathMode);
+}
+
+// Work out which channels run their console strip elsewhere, and hand the renderer a detour for
+// them. Keyed by track name, which is also the route name the renderer asks about.
+void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked() {
+    std::map<std::string, RemoteConsoleStrip> next;
+    activeRemoteConsoleStripCount_ = 0;
+    for (const auto& track : projectPlan_.tracks) {
+        const std::string mode = remoteDspModeForRole(
+            settings_.remoteDspServer,
+            effectiveDspMachine(track.consoleDspMachine, settings_.remoteDspServer.roleChannelStrip));
+        if (!remoteDspModeAvailable(settings_.remoteDspServer, mode)) {
+            continue;
+        }
+        // A strip with every module off is a passthrough; sending it over the network would add
+        // latency and a dropout risk to buy nothing.
+        const auto& c = track.consoleChannel;
+        if (!c.filterEnabled && !c.eqEnabled && !c.compEnabled && !c.gateEnabled && !c.saturatorEnabled) {
+            continue;
+        }
+        RemoteConsoleStrip strip;
+        strip.mode = mode;
+        for (const auto& parameter : consoleChannelParameterValues(c)) {
+            strip.parameters.push_back({static_cast<uint32_t>(parameter.index), parameter.normalized});
+        }
+        // Reuse the running stream for a channel that is still on the same machine — rebuilding it
+        // would re-handshake and drop a block for an unrelated edit elsewhere in the project.
+        auto existing = remoteConsoleStrips_.find(track.name);
+        strip.stream = (existing != remoteConsoleStrips_.end() && existing->second.mode == mode)
+                           ? std::move(existing->second.stream)
+                           : std::make_unique<RemoteDspAsyncStream>();
+        if (strip.stream == nullptr) {
+            strip.stream = std::make_unique<RemoteDspAsyncStream>();
+        }
+        next.emplace(track.name, std::move(strip));
+        ++activeRemoteConsoleStripCount_;
+    }
+    remoteConsoleStrips_ = std::move(next);
+    if (remoteConsoleStrips_.empty()) {
+        projectRenderState_.remoteConsoleStrip = nullptr;
+        return;
+    }
+    // Installed once, not per block: the hook is called from the render thread, and rebuilding a
+    // std::function there would allocate.
+    projectRenderState_.remoteConsoleStrip =
+        [this](const std::string& routeName, std::vector<float>& block) {
+            return processRemoteConsoleStripLocked(routeName, block);
+        };
+}
+
+// Called from the renderer, on the render thread, with mutex_ already held by the caller.
+bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& routeName,
+                                                          std::vector<float>& interleavedStereo) {
+    auto found = remoteConsoleStrips_.find(routeName);
+    if (found == remoteConsoleStrips_.end() || found->second.stream == nullptr ||
+        interleavedStereo.empty()) {
+        return false;
+    }
+    auto settings = remoteDspSettingsForMode(settings_.remoteDspServer, found->second.mode);
+    settings.channelCount = 2;
+    settings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));
+    settings.sampleRate = settings_.sampleRate;
+    settings.loadedPluginIdHint = "na.neuracoust.console.channel";
+    const uint16_t networkBufferFrames =
+        std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
+    settings.networkBufferFrames = networkBufferFrames;
+    const double bufferLatencyMs = settings_.sampleRate > 0.0
+        ? (static_cast<double>(networkBufferFrames) * 1000.0 / settings_.sampleRate)
+        : 2.7;
+    settings.timeoutMs = std::max<int>(8, static_cast<int>(std::ceil(bufferLatencyMs + 5.0)));
+
+    if (!found->second.stream->process(settings,
+                                       interleavedStereo,
+                                       found->second.parameters,
+                                       remoteConsoleProcessedBlock_) ||
+        remoteConsoleProcessedBlock_.size() != interleavedStereo.size()) {
+        // Warming up or the node missed a block. Returning false runs the LOCAL strip for this
+        // block instead of dropping it — the same processor, so the channel keeps its sound
+        // rather than going momentarily dry.
+        return false;
+    }
+    interleavedStereo = remoteConsoleProcessedBlock_;
+    recordRemoteDspRoundTripLocked(found->second.stream->status().averageRoundTripMs);
+    return true;
 }
 
 bool NeuracoustDspEngine::monitorDspModeRequestsRemoteLocked(const std::string& mode) const {

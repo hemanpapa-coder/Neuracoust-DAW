@@ -1311,6 +1311,14 @@ int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out);
 // against a dead address costs a known amount of time rather than the client default.
 int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* out);
 
+// Per-item overrides of the project-wide DSP assignment: which machine runs THIS channel's console
+// strip, or THIS insert. Empty string follows the project assignment; otherwise "internal" | "nds" |
+// "external". A session is rarely uniform, so the global rows are defaults, not verdicts.
+void nc_track_console_dsp_machine(NCEngine* engine, int trackIndex, char* out, size_t outLen);
+void nc_track_set_console_dsp_machine(NCEngine* engine, int trackIndex, const char* machine);
+void nc_track_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);
+void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, const char* machine);
+
 // The "use this node" master switch: whether the external DSP node participates at all. Off gates the
 // node out of the monitor/DAW/plugin core plan regardless of the requested reserve. Applies live.
 int nc_dsp_external_enabled(NCEngine* engine);

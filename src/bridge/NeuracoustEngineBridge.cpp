@@ -7350,6 +7350,54 @@ void nc_dsp_set_nds_enabled(NCEngine* engine, int enabled) {
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
 }
 
+namespace {
+
+// Empty means "follow the project assignment"; anything else must name a real machine, so a
+// typo cannot quietly become a route.
+bool isDspMachineName(const std::string& machine) {
+    return machine.empty() || machine == "internal" || machine == "nds" || machine == "external";
+}
+
+} // namespace
+
+void nc_track_console_dsp_machine(NCEngine* engine, int trackIndex, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    copyText(out, outLen, track != nullptr ? track->consoleDspMachine : std::string{});
+}
+
+void nc_track_set_console_dsp_machine(NCEngine* engine, int trackIndex, const char* machine) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || machine == nullptr) return;
+    const std::string next = machine;
+    if (!isDspMachineName(next) || track->consoleDspMachine == next) return;
+    track->consoleDspMachine = next;
+    // Which machine runs a strip is a graph decision, so it needs a reconcile rather than the
+    // lightweight value push a knob turn uses.
+    engine->reconcileProject();
+    engine->recordStep("Channel strip DSP");
+}
+
+void nc_track_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen) {
+    const auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) {
+        copyText(out, outLen, std::string{});
+        return;
+    }
+    copyText(out, outLen, track->inserts[static_cast<size_t>(slot)].assignedDspServerId);
+}
+
+void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, const char* machine) {
+    auto* track = trackAt(engine, trackIndex);
+    if (track == nullptr || machine == nullptr) return;
+    if (slot < 0 || static_cast<size_t>(slot) >= track->inserts.size()) return;
+    auto& insert = track->inserts[static_cast<size_t>(slot)];
+    const std::string next = machine;
+    if (!isDspMachineName(next) || insert.assignedDspServerId == next) return;
+    insert.assignedDspServerId = next;
+    engine->reconcileProject();
+    engine->recordStep("Insert DSP");
+}
+
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, std::string{});
     const auto settings = engine != nullptr ? buildRemoteDspSettings(engine)

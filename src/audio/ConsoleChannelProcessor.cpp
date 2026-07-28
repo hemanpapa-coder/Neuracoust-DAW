@@ -310,4 +310,128 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
     }
 }
 
+namespace {
+
+// The one place the console strip's wire format is written down: an index, and the range that
+// index's 0..1 stands for. Adding a parameter means appending an entry — never renumbering, or a
+// node on an older build would silently apply the new value to an old control. Ranges are
+// deliberately wider than the UI allows so a value never arrives clipped.
+struct ConsoleParameterRange {
+    float min;
+    float max;
+};
+
+constexpr ConsoleParameterRange kUnit {0.0f, 1.0f};
+
+ConsoleParameterRange consoleParameterRange(int index) {
+    switch (index) {
+        case 3:  return {10.0f, 1000.0f};      // highPassHz
+        case 4:  return {1000.0f, 20000.0f};   // lowPassHz
+        case 6:  case 8: case 11: case 14: return {-24.0f, 24.0f};   // EQ band gains
+        case 7:  return {1000.0f, 20000.0f};   // eqHfHz
+        case 9:  return {200.0f, 8000.0f};     // eqHmfHz
+        case 12: return {100.0f, 2000.0f};     // eqLmfHz
+        case 15: return {20.0f, 600.0f};       // eqLfHz
+        case 10: case 13: return {0.1f, 10.0f};// EQ mid Q
+        case 17: return {-60.0f, 12.0f};       // compThresholdDb
+        case 18: return {1.0f, 20.0f};         // compRatio
+        case 19: return {0.1f, 100.0f};        // compAttackMs
+        case 20: case 26: return {5.0f, 5000.0f};  // comp/gate releaseMs
+        case 23: return {-80.0f, 0.0f};        // gateThresholdDb
+        case 24: return {0.0f, 60.0f};         // gateRangeDb
+        case 25: return {0.01f, 100.0f};       // gateAttackMs
+        case 28: return {0.0f, 24.0f};         // saturatorDriveDb
+        case 37: return {0.0f, 511.0f};        // channelBiasSeed (512 channels)
+        default: return kUnit;                 // flags, mixes, bias depth
+    }
+}
+
+float normalizeConsoleParameter(int index, float value) {
+    const auto range = consoleParameterRange(index);
+    if (range.max <= range.min) return 0.0f;
+    return std::clamp((value - range.min) / (range.max - range.min), 0.0f, 1.0f);
+}
+
+float denormalizeConsoleParameter(int index, float normalized) {
+    const auto range = consoleParameterRange(index);
+    return range.min + std::clamp(normalized, 0.0f, 1.0f) * (range.max - range.min);
+}
+
+} // namespace
+
+std::vector<ConsoleChannelParameter> consoleChannelParameterValues(const ConsoleChannelState& p) {
+    const auto flag = [](bool b) { return b ? 1.0f : 0.0f; };
+    const std::pair<int, float> raw[] = {
+        {0,  flag(p.filterEnabled)},   {1,  flag(p.highPassEnabled)}, {2,  flag(p.lowPassEnabled)},
+        {3,  p.highPassHz},            {4,  p.lowPassHz},
+        {5,  flag(p.eqEnabled)},
+        {6,  p.eqHfGainDb},            {7,  p.eqHfHz},
+        {8,  p.eqHmfGainDb},           {9,  p.eqHmfHz},              {10, p.eqHmfQ},
+        {11, p.eqLmfGainDb},           {12, p.eqLmfHz},              {13, p.eqLmfQ},
+        {14, p.eqLfGainDb},            {15, p.eqLfHz},
+        {16, flag(p.compEnabled)},     {17, p.compThresholdDb},      {18, p.compRatio},
+        {19, p.compAttackMs},          {20, p.compReleaseMs},        {21, p.compMix},
+        {22, flag(p.gateEnabled)},     {23, p.gateThresholdDb},      {24, p.gateRangeDb},
+        {25, p.gateAttackMs},          {26, p.gateReleaseMs},
+        {27, flag(p.saturatorEnabled)},{28, p.saturatorDriveDb},     {29, p.saturatorMix},
+        {30, flag(p.eqEMode)},         {31, flag(p.expanderMode)},
+        {32, flag(p.compFastAttack)},  {33, flag(p.gateFastAttack)},
+        {34, flag(p.compCircuitMode)}, {35, flag(p.eqCircuitMode)},  {36, flag(p.saturatorCircuitMode)},
+        {37, static_cast<float>(p.channelBiasSeed)},                 {38, p.channelBiasDepth},
+    };
+    std::vector<ConsoleChannelParameter> values;
+    values.reserve(std::size(raw));
+    for (const auto& [index, value] : raw) {
+        values.push_back({index, normalizeConsoleParameter(index, value)});
+    }
+    return values;
+}
+
+void applyConsoleChannelParameter(ConsoleChannelState& p, int index, float normalized) {
+    const bool on = normalized >= 0.5f;
+    const float value = denormalizeConsoleParameter(index, normalized);
+    switch (index) {
+        case 0:  p.filterEnabled = on; break;
+        case 1:  p.highPassEnabled = on; break;
+        case 2:  p.lowPassEnabled = on; break;
+        case 3:  p.highPassHz = value; break;
+        case 4:  p.lowPassHz = value; break;
+        case 5:  p.eqEnabled = on; break;
+        case 6:  p.eqHfGainDb = value; break;
+        case 7:  p.eqHfHz = value; break;
+        case 8:  p.eqHmfGainDb = value; break;
+        case 9:  p.eqHmfHz = value; break;
+        case 10: p.eqHmfQ = value; break;
+        case 11: p.eqLmfGainDb = value; break;
+        case 12: p.eqLmfHz = value; break;
+        case 13: p.eqLmfQ = value; break;
+        case 14: p.eqLfGainDb = value; break;
+        case 15: p.eqLfHz = value; break;
+        case 16: p.compEnabled = on; break;
+        case 17: p.compThresholdDb = value; break;
+        case 18: p.compRatio = value; break;
+        case 19: p.compAttackMs = value; break;
+        case 20: p.compReleaseMs = value; break;
+        case 21: p.compMix = value; break;
+        case 22: p.gateEnabled = on; break;
+        case 23: p.gateThresholdDb = value; break;
+        case 24: p.gateRangeDb = value; break;
+        case 25: p.gateAttackMs = value; break;
+        case 26: p.gateReleaseMs = value; break;
+        case 27: p.saturatorEnabled = on; break;
+        case 28: p.saturatorDriveDb = value; break;
+        case 29: p.saturatorMix = value; break;
+        case 30: p.eqEMode = on; break;
+        case 31: p.expanderMode = on; break;
+        case 32: p.compFastAttack = on; break;
+        case 33: p.gateFastAttack = on; break;
+        case 34: p.compCircuitMode = on; break;
+        case 35: p.eqCircuitMode = on; break;
+        case 36: p.saturatorCircuitMode = on; break;
+        case 37: p.channelBiasSeed = static_cast<int>(value + 0.5f); break;
+        case 38: p.channelBiasDepth = value; break;
+        default: break;
+    }
+}
+
 } // namespace neuracoust::daw

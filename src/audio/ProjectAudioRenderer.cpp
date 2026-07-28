@@ -2191,9 +2191,16 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         // Built-in console channel is pre-insert, matching a physical console's
         // EQ/dynamics position. The same render state is used by realtime and bounce.
         if (track != nullptr && routeMayProcessInserts(route->kind)) {
+            // A channel assigned to a remote machine takes the detour; everything else, and every
+            // offline bounce, runs the local processor. Gain-reduction meters stay at zero for a
+            // remote strip — the node does the compressing and does not report it back.
+            const bool handledRemotely =
+                state.remoteConsoleStrip && state.remoteConsoleStrip(route->name, routeInput);
             auto& consoleProcessor = state.consoleChannelProcessors[route->name];
-            consoleProcessor.processInterleavedStereo(routeInput, track->consoleChannel, plan.sampleRate);
-            if (meters != nullptr) {
+            if (!handledRemotely) {
+                consoleProcessor.processInterleavedStereo(routeInput, track->consoleChannel, plan.sampleRate);
+            }
+            if (!handledRemotely && meters != nullptr) {
                 const auto meterIt = meterIndexByTrack.find(route->name);
                 if (meterIt != meterIndexByTrack.end() &&
                     meterIt->second < meters->trackConsoleGainReductionDb.size()) {

@@ -917,50 +917,10 @@ bool isProductModuleId(const std::string& moduleId) {
 neuracoust::daw::ConsoleChannelState consoleStateFromParameters(const std::vector<ParsedParameter>& parameters) {
     neuracoust::daw::ConsoleChannelState console;
     console.model = "4000e";
-    const auto flag = [](float v) { return v >= 0.5f; };
+    // The numbering lives in ConsoleChannelProcessor, shared with the DAW that packs these — a
+    // second copy here is exactly how the two ends drift apart and a strip stops matching.
     for (const auto& parameter : parameters) {
-        switch (parameter.index) {
-            case 0:  console.filterEnabled = flag(parameter.value); break;
-            case 1:  console.highPassEnabled = flag(parameter.value); break;
-            case 2:  console.lowPassEnabled = flag(parameter.value); break;
-            case 3:  console.highPassHz = parameter.value; break;
-            case 4:  console.lowPassHz = parameter.value; break;
-            case 5:  console.eqEnabled = flag(parameter.value); break;
-            case 6:  console.eqHfGainDb = parameter.value; break;
-            case 7:  console.eqHfHz = parameter.value; break;
-            case 8:  console.eqHmfGainDb = parameter.value; break;
-            case 9:  console.eqHmfHz = parameter.value; break;
-            case 10: console.eqHmfQ = parameter.value; break;
-            case 11: console.eqLmfGainDb = parameter.value; break;
-            case 12: console.eqLmfHz = parameter.value; break;
-            case 13: console.eqLmfQ = parameter.value; break;
-            case 14: console.eqLfGainDb = parameter.value; break;
-            case 15: console.eqLfHz = parameter.value; break;
-            case 16: console.compEnabled = flag(parameter.value); break;
-            case 17: console.compThresholdDb = parameter.value; break;
-            case 18: console.compRatio = parameter.value; break;
-            case 19: console.compAttackMs = parameter.value; break;
-            case 20: console.compReleaseMs = parameter.value; break;
-            case 21: console.compMix = parameter.value; break;
-            case 22: console.gateEnabled = flag(parameter.value); break;
-            case 23: console.gateThresholdDb = parameter.value; break;
-            case 24: console.gateRangeDb = parameter.value; break;
-            case 25: console.gateAttackMs = parameter.value; break;
-            case 26: console.gateReleaseMs = parameter.value; break;
-            case 27: console.saturatorEnabled = flag(parameter.value); break;
-            case 28: console.saturatorDriveDb = parameter.value; break;
-            case 29: console.saturatorMix = parameter.value; break;
-            case 30: console.eqEMode = flag(parameter.value); break;
-            case 31: console.expanderMode = flag(parameter.value); break;
-            case 32: console.compFastAttack = flag(parameter.value); break;
-            case 33: console.gateFastAttack = flag(parameter.value); break;
-            case 34: console.compCircuitMode = flag(parameter.value); break;
-            case 35: console.eqCircuitMode = flag(parameter.value); break;
-            case 36: console.saturatorCircuitMode = flag(parameter.value); break;
-            case 37: console.channelBiasSeed = static_cast<int>(parameter.value); break;
-            case 38: console.channelBiasDepth = parameter.value; break;
-            default: break;
-        }
+        neuracoust::daw::applyConsoleChannelParameter(console, parameter.index, parameter.value);
     }
     return console;
 }

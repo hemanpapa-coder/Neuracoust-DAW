@@ -206,6 +206,9 @@ private:
         RealtimeMasterInsertChain chain;
         unsigned int latencySamples = 0;
         bool remoteDsp = false;
+        /// Which machine this chain streams to ("nds" | "remote_external" | "auto"), resolved
+        /// from the inserts' own assignment. One chain per machine per track.
+        std::string remoteMode;
         std::string remoteModuleId;
         std::vector<RemoteDspParameterValue> remoteParameters;
         std::unique_ptr<RemoteDspAsyncStream> remoteStream;
@@ -215,6 +218,22 @@ private:
         int64_t transitionSamplesTotal = 0;
         bool protectDryWhenSilent = false;
     };
+
+    /// A channel whose console strip runs on a remote machine. One stream per track, addressed by
+    /// the same NART module the node builds from this library's ConsoleChannelProcessor — so the
+    /// strip is the same code, just executed elsewhere.
+    struct RemoteConsoleStrip {
+        std::string mode;                       // "nds" | "remote_external" | "auto"
+        std::vector<RemoteDspParameterValue> parameters;
+        std::unique_ptr<RemoteDspAsyncStream> stream;
+    };
+    std::map<std::string, RemoteConsoleStrip> remoteConsoleStrips_;
+    std::vector<float> remoteConsoleProcessedBlock_;
+    int activeRemoteConsoleStripCount_ = 0;
+
+    void prepareRemoteConsoleStripsLocked();
+    bool processRemoteConsoleStripLocked(const std::string& routeName,
+                                         std::vector<float>& interleavedStereo);
 
     bool prepareRealtimeInsertChainLocked(int maxBlockSize, std::string& error);
     void warmRouteInsertChainsLocked();

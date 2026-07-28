@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -99,6 +100,16 @@ struct ProjectAudioBlockMeters {
 struct ProjectAudioRenderState {
     std::map<std::string, std::deque<MixerStereoFrame>> routeDelayLines;
     std::map<std::string, ConsoleChannelProcessor> consoleChannelProcessors;
+    /// Optional detour for a track's console strip, set only by the realtime engine: return true
+    /// having processed the block on a remote node, false to let the local processor run.
+    ///
+    /// It is a hook rather than a branch inside the renderer because the OFFLINE BOUNCE shares
+    /// this code, and a bounce must never depend on a network node — it has to be deterministic
+    /// and reproducible with the node switched off. The realtime engine installs the hook; the
+    /// bounce leaves it null and always processes locally. Both sides run the same
+    /// ConsoleChannelProcessor (the node links this library), so the sound matches.
+    std::function<bool(const std::string& routeName, std::vector<float>& interleavedStereo)>
+        remoteConsoleStrip;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;

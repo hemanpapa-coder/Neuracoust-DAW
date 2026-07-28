@@ -2100,6 +2100,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"mixGroupName\":\"" << escapeJsonString(track.mixGroupName) << "\""
             << ",\"controlMasterTrackName\":\"" << escapeJsonString(track.controlMasterTrackName) << "\""
             << ",\"notes\":\"" << escapeJsonString(track.notes) << "\""
+            << ",\"consoleDspMachine\":\"" << escapeJsonString(track.consoleDspMachine) << "\""
             << ",\"consoleModel\":\"" << escapeJsonString(track.consoleChannel.model) << "\""
             << ",\"consoleModuleOrder\":\"" << escapeJsonString(track.consoleChannel.moduleOrder) << "\""
             << ",\"consoleFilterEnabled\":" << (track.consoleChannel.filterEnabled ? "true" : "false")
@@ -2869,6 +2870,11 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.mixGroupName = trim(stringAfterKey(body, "mixGroupName"));
         track.controlMasterTrackName = trim(stringAfterKey(body, "controlMasterTrackName"));
         track.notes = stringAfterKey(body, "notes");
+        track.consoleDspMachine = trim(stringAfterKey(body, "consoleDspMachine"));
+        if (track.consoleDspMachine != "internal" && track.consoleDspMachine != "nds" &&
+            track.consoleDspMachine != "external") {
+            track.consoleDspMachine.clear();   // anything unrecognised follows the project role
+        }
         track.consoleChannel.model = trim(stringAfterKey(body, "consoleModel"));
         if (track.consoleChannel.model.empty() || track.consoleChannel.model == "4001e")
             track.consoleChannel.model = "4000e";

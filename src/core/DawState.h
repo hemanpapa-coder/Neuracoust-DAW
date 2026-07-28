@@ -184,6 +184,10 @@ struct TrackState {
     std::string controlMasterTrackName;
     std::string notes;   // free-text channel memo, shown in the mixer; no audio effect
     ConsoleChannelState consoleChannel;
+    /// Which machine runs THIS channel's console strip: empty follows the project's 채널 스트립
+    /// assignment, otherwise "internal" | "nds" | "external". Per-channel because a session is
+    /// rarely uniform — a couple of heavy strips can go to the appliance while the rest stay home.
+    std::string consoleDspMachine;
 };
 
 struct ClipState {
@@ -293,6 +297,16 @@ struct InsertState {
 
 inline bool isRemoteInternalDspExecutionMode(const std::string& mode) {
     return mode == "remote_internal" || mode == "external";
+}
+
+/// Resolve a per-item machine override against the project-wide assignment for that job.
+/// Empty means "follow the assignment"; anything else is this one item's own answer.
+inline std::string effectiveDspMachine(const std::string& itemOverride,
+                                       const std::string& projectRole) {
+    if (itemOverride == "internal" || itemOverride == "nds" || itemOverride == "external") {
+        return itemOverride;
+    }
+    return projectRole.empty() ? std::string("internal") : projectRole;
 }
 
 inline bool isAnyInternalDspExecutionMode(const std::string& mode) {
