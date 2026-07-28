@@ -880,6 +880,39 @@ public:
             strip.session = std::make_unique<RemoteDspProcessSession>();
         }
 
+        // Remote-assigned track inserts. The local route graph excludes these by design, and in
+        // a plain bounce nothing else ran them — they fell out of the render entirely. Here each
+        // remote slot becomes a node stage on its track, in slot order after the local slots.
+        for (const auto& track : plan.tracks) {
+            for (const auto& insert : track.inserts) {
+                if (!insert.enabled || insert.bypassed) {
+                    continue;
+                }
+                const std::string mode = remoteDspModeForRole(
+                    base, effectiveDspMachine(insert.assignedDspServerId, base.roleInserts));
+                const bool remoteMode = isRemoteInternalDspExecutionMode(
+                    insert.dspExecutionMode.empty() ? std::string("native") : insert.dspExecutionMode);
+                if (!remoteMode || !remoteDspModeAvailable(base, mode)) {
+                    continue;
+                }
+                const auto capability = remoteDspCapabilityForInsert(insert, true, true);
+                // Mirror the local graph's rule exactly: it keeps any slot whose serverModuleId
+                // is empty (third-party, or a Neuracoust module not yet activated), so staging
+                // that slot remotely would process it TWICE — once by the local VST3, once by
+                // the node. Only what the local graph excludes belongs to the node.
+                if (capability.moduleId.empty() ||
+                    trackInsertShouldRunInLocalRouteGraph(insert)) {
+                    continue;
+                }
+                InsertStage stage;
+                stage.mode = mode;
+                stage.moduleId = capability.moduleId;
+                stage.parameters = remoteInsertParameterValues(insert);
+                stage.session = std::make_unique<RemoteDspProcessSession>();
+                routeInserts_[track.name].push_back(std::move(stage));
+            }
+        }
+
         // Master inserts, all-or-nothing on one machine (the chain is serial) — the same rule the
         // realtime engine applies. A chain that cannot fully offload fails STRICT mode loudly.
         std::string masterMode;
@@ -923,7 +956,9 @@ public:
         (void)project;
     }
 
-    bool anythingRemote() const { return !strips_.empty() || !masterStages_.empty(); }
+    bool anythingRemote() const {
+        return !strips_.empty() || !masterStages_.empty() || !routeInserts_.empty();
+    }
     bool failed() const { return failed_; }
     const std::string& failure() const { return failure_; }
     const std::string& blockedReason() const { return blockedReason_; }
@@ -939,6 +974,11 @@ public:
                 return processMaster(block);
             };
         }
+        if (!routeInserts_.empty()) {
+            state.remoteRouteInserts = [this](const std::string& route, std::vector<float>& block) {
+                processRouteInserts(route, block);
+            };
+        }
     }
 
 private:
@@ -948,6 +988,12 @@ private:
         std::unique_ptr<RemoteDspProcessSession> session;
     };
     struct MasterStage {
+        std::string moduleId;
+        std::vector<RemoteDspParameterValue> parameters;
+        std::unique_ptr<RemoteDspProcessSession> session;
+    };
+    struct InsertStage {
+        std::string mode;
         std::string moduleId;
         std::vector<RemoteDspParameterValue> parameters;
         std::unique_ptr<RemoteDspProcessSession> session;
@@ -1034,9 +1080,28 @@ private:
         return true;
     }
 
+    void processRouteInserts(const std::string& route, std::vector<float>& block) {
+        if (failed_) {
+            return;
+        }
+        auto found = routeInserts_.find(route);
+        if (found == routeInserts_.end()) {
+            return;
+        }
+        for (auto& stage : found->second) {
+            auto settings = settingsFor(stage.mode, block.size() / 2u, stage.moduleId);
+            if (!runWithRetries(*stage.session, settings, block, stage.parameters, scratch_,
+                                "트랙 인서트 (" + route + ": " + stage.moduleId + ")")) {
+                return;
+            }
+            block = scratch_;
+        }
+    }
+
     RemoteDspServerSettings base_;
     std::map<std::string, Strip> strips_;
     std::vector<MasterStage> masterStages_;
+    std::map<std::string, std::vector<InsertStage>> routeInserts_;
     std::string masterMode_;
     std::vector<float> scratch_;
     bool failed_ = false;

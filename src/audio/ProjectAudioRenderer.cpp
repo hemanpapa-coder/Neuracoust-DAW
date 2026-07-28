@@ -806,16 +806,7 @@ bool routeMayProcessInserts(MixerRouteKind kind) {
         kind == MixerRouteKind::RoutingFolder;
 }
 
-bool trackInsertShouldRunInLocalRouteGraph(const TrackInsertSlot& insert) {
-    if (!trackInsertIsActiveVst3(insert) || insert.pluginPath.empty()) {
-        return false;
-    }
-    // Leave only server-backed remote/external slots for the NDS path. A
-    // third-party VST3 with no server module must still run in the local
-    // Native-safe insert graph even if an old project saved a remote mode.
-    return !isRemoteInternalDspExecutionMode(effectiveTrackInsertDspExecutionMode(insert)) ||
-        insert.serverModuleId.empty();
-}
+
 
 /// The track's enabled signal-generator inserts, as render inserts. Separate from
 /// activeLocalRouteInserts because a generator is Builtin — no plug-in path, not VST3 — so that
@@ -1291,6 +1282,17 @@ void applyActiveTrackVst3InsertsToStereoBlock(const ProjectAudioRenderPlan& plan
 }
 
 } // namespace
+
+bool trackInsertShouldRunInLocalRouteGraph(const TrackInsertSlot& insert) {
+    if (!trackInsertIsActiveVst3(insert) || insert.pluginPath.empty()) {
+        return false;
+    }
+    // Leave only server-backed remote/external slots for the NDS path. A
+    // third-party VST3 with no server module must still run in the local
+    // Native-safe insert graph even if an old project saved a remote mode.
+    return !isRemoteInternalDspExecutionMode(effectiveTrackInsertDspExecutionMode(insert)) ||
+        insert.serverModuleId.empty();
+}
 
 double projectDurationSeconds(const ProjectDocument& project) {
     ProjectDocument effectiveProject = project;
@@ -2258,7 +2260,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 blockPeakAbs(routeInput) <= 0.000001f &&
                 synthesizeSourceGeneratorFallback(state,
                                                   route->name,
-                                                  routeInserts,
+                                                  activeSourceGeneratorInserts(*track),
                                                   plan.sampleRate,
                                                   frameCount,
                                                   routeInput)) {
@@ -2299,6 +2301,13 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                   plan.sampleRate, frameCount, routeInput)) {
                 routeProcessedWet = true;
             }
+        }
+
+        // Remote-assigned inserts, when a strict remote bounce installed the hook. After the
+        // local slots, so a mixed chain keeps local-then-remote order (the realtime engine makes
+        // the same split).
+        if (state.remoteRouteInserts && track != nullptr) {
+            state.remoteRouteInserts(route->name, routeInput);
         }
 
         // Declick add / remove / reorder. Whenever a route flips between dry and wet — a chain

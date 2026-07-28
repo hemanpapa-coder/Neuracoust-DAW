@@ -119,6 +119,12 @@ struct ProjectAudioRenderState {
     /// remote node, false to run the local chain. Null in every offline bounce, for the same
     /// reason as above — a bounce must be reproducible with the node switched off.
     std::function<bool(std::vector<float>& interleavedStereo)> remoteMasterInserts;
+    /// A route's REMOTE-ASSIGNED track inserts. The local route graph rightly excludes them
+    /// (activeLocalRouteInserts), and in a plain offline bounce nothing else runs them — they
+    /// were silently dropped from the render. The strict remote bounce installs this to run
+    /// them on the node, after the route's local inserts, in slot order.
+    std::function<void(const std::string& routeName, std::vector<float>& interleavedStereo)>
+        remoteRouteInserts;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;
@@ -189,6 +195,10 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                ProjectAudioBlockMeters* meters,
                                                bool offline = false,
                                                bool transportRunning = true);
+/// Whether a track insert belongs to the LOCAL route graph (as opposed to the NDS path). The
+/// strict remote bounce uses the same judgement, inverted, so a slot is never processed twice.
+bool trackInsertShouldRunInLocalRouteGraph(const TrackInsertSlot& insert);
+
 bool renderTrackPreFaderStereoBlock(const ProjectAudioRenderPlan& plan,
                                     const std::string& trackName,
                                     int64_t startFrame,
