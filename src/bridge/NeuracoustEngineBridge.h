@@ -1264,6 +1264,24 @@ void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen);
 void nc_dsp_set_remote_host(NCEngine* engine, const char* host);
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen);
 
+// ---------------------------------------------------------------------------
+// DSP role assignment
+//
+// Which machine handles each job: "internal" (this Mac), "nds" (the dedicated appliance) or
+// "external" (a general-purpose node computer). Assignment is explicit by default — a path that
+// changes under you mid-take is worse than one that runs short predictably — and nc_dsp_auto_overflow
+// turns the assignments into starting points that spill internal -> NDS -> external as each fills.
+// Roles: "monitor", "channelStrip", "master", "inserts".
+// ---------------------------------------------------------------------------
+void nc_dsp_role(NCEngine* engine, const char* role, char* out, size_t outLen);
+void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine);
+int  nc_dsp_auto_overflow(NCEngine* engine);
+void nc_dsp_set_auto_overflow(NCEngine* engine, int enabled);
+void nc_dsp_nds_host(NCEngine* engine, char* out, size_t outLen);
+void nc_dsp_set_nds_host(NCEngine* engine, const char* host);
+int  nc_dsp_nds_enabled(NCEngine* engine);
+void nc_dsp_set_nds_enabled(NCEngine* engine, int enabled);
+
 // A discovered/queried remote DSP node's identity + hardware specs, for the Remote Core panel.
 typedef struct {
     int reachable;          // 1 if a node answered, else 0 (other fields undefined when 0)

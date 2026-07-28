@@ -253,6 +253,21 @@ struct ProjectDocument {
     // falls back to "studio.local". This is what makes External/NDS reach a real node
     // instead of the hardcoded default.
     std::string remoteDspHost = "studio.local";
+    // The dedicated NDS appliance, addressed separately from the general-purpose node above.
+    // They speak the same protocol but are not the same class of machine: the appliance runs its
+    // own RT kernel and measures tighter in the tail, which is what decides quality for live work.
+    std::string ndsHost = "192.168.0.198";
+    bool ndsEnabled = false;
+    // Which machine handles each job. "internal" (this Mac), "nds", or "external" (node computer).
+    // Explicit assignment is the default because a path that changes under you mid-take is worse
+    // than one that runs out of headroom predictably.
+    std::string dspRoleMonitor = "internal";
+    std::string dspRoleChannelStrip = "internal";
+    std::string dspRoleMaster = "internal";
+    std::string dspRoleInserts = "internal";
+    // When set, the assignments above become starting points and work spills to the next machine
+    // as the one before it runs short: internal -> NDS -> external node.
+    bool dspAutoOverflow = false;
     // The **physical** speaker / headphone the user actually monitors on — a definition
     // of the real hardware, not a simulation. Empty = unspecified. When
     // monitorSpeakerHeadphoneExclusive is set, switching to one output deactivates the

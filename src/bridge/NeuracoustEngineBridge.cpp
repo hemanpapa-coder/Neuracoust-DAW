@@ -7217,6 +7217,78 @@ void nc_dsp_set_remote_host(NCEngine* engine, const char* host) {
 
 /// Broadcast-discover a node and return its address, or "" if none answered. Lets the
 /// UI fill the host field without the user typing an IP.
+namespace {
+/// The four assignable roles, mapped to their field on the project. A name outside this set is
+/// ignored rather than guessed at.
+std::string* dspRoleField(NCEngine* engine, const char* role) {
+    if (engine == nullptr || role == nullptr) return nullptr;
+    const std::string name = role;
+    if (name == "monitor") return &engine->project.dspRoleMonitor;
+    if (name == "channelStrip") return &engine->project.dspRoleChannelStrip;
+    if (name == "master") return &engine->project.dspRoleMaster;
+    if (name == "inserts") return &engine->project.dspRoleInserts;
+    return nullptr;
+}
+}  // namespace
+
+void nc_dsp_role(NCEngine* engine, const char* role, char* out, size_t outLen) {
+    const auto* field = dspRoleField(engine, role);
+    copyText(out, outLen, field != nullptr ? *field : std::string("internal"));
+}
+
+void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine) {
+    auto* field = dspRoleField(engine, role);
+    if (field == nullptr || machine == nullptr) return;
+    const std::string next = machine;
+    if (next != "internal" && next != "nds" && next != "external") return;
+    if (*field == next) return;
+    *field = next;
+    // Re-apply live so the change takes effect without an audio restart, the same way the host
+    // setter does. The engine still runs on one routing string; the roles decide what feeds it.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->recordStep("DSP role");
+}
+
+int nc_dsp_auto_overflow(NCEngine* engine) {
+    return engine != nullptr && engine->project.dspAutoOverflow ? 1 : 0;
+}
+
+void nc_dsp_set_auto_overflow(NCEngine* engine, int enabled) {
+    if (engine == nullptr) return;
+    const bool next = enabled != 0;
+    if (engine->project.dspAutoOverflow == next) return;
+    engine->project.dspAutoOverflow = next;
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->recordStep("DSP overflow");
+}
+
+void nc_dsp_nds_host(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.ndsHost : std::string{});
+}
+
+void nc_dsp_set_nds_host(NCEngine* engine, const char* host) {
+    if (engine == nullptr || host == nullptr) return;
+    std::string next = host;
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    next.erase(next.begin(), std::find_if(next.begin(), next.end(), notSpace));
+    next.erase(std::find_if(next.rbegin(), next.rend(), notSpace).base(), next.end());
+    if (engine->project.ndsHost == next) return;
+    engine->project.ndsHost = next;
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+}
+
+int nc_dsp_nds_enabled(NCEngine* engine) {
+    return engine != nullptr && engine->project.ndsEnabled ? 1 : 0;
+}
+
+void nc_dsp_set_nds_enabled(NCEngine* engine, int enabled) {
+    if (engine == nullptr) return;
+    const bool next = enabled != 0;
+    if (engine->project.ndsEnabled == next) return;
+    engine->project.ndsEnabled = next;
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+}
+
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, std::string{});
     const auto settings = engine != nullptr ? buildRemoteDspSettings(engine)

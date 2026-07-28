@@ -2024,6 +2024,13 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"externalDspCoreCount\": " << std::max(1, std::min(16, project.externalDspCoreCount)) << ",\n";
     out << "  \"externalDspEnabled\": " << (project.externalDspEnabled ? "true" : "false") << ",\n";
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
+    out << "  \"ndsHost\": \"" << escapeJsonString(project.ndsHost) << "\",\n";
+    out << "  \"ndsEnabled\": " << (project.ndsEnabled ? "true" : "false") << ",\n";
+    out << "  \"dspRoleMonitor\": \"" << escapeJsonString(project.dspRoleMonitor) << "\",\n";
+    out << "  \"dspRoleChannelStrip\": \"" << escapeJsonString(project.dspRoleChannelStrip) << "\",\n";
+    out << "  \"dspRoleMaster\": \"" << escapeJsonString(project.dspRoleMaster) << "\",\n";
+    out << "  \"dspRoleInserts\": \"" << escapeJsonString(project.dspRoleInserts) << "\",\n";
+    out << "  \"dspAutoOverflow\": " << (project.dspAutoOverflow ? "true" : "false") << ",\n";
     out << "  \"physicalSpeakerModel\": \"" << escapeJsonString(project.physicalSpeakerModel) << "\",\n";
     out << "  \"physicalHeadphoneModel\": \"" << escapeJsonString(project.physicalHeadphoneModel) << "\",\n";
     out << "  \"measurementMicModel\": \"" << escapeJsonString(project.measurementMicModel) << "\",\n";
@@ -2711,6 +2718,22 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         const std::string host = stringAfterKey(text, "remoteDspHost");
         parsed.remoteDspHost = host.empty() ? std::string("studio.local") : host;
     }
+    {
+        const std::string host = stringAfterKey(text, "ndsHost");
+        parsed.ndsHost = host.empty() ? std::string("192.168.0.198") : host;
+    }
+    parsed.ndsEnabled = boolAfterKey(text, "ndsEnabled", false);
+    // A role only accepts the three machines it can name; anything else loads as local, so a
+    // project written by a newer build cannot silently route audio somewhere this one cannot reach.
+    const auto role = [&](const char* key) {
+        const std::string value = stringAfterKey(text, key);
+        return (value == "nds" || value == "external") ? value : std::string("internal");
+    };
+    parsed.dspRoleMonitor = role("dspRoleMonitor");
+    parsed.dspRoleChannelStrip = role("dspRoleChannelStrip");
+    parsed.dspRoleMaster = role("dspRoleMaster");
+    parsed.dspRoleInserts = role("dspRoleInserts");
+    parsed.dspAutoOverflow = boolAfterKey(text, "dspAutoOverflow", false);
     parsed.physicalSpeakerModel = stringAfterKey(text, "physicalSpeakerModel");
     parsed.measurementMicModel = stringAfterKey(text, "measurementMicModel");
     parsed.physicalPowerAmpModel = stringAfterKey(text, "physicalPowerAmpModel");
