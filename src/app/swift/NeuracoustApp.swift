@@ -270,6 +270,64 @@ struct NeuracoustApp: App {
         }
         .defaultSize(width: 920, height: 250)
         .windowResizability(.contentMinSize)
+
+        // Pro-Tools-style detached windows: the mixer and the monitor station each as a window of
+        // its own, over the same engine — a second view of the state, never a second engine.
+        Window("믹서", id: "mixer") {
+            MixerWindowRoot()
+                .environmentObject(engine)
+                .environmentObject(engine.trackMeters)
+                .environmentObject(engine.meters)
+                .environmentObject(engine.pluginEditors)
+                .environmentObject(listen)
+                .environmentObject(ai)
+        }
+        .defaultSize(width: 1200, height: 860)
+
+        Window("모니터 스테이션", id: "monitor-station") {
+            MonitorStationWindowRoot()
+                .environmentObject(engine)
+                .environmentObject(engine.trackMeters)
+                .environmentObject(engine.meters)
+                .environmentObject(engine.pluginEditors)
+                .environmentObject(listen)
+                .environmentObject(ai)
+        }
+        .defaultSize(width: 420, height: 950)
+        .windowResizability(.contentSize)
+    }
+}
+
+/// The mixer as its own window. Opening it flips the MAIN window to the edit view — the Pro Tools
+/// arrangement (Edit window + Mix window), and it spares the app rendering two live mixers at
+/// meter rate for no reason. Closing it leaves the main window as it is; ⌘= still works there.
+struct MixerWindowRoot: View {
+    @EnvironmentObject private var engine: EngineController
+
+    var body: some View {
+        MixerView()
+            .frame(minWidth: 720, minHeight: 600)
+            .background(Theme.Palette.background)
+            .preferredColorScheme(.dark)
+            .coordinateSpace(name: "helpRoot")
+            .onAppear { engine.viewTab = .edit }
+    }
+}
+
+/// The monitor station as its own window: the same MonitorDock, at its fixed rack width. While
+/// this window is open the main window's dock column steps aside (and comes back on close), so
+/// the station exists exactly once on screen — it is a console centre section, not a palette.
+struct MonitorStationWindowRoot: View {
+    @EnvironmentObject private var engine: EngineController
+
+    var body: some View {
+        MonitorDock()
+            .frame(width: Theme.monitorDockWidth)
+            .frame(maxHeight: .infinity)
+            .background(Theme.Palette.panel)
+            .preferredColorScheme(.dark)
+            .onAppear { engine.showMonitorDock = false }
+            .onDisappear { engine.showMonitorDock = true }
     }
 }
 

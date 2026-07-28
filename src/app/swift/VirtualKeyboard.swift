@@ -179,6 +179,13 @@ struct VirtualKeyboardCommands: Commands {
         CommandMenu("윈도우") {
             Button("가상 MIDI 키보드") { openWindow(id: "virtual-keyboard") }
                 .keyboardShortcut("k", modifiers: [.command, .option])
+            Divider()
+            // The Pro Tools window pair. Declared shortcuts are for discoverability; under a
+            // Korean input source only the menu click is reliable (see the key-code note).
+            Button("믹서 창") { openWindow(id: "mixer") }
+                .keyboardShortcut("m", modifiers: [.command, .option])
+            Button("모니터 스테이션 창") { openWindow(id: "monitor-station") }
+                .keyboardShortcut("u", modifiers: [.command, .option])
         }
     }
 }
