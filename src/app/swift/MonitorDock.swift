@@ -983,25 +983,59 @@ struct MonitorDock: View {
         return String(format: "%.0f%%", specs.cpuLoadPercent)
     }
 
+    /// A machine's load as a 0…1 bar fill. Unknown reads as empty rather than as zero-with-a-mark:
+    /// the number beside it says which it is.
+    private func remoteLoadFraction(_ machine: EngineController.DspMachine) -> Double {
+        guard let specs = engine.nodeSpecs(for: machine), specs.cpuLoadPercent >= 0 else { return 0 }
+        return min(1.0, specs.cpuLoadPercent / 100.0)
+    }
+
+    /// One machine's load: name, figure, bar. Identical for all three so they compare at a glance;
+    /// a switched-off machine keeps its row and dims, so its absence from the mix is visible.
+    private func machineLoadMeter(label: String,
+                                  on: Bool,
+                                  fraction: Double,
+                                  text: String,
+                                  hot: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: Theme.Space.sm) {
+                Text(label)
+                    .font(Theme.Font.ui(9))
+                    .foregroundStyle(on ? Theme.Palette.textLabel : Theme.Palette.textFainter)
+                Spacer(minLength: 0)
+                Text(text)
+                    .font(Theme.Font.mono(9, .medium))
+                    .foregroundStyle(!on ? Theme.Palette.textFainter
+                                     : hot ? Theme.Palette.red : Theme.Palette.textSecondary)
+            }
+            MeterBar(fraction: on ? fraction : 0, gradient: Theme.Gradient.dspLoad)
+                .opacity(on ? 1 : 0.4)
+        }
+    }
+
     private var meterCard: some View {
         VStack(alignment: .leading, spacing: Theme.Space.md) {
-            StatRow(label: "DSP 부하",
-                    value: String(format: "%.0f%%", engine.dspLoadFraction * 100),
-                    valueColor: engine.dspLoadFraction > 0.8 ? Theme.Palette.red : Theme.Palette.textSecondary)
-            MeterBar(fraction: engine.dspLoadFraction, gradient: Theme.Gradient.dspLoad)
-
-            // The two remote kinds get their own load rows and stay visible whether or not they are
-            // in use — a row that vanishes cannot tell you it is idle. NDS is the dedicated
-            // appliance (its own OS and timing); 외부 노드 is a general-purpose machine, used when
-            // the local engine and NDS together run short.
-            // Whether a machine is ON is its own switch, not whether the monitor happens to be
-            // pointed at it: a node carrying only track inserts still has a load worth reading.
-            StatRow(label: "NDS 부하",
-                    value: remoteLoadText(.nds, active: engine.ndsEnabled),
-                    valueColor: engine.ndsEnabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
-            StatRow(label: "외부 노드 부하",
-                    value: remoteLoadText(.external, active: engine.externalDspEnabled),
-                    valueColor: engine.externalDspEnabled ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+            // Three machines, three meters. They are peers — work is assigned to any of them —
+            // so they read as peers: same row, same bar, same scale. All three stay visible
+            // whether or not they are in use, because a meter that vanishes cannot tell you it
+            // is idle, and a machine is ON by its own switch rather than by whether the monitor
+            // happens to point at it (a node carrying only track inserts still has a load).
+            sectionLabel("DSP 부하")
+            machineLoadMeter(label: "내장",
+                             on: true,
+                             fraction: engine.dspLoadFraction,
+                             text: String(format: "%.0f%%", engine.dspLoadFraction * 100),
+                             hot: engine.dspLoadFraction > 0.8)
+            machineLoadMeter(label: "NDS",
+                             on: engine.ndsEnabled,
+                             fraction: remoteLoadFraction(.nds),
+                             text: remoteLoadText(.nds, active: engine.ndsEnabled),
+                             hot: remoteLoadFraction(.nds) > 0.8)
+            machineLoadMeter(label: "외부 노드",
+                             on: engine.externalDspEnabled,
+                             fraction: remoteLoadFraction(.external),
+                             text: remoteLoadText(.external, active: engine.externalDspEnabled),
+                             hot: remoteLoadFraction(.external) > 0.8)
 
             StatRow(label: "지터 (Jitter)", value: String(format: "%.0f µs", engine.wakeJitterUs))
             // The jitter row above watches the OUTPUT render thread. A crackle while listening to
