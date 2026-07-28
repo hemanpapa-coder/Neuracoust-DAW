@@ -96,30 +96,10 @@ bool RemoteDspAsyncStream::process(const RemoteDspServerSettings& settings,
         configureLocked(settings, frameCount, lock);
     }
 
-    if (status_.processedBlocks == 0 && outputQueue_.empty() && inputQueue_.empty()) {
-        RemoteDspServerSettings primeSettings = settings_;
-        primeSettings.channelCount = 2;
-        primeSettings.frameCount = static_cast<uint16_t>(std::max<size_t>(1, frameCount_));
-        primeSettings.timeoutMs = std::max(2, primeSettings.timeoutMs);
-        lock.unlock();
-        std::vector<float> primedOutput;
-        const auto primeResult = processSession_.process(primeSettings, inputInterleavedStereo, parameters, primedOutput);
-        lock.lock();
-        if (!configured_ || stopRequested_) {
-            return false;
-        }
-        if (primeResult.processed && primedOutput.size() == inputInterleavedStereo.size()) {
-            recordRoundTripLocked(primeResult.roundTripMs);
-            ++status_.processedBlocks;
-            status_.outputReady = true;
-            status_.queuedOutputBlocks = static_cast<uint32_t>(outputQueue_.size());
-            status_.message = "Remote DSP async stream primed.";
-            outputInterleavedStereo = std::move(primedOutput);
-            return true;
-        }
-        ++status_.failedBlocks;
-        status_.message = "Remote DSP async prime failed: " + primeResult.message;
-    }
+    // No synchronous prime here. This runs on the audio render thread, and priming did a blocking
+    // network round trip with an 8 ms timeout against a 5.33 ms buffer period — so an unreachable
+    // node made every single block overrun, forever, because processedBlocks never left zero.
+    // The worker primes instead; until it succeeds this returns false and the caller stays dry.
 
     if (inputQueue_.size() >= kMaxInputQueueBlocks) {
         inputQueue_.pop_front();
@@ -134,10 +114,10 @@ bool RemoteDspAsyncStream::process(const RemoteDspServerSettings& settings,
         const double blockMs = settings.sampleRate > 0.0
             ? (static_cast<double>(frameCount) * 1000.0 / settings.sampleRate)
             : 1.0;
-        const bool coldStart = status_.processedBlocks == 0;
-        const double waitMs = coldStart
-            ? std::clamp(static_cast<double>(settings.timeoutMs > 0 ? settings.timeoutMs : 8) * 4.0, 8.0, 50.0)
-            : std::clamp(blockMs * 0.35, 0.25, 2.0);
+        // Never wait a large fraction of the block, and never wait longer while cold: the old
+        // cold-start branch parked the render thread for up to 50 ms waiting for a node that might
+        // never answer. A short wait absorbs ordinary network wobble; anything worse must go dry.
+        const double waitMs = std::clamp(blockMs * 0.20, 0.25, 1.0);
         const auto waitMicros = static_cast<int64_t>(waitMs * 1000.0);
         condition_.wait_for(lock,
                             std::chrono::microseconds(waitMicros),
