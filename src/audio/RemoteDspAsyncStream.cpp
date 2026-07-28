@@ -41,6 +41,10 @@ void RemoteDspAsyncStream::configureLocked(const RemoteDspServerSettings& settin
     targetBufferedBlocks_ = std::min<size_t>(targetBufferedBlocks_, 8);
     stopRequested_ = false;
     configured_ = true;
+    // A different node (or a changed buffer) starts fresh: carrying the old node's failure count
+    // across would leave the new one in backoff, probing once every few seconds for no reason.
+    consecutiveFailures_ = 0;
+    blocksSinceProbe_ = 0;
     inputQueue_.clear();
     outputQueue_.clear();
     previousRoundTripMs_ = 0.0;

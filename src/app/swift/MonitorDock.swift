@@ -927,12 +927,31 @@ struct MonitorDock: View {
 
     // MARK: Meters
 
+    /// A remote kind's load: the node's own busiest core while it is carrying work, "사용 안 함"
+    /// when that source is not selected, "대기" when it is selected but nothing has answered.
+    private func remoteLoadText(active: Bool) -> String {
+        guard active else { return "사용 안 함" }
+        guard let specs = engine.remoteNodeSpecs, specs.cpuLoadPercent >= 0 else { return "대기" }
+        return String(format: "%.0f%%", specs.cpuLoadPercent)
+    }
+
     private var meterCard: some View {
         VStack(alignment: .leading, spacing: Theme.Space.md) {
             StatRow(label: "DSP 부하",
                     value: String(format: "%.0f%%", engine.dspLoadFraction * 100),
                     valueColor: engine.dspLoadFraction > 0.8 ? Theme.Palette.red : Theme.Palette.textSecondary)
             MeterBar(fraction: engine.dspLoadFraction, gradient: Theme.Gradient.dspLoad)
+
+            // The two remote kinds get their own load rows and stay visible whether or not they are
+            // in use — a row that vanishes cannot tell you it is idle. NDS is the dedicated
+            // appliance (its own OS and timing); 외부 노드 is a general-purpose machine, used when
+            // the local engine and NDS together run short.
+            StatRow(label: "NDS 부하",
+                    value: remoteLoadText(active: engine.usesDspSource(.nds)),
+                    valueColor: engine.usesDspSource(.nds) ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
+            StatRow(label: "외부 노드 부하",
+                    value: remoteLoadText(active: engine.usesDspSource(.external)),
+                    valueColor: engine.usesDspSource(.external) ? Theme.Palette.textSecondary : Theme.Palette.textFainter)
 
             StatRow(label: "지터 (Jitter)", value: String(format: "%.0f µs", engine.wakeJitterUs))
             // The jitter row above watches the OUTPUT render thread. A crackle while listening to
@@ -1385,17 +1404,19 @@ struct MonitorDock: View {
                     .scaleEffect(0.7)
                     .frame(width: 34)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("외부 DSP 코어")
+                    Text("외부 노드 사용")
                         .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(Theme.Palette.textSecondary)
-                    Text(engine.externalDspEnabled ? "DSP 매니저 예약" : "사용 안 함")
+                    // No core-count stepper: a connected node reports its own core count and that
+                    // report wins, so the number only ever applied to a node that was not
+                    // answering — it read as control over something it did not control.
+                    Text(engine.externalDspEnabled
+                            ? (engine.remoteNodeSpecs.map { "코어 \($0.coreCount)개 (노드 보고)" } ?? "노드 대기")
+                            : "사용 안 함")
                         .font(Theme.Font.mono(7))
                         .foregroundStyle(Theme.Palette.textFaint)
                 }
                 Spacer()
-                externalCoreStepper
-                    .opacity(engine.externalDspEnabled ? 1 : 0.35)
-                    .disabled(!engine.externalDspEnabled)
             }
         }
         .padding(Theme.Space.xl)
