@@ -690,15 +690,52 @@ struct TransportBar: View {
     /// that width for the tabs, so narrowing the window no longer pushes them off (user's idea).
     private var thinMeters: some View {
         HStack(spacing: Theme.Space.md) {
-            compactMeter("오디오 입력", meterFraction(engine.inputPeak), Theme.Palette.green)
-            compactMeter("미디 입력", Double(engine.midiActivity), Theme.Palette.purple)
-            compactMeter("L", meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
-            compactMeter("R", meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+            // Grouped IN / MIDI / OUT the way the transport-bar design lays them out: one block with
+            // a row label each, and OUT as a stacked L/R pair rather than two separate meters. OUT
+            // is the control-room meter (the monitor bus before its level), so it follows solo and
+            // mono/stereo but not the monitor knob; IN and MIDI are activity indicators.
+            HStack(spacing: 5) {
+                meterRowLabel("IN")
+                meterBarCell(meterFraction(engine.inputPeak), Theme.Palette.green)
+            }
+            HStack(spacing: 5) {
+                meterRowLabel("MIDI")
+                meterBarCell(Double(engine.midiActivity), Theme.Palette.purple)
+            }
+            HStack(spacing: 5) {
+                meterRowLabel("OUT")
+                VStack(spacing: 2) {
+                    meterBarCell(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
+                    meterBarCell(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+                }
+            }
             Text(dbLabel)
                 .font(Theme.Font.mono(8, .semibold))
                 .foregroundStyle(Theme.Palette.yellow)
                 .frame(width: 30, alignment: .trailing)
         }
+    }
+
+    /// Row label inside the meter group — fixed width so IN / MIDI / OUT line their bars up.
+    private func meterRowLabel(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.Font.mono(7))
+            .foregroundStyle(Theme.Palette.textFaint)
+            .frame(width: 24, alignment: .leading)
+    }
+
+    /// One bar of the meter group, without a label of its own (OUT stacks two of these).
+    private func meterBarCell(_ fraction: Double, _ tint: Color) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(Theme.Palette.recess)
+                RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(tint)
+                    .mask(alignment: .leading) {
+                        Rectangle().frame(width: geo.size.width * max(0, min(1, fraction)))
+                    }
+            }
+        }
+        .frame(width: 54, height: 4)
     }
 
     private func compactMeter(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
