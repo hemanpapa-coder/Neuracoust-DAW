@@ -850,7 +850,10 @@ static void *run_monitor_server(void *arg) {
             break;
         }
         request[got] = '\0';
-        if (strstr(request, "NA_STATUS") == NULL) {
+        /* NA_STATUS is the direct query; NA_DISCOVER is the DAW's LAN broadcast. Both deserve
+         * the same status reply — answering only the first is why the DAW's 검색 button never
+         * found this node while a typed-in address worked fine. */
+        if (strstr(request, "NA_STATUS") == NULL && strstr(request, "NA_DISCOVER") == NULL) {
             continue;
         }
         build_status_payload(response, sizeof(response));
