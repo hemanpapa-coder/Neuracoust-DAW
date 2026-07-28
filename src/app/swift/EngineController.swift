@@ -3056,15 +3056,18 @@ final class EngineController: ObservableObject {
         guard !host.isEmpty else { return nil }
         var info = NCRemoteNodeInfo()
         guard host.withCString({ nc_dsp_probe_node_info($0, 120, &info) }) != 0 else { return nil }
+        // Quantised to what the UI displays (load 1%, trip 0.1 ms, temp 1°) — the raw values
+        // wobble on every probe, and a wobble that survives the Equatable compare republishes the
+        // specs and re-renders everything observing the controller, every two seconds, forever.
         return RemoteNodeSpecs(
             model: cStringField(&info.model),
             cpuModel: cStringField(&info.cpuModel),
             cpuMhz: info.cpuMhz,
             memoryMb: Int(info.memoryMb),
             coreCount: Int(info.coreCount),
-            roundTripMs: info.roundTripMs,
-            cpuLoadPercent: info.cpuLoadPercent,
-            temperatureC: info.temperatureC,
+            roundTripMs: (info.roundTripMs * 10).rounded() / 10,
+            cpuLoadPercent: info.cpuLoadPercent < 0 ? -1 : info.cpuLoadPercent.rounded(),
+            temperatureC: info.temperatureC.rounded(),
             packetsIn: info.packetsIn,
             packetsOut: info.packetsOut,
             badPackets: info.badPackets)
@@ -9841,11 +9844,51 @@ final class EngineController: ObservableObject {
     /// observing the controller — including open menus, whose checkmarks then visibly flicker.
     /// Writing only real changes means an idle engine publishes nothing and menus stay put.
     private func setIfChanged<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<EngineController, T>, _ value: T) {
-        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+        if self[keyPath: keyPath] != value {
+            if Self.diagPubLog { Self.pubCounts[String(describing: keyPath), default: 0] += 1 }
+            self[keyPath: keyPath] = value
+        }
     }
+
+    /// Diagnostic only (NC_DIAG_PUBLOG=1): count which properties actually publish, and print the
+    /// tally every 5 s. Measuring, not guessing — the whole idle cost turned out to be the poll's
+    /// publishes, so the next question is exactly WHICH ones fire on an idle engine.
+    private static let diagPubLog = ProcessInfo.processInfo.environment["NC_DIAG_PUBLOG"] != nil
+    private static var pubCounts: [String: Int] = [:]
+    private static var pubLogLast = Date()
+    private func dumpPubCountsIfDue() {
+        guard Self.diagPubLog, Date().timeIntervalSince(Self.pubLogLast) >= 5 else { return }
+        Self.pubLogLast = Date()
+        let sorted = Self.pubCounts.sorted { $0.value > $1.value }
+        // Straight to a file: stdout is block-buffered when redirected, so print() shows nothing.
+        let line = "PUBLOG " + sorted.prefix(14).map { "\($0.key.split(separator: ".").last ?? "?")=\($0.value)" }.joined(separator: " ") + "\n"
+        if let data = line.data(using: .utf8),
+           let fh = FileHandle(forWritingAtPath: "/tmp/nc-publog.txt") ?? {
+               FileManager.default.createFile(atPath: "/tmp/nc-publog.txt", contents: nil)
+               return FileHandle(forWritingAtPath: "/tmp/nc-publog.txt")
+           }() {
+            fh.seekToEndOfFile(); fh.write(data); try? fh.close()
+        }
+        Self.pubCounts.removeAll()
+    }
+
+    /// Diagnostic only (NC_DIAG_NOTICK=1): skip the whole status poll, so the idle cost of
+    /// "everything the poll publishes" can be measured as one number. Never set in normal use.
+    private static let diagNoTick = ProcessInfo.processInfo.environment["NC_DIAG_NOTICK"] != nil
+
+    /// Diagnostic only (NC_DIAG_TICKSTAGE=n): cut tick() short after stage n, so the cost of each
+    /// stage can be measured separately. 0/unset = run everything.
+    private static let diagTickStage = Int(ProcessInfo.processInfo.environment["NC_DIAG_TICKSTAGE"] ?? "") ?? 0
+
+    /// Smoothed telemetry state — see the publish site for why smoothing exists at all.
+    private var telemetrySmoothedJitterUs: Double = 0
+    private var telemetrySmoothedRenderUs: Double = 0
+    private var telemetrySmoothedRenderLoad: Double = 0
 
     private func tick() {
         guard let handle else { return }
+        if Self.diagNoTick { return }
+        dumpPubCountsIfDue()
 
         // While a menu (context menu, `Menu`, or the menu bar) is tracking, skip the whole
         // telemetry publish. Every setIfChanged below fires objectWillChange, re-rendering the
@@ -9860,21 +9903,33 @@ final class EngineController: ObservableObject {
             reloadSpeakerOutputRoutes(Int(status.outputChannels))
         }
 
+        if Self.diagTickStage == 1 { return }   // stage 1: status read only
         // The rest of the timing telemetry (jitter, render duration, DSP load) drifts a hair
         // every audio callback, so publishing it each poll re-laid-out the heavy MonitorDock
         // ~30×/s even at idle. Round it and refresh at ~6 Hz; a readout that ticks 6×/s is plenty.
         telemetrySlowCounter += 1
         if telemetrySlowCounter >= 5 {
             telemetrySlowCounter = 0
-            setIfChanged(\.wakeJitterUs, status.realtimeAverageWakeJitterUs.rounded())
+            // SMOOTH, then round to the resolution the UI actually displays. These numbers wobble
+            // by nature (jitter ±3 µs, render time ±50 µs), and each wobble that survives
+            // setIfChanged fires objectWillChange — which re-evaluates and RE-LAYS-OUT every view
+            // observing this controller. Measured on an idle engine: these three properties plus
+            // the node probe were the app's entire idle cost, 57.6% CPU against 1.6% with the poll
+            // off. Render duration was published at 1 µs against a 0.1 ms display — 100x finer
+            // than anyone could see. Smoothing settles the value; display-resolution rounding
+            // makes a settled value publish nothing at all.
+            telemetrySmoothedJitterUs = telemetrySmoothedJitterUs * 0.7 + status.realtimeAverageWakeJitterUs * 0.3
+            setIfChanged(\.wakeJitterUs, telemetrySmoothedJitterUs.rounded())
             setIfChanged(\.referenceTapFaults,
                          Int(status.referenceUnderrunBlocks) + Int(status.referenceOverrunDrops))
-            setIfChanged(\.maxRenderDurationUs, status.realtimeMaxRenderDurationUs.rounded())
-            setIfChanged(\.maxRenderLoad, (status.realtimeMaxRenderLoad * 1000).rounded() / 1000)
+            telemetrySmoothedRenderUs = telemetrySmoothedRenderUs * 0.7 + status.realtimeMaxRenderDurationUs * 0.3
+            setIfChanged(\.maxRenderDurationUs, (telemetrySmoothedRenderUs / 100).rounded() * 100)   // 0.1 ms display
+            telemetrySmoothedRenderLoad = telemetrySmoothedRenderLoad * 0.7 + status.realtimeMaxRenderLoad * 0.3
+            setIfChanged(\.maxRenderLoad, (telemetrySmoothedRenderLoad * 100).rounded() / 100)       // 1% display
             setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
-            setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 100).rounded() / 100)
+            setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 10).rounded() / 10)  // 0.1 ms display
             // Ask each remote machine what it is doing. Self-rate-limited to ~2 s and run off
             // the main thread; a connected node reported no load at all before this, because
             // only a manual 검색 ever asked.
@@ -9924,6 +9979,7 @@ final class EngineController: ObservableObject {
             setIfChanged(\.inputPeak, Self.decayedMeter(status.inputPeak, inputPeak))
             applyTrackMeters(status)
         }
+        if Self.diagTickStage == 2 { return }   // stage 2: + telemetry & meters
         setIfChanged(\.sampleRate, status.sampleRate)
         setIfChanged(\.bufferSize, Int(status.requestedBufferSize))
         setIfChanged(\.delayCompensationMs, status.delayCompensationMs)
@@ -9932,6 +9988,7 @@ final class EngineController: ObservableObject {
         })
 
         updatePlayhead(engineSeconds: status.playbackSeconds)
+        if Self.diagTickStage == 3 { return }   // stage 3: + playhead
         if pitchEditorClipId != nil && pitchEditorTimelineSync {
             pitchEditorClock.seconds = min(pitchEditorClipDuration,
                                            max(0, playheadSeconds - pitchEditorClipStartSeconds))
@@ -9974,6 +10031,7 @@ final class EngineController: ObservableObject {
         // menu / the dock appears instead; a proper CoreAudio change-listener is the way to add
         // hot-plug detection without polling.
 
+        if Self.diagTickStage == 4 { return }   // stage 4: + midi/hui/blinks
         pollMeasurement()
         if measurementLevelCheckActive || measuringInterface {
             measurementInputLevel = nc_measure_input_level(handle)

@@ -38,6 +38,13 @@ struct MonitorDock: View {
     }
     private func shows(_ panel: DockPanel) -> Bool { !hiddenPanels.contains(panel.rawValue) }
 
+    /// NC_DIAG_STRIP bisection gate, shared with RootView. Empty in normal use.
+    private static let diagStrip: Set<String> = {
+        guard let raw = ProcessInfo.processInfo.environment["NC_DIAG_STRIP"] else { return [] }
+        return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    }()
+    private static func diag(_ name: String) -> Bool { diagStrip.contains(name) }
+
     var body: some View {
         VStack(spacing: 0) {
             // Edit / Mix tabs live in the transport toolbar row (alongside the panel-toggle and
@@ -47,15 +54,17 @@ struct MonitorDock: View {
 
             ScrollView {
                 VStack(spacing: Theme.Space.xl) {
-                    inputSection
-                    levelAndModes
-                    outputMode
+                    // The Self.diag gates are the same NC_DIAG_STRIP bisection mechanism as
+                    // RootView's — see there. Empty in normal use.
+                    if !Self.diag("d-input") { inputSection }
+                    if !Self.diag("d-level") { levelAndModes }
+                    if !Self.diag("d-output") { outputMode }
                     if shows(.reference) { referenceMonitoring }
-                    if shows(.meter) { meterCard }
+                    if shows(.meter) && !Self.diag("d-meter") { meterCard }
                     if shows(.modules) { moduleList }
-                    if shows(.dspSource) { dspSource }
+                    if shows(.dspSource) && !Self.diag("d-dsp") { dspSource }
                     if shows(.listenRoom) { listenRoom }
-                    if shows(.remoteCore) { remoteCore }
+                    if shows(.remoteCore) && !Self.diag("d-remote") { remoteCore }
                 }
                 .padding(Theme.Space.xxl)
             }

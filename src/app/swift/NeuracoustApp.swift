@@ -271,6 +271,16 @@ struct RootView: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var ai: AiAssistantController
 
+    /// Diagnostic only: NC_DIAG_STRIP="transport,edit,dock,…" removes pieces of the view tree so
+    /// the idle-CPU cost can be bisected by measurement instead of by guessing — two hypotheses
+    /// (meter publishing, the mixer's self-measuring loop) were already measured wrong here.
+    /// Empty in normal use, so this costs nothing and changes nothing.
+    private static let diagStrip: Set<String> = {
+        guard let raw = ProcessInfo.processInfo.environment["NC_DIAG_STRIP"] else { return [] }
+        return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    }()
+    private func stripped(_ name: String) -> Bool { Self.diagStrip.contains(name) }
+
     var body: some View {
         ZStack {
             if engine.compactMonitorMode {
@@ -286,15 +296,19 @@ struct RootView: View {
 
     private var fullDawView: some View {
         VStack(spacing: 0) {
-            TitleBar()
-            TransportBar(clock: engine.playheadClock)
-            StatusStrip()
+            if !stripped("title") { TitleBar() }
+            if !stripped("transport") { TransportBar(clock: engine.playheadClock) }
+            if !stripped("status") { StatusStrip() }
 
             HStack(spacing: 0) {
                 Group {
-                    switch engine.viewTab {
-                    case .edit: EditView()
-                    case .mix: MixerView()
+                    if stripped("center") {
+                        Color.clear
+                    } else {
+                        switch engine.viewTab {
+                        case .edit: EditView()
+                        case .mix: MixerView()
+                        }
                     }
                 }
                 // The edit/mix area yields first as the window narrows (it may clip to nothing); the
@@ -304,7 +318,7 @@ struct RootView: View {
                 .layoutPriority(0)
                 .clipped()
 
-                if engine.showMonitorDock {
+                if engine.showMonitorDock && !stripped("dock") {
                     Rectangle().fill(Theme.Palette.deepBorder).frame(width: 1)
                     MonitorDock()
                         .frame(width: Theme.monitorDockWidth)

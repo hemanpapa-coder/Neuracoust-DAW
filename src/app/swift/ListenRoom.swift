@@ -350,28 +350,40 @@ final class ListenRoomController: ObservableObject {
     // MARK: Poll
 
     /// Called from EngineController's 30 Hz tick.
+    /// Assign a @Published only when the value actually changed. @Published fires
+    /// objectWillChange from willSet UNCONDITIONALLY — equality is never consulted — so the
+    /// unguarded assignments this used to make meant ~12 publishes x 30 Hz = ~360
+    /// objectWillChange/s on this controller at idle, with nothing changing at all. MonitorDock
+    /// observes this object, so that alone re-laid-out the dock every frame; measured, this one
+    /// function was the single largest idle cost in the app (~40 of 55 CPU points, window hidden
+    /// or not). The engine-side poll learned this same lesson earlier as setIfChanged.
+    private func setIfChanged<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<ListenRoomController, T>, _ value: T) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+    }
+
     func refresh() {
         guard let handle = engine.rawHandle else { return }
 
         var status = NCListenStatus()
         nc_listen_status(handle, &status)
 
-        senderRunning = status.senderRunning
-        relayReachable = status.relayReachable
-        offerReady = status.nativeWebRtcOfferReady
-        packetsQueued = status.packetsQueued
-        packetsDropped = status.packetsDropped
-        transportMode = withUnsafePointer(to: status.transportMode) {
+        setIfChanged(\.senderRunning, status.senderRunning)
+        setIfChanged(\.relayReachable, status.relayReachable)
+        setIfChanged(\.offerReady, status.nativeWebRtcOfferReady)
+        setIfChanged(\.packetsQueued, status.packetsQueued)
+        setIfChanged(\.packetsDropped, status.packetsDropped)
+        setIfChanged(\.transportMode, withUnsafePointer(to: status.transportMode) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(NC_TEXT_LEN)) { String(cString: $0) }
-        }
-        shareUrl = withUnsafePointer(to: status.shareUrl) {
+        })
+        setIfChanged(\.shareUrl, withUnsafePointer(to: status.shareUrl) {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
-        }
-        externalShareUrl = engine.readEngineString(capacity: 512) { nc_listen_external_share_url(handle, $0, $1) }
-        latencyTargetMs = Int(status.latencyTargetMs)
-        packetsSent = status.packetsSent
-        quality = engine.readEngineString { nc_listen_quality(handle, $0, $1) }
-        latencyMode = engine.readEngineString { nc_listen_latency_mode(handle, $0, $1) }
+        })
+        setIfChanged(\.externalShareUrl,
+                     engine.readEngineString(capacity: 512) { nc_listen_external_share_url(handle, $0, $1) })
+        setIfChanged(\.latencyTargetMs, Int(status.latencyTargetMs))
+        setIfChanged(\.packetsSent, status.packetsSent)
+        setIfChanged(\.quality, engine.readEngineString { nc_listen_quality(handle, $0, $1) })
+        setIfChanged(\.latencyMode, engine.readEngineString { nc_listen_latency_mode(handle, $0, $1) })
     }
 
     // MARK: Quality, latency, token, ping
