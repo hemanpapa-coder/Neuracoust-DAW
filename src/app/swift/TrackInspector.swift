@@ -426,7 +426,7 @@ struct TrackInspector: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("레벨").font(Theme.Font.ui(9)).foregroundStyle(Theme.Palette.textFaint)
             // The mixer's own meter view — same dB mapping, gradient and ballistics.
-            HorizontalMeter(peakLeft: track.peakLeft, peakRight: track.peakRight)
+            InspectorTrackMeter(trackName: track.name)
         }
     }
 
@@ -594,5 +594,18 @@ struct TrackInspector: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+    }
+}
+
+
+/// The inspector's level meter, split out so that observing the 15 Hz meter store re-renders one
+/// small view instead of the entire inspector.
+private struct InspectorTrackMeter: View {
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
+    let trackName: String
+
+    var body: some View {
+        let level = trackMeters.level(trackName)
+        HorizontalMeter(peakLeft: level.peakLeft, peakRight: level.peakRight)
     }
 }

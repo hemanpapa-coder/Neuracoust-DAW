@@ -618,6 +618,7 @@ private struct HarmonicsMiniBars: View {
 // gain from the same target math the processor uses, so the shape matches the sound.
 private struct DynamicsGraphView: View {
     @ObservedObject var engine: EngineController
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
     let trackId: Int
     private let lo = -60.0, hi = 0.0
     private let steps = 96
@@ -683,10 +684,11 @@ private struct DynamicsGraphView: View {
             // signal: the track's output peak is where the curve is being driven right now, and
             // input = output + gain reduction, so the dot rides the curve as the music plays.
             guard let t = engine.tracks.first(where: { $0.id == trackId }) else { return }
-            let peak = max(t.peakLeft, t.peakRight)
+            let level = trackMeters.level(t.name)
+            let peak = max(level.peakLeft, level.peakRight)
             guard peak > 0.00002 else { return }
             let outNow = Double(20 * log10f(peak))
-            let gr = Double(max(t.consoleCompGainReductionDb, t.consoleGateGainReductionDb))
+            let gr = Double(max(level.compGainReductionDb, level.gateGainReductionDb))
             let inNow = outNow + gr
             guard inNow > lo else { return }
             let px = x(min(hi, inNow)), py = y(max(lo, min(hi, outNow)))
@@ -714,6 +716,7 @@ private struct DynamicsGraphView: View {
 /// dynamics, saturator → harmonics (up to three panels). Panels are added per phase.
 struct ConsoleVizStrip: View {
     @ObservedObject var engine: EngineController
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
     let trackId: Int
     let width: CGFloat
     /// Mixer-wide height so every strip's fader still lines up when only some strips show panels.
@@ -765,8 +768,8 @@ struct ConsoleVizStrip: View {
                         vizPanel("다이나믹스", extra: Self.grMeterHeight) {
                             VStack(spacing: 1) {
                                 DynamicsGraphView(engine: engine, trackId: trackId)
-                                GrMeter(label: "GR", gr: max(track?.consoleCompGainReductionDb ?? 0,
-                                                             track?.consoleGateGainReductionDb ?? 0))
+                                GrMeter(label: "GR", gr: max(trackMeters.level(track?.name ?? "").compGainReductionDb,
+                                                             trackMeters.level(track?.name ?? "").gateGainReductionDb))
                                     .frame(height: 7)
                             }
                         }
@@ -935,6 +938,7 @@ private struct ConsoleModuleChrome<Content: View>: View {
 // MARK: - Wired module view
 
 struct NeuracoustConsoleModulesView: View {
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
     let module: MixerModuleFocus
     var width: CGFloat = 205
     @ObservedObject var engine: EngineController
@@ -1324,7 +1328,7 @@ struct NeuracoustConsoleModulesView: View {
 
     private var compress: some View {
         let tk = engine.tracks.first(where: { $0.id == trackId })
-        let gr = tk?.consoleCompGainReductionDb ?? 0
+        let gr = trackMeters.level(tk?.name ?? "").compGainReductionDb
         return ConsoleModuleChrome(title: "COMPRESS", modelName: tk?.consoleCompType ?? "SSL 4000E", models: EngineController.compModels, onSelectModel: { engine.setCompModel(trackId, $0) }, inOn: inOn, onToggleIn: onToggleIn) {
             VStack(spacing: 0) {
                 MixBar(engine: engine, trackId: trackId)
@@ -1349,7 +1353,7 @@ struct NeuracoustConsoleModulesView: View {
 
     private var gate: some View {
         let tk = engine.tracks.first(where: { $0.id == trackId })
-        let gr = tk?.consoleGateGainReductionDb ?? 0
+        let gr = trackMeters.level(tk?.name ?? "").gateGainReductionDb
         return ConsoleModuleChrome(title: "GATE / EXP", modelName: tk?.consoleGateType ?? "SSL 4000E", models: EngineController.gateModels, onSelectModel: { engine.setGateModel(trackId, $0) }, inOn: inOn, onToggleIn: onToggleIn) {
           VStack(spacing: 0) {
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112

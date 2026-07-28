@@ -48,8 +48,10 @@ struct TimelineModel: Equatable {
         var soloSilencedBlink: Bool = false
         var volumeDb: Float = 0
         var pan: Float = 0
-        var peakLeft: Float = 0
-        var peakRight: Float = 0
+        /// No meter levels here on purpose. TimelineModel is rebuilt from scratch whenever it is
+        /// read, so a peak on a lane meant every lane, clip, automation curve and chip in the
+        /// whole model was reconstructed ~15x a second. The view reads levels straight from the
+        /// meter store when it draws instead — see `trackMeters`.
         /// Read / Touch / Latch / Write / Off — drawn as a coloured letter the user cycles.
         var automationMode: String = "read"
         /// nil while the lane's automation is folded away.
@@ -169,6 +171,22 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard playheadSink == nil else { return }
         playheadSeconds = clock.seconds
         playheadSink = clock.$seconds.sink { [weak self] s in self?.playheadSeconds = s }
+    }
+
+    /// Lane meter levels, bound straight to the store with Combine for exactly the reason the
+    /// playhead above is: a 15 Hz value routed through the representable's update path invalidates
+    /// inside SwiftUI's layout pass and drags the whole hosting view into a re-layout loop. Only
+    /// the header column is marked dirty, so a moving meter never redraws the lanes.
+    private(set) var trackMeterLevels: [String: EngineController.TrackMeters.Level] = [:]
+    private var trackMeterSink: AnyCancellable?
+    func bindTrackMeters(_ meters: EngineController.TrackMeters) {
+        guard trackMeterSink == nil else { return }
+        trackMeterLevels = meters.levels
+        trackMeterSink = meters.$levels.sink { [weak self] levels in
+            guard let self else { return }
+            self.trackMeterLevels = levels
+            self.setNeedsDisplay(NSRect(x: 0, y: 0, width: Self.headerWidth, height: self.bounds.height))
+        }
     }
 
     /// Play or record in progress — a click on empty lane space must NOT relocate the playhead
@@ -2159,8 +2177,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             meterGradient?.draw(in: NSRect(x: meter.minX, y: y, width: meter.width, height: barHeight), angle: 0)
             NSGraphicsContext.restoreGraphicsState()
         }
-        meterBar(lane.peakLeft, atY: meter.minY)
-        meterBar(lane.peakRight, atY: meter.minY + barHeight + 1)
+        let level = trackMeterLevels[lane.name] ?? .init()
+        meterBar(level.peakLeft, atY: meter.minY)
+        meterBar(level.peakRight, atY: meter.minY + barHeight + 1)
     }
 
     /// The automation-mode chip (R/T/L/W/O), coloured like Pro Tools' mode buttons.
@@ -3274,6 +3293,9 @@ struct TimelineView: NSViewRepresentable {
     // NOT observed: the NSView subscribes to the clock itself (bindPlayheadClock) and moves only its
     // playhead layer, so the 30 Hz playhead never touches SwiftUI at all.
     let playheadClock: PlayheadClock
+    /// Also NOT observed, for the same reason: the NSView subscribes to the meter store itself and
+    /// redraws only the header column.
+    let trackMeters: EngineController.TrackMeters
     var isTransportRunning: Bool = false
     let waveforms: [String: EngineController.WaveformData]
     // Live audio-record clips (empty = not recording / plain background pass).
@@ -3389,6 +3411,7 @@ struct TimelineView: NSViewRepresentable {
     func makeNSView(context: Context) -> TimelineNSView {
         let view = TimelineNSView(frame: .zero)
         view.bindPlayheadClock(playheadClock)
+        view.bindTrackMeters(trackMeters)
         wire(view)
         return view
     }

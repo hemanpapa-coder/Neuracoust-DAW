@@ -27,7 +27,7 @@ final class AnalyzerWindowManager {
 
     func open(kind: AnalyzerKind, engine: EngineController) {
         let host = NSHostingController(
-            rootView: AnalyzerWindowView(kind: kind).environmentObject(engine))
+            rootView: AnalyzerWindowView(kind: kind).environmentObject(engine).environmentObject(engine.trackMeters))
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.title = "분석 — \(kind.label)"

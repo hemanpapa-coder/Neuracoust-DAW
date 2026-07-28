@@ -81,6 +81,7 @@ struct NeuracoustApp: App {
         Window("Neuracoust DAW", id: "main") {
             RootView()
                 .environmentObject(engine)
+                .environmentObject(engine.trackMeters)
                 .environmentObject(engine.pluginEditors)
                 .environmentObject(listen)
                 .environmentObject(ai)
@@ -261,6 +262,7 @@ struct NeuracoustApp: App {
         Window("가상 MIDI 키보드", id: "virtual-keyboard") {
             VirtualKeyboardView()
                 .environmentObject(engine)
+                .environmentObject(engine.trackMeters)
         }
         .defaultSize(width: 920, height: 250)
         .windowResizability(.contentMinSize)
@@ -613,6 +615,7 @@ private struct EditView: View {
                 TimelineView(
                     model: engine.timelineModel,
                     playheadClock: engine.playheadClock,
+                    trackMeters: engine.trackMeters,
                     isTransportRunning: engine.transportRunning || engine.recording,
                     waveforms: engine.waveforms,
                     recordingClips: engine.recordingClips,

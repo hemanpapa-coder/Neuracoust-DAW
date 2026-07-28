@@ -787,6 +787,11 @@ struct MixerView: View {
 struct ChannelStrip: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var editors: PluginEditorHost
+    /// Observed separately from `engine` on purpose: meter levels move ~15x a second and this is
+    /// the only reason a strip needs to re-render that often. See EngineController.TrackMeters.
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
+
+    private var meters: EngineController.TrackMeters.Level { trackMeters.level(track.name) }
 
     /// How many insert / send slots each strip pre-allocates (the engine ceiling is higher).
     static let mixerSlotCount = 10
@@ -1366,7 +1371,7 @@ struct ChannelStrip: View {
     /// above the output meter. Keeping it outside the compressor panel makes every
     /// strip line up and frees the processor panel from metering height.
     private var channelGainReductionMeter: some View {
-        let amount = CGFloat(max(0, min(20, track.consoleCompGainReductionDb)) / 20)
+        let amount = CGFloat(max(0, min(20, meters.compGainReductionDb)) / 20)
         return HStack(spacing: 3) {
             Text("GR")
                 .font(Theme.Font.mono(5.5, .bold))
@@ -1385,13 +1390,13 @@ struct ChannelStrip: View {
                 }
             }
             .frame(height: 4)
-            Text(String(format: "%.1f", track.consoleCompGainReductionDb))
+            Text(String(format: "%.1f", meters.compGainReductionDb))
                 .font(Theme.Font.mono(5.5, .semibold))
                 .foregroundStyle(Theme.Palette.textNumeric)
                 .frame(width: 19, alignment: .trailing)
         }
         .frame(height: 8)
-        .opacity(track.consoleCompEnabled || track.consoleCompGainReductionDb > 0.05 ? 1 : 0.42)
+        .opacity(track.consoleCompEnabled || meters.compGainReductionDb > 0.05 ? 1 : 0.42)
         .helpTip("채널 컴프레서 게인 리덕션")
     }
 
@@ -1491,7 +1496,7 @@ struct ChannelStrip: View {
                     .foregroundStyle(track.consoleGateEnabled
                                      ? Theme.Palette.textBright : Theme.Palette.textFaint)
                 Spacer(minLength: 0)
-                gainReductionMeter(track.consoleGateGainReductionDb, title: "GR dB")
+                gainReductionMeter(meters.gateGainReductionDb, title: "GR dB")
             }
             consoleModelPicker
             circuitModeSwitch(parameter: "gateCircuitMode", enabled: track.consoleGateCircuitMode)
@@ -2188,8 +2193,8 @@ struct ChannelStrip: View {
     // Master reads the master BUS (post fader, pre monitor path). The device output peak follows
     // the monitor volume knob, so metering it here made the Master meter move when only the
     // monitoring level changed — the mix itself had not.
-    private var meterPeakLeft: Float { track.kind == .master ? engine.masterBusPeakLeft : track.peakLeft }
-    private var meterPeakRight: Float { track.kind == .master ? engine.masterBusPeakRight : track.peakRight }
+    private var meterPeakLeft: Float { track.kind == .master ? engine.masterBusPeakLeft : meters.peakLeft }
+    private var meterPeakRight: Float { track.kind == .master ? engine.masterBusPeakRight : meters.peakRight }
 
     /// Master-only: an auto fade-out over the last N seconds, with a curve preview and
     /// picker. The seconds and curve write master volume automation in the engine.
@@ -2202,6 +2207,7 @@ struct ChannelStrip: View {
                 AutoFadeCurvePreview(curve: engine.autoFadeOutCurve,
                                      active: engine.autoFadeOutSeconds > 0)
                     .environmentObject(engine)
+                    .environmentObject(engine.trackMeters)
                     .frame(width: 30, height: 20)
                     // The curve is chosen by right-clicking the graph now (the text picker
                     // below was redundant).

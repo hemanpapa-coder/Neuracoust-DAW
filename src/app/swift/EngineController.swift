@@ -302,6 +302,37 @@ final class EngineController: ObservableObject {
         var soloed: Bool = false
     }
 
+    /// Track meter levels, deliberately NOT on `Track`.
+    ///
+    /// They move ~15x a second, and `tracks` is read by the mixer, the timeline and the inspector
+    /// — and `timelineModel` is a computed property built from it, so every lane, clip, automation
+    /// curve, insert chip and send chip was reconstructed fifteen times a second because a meter
+    /// twitched. Profiling put SwiftUI layout at well over a core while the audio engine sat at
+    /// 8%, and it kept running with the window hidden: invisible views were being re-laid-out for
+    /// meters nobody could see.
+    ///
+    /// Living in their own observable object means only the views that actually draw a meter are
+    /// invalidated when one moves.
+    final class TrackMeters: ObservableObject {
+        struct Level: Equatable {
+            var peakLeft: Float = 0
+            var peakRight: Float = 0
+            var compGainReductionDb: Float = 0
+            var gateGainReductionDb: Float = 0
+        }
+        @Published private(set) var levels: [String: Level] = [:]
+
+        func level(_ trackName: String) -> Level { levels[trackName] ?? Level() }
+
+        /// Publish only on a real change, so an idle mix settles to no publishing at all rather
+        /// than re-rendering every meter view forever on an asymptotic decay.
+        func apply(_ next: [String: Level]) {
+            if next != levels { levels = next }
+        }
+    }
+
+    let trackMeters = TrackMeters()
+
     struct Track: Identifiable {
         let id: Int
         let name: String
@@ -355,14 +386,10 @@ final class EngineController: ObservableObject {
         var consoleSaturatorCircuitMode = false
         var consoleExpanderMode = true
         var consoleGateFastAttack = false
-        var consoleGateGainReductionDb: Float = 0
 
         /// Plugin delay compensation applied to this track/bus, in samples (0 = none). Shown per
         /// strip when the mixer's PDC readout is on.
         var delayCompSamples: Int = 0
-
-        var peakLeft: Float = 0
-        var peakRight: Float = 0
 
         var panLabel: String {
             let value = Int((abs(pan) * 100).rounded())
@@ -5188,8 +5215,6 @@ final class EngineController: ObservableObject {
                                               && track.kind.hasSolo && soloBlinkOn,
                                           volumeDb: track.volumeDb,
                                           pan: track.pan,
-                                          peakLeft: track.peakLeft,
-                                          peakRight: track.peakRight,
                                           automationMode: track.automationMode,
                                           automation: automation,
                                           inserts: track.inserts.prefix(4).map {
@@ -7614,24 +7639,21 @@ final class EngineController: ObservableObject {
             }
         }
 
-        for index in tracks.indices {
-            let (left, right, gainReduction, gateGainReduction) = peaks[tracks[index].name] ?? (0, 0, 0, 0)
+        // Into the meter store, never into `tracks` — see TrackMeters for why that distinction is
+        // the difference between invalidating four view trees and invalidating the meters.
+        var next: [String: TrackMeters.Level] = [:]
+        next.reserveCapacity(tracks.count)
+        for track in tracks {
+            let (left, right, gainReduction, gateGainReduction) = peaks[track.name] ?? (0, 0, 0, 0)
+            let previous = trackMeters.level(track.name)
             // Ballistic, so a track meter falls to silence on stop instead of freezing.
-            // Assign only on change: an idle strip must not republish tracks every tick, or
-            // every menu observing the controller flickers.
-            let nl = Self.decayedMeter(left, tracks[index].peakLeft)
-            let nr = Self.decayedMeter(right, tracks[index].peakRight)
-            if nl != tracks[index].peakLeft { tracks[index].peakLeft = nl }
-            if nr != tracks[index].peakRight { tracks[index].peakRight = nr }
-            let ngr = Self.decayedMeter(gainReduction, tracks[index].consoleCompGainReductionDb)
-            if ngr != tracks[index].consoleCompGainReductionDb {
-                tracks[index].consoleCompGainReductionDb = ngr
-            }
-            let nggr = Self.decayedMeter(gateGainReduction, tracks[index].consoleGateGainReductionDb)
-            if nggr != tracks[index].consoleGateGainReductionDb {
-                tracks[index].consoleGateGainReductionDb = nggr
-            }
+            next[track.name] = TrackMeters.Level(
+                peakLeft: Self.decayedMeter(left, previous.peakLeft),
+                peakRight: Self.decayedMeter(right, previous.peakRight),
+                compGainReductionDb: Self.decayedMeter(gainReduction, previous.compGainReductionDb),
+                gateGainReductionDb: Self.decayedMeter(gateGainReduction, previous.gateGainReductionDb))
         }
+        trackMeters.apply(next)
     }
 
     /// Per-tick meter release. At ~30 Hz this falls a held peak to silence in ~0.2 s.
@@ -9952,7 +9974,7 @@ final class EngineController: ObservableObject {
         // 0 dBFS. Linear 0.98 ≈ -0.18 dB, just under the strip's red threshold, so a red
         // readout always has the blink running behind it.
         let clipping = outputPeakLeft >= 0.98 || outputPeakRight >= 0.98
-            || tracks.contains { max($0.peakLeft, $0.peakRight) >= 0.98 }
+            || trackMeters.levels.values.contains { max($0.peakLeft, $0.peakRight) >= 0.98 }
         let cb = clipping && Int(CACurrentMediaTime() * 2.6).isMultiple(of: 2)
         if cb != clipBlinkOn { clipBlinkOn = cb }
 
