@@ -2928,6 +2928,10 @@ final class EngineController: ObservableObject {
             case .inserts: return "인서트"
             }
         }
+        /// Whether picking a machine for this job actually changes where the audio is processed.
+        /// All four route today; the flag stays so a future job can be added honestly rather than
+        /// shipped as a row that quietly does nothing.
+        var routed: Bool { true }
     }
     @Published private(set) var dspRoles: [String: DspMachine] = [:]
     @Published private(set) var dspAutoOverflow = false

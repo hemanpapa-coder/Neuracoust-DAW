@@ -950,6 +950,9 @@ struct MonitorDock: View {
                         .frame(width: 62, alignment: .leading)
                     ForEach(EngineController.DspMachine.allCases) { machine in
                         let picked = engine.dspRole(job) == machine
+                        // A job with no remote path yet still stores its assignment, but it must
+                        // not look live: amber, not teal, so the row reads as "saved, not routed".
+                        let live = picked && (job.routed || machine == .internalDsp)
                         Button { engine.setDspRole(job, machine) } label: {
                             Text(machine.label)
                                 .font(Theme.Font.mono(7.5, picked ? .bold : .regular))
@@ -957,7 +960,8 @@ struct MonitorDock: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 3)
                                 .background(RoundedRectangle(cornerRadius: 3)
-                                    .fill(picked ? Theme.Palette.teal : Theme.Palette.keyFace))
+                                    .fill(!picked ? Theme.Palette.keyFace
+                                          : live ? Theme.Palette.teal : Theme.Palette.amber))
                         }
                         .buttonStyle(.plain)
                     }
@@ -966,6 +970,21 @@ struct MonitorDock: View {
             Text(engine.dspAutoOverflow
                     ? "배정한 기계가 모자라면 내장 → NDS → 외부 노드 순으로 넘어갑니다."
                     : "배정한 기계에서만 처리합니다. 모자라도 다른 기계로 넘어가지 않습니다.")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFainter)
+                .fixedSize(horizontal: false, vertical: true)
+            // Say plainly what a remote assignment does and does not cover, so the table is not
+            // read as "the DAW runs on the node". Playback, recording, instruments, third-party
+            // plug-ins and the bounce are always local — the bounce deliberately so.
+            let unrouted = EngineController.DspJob.allCases
+                .filter { !$0.routed && engine.dspRole($0) != .internalDsp }
+            if !unrouted.isEmpty {
+                Text("주황색 = 저장만 됨 (\(unrouted.map(\.label).joined(separator: " · "))은 아직 원격 경로가 없어 내장에서 처리)")
+                    .font(Theme.Font.mono(6.5))
+                    .foregroundStyle(Theme.Palette.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("파일 재생·녹음 캡처·악기·서드파티 플러그인·믹스다운은 항상 이 맥에서 처리합니다.")
                 .font(Theme.Font.mono(6.5))
                 .foregroundStyle(Theme.Palette.textFainter)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1512,7 +1531,9 @@ struct MonitorDock: View {
     private func machineDetail(_ machine: EngineController.DspMachine, on: Bool) -> String {
         guard on else { return "사용 안 함" }
         guard let specs = engine.nodeSpecs(for: machine) else { return "응답 없음" }
-        let jobs = EngineController.DspJob.allCases.filter { engine.dspRole($0) == machine }
+        // Only jobs that actually route: listing 마스터 here claimed the master bus was running on
+        // the node when nothing sends it there.
+        let jobs = EngineController.DspJob.allCases.filter { engine.dspRole($0) == machine && $0.routed }
         let where_ = jobs.isEmpty ? "배정 대기" : jobs.map(\.label).joined(separator: " · ")
         return "코어 \(specs.coreCount)개 · \(where_)"
     }

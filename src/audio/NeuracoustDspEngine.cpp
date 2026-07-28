@@ -3114,9 +3114,14 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked() {
     std::map<std::string, RemoteConsoleStrip> next;
     activeRemoteConsoleStripCount_ = 0;
     for (const auto& track : projectPlan_.tracks) {
+        // The master bus is its own job: a session commonly keeps the channels local and sends
+        // only the master to the appliance, or the reverse.
+        const bool isMaster = track.trackType == "master" || track.name == "Master";
+        const std::string& projectRole = isMaster ? settings_.remoteDspServer.roleMaster
+                                                  : settings_.remoteDspServer.roleChannelStrip;
         const std::string mode = remoteDspModeForRole(
             settings_.remoteDspServer,
-            effectiveDspMachine(track.consoleDspMachine, settings_.remoteDspServer.roleChannelStrip));
+            effectiveDspMachine(track.consoleDspMachine, projectRole));
         if (!remoteDspModeAvailable(settings_.remoteDspServer, mode)) {
             continue;
         }

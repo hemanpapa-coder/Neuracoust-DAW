@@ -2421,6 +2421,22 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             }
         }
     }
+    // The Master strip's own console channel, pre-fader, exactly where a channel's sits. It was
+    // drawn in the mixer and never rendered: the route loop skips the master route and nothing
+    // here ran it, so every knob on the Master strip's FLT/EQ/GAT/CMP/SAT did nothing. Pre-fader
+    // so the master meter below, which is post-fader, actually includes it.
+    //
+    // Same detour hook as the channels — the map is keyed by track name and "Master" is a track —
+    // so the master bus goes to a remote machine when it is assigned to one, and the offline
+    // bounce (which never installs the hook) always processes it here.
+    if (const TrackState* masterStrip = findTrack(plan, "Master")) {
+        const bool handledRemotely =
+            state.remoteConsoleStrip && state.remoteConsoleStrip("Master", interleavedStereo);
+        if (!handledRemotely) {
+            state.consoleChannelProcessors["Master"]
+                .processInterleavedStereo(interleavedStereo, masterStrip->consoleChannel, plan.sampleRate);
+        }
+    }
     if (const TrackState* master = findTrack(plan, "Master")) {
         for (int64_t frameOffset = 0; frameOffset < frameCount; ++frameOffset) {
             const int64_t timelineFrame = timelineFrameForPlaybackFrame(plan, startFrame + frameOffset);
