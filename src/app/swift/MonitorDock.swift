@@ -468,6 +468,24 @@ struct MonitorDock: View {
         modelMenu("실물 헤드폰 모델", catalog: engine.headphoneModelCatalog,
                   selected: engine.physicalHeadphoneModel,
                   measured: engine.measuredHeadphoneTargetSet) { engine.setPhysicalHeadphoneModel($0) }
+        // The headphone side's OWN output pair — no longer riding the active speaker slot's
+        // route. "메인 (기본)" is the main L/R pair, the same non-mute meaning as the speaker
+        // slots' "None".
+        Menu("물리 출력") {
+            let current = engine.headphoneOutputRoute
+            Button { engine.setHeadphoneOutput("") } label: {
+                Text((current.isEmpty || current == "None" ? "✓ " : "") + "메인 (기본)")
+            }
+            Button { engine.setHeadphoneOutput("Main 1-2") } label: {
+                Text((current == "Main 1-2" ? "✓ " : "") + "Main 1-2")
+            }
+            ForEach(Array(stride(from: 3, through: 31, by: 2)), id: \.self) { first in
+                let route = "Output \(first)-\(first + 1)"
+                Button { engine.setHeadphoneOutput(route) } label: {
+                    Text((current == route ? "✓ " : "") + route)
+                }
+            }
+        }
         audioInterfaceMenuGroup
     }
 

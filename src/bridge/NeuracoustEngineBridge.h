@@ -1608,6 +1608,13 @@ void nc_monitor_set_speaker_model(NCEngine* engine, int slot, const char* model)
 void nc_monitor_set_speaker_real_model(NCEngine* engine, int slot, const char* model);
 void nc_monitor_speaker_real_model(NCEngine* engine, int slot, char* out, size_t outLen);
 void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route);
+// The headphone side's OWN physical output pair, independent of the A/B/C speaker slots
+// ("" / "None" = the main pair). The engine routes to it whenever the monitor destination is
+// headphone — which nc_monitor_set_output_to_headphone reports from the 스피커/헤드폰 tab.
+void nc_monitor_headphone_output(NCEngine* engine, char* out, size_t outLen);
+void nc_monitor_set_headphone_output(NCEngine* engine, const char* route);
+bool nc_monitor_output_to_headphone(NCEngine* engine);
+void nc_monitor_set_output_to_headphone(NCEngine* engine, bool headphone);
 void nc_monitor_set_speaker_room_eq(NCEngine* engine, int slot, bool enabled);
 // Per-slot amp/cable for a passive modeled speaker (heuristic tone folded into the monitor EQ).
 void nc_monitor_speaker_amp(NCEngine* engine, int slot, char* out, size_t outLen);

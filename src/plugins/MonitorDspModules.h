@@ -51,6 +51,14 @@ struct MonitorDspModule {
     std::string realCableA;
     std::string realCableB;
     std::string realCableC;
+    // The HEADPHONE side's own physical output pair — independent of the A/B/C speaker slots,
+    // which the headphone path silently rode until now (switching to 헤드폰 changed the DSP
+    // context but kept playing out of whatever pair the active speaker slot used). "" / "None"
+    // means the main pair, the same non-mute convention as the speaker routes. monitorToHeadphone
+    // is the 스피커/헤드폰 tab made visible to the engine, which routes by it. Kept LAST for
+    // aggregate-init order.
+    std::string headphoneOutput;
+    bool monitorToHeadphone = false;
 };
 
 std::vector<MonitorDspModule> defaultMonitorDspModules();

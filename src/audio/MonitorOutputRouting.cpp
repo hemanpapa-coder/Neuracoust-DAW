@@ -114,6 +114,13 @@ int monitorOutputRequiredChannels(const std::vector<MonitorDspModule>& modules) 
             required = std::max(required, right + 1);
         }
     }
+    {
+        int left = 0;
+        int right = 1;
+        if (parseRoutePair(module.headphoneOutput, left, right)) {
+            required = std::max(required, right + 1);
+        }
+    }
     return required;
 }
 
@@ -126,6 +133,43 @@ MonitorOutputRoute resolveMonitorOutputRoute(const std::vector<MonitorDspModule>
     }
 
     const auto& module = modules.front();
+
+    // Headphone destination: its OWN route, never the speaker slots'. The 스피커/헤드폰 tab
+    // used to change only the DSP context while the audio kept leaving on the active speaker
+    // slot's pair — with speakers and headphones on different interface outputs, "headphone"
+    // still fed the speakers.
+    if (module.monitorToHeadphone) {
+        const auto route = compactRouteName(module.headphoneOutput);
+        result.requestedRoute = route;
+        result.displayRoute = route;
+        result.description = "Headphone -> " + route;
+        if (routeIsNone(route)) {
+            result.assigned = true;
+            result.available = availableChannels >= 2;
+            result.leftChannel = 0;
+            result.rightChannel = 1;
+            result.displayRoute = "Main 1-2";
+            result.description = "Headphone -> Main 1-2";
+            return result;
+        }
+        int left = 0;
+        int right = 1;
+        if (!parseRoutePair(route, left, right)) {
+            result.assigned = true;
+            result.available = availableChannels >= 2;
+            result.leftChannel = 0;
+            result.rightChannel = 1;
+            return result;
+        }
+        result.leftChannel = left;
+        result.rightChannel = right;
+        result.available = right < availableChannels;
+        if (!result.available) {
+            result.description += " (장치 채널 부족)";
+        }
+        return result;
+    }
+
     const auto route = compactRouteName(effectiveRouteForSlot(module, result.activeSlot));
     result.requestedRoute = route;
     result.displayRoute = route;

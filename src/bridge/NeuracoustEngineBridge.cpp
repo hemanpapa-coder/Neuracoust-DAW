@@ -9271,6 +9271,36 @@ void nc_monitor_set_speaker_output(NCEngine* engine, int slot, const char* route
     engine->pushModules();
 }
 
+void nc_monitor_headphone_output(NCEngine* engine, char* out, size_t outLen) {
+    const MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    copyText(out, outLen, module != nullptr ? module->headphoneOutput : std::string{});
+}
+
+void nc_monitor_set_headphone_output(NCEngine* engine, const char* route) {
+    if (engine == nullptr || route == nullptr) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr || module->headphoneOutput == route) return;
+    module->headphoneOutput = route;
+    engine->recordStep("Set headphone output");
+    engine->pushModules();
+}
+
+bool nc_monitor_output_to_headphone(NCEngine* engine) {
+    const MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;
+    return module != nullptr && module->monitorToHeadphone;
+}
+
+// The 스피커/헤드폰 tab, delivered to the engine so ROUTING can follow it — the tab used to
+// switch only the DSP context while the audio kept leaving on the speaker slot's pair. Not an
+// undo step, same as the listen buttons: it is monitor state, not an edit.
+void nc_monitor_set_output_to_headphone(NCEngine* engine, bool headphone) {
+    if (engine == nullptr) return;
+    MonitorDspModule* module = engine->speakerSimulation();
+    if (module == nullptr || module->monitorToHeadphone == headphone) return;
+    module->monitorToHeadphone = headphone;
+    engine->pushModules();
+}
+
 // Per-slot power amp / cable for a passive modeled speaker (heuristic tone; applied in eq_sync).
 void nc_monitor_speaker_amp(NCEngine* engine, int slot, char* out, size_t outLen) {
     MonitorDspModule* module = engine != nullptr ? engine->speakerSimulation() : nullptr;

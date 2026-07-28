@@ -2875,7 +2875,24 @@ final class EngineController: ObservableObject {
     /// which simulation module is enabled. Switching it re-derives the single monitor EQ
     /// (headphone drops the speaker model curve; speaker restores it).
     @Published var outputMode: OutputMode = .speaker {
-        didSet { if oldValue != outputMode { syncMonitorEqToContext() } }
+        didSet {
+            guard oldValue != outputMode else { return }
+            // The engine ROUTES by this now (the headphone side has its own output pair), so
+            // the tab is engine state, not just an EQ-context hint.
+            if let handle { nc_monitor_set_output_to_headphone(handle, outputMode == .headphone) }
+            syncMonitorEqToContext()
+        }
+    }
+
+    /// The headphone side's own physical output pair ("" = the main pair) — independent of the
+    /// A/B/C speaker slots, which used to carry the headphone audio silently.
+    @Published private(set) var headphoneOutputRoute = ""
+
+    func setHeadphoneOutput(_ route: String) {
+        guard let handle else { return }
+        route.withCString { nc_monitor_set_headphone_output(handle, $0) }
+        headphoneOutputRoute = readEngineString { nc_monitor_headphone_output(handle, $0, $1) }
+        refreshHistory()
     }
 
     struct OutputDevice: Identifiable, Hashable { let id: String; let name: String }
@@ -7779,6 +7796,14 @@ final class EngineController: ObservableObject {
         guard let handle else { return }
 
         reloadVrState()
+        setIfChanged(\.headphoneOutputRoute,
+                     readEngineString { nc_monitor_headphone_output(handle, $0, $1) })
+        // Project load carries the saved destination back into the tab (didSet re-pushes the
+        // same value, which the bridge ignores as a no-op).
+        let toHeadphone = nc_monitor_output_to_headphone(handle)
+        if (outputMode == .headphone) != toHeadphone {
+            outputMode = toHeadphone ? .headphone : .speaker
+        }
         monitorModules = (0..<Int(nc_monitor_module_count(handle))).map { index in
             let i = Int32(index)
             return MonitorModule(
