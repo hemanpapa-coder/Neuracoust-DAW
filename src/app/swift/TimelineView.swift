@@ -154,6 +154,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
             guard model != oldValue else { return }
             needsDisplay = true
             window?.invalidateCursorRects(for: self)
+            layoutHeaderMeterLayers()
         }
     }
 
@@ -185,7 +186,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         trackMeterSink = meters.$levels.sink { [weak self] levels in
             guard let self else { return }
             self.trackMeterLevels = levels
-            self.setNeedsDisplay(NSRect(x: 0, y: 0, width: Self.headerWidth, height: self.bounds.height))
+            self.updateHeaderMeterLevels()
         }
     }
 
@@ -575,6 +576,20 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     static let headerWidth: CGFloat = 150
 
     private let playheadLayer = CALayer()
+
+    /// The lane-header stereo meters as LAYERS, not draw(_:) content. The meter store publishes
+    /// ~15x/s whenever signal flows, and the old path answered each publish with a full-view
+    /// drawRect — ruler, grid, clips, waveforms, everything — because draw() paints bounds, not
+    /// the dirty rect. A layer's frame change commits without any drawing (the same reason the
+    /// playhead and the drop band are layers). One entry per visible lane, keyed by track name.
+    private struct HeaderMeterLayer {
+        let container = CALayer()
+        let left = CAGradientLayer()
+        let right = CAGradientLayer()
+        let leftMask = CALayer()
+        let rightMask = CALayer()
+    }
+    private var headerMeterLayers: [String: HeaderMeterLayer] = [:]
     /// The drop target is its own layer, not draw(_:), because a layer-backed view
     /// does not flush draw(_:) during the drag-tracking run loop but a layer change
     /// commits immediately — the same reason the playhead lives in a layer.
@@ -1492,6 +1507,7 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         guard next != scrollY else { return }
         scrollY = next
         needsDisplay = true
+        layoutHeaderMeterLayers()
     }
 
     // MARK: File drop
@@ -1605,6 +1621,73 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         scrollY = min(scrollY, maximumScrollY)
         super.layout()
         layoutPlayhead()
+        layoutHeaderMeterLayers()
+    }
+
+    /// (Re)position the header meter layers for the current lanes / scroll / lane heights.
+    /// Called wherever the header geometry can change; cheap (a dozen frame sets).
+    private func layoutHeaderMeterLayers() {
+        guard let hostLayer = layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        var seen = Set<String>()
+        for (index, lane) in model.lanes.enumerated() {
+            guard laneShowsFaderRow(index) else { continue }
+            let rect = headerMeterRect(index)
+            // Fully scrolled out of the lane area: hide rather than draw over the ruler.
+            guard rect.maxY > rulerHeight, rect.minY < bounds.height else { continue }
+            seen.insert(lane.name)
+            let entry = headerMeterLayers[lane.name] ?? {
+                let entry = HeaderMeterLayer()
+                entry.container.backgroundColor = NSColor(hex: 0x140f0a).cgColor
+                entry.container.cornerRadius = 1
+                entry.container.zPosition = 5
+                for (bar, mask) in [(entry.left, entry.leftMask), (entry.right, entry.rightMask)] {
+                    bar.colors = [NSColor(hex: 0x46d17f).cgColor,
+                                  NSColor(hex: 0xe6d24a).cgColor,
+                                  NSColor(hex: 0xff5252).cgColor]
+                    bar.locations = [0.0, 0.6, 1.0]
+                    bar.startPoint = CGPoint(x: 0, y: 0.5)
+                    bar.endPoint = CGPoint(x: 1, y: 0.5)
+                    mask.backgroundColor = NSColor.black.cgColor
+                    bar.mask = mask
+                    entry.container.addSublayer(bar)
+                }
+                hostLayer.addSublayer(entry.container)
+                headerMeterLayers[lane.name] = entry
+                return entry
+            }()
+            entry.container.isHidden = false
+            entry.container.frame = rect
+            let barHeight = (rect.height - 1) / 2
+            entry.left.frame = CGRect(x: 0, y: 0, width: rect.width, height: barHeight)
+            entry.right.frame = CGRect(x: 0, y: barHeight + 1, width: rect.width, height: barHeight)
+        }
+        for (name, entry) in headerMeterLayers where !seen.contains(name) {
+            entry.container.isHidden = true
+            _ = name
+        }
+        CATransaction.commit()
+        updateHeaderMeterLevels()
+    }
+
+    /// Push the current levels into the mask widths. No drawing, no invalidation.
+    private func updateHeaderMeterLevels() {
+        guard !headerMeterLayers.isEmpty else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (name, entry) in headerMeterLayers {
+            let level = trackMeterLevels[name] ?? .init()
+            let width = entry.container.bounds.width
+            let barHeight = entry.left.bounds.height
+            entry.leftMask.frame = CGRect(x: 0, y: 0,
+                                          width: width * CGFloat(meterFraction(level.peakLeft)),
+                                          height: barHeight)
+            entry.rightMask.frame = CGRect(x: 0, y: 0,
+                                           width: width * CGFloat(meterFraction(level.peakRight)),
+                                           height: barHeight)
+        }
+        CATransaction.commit()
     }
 
     private func layoutPlayhead() {
@@ -2159,27 +2242,9 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         drawHeaderFader(index: index, lane: lane)
         drawHeaderPan(index: index, lane: lane)
 
-        // Stereo peak meter: L bar on top, R below. Same dB mapping + green→yellow→red
-        // gradient as the mixer's HorizontalMeter, so the track meter reads identically.
-        let meter = headerMeterRect(index)
-        NSColor(hex: 0x140f0a).setFill()
-        NSBezierPath(roundedRect: meter, xRadius: 1, yRadius: 1).fill()
-        let barHeight = (meter.height - 1) / 2
-        let meterGradient = NSGradient(colors: [NSColor(hex: 0x46d17f), NSColor(hex: 0xe6d24a), NSColor(hex: 0xff5252)],
-                                       atLocations: [0.0, 0.6, 1.0], colorSpace: .deviceRGB)
-        func meterBar(_ level: Float, atY y: CGFloat) {
-            let frac = CGFloat(meterFraction(level))
-            guard frac > 0.001 else { return }
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: NSRect(x: meter.minX, y: y, width: meter.width * frac, height: barHeight)).addClip()
-            // Draw the gradient across the full width so a colour maps to a level, not to the
-            // bar's own length; the clip reveals only up to the current level.
-            meterGradient?.draw(in: NSRect(x: meter.minX, y: y, width: meter.width, height: barHeight), angle: 0)
-            NSGraphicsContext.restoreGraphicsState()
-        }
-        let level = trackMeterLevels[lane.name] ?? .init()
-        meterBar(level.peakLeft, atY: meter.minY)
-        meterBar(level.peakRight, atY: meter.minY + barHeight + 1)
+        // The stereo peak meter itself is a set of LAYERS (headerMeterLayers) — drawn content
+        // would drag the whole view's drawRect along at meter rate. Same dB mapping + gradient
+        // as the mixer's HorizontalMeter, so the track meter reads identically.
     }
 
     /// The automation-mode chip (R/T/L/W/O), coloured like Pro Tools' mode buttons.

@@ -113,7 +113,10 @@ struct TransportBar: View {
     @EnvironmentObject private var engine: EngineController
     // The playhead moved off the engine object; observe it here so the timecode / bars-beats readout
     // still updates during playback (without re-rendering the heavy dock, which no longer sees it).
-    @ObservedObject var clock: PlayheadClock
+    /// NOT @ObservedObject: the clock publishes 30x/s during playback, and observing it here
+    /// re-evaluated and re-laid-out the entire transport bar every frame. Only the two views
+    /// that actually move — the numerals and the top playhead line — observe it, below.
+    let clock: PlayheadClock
     @State private var editingPod: String?
     @State private var podDraft = ""
     @State private var barWidth: CGFloat = 0
@@ -158,12 +161,7 @@ struct TransportBar: View {
         // The design's one moving element outside the numerals: a 2 pt line across the top of the
         // bar showing where the playhead sits inside the visible timeline.
         .overlay(alignment: .top) {
-            GeometryReader { geo in
-                Rectangle()
-                    .fill(Theme.Palette.accent)
-                    .frame(width: geo.size.width * playheadFraction, height: 2)
-            }
-            .frame(height: 2)
+            TransportPlayheadLine(clock: clock)
         }
         .background(
             GeometryReader { geo in
@@ -587,26 +585,7 @@ struct TransportBar: View {
     /// everything else steps down from it in size and brightness. No panel behind them — the
     /// design drops the recessed boxes and lets the numerals carry the block on their own.
     private var displays: some View {
-        let position = engine.barsBeats
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(engine.timecode)
-                .font(Theme.Font.mono(30, .medium))
-                .monospacedDigit()
-                .foregroundStyle(Theme.Palette.text)
-                .fixedSize()
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text(String(format: "%03d.%02d.%03d", position.bar, position.beat, position.tick))
-                    .font(Theme.Font.mono(13, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.Palette.accent)
-                caption("BARS·BEATS")
-                caption("25 FPS")
-            }
-        }
-        // Never let the clock digits truncate to "00:0…" when the window is tight — the flexible
-        // spacers/meters around them yield first, and the hScrollWhenNarrow wrapper scrolls if even
-        // that is not enough.
-        .fixedSize(horizontal: true, vertical: false)
+        TransportNumeralsDisplay(clock: clock)
     }
 
     private var divider: some View {
@@ -640,11 +619,6 @@ struct TransportBar: View {
 
     /// Four dots under the tempo, one lit on the current beat — the design's way of showing the
     /// meter without a second numeric readout.
-    /// Where the playhead sits inside the visible timeline, 0…1 — drives the line across the top.
-    private var playheadFraction: CGFloat {
-        let span = max(0.0001, engine.visibleDuration)
-        return CGFloat(min(1, max(0, (clock.seconds - engine.visibleStart) / span)))
-    }
 
     private var beatDots: some View {
         let beat = engine.barsBeats.beat
@@ -884,6 +858,58 @@ struct StatusStrip: View {
 /// indicators at the interface, and 컨트롤룸 (OUT, a stacked L/R pair) is the monitor bus read
 /// BEFORE its level — so solo and mono/stereo move it while the monitor knob does not. They live
 /// here, beside the monitor controls that shape them, and the transport bar gets its width back.
+/// The transport's moving numerals, split out so the 30 Hz playhead clock re-renders THIS and
+/// nothing else. Values still come off the engine (timecode/barsBeats are computed from the
+/// same playhead the clock mirrors); the clock is purely the invalidation signal.
+private struct TransportNumeralsDisplay: View {
+    @EnvironmentObject private var engine: EngineController
+    @ObservedObject var clock: PlayheadClock
+
+    var body: some View {
+        let position = engine.barsBeats
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(engine.timecode)
+                .font(Theme.Font.mono(30, .medium))
+                .monospacedDigit()
+                .foregroundStyle(Theme.Palette.text)
+                .fixedSize()
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text(String(format: "%03d.%02d.%03d", position.bar, position.beat, position.tick))
+                    .font(Theme.Font.mono(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Palette.accent)
+                Text("BARS·BEATS")
+                    .font(Theme.Font.mono(6.5)).tracking(0.6)
+                    .foregroundStyle(Theme.Palette.textFaint)
+                Text("25 FPS")
+                    .font(Theme.Font.mono(6.5)).tracking(0.6)
+                    .foregroundStyle(Theme.Palette.textFaint)
+            }
+        }
+        // Never let the clock digits truncate to "00:0…" when the window is tight — the flexible
+        // spacers/meters around them yield first, and the hScrollWhenNarrow wrapper scrolls if even
+        // that is not enough.
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+/// The 2 pt playhead-position line across the top of the bar — the other clock consumer.
+private struct TransportPlayheadLine: View {
+    @EnvironmentObject private var engine: EngineController
+    @ObservedObject var clock: PlayheadClock
+
+    var body: some View {
+        let span = max(0.0001, engine.visibleDuration)
+        let fraction = CGFloat(min(1, max(0, (clock.seconds - engine.visibleStart) / span)))
+        return GeometryReader { geo in
+            Rectangle()
+                .fill(Theme.Palette.accent)
+                .frame(width: geo.size.width * fraction, height: 2)
+        }
+        .frame(height: 2)
+    }
+}
+
 struct ControlRoomMeters: View {
     /// The meter store, not the controller: these bars redraw ~15x/s with signal, and observing
     /// the controller would drag every transport re-render along with them.

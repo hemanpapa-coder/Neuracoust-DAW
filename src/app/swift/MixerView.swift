@@ -785,13 +785,10 @@ struct MixerView: View {
 struct ChannelStrip: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var editors: PluginEditorHost
-    /// Observed separately from `engine` on purpose: meter levels move ~15x a second and this is
-    /// the only reason a strip needs to re-render that often. See EngineController.TrackMeters.
-    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
-    /// Engine-level meters (the master bus pair) live in their own store for the same reason.
-    @EnvironmentObject private var engineMeters: EngineController.EngineMeters
-
-    private var meters: EngineController.TrackMeters.Level { trackMeters.level(track.name) }
+    // The meter stores are deliberately NOT observed here. Every meter drawn inside the strip
+    // goes through the TrackMeterReader leaf below, so a ~15 Hz meter publish re-evaluates a
+    // few tiny meter views instead of every strip's whole body — with many strips, that
+    // difference IS the playback CPU bill.
 
     /// How many insert / send slots each strip pre-allocates (the engine ceiling is higher).
     static let mixerSlotCount = 10
@@ -867,7 +864,9 @@ struct ChannelStrip: View {
                 if track.kind.hasSolo || track.kind == .master { automationModeMenu }
                 // Output (post-plugin) meter — horizontal, right above the fader. The one
                 // under the input is the incoming meter; this one is after the inserts.
-                HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
+                TrackMeterReader(trackName: track.name, isMaster: track.kind == .master) {
+                    _, pl, pr in HorizontalMeter(peakLeft: pl, peakRight: pr)
+                }
                 faderSection
                 volumeReadout
                 if showMemo { memoField }
@@ -933,7 +932,9 @@ struct ChannelStrip: View {
     private var prePanSection: some View {
         VStack(spacing: Theme.Space.md) {
             if showIO && selectedModules.contains(.inRec) { inputSection }
-            HorizontalMeter(peakLeft: meterPeakLeft, peakRight: meterPeakRight)
+            TrackMeterReader(trackName: track.name, isMaster: track.kind == .master) {
+                _, pl, pr in HorizontalMeter(peakLeft: pl, peakRight: pr)
+            }
             moduleFocusPanel
             // Function visualisers directly under the module selector, in signal-path order, for
             // enabled modules only. Its height is the mixer-wide COMPUTED maximum (identical on
@@ -1403,7 +1404,13 @@ struct ChannelStrip: View {
     /// above the output meter. Keeping it outside the compressor panel makes every
     /// strip line up and frees the processor panel from metering height.
     private var channelGainReductionMeter: some View {
-        let amount = CGFloat(max(0, min(20, meters.compGainReductionDb)) / 20)
+        TrackMeterReader(trackName: track.name) { level, _, _ in
+            channelGainReductionBody(level.compGainReductionDb)
+        }
+    }
+
+    private func channelGainReductionBody(_ compGrDb: Float) -> some View {
+        let amount = CGFloat(max(0, min(20, compGrDb)) / 20)
         return HStack(spacing: 3) {
             Text("GR")
                 .font(Theme.Font.mono(5.5, .bold))
@@ -1422,13 +1429,13 @@ struct ChannelStrip: View {
                 }
             }
             .frame(height: 4)
-            Text(String(format: "%.1f", meters.compGainReductionDb))
+            Text(String(format: "%.1f", compGrDb))
                 .font(Theme.Font.mono(5.5, .semibold))
                 .foregroundStyle(Theme.Palette.textNumeric)
                 .frame(width: 19, alignment: .trailing)
         }
         .frame(height: 8)
-        .opacity(track.consoleCompEnabled || meters.compGainReductionDb > 0.05 ? 1 : 0.42)
+        .opacity(track.consoleCompEnabled || compGrDb > 0.05 ? 1 : 0.42)
         .helpTip("채널 컴프레서 게인 리덕션")
     }
 
@@ -1528,7 +1535,9 @@ struct ChannelStrip: View {
                     .foregroundStyle(track.consoleGateEnabled
                                      ? Theme.Palette.textBright : Theme.Palette.textFaint)
                 Spacer(minLength: 0)
-                gainReductionMeter(meters.gateGainReductionDb, title: "GR dB")
+                TrackMeterReader(trackName: track.name) { level, _, _ in
+                    gainReductionMeter(level.gateGainReductionDb, title: "GR dB")
+                }
             }
             consoleModelPicker
             circuitModeSwitch(parameter: "gateCircuitMode", enabled: track.consoleGateCircuitMode)
@@ -2225,8 +2234,7 @@ struct ChannelStrip: View {
     // Master reads the master BUS (post fader, pre monitor path). The device output peak follows
     // the monitor volume knob, so metering it here made the Master meter move when only the
     // monitoring level changed — the mix itself had not.
-    private var meterPeakLeft: Float { track.kind == .master ? engineMeters.masterBusPeakLeft : meters.peakLeft }
-    private var meterPeakRight: Float { track.kind == .master ? engineMeters.masterBusPeakRight : meters.peakRight }
+
 
     /// Master-only: an auto fade-out over the last N seconds, with a curve preview and
     /// picker. The seconds and curve write master volume automation in the engine.
@@ -2398,7 +2406,14 @@ struct ChannelStrip: View {
     /// blinks so a momentary clip is caught. Replaces the old peak/GR/DSP block (GR and DSP
     /// were never published, so they only ever read "—").
     private var channelStats: some View {
-        let db = peakDb
+        TrackMeterReader(trackName: track.name, isMaster: track.kind == .master) { _, pl, pr in
+            channelStatsBody(peakLeft: pl, peakRight: pr)
+        }
+    }
+
+    private func channelStatsBody(peakLeft: Float, peakRight: Float) -> some View {
+        let peak = max(peakLeft, peakRight)
+        let db: Float = peak <= 0.00001 ? FaderScale.silenceDb : Float(peakToDb(peak))
         let color: Color = db >= Self.clipDb ? Theme.Palette.red
                          : db >= Self.hotDb ? Theme.Palette.yellow
                          : Theme.Palette.green
@@ -2440,11 +2455,35 @@ struct ChannelStrip: View {
         db <= FaderScale.silenceDb ? "-∞" : String(format: "%+.1f", db)
     }
 
-    private var peakDb: Float {
-        let peak = max(meterPeakLeft, meterPeakRight)
-        return peak <= 0.00001 ? FaderScale.silenceDb : Float(peakToDb(peak))
+
+}
+
+/// The one window into the meter stores for everything drawn inside a channel strip. A meter
+/// publish re-evaluates the readers — a handful of tiny views — and nothing else; the strip
+/// bodies stay parked until a real edit. `isMaster` swaps in the master-bus pair, which lives
+/// on the engine-level store because the master strip meters the mix, not a track.
+private struct TrackMeterReader<Content: View>: View {
+    @EnvironmentObject private var trackMeters: EngineController.TrackMeters
+    @EnvironmentObject private var engineMeters: EngineController.EngineMeters
+    let trackName: String
+    var isMaster = false
+    @ViewBuilder let content: (_ level: EngineController.TrackMeters.Level,
+                               _ peakLeft: Float, _ peakRight: Float) -> Content
+
+    init(trackName: String, isMaster: Bool = false,
+         @ViewBuilder content: @escaping (_ level: EngineController.TrackMeters.Level,
+                                          _ peakLeft: Float, _ peakRight: Float) -> Content) {
+        self.trackName = trackName
+        self.isMaster = isMaster
+        self.content = content
     }
 
+    var body: some View {
+        let level = trackMeters.level(trackName)
+        content(level,
+                isMaster ? engineMeters.masterBusPeakLeft : level.peakLeft,
+                isMaster ? engineMeters.masterBusPeakRight : level.peakRight)
+    }
 }
 
 /// A tiny preview of the auto fade-out curve: full at the left, silent at the right.
