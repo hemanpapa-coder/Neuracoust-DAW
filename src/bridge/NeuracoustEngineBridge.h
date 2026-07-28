@@ -64,6 +64,8 @@ typedef struct {
 
     int inputChannels;
     float inputPeak;
+    float inputPeakLeft;
+    float inputPeakRight;
     int recordArmedTrackCount;
 
     // Realtime telemetry. Wake jitter is meaningless on its own — judge severity

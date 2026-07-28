@@ -561,6 +561,8 @@ public:
         copy.recordArmedTrackCount = dspStatus.recordArmedTrackCount;
         copy.inputChannels = dspStatus.inputChannels;
         copy.inputPeak = dspStatus.inputPeak;
+        copy.inputPeakLeft = dspStatus.inputPeakLeft;
+        copy.inputPeakRight = dspStatus.inputPeakRight;
         copy.requestedBufferSize = dspStatus.requestedBufferSize;
         copy.playbackStabilityBufferSize = dspStatus.playbackStabilityBufferSize;
         copy.dspEngineName = dspStatus.dspEngineName;

@@ -132,6 +132,9 @@ struct AudioEngineStatus {
     int recordArmedTrackCount = 0;
     int inputChannels = 0;
     float inputPeak = 0.0f;
+    /// Per-side input peaks — the input is a stereo pair and the meter shows it as one.
+    float inputPeakLeft = 0.0f;
+    float inputPeakRight = 0.0f;
     int requestedBufferSize = 0;
     int playbackStabilityBufferSize = 0;
     std::string deviceName;

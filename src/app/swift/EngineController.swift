@@ -36,6 +36,9 @@ final class EngineController: ObservableObject {
     /// output peak below follows the monitor volume knob, which must not move the Master meter.
     /// Monitor bus after its shaping but before the monitor level — what the transport's L/R
     /// meter shows, so solo and mono/stereo move it while the monitor volume knob does not.
+    /// Per-side input peaks — the input is a stereo pair, so its meter is a stacked pair too.
+    @Published private(set) var inputPeakLeft: Float = 0
+    @Published private(set) var inputPeakRight: Float = 0
     @Published private(set) var monitorPrePeakLeft: Float = 0
     @Published private(set) var monitorPrePeakRight: Float = 0
     @Published private(set) var masterBusPeakLeft: Float = 0
@@ -9718,6 +9721,8 @@ final class EngineController: ObservableObject {
             setIfChanged(\.spectrumMid, status.spectrumMid)
             setIfChanged(\.spectrumHigh, status.spectrumHigh)
             // Ballistic meters: snap up to a new peak, decay down (and floor to exact silence).
+            setIfChanged(\.inputPeakLeft, Self.decayedMeter(status.inputPeakLeft, inputPeakLeft))
+            setIfChanged(\.inputPeakRight, Self.decayedMeter(status.inputPeakRight, inputPeakRight))
             setIfChanged(\.monitorPrePeakLeft, Self.decayedMeter(status.monitorPrePeakLeft, monitorPrePeakLeft))
             setIfChanged(\.monitorPrePeakRight, Self.decayedMeter(status.monitorPrePeakRight, monitorPrePeakRight))
             setIfChanged(\.masterBusPeakLeft, Self.decayedMeter(status.masterBusPeakLeft, masterBusPeakLeft))

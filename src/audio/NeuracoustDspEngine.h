@@ -384,6 +384,10 @@ private:
     bool recordMonitorMuted_ = false;
     int inputMonitorChannels_ = 0;
     float inputPeak_ = 0.0f;
+    /// Per-side input peaks. The input is a stereo pair, so the meter shows it as one — the single
+    /// combined figure could not tell a dead right channel from a quiet take.
+    float inputPeakLeft_ = 0.0f;
+    float inputPeakRight_ = 0.0f;
     std::vector<float> inputMonitorBuffer_;
     // Reference tap FIFO — separate from the mic buffer so talkback toggling never disturbs it.
     std::vector<float> referenceBuffer_;
@@ -488,6 +492,8 @@ private:
     std::atomic<bool> physicalInputMonitoringActiveForStatus_ {false};
     std::atomic<int> inputMonitorChannelsForStatus_ {0};
     std::atomic<float> inputPeakForStatus_ {0.0f};
+    std::atomic<float> inputPeakLeftForStatus_ {0.0f};
+    std::atomic<float> inputPeakRightForStatus_ {0.0f};
     float lowBandState_ = 0.0f;
     float midBandState_ = 0.0f;
     // FFT spectrum analyzer state. Mono output accumulates into a window; when full a

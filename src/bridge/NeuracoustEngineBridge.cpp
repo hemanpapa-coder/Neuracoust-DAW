@@ -564,6 +564,8 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->delayCompensationMs = s.delayCompensationMs;
     out->inputChannels = s.inputChannels;
     out->inputPeak = s.inputPeak;
+    out->inputPeakLeft = s.inputPeakLeft;
+    out->inputPeakRight = s.inputPeakRight;
     out->recordArmedTrackCount = s.recordArmedTrackCount;
     out->realtimeCallbackCount = s.realtimeCallbackCount;
     out->realtimeAverageWakeJitterUs = s.realtimeAverageWakeJitterUs;

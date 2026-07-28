@@ -861,6 +861,11 @@ struct MonitorDock: View {
                 .help("켜면 다른 앱이 앞에 있어도 숫자 키패드로 모니터 볼륨(+/−)·Dim(0)·Mute(.)·Talk(Enter, 누르는 동안)·스피커 A/B/C(1/2/3) 등을 제어합니다. 바인딩은 키패드 단축키 설정을 따릅니다. 손쉬운 사용 권한 필요.")
                 Spacer(minLength: 0)
             }
+            // The level meters live here now rather than in the transport bar: the control-room
+            // meter belongs beside the monitor controls that shape it, and moving them gives the
+            // transport bar its width back.
+            ControlRoomMeters(engine: engine)
+                .padding(.top, 2)
         }
         .onAppear { engine.refreshInputDevices() }
     }

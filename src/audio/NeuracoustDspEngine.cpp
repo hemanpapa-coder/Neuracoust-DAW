@@ -1899,6 +1899,7 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
     }
     inputMonitorChannels_ = std::min(2, channels);
     float peak = inputPeak_;
+    float peakL = inputPeakLeft_, peakR = inputPeakRight_;
     const auto startSize = inputMonitorBuffer_.size();
     inputMonitorBuffer_.resize(startSize + static_cast<size_t>(frameCount) * 2);
     for (int64_t frame = 0; frame < frameCount; ++frame) {
@@ -1909,6 +1910,8 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
         inputMonitorBuffer_[destination] = left;
         inputMonitorBuffer_[destination + 1] = right;
         peak = std::max(peak, std::max(std::abs(left), std::abs(right)));
+        peakL = std::max(peakL, std::abs(left));
+        peakR = std::max(peakR, std::abs(right));
     }
     // Record-arm / talkback monitoring wants a shallow FIFO (low latency: your voice must
     // reach the speaker fast). Listening to a source (BlackHole reference music) is the
@@ -1943,6 +1946,10 @@ void NeuracoustDspEngine::pushInputMonitorInterleaved(const float* samples, int6
         talkbackMonoBuffer_.clear();
     }
     inputPeak_ = std::min(1.0f, peak);
+    inputPeakLeft_ = std::min(1.0f, peakL);
+    inputPeakRight_ = std::min(1.0f, peakR);
+    inputPeakLeftForStatus_.store(inputPeakLeft_, std::memory_order_relaxed);
+    inputPeakRightForStatus_.store(inputPeakRight_, std::memory_order_relaxed);
     physicalInputMonitoringActive_ = true;
     physicalInputMonitoringActiveForStatus_.store(true, std::memory_order_relaxed);
     inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
@@ -1955,6 +1962,7 @@ void NeuracoustDspEngine::pushReferenceInterleaved(const float* interleavedStere
     // and skips the block if it can't get it, so we hold it only for the fast copy — never across
     // the recording append below. (This is the monitored audio; it must not glitch.)
     float peak = 0.0f;
+    float peakL = inputPeakLeft_, peakR = inputPeakRight_;
     {
         std::lock_guard<std::mutex> lock(inputMonitorMutex_);
         const size_t start = referenceBuffer_.size();
@@ -1965,6 +1973,8 @@ void NeuracoustDspEngine::pushReferenceInterleaved(const float* interleavedStere
             referenceBuffer_[start + static_cast<size_t>(f) * 2u]      = l;
             referenceBuffer_[start + static_cast<size_t>(f) * 2u + 1u] = r;
             peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+            peakL = std::max(peakL, std::abs(l));
+            peakR = std::max(peakR, std::abs(r));
         }
         // Deep cushion (~170 ms+): the tap and the output run on independent clocks and the tap
         // delivers in bursts, so a shallow cap would starve. The resampler parks the depth near
@@ -1981,6 +1991,10 @@ void NeuracoustDspEngine::pushReferenceInterleaved(const float* interleavedStere
         }
     }
     inputPeak_ = std::min(1.0f, peak);
+    inputPeakLeft_ = std::min(1.0f, peakL);
+    inputPeakRight_ = std::min(1.0f, peakR);
+    inputPeakLeftForStatus_.store(inputPeakLeft_, std::memory_order_relaxed);
+    inputPeakRightForStatus_.store(inputPeakRight_, std::memory_order_relaxed);
     inputMonitorChannels_ = 2;
     physicalInputMonitoringActive_ = true;
     physicalInputMonitoringActiveForStatus_.store(true, std::memory_order_relaxed);
@@ -2435,6 +2449,8 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.recordArmedTrackCount = recordArmedTrackCount_;
     status.inputChannels = inputMonitorChannelsForStatus_.load(std::memory_order_relaxed);
     status.inputPeak = inputPeakForStatus_.load(std::memory_order_relaxed);
+    status.inputPeakLeft = inputPeakLeftForStatus_.load(std::memory_order_relaxed);
+    status.inputPeakRight = inputPeakRightForStatus_.load(std::memory_order_relaxed);
     status.requestedBufferSize = settings_.bufferSize;
     status.playbackStabilityBufferSize = std::max(1, settings_.bufferSize) * std::max(1, settings_.playbackStabilityBufferMultiplier);
     status.dspEngineName = "Neuracoust DSP Engine";

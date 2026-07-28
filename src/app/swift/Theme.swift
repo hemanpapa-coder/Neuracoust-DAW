@@ -30,6 +30,9 @@ enum Theme {
         static let ruler = Color(hex: 0x332c26)
         static let toolbar = Color(hex: 0x37302a)
         static let button = Color(hex: 0x3d352e)
+        /// Flat transport-key face, from the transport-bar design: a plain dark square, no bevel.
+        /// An engaged key replaces this with the accent and inverts its glyph.
+        static let keyFace = Color(hex: 0x171717)
         static let titlebarTop = Color(hex: 0x463c33)
         static let buttonProminent = Color(hex: 0x4b4036)
         static let divider = Color(hex: 0x4f4339)

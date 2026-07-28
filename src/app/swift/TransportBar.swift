@@ -139,19 +139,17 @@ struct TransportBar: View {
                             beatDots
                         }
                     }
-                    thinMeters
                 }
             }
             Spacer(minLength: Theme.Space.xl)
             // Right toolbar cluster: the panel-toggle + help chips on top, the Edit/Mix tabs
             // directly underneath them — above the monitor station, never in the dock's column.
             // Clips off with the rest of the toolbar when the window narrows (the dock stays put).
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: Theme.Space.lg) {
-                    panelToggles
-                    helpChip
-                }
-                ViewTabsControl()
+            // No Edit/Mix tabs: Pro Tools has no on-screen pair either — ⌘= toggles the two, and
+            // that shortcut already works here. Dropping them returns the width to the toolbar.
+            HStack(spacing: Theme.Space.lg) {
+                panelToggles
+                helpChip
             }
         }
         .padding(.horizontal, Theme.Space.xxl)
@@ -334,17 +332,16 @@ struct TransportBar: View {
                               badge: (symbol: String, tint: Color)? = nil,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            // Flat key, per the design: a square face with a 3 pt corner, no bevel, no outline.
+            // State is the FILL — an engaged key inverts to a solid face with a dark glyph, rather
+            // than tinting an outline. Bigger than the old 28x24 now that the meters left the bar.
             Image(systemName: symbol)
-                .font(.system(size: 10))
-                .foregroundStyle(tint)
-                .frame(width: 28, height: 24)
+                .font(.system(size: 13))
+                .foregroundStyle(keyFill != nil ? Theme.Palette.background : tint)
+                .frame(width: 34, height: 30)
                 .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(keyFill ?? Theme.Palette.button)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .stroke(keyFill != nil ? Color.clear : Theme.Palette.border, lineWidth: 1)
-                        )
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(keyFill ?? Theme.Palette.keyFace)
                 )
                 // The mode badge rides the bottom-trailing corner, exactly as the
                 // "Transport Mode Icons" design spec draws it.
@@ -478,16 +475,12 @@ struct TransportBar: View {
     private func rollControl(_ title: String, seconds: Double, tint: Color,
                              set: @escaping (Double) -> Void) -> some View {
         HStack(spacing: 2) {
-            Button(title) { set(seconds > 0 ? 0 : 1.0) }
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(seconds > 0 ? Color.black.opacity(0.85) : Theme.Palette.textSecondary)
-                .frame(width: 28, height: 20)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(seconds > 0 ? tint : Theme.Palette.button)
-                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
-                            .stroke(Theme.Palette.border, lineWidth: 1))
-                )
+            // Flat label, uppercase mono, no box — the design writes PRE / POST as type and lets
+            // the value beside it carry the weight.
+            Button(title.uppercased()) { set(seconds > 0 ? 0 : 1.0) }
+                .font(Theme.Font.mono(8, .semibold))
+                .foregroundStyle(seconds > 0 ? tint : Theme.Palette.textFainter)
+                .fixedSize()          // "POST" wrapped to two lines inside a 26 pt box
                 .buttonStyle(.plain)
             TextField("", text: Binding(
                 get: { String(format: "%.2f", seconds) },
@@ -541,24 +534,24 @@ struct TransportBar: View {
     /// Pro Tools edit modes replace the old Snap on/off: Grid snaps, Slip is free,
     /// Shuffle ripples, Spot places by typed time.
     private var editModePicker: some View {
-        HStack(spacing: Theme.Space.sm) {
+        HStack(spacing: 16) {
             ForEach(EngineController.EditMode.allCases) { mode in
                 let active = engine.editMode == mode
                 Button { engine.editMode = mode } label: {
+                    // Underlined type, not a pill — same rule as the Edit/Mix tabs, so the two
+                    // rows of mode choices read as one family (the design draws them stacked).
                     Text(mode.label)
-                        .font(Theme.Font.ui(9, .medium))
+                        .font(Theme.Font.ui(11, .medium))
                         .foregroundStyle(active ? Theme.Palette.accent : Theme.Palette.textFaint)
-                        .padding(.horizontal, 9)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .fill(active ? Theme.Palette.accent.opacity(0.14) : Theme.Palette.button)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                        .stroke(active ? Theme.Palette.accent.opacity(0.5) : Theme.Palette.border, lineWidth: 1)
-                                )
-                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-                        )
+                        .padding(.top, 2)
+                        .padding(.bottom, 5)
+                        .padding(.horizontal, 2)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(active ? Theme.Palette.accent : .clear)
+                                .frame(height: 2)
+                        }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("\(mode.label) 편집 모드")
@@ -572,25 +565,20 @@ struct TransportBar: View {
                         icon: String? = nil,
                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
+            // Same flat key as the transport buttons: a square face, engaged = filled with the
+            // tint and the glyph inverted. Icon only when there is one — the design leans on the
+            // shape, not a word, for Loop and Click.
+            Group {
                 if let icon {
-                    Image(systemName: icon).font(.system(size: 10, weight: .medium))
+                    Image(systemName: icon).font(.system(size: 13, weight: .medium))
+                } else {
+                    Text(title).font(Theme.Font.ui(10, .medium))
                 }
-                Text(title)
-                    .font(Theme.Font.ui(9, .medium))
             }
-                .foregroundStyle(isOn ? tint : Theme.Palette.textFaint)
-                .padding(.horizontal, 9)
-                .frame(height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(isOn ? tint.opacity(0.14) : Theme.Palette.button)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .stroke(isOn ? tint.opacity(0.5) : Theme.Palette.border, lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-                )
+                .foregroundStyle(isOn ? Theme.Palette.background : Theme.Palette.textFaint)
+                .frame(width: icon == nil ? 44 : 34, height: 30)
+                .background(RoundedRectangle(cornerRadius: 3).fill(isOn ? tint : Theme.Palette.keyFace))
+                .help(title)
         }
         .buttonStyle(.plain)
     }
@@ -718,76 +706,6 @@ struct TransportBar: View {
             RoundedRectangle(cornerRadius: Theme.Radius.display)
                 .fill(Theme.Palette.ruler)
         )
-    }
-
-    /// One thin row holding all the meters — audio/MIDI input + master L/R + the dB read — so they can
-    /// tuck UNDER the transport displays instead of eating ~310 px of bar width to their right. Frees
-    /// that width for the tabs, so narrowing the window no longer pushes them off (user's idea).
-    private var thinMeters: some View {
-        HStack(spacing: Theme.Space.md) {
-            // Two groups, because they do two different jobs. INPUT is what is arriving at the
-            // interface — activity indicators, not calibrated metering. CONTROL ROOM is the monitor
-            // bus taken before its level, so it follows solo and mono/stereo but not the monitor
-            // knob. The rows within each group follow the transport-bar design: a label, a bar, and
-            // the output as a stacked L/R pair under one OUT rather than two separate meters.
-            meterGroup("입력") {
-                HStack(spacing: 5) {
-                    meterRowLabel("IN")
-                    meterBarCell(meterFraction(engine.inputPeak), Theme.Palette.green)
-                }
-                HStack(spacing: 5) {
-                    meterRowLabel("MIDI")
-                    meterBarCell(Double(engine.midiActivity), Theme.Palette.purple)
-                }
-            }
-            meterGroup("컨트롤룸") {
-                HStack(spacing: 5) {
-                    meterRowLabel("OUT")
-                    VStack(spacing: 2) {
-                        meterBarCell(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
-                        meterBarCell(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
-                    }
-                }
-                Text(dbLabel)
-                    .font(Theme.Font.mono(8, .semibold))
-                    .foregroundStyle(Theme.Palette.yellow)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-        }
-    }
-
-    /// A titled cluster of meter rows. The caption is what separates the input indicators from the
-    /// control-room meter — they sit side by side but are not the same measurement.
-    @ViewBuilder private func meterGroup<Content: View>(_ title: String,
-                                                       @ViewBuilder _ rows: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(Theme.Font.mono(6.5))
-                .foregroundStyle(Theme.Palette.textFainter)
-            rows()
-        }
-    }
-
-    /// Row label inside the meter group — fixed width so IN / MIDI / OUT line their bars up.
-    private func meterRowLabel(_ text: String) -> some View {
-        Text(text)
-            .font(Theme.Font.mono(7))
-            .foregroundStyle(Theme.Palette.textFaint)
-            .frame(width: 24, alignment: .leading)
-    }
-
-    /// One bar of the meter group, without a label of its own (OUT stacks two of these).
-    private func meterBarCell(_ fraction: Double, _ tint: Color) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(Theme.Palette.recess)
-                RoundedRectangle(cornerRadius: Theme.Radius.meterCell).fill(tint)
-                    .mask(alignment: .leading) {
-                        Rectangle().frame(width: geo.size.width * max(0, min(1, fraction)))
-                    }
-            }
-        }
-        .frame(width: 54, height: 4)
     }
 
     private func compactMeter(_ label: String, _ fraction: Double, _ tint: Color) -> some View {
@@ -943,29 +861,30 @@ struct ViewTabsControl: View {
     @EnvironmentObject private var engine: EngineController
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 16) {
             ForEach(EngineController.ViewTab.allCases) { tab in
                 Button {
                     engine.viewTab = tab
                 } label: {
-                    Text(tab.rawValue)
-                        .font(Theme.Font.ui(10, .semibold))
-                        .foregroundStyle(engine.viewTab == tab ? Theme.Palette.deepBorder : Theme.Palette.textDim)
-                        .padding(.horizontal, Theme.Space.xxl)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                .fill(engine.viewTab == tab ? Theme.Palette.tabActive : .clear)
-                        )
+                    // Underlined type instead of a pill, per the transport-bar design: the active
+                    // tab is marked by a 2 pt rule under it, not by a filled capsule.
+                    Text(tab.rawValue.uppercased())
+                        .font(Theme.Font.mono(11, .medium))
+                        .tracking(1.6)
+                        .foregroundStyle(engine.viewTab == tab ? Theme.Palette.text : Theme.Palette.textDim)
+                        .padding(.top, 2)
+                        .padding(.bottom, 5)
+                        .padding(.horizontal, 2)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(engine.viewTab == tab ? Theme.Palette.text : .clear)
+                                .frame(height: 2)
+                        }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.panel)
-                .fill(Theme.Palette.surface)
-        )
     }
 }
 
@@ -1031,5 +950,88 @@ struct StatusStrip: View {
                 .tracking(0.5)
                 .foregroundStyle(Theme.Palette.textLabel)
         }
+    }
+}
+
+/// The level meters, as a block the monitor station owns rather than the transport bar.
+///
+/// Two captioned groups because they are two different measurements: 입력 (IN, MIDI) are activity
+/// indicators at the interface, and 컨트롤룸 (OUT, a stacked L/R pair) is the monitor bus read
+/// BEFORE its level — so solo and mono/stereo move it while the monitor knob does not. They live
+/// here, beside the monitor controls that shape them, and the transport bar gets its width back.
+struct ControlRoomMeters: View {
+    @ObservedObject var engine: EngineController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            group("입력") {
+                // Stereo: the audio input is a pair, and one combined bar could not tell a dead
+                // right channel from a quiet take. MIDI stays a single activity bar.
+                HStack(spacing: 5) {
+                    label("IN")
+                    VStack(spacing: 2) {
+                        bar(meterFraction(engine.inputPeakLeft), Theme.Palette.green)
+                        bar(meterFraction(engine.inputPeakRight), Theme.Palette.green)
+                    }
+                    Spacer(minLength: 32)
+                }
+                row("MIDI", Double(engine.midiActivity), Theme.Palette.purple)
+            }
+            group("컨트롤룸") {
+                HStack(spacing: 5) {
+                    label("OUT")
+                    VStack(spacing: 2) {
+                        bar(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
+                        bar(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+                    }
+                    Text(dbLabel)
+                        .font(Theme.Font.mono(8, .semibold))
+                        .foregroundStyle(Theme.Palette.yellow)
+                        .frame(width: 32, alignment: .trailing)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dbLabel: String {
+        let peak = max(engine.monitorPrePeakLeft, engine.monitorPrePeakRight)
+        return peak <= 0.00001 ? "-∞" : String(format: "%.1f", 20 * log10(Double(peak)))
+    }
+
+    @ViewBuilder private func group<Content: View>(_ title: String,
+                                                  @ViewBuilder _ rows: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(Theme.Font.mono(7))
+                .foregroundStyle(Theme.Palette.textFainter)
+            rows()
+        }
+    }
+
+    private func row(_ name: String, _ fraction: Double, _ tint: Color) -> some View {
+        HStack(spacing: 5) {
+            label(name)
+            bar(fraction, tint)
+            Spacer(minLength: 32)
+        }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.Font.mono(7))
+            .foregroundStyle(Theme.Palette.textFaint)
+            .frame(width: 26, alignment: .leading)
+    }
+
+    private func bar(_ fraction: Double, _ tint: Color) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Theme.Palette.recess)
+                Rectangle().fill(tint)
+                    .frame(width: geo.size.width * max(0, min(1, fraction)))
+            }
+        }
+        .frame(height: 4)
     }
 }
