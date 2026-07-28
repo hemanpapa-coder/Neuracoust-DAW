@@ -3060,11 +3060,33 @@ final class EngineController: ObservableObject {
         dspAutoOverflow = nc_dsp_auto_overflow(handle) != 0
         ndsHost = readString { nc_dsp_nds_host(handle, $0, $1) }
         ndsEnabled = nc_dsp_nds_enabled(handle) != 0
+        setIfChanged(\.remoteNetworkBufferFrames, Int(nc_dsp_network_buffer_frames(handle)))
+        setIfChanged(\.remoteMixerChannels, Int(nc_dsp_mixer_channels(handle)))
         // The 모니터 assignment and the DSP-source row are the same decision; the bridge keeps
         // them equal, so read the mode back here rather than letting the two views drift.
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
         dspSources = dspSourcesFromMode(monitorPathMode)
     }
+    /// Waves-style server options on the NDS card: the wire buffer per remote stream (frames —
+    /// smaller is tighter, larger rides out LAN jitter) and the remote-mixer channel capacity
+    /// ladder the M1+ sessions size themselves for.
+    @Published private(set) var remoteNetworkBufferFrames = 128
+    @Published private(set) var remoteMixerChannels = 32
+
+    func setRemoteNetworkBufferFrames(_ frames: Int) {
+        guard let handle else { return }
+        nc_dsp_set_network_buffer_frames(handle, Int32(frames))
+        remoteNetworkBufferFrames = Int(nc_dsp_network_buffer_frames(handle))
+        refreshHistory()
+    }
+
+    func setRemoteMixerChannels(_ channels: Int) {
+        guard let handle else { return }
+        nc_dsp_set_mixer_channels(handle, Int32(channels))
+        remoteMixerChannels = Int(nc_dsp_mixer_channels(handle))
+        refreshHistory()
+    }
+
     // Discovered/queried node hardware, shown in the Remote Core panel. Populated on 검색/refresh.
     struct RemoteNodeSpecs: Equatable {
         var model = ""

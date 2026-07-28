@@ -440,6 +440,8 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
         static_cast<uint16_t>(std::max(1, std::min(16, project.externalDspCoreCount)));
+    settings.networkBufferFrames =
+        static_cast<uint16_t>(std::max(64, std::min(1024, project.remoteNetworkBufferFrames)));
     settings.host = project.remoteDspHost.empty() ? std::string("studio.local") : project.remoteDspHost;
     settings.enabled = project.externalDspEnabled;
     settings.ndsHost = project.ndsHost.empty() ? std::string("192.168.0.198") : project.ndsHost;
@@ -457,6 +459,8 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
         static_cast<uint16_t>(std::max(1, std::min(16, engine->project.externalDspCoreCount)));
+    settings.networkBufferFrames =
+        static_cast<uint16_t>(std::max(64, std::min(1024, engine->project.remoteNetworkBufferFrames)));
     // Point the engine at the user's node. Clearing the default node list makes the
     // top-level host the effective target, so External/NDS reach a real server instead
     // of the hardcoded "studio.local" default.
@@ -7376,6 +7380,38 @@ void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine) {
     // unrelated edit happened to reconcile — the row looked live and did nothing.
     engine->reconcileProjectDeclicked();
     engine->recordStep("DSP role");
+}
+
+// Waves-style "Server Network Buffer": frames of wire buffering per remote stream. Small =
+// tighter latency, large = more resilience to LAN jitter. Applied live the way the external
+// core hint is — re-push the monitor path, then rebuild the offload lists so every stream
+// picks the new size up.
+int nc_dsp_network_buffer_frames(NCEngine* engine) {
+    return engine != nullptr ? engine->project.remoteNetworkBufferFrames : 128;
+}
+
+void nc_dsp_set_network_buffer_frames(NCEngine* engine, int frames) {
+    if (engine == nullptr) return;
+    const int clamped = std::max(64, std::min(1024, frames));
+    if (clamped == engine->project.remoteNetworkBufferFrames) return;
+    engine->project.remoteNetworkBufferFrames = clamped;
+    engine->recordStep("Server network buffer");
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();
+}
+
+// The SoundGrid configuration ladder (8/16/32/64): how many channels the remote-mixer sessions
+// size themselves for. Stored intent until M1 lands; the card shows it either way.
+int nc_dsp_mixer_channels(NCEngine* engine) {
+    return engine != nullptr ? engine->project.remoteMixerChannels : 32;
+}
+
+void nc_dsp_set_mixer_channels(NCEngine* engine, int channels) {
+    if (engine == nullptr) return;
+    const int clamped = channels >= 64 ? 64 : channels >= 32 ? 32 : channels >= 16 ? 16 : 8;
+    if (clamped == engine->project.remoteMixerChannels) return;
+    engine->project.remoteMixerChannels = clamped;
+    engine->recordStep("Remote mixer channels");
 }
 
 int nc_dsp_auto_overflow(NCEngine* engine) {

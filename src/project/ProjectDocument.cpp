@@ -2030,6 +2030,8 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"dspRoleChannelStrip\": \"" << escapeJsonString(project.dspRoleChannelStrip) << "\",\n";
     out << "  \"dspRoleMaster\": \"" << escapeJsonString(project.dspRoleMaster) << "\",\n";
     out << "  \"dspRoleInserts\": \"" << escapeJsonString(project.dspRoleInserts) << "\",\n";
+    out << "  \"remoteNetworkBufferFrames\": " << project.remoteNetworkBufferFrames << ",\n";
+    out << "  \"remoteMixerChannels\": " << project.remoteMixerChannels << ",\n";
     out << "  \"dspRolePlayback\": \"" << escapeJsonString(project.dspRolePlayback) << "\",\n";
     out << "  \"dspRoleRecording\": \"" << escapeJsonString(project.dspRoleRecording) << "\",\n";
     out << "  \"dspRoleMixer\": \"" << escapeJsonString(project.dspRoleMixer) << "\",\n";
@@ -2740,6 +2742,10 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     parsed.dspRoleChannelStrip = role("dspRoleChannelStrip");
     parsed.dspRoleMaster = role("dspRoleMaster");
     parsed.dspRoleInserts = role("dspRoleInserts");
+    parsed.remoteNetworkBufferFrames = std::max(64, std::min(1024,
+        static_cast<int>(numberAfterKey(text, "remoteNetworkBufferFrames", 128))));
+    parsed.remoteMixerChannels = std::max(8, std::min(64,
+        static_cast<int>(numberAfterKey(text, "remoteMixerChannels", 32))));
     parsed.dspRolePlayback = role("dspRolePlayback");
     parsed.dspRoleRecording = role("dspRoleRecording");
     parsed.dspRoleMixer = role("dspRoleMixer");

@@ -245,6 +245,12 @@ struct ProjectDocument {
     // hint: when a connected node reports its own core_count that report wins, so this
     // is the value used before/without a report and the count the DAW requests.
     int externalDspCoreCount = 4;
+    // Waves-style server options on the NDS card. The network buffer trades latency for wire
+    // resilience exactly like SoundGrid's "Server Network Buffer" (frames; ~2.7 ms at 128/48k).
+    // The mixer channel capacity is what the remote-mixer sessions (M1+) size themselves for —
+    // 8/16/32/64, the SoundGrid configuration ladder.
+    int remoteNetworkBufferFrames = 128;
+    int remoteMixerChannels = 32;
     // The "use this node" master switch — whether the external DSP node participates at all.
     // Off gates it out of the monitor/DAW/plugin core plan regardless of the reserve above.
     // Default on preserves the prior always-available behaviour.

@@ -1564,6 +1564,31 @@ struct MonitorDock: View {
                         setOn: { engine.setNdsEnabled($0) },
                         host: RemoteHostField(kind: .nds),
                         detail: machineDetail(.nds, on: engine.ndsEnabled))
+                // SoundGrid-style server options, where SoundGrid puts them: on the server card.
+                .contextMenu {
+                    Menu("서버 네트워크 버퍼") {
+                        ForEach([64, 96, 128, 192, 256, 384, 512], id: \.self) { frames in
+                            let ms = Double(frames) / 48.0
+                            Button {
+                                engine.setRemoteNetworkBufferFrames(frames)
+                            } label: {
+                                Text((engine.remoteNetworkBufferFrames == frames ? "✓ " : "")
+                                     + "\(frames) / \(String(format: "%.1f", ms)) ms")
+                            }
+                        }
+                    }
+                    Menu("믹서 채널 구성") {
+                        ForEach([8, 16, 32, 64], id: \.self) { channels in
+                            Button {
+                                engine.setRemoteMixerChannels(channels)
+                            } label: {
+                                Text((engine.remoteMixerChannels == channels ? "✓ " : "")
+                                     + "\(channels) 입력 채널")
+                            }
+                        }
+                    }
+                    Text("버퍼가 작을수록 지연이 짧고, 클수록 LAN 지터에 강합니다. 채널 구성은 원격 믹서(M1+)가 준비할 용량입니다.")
+                }
 
             machineCard(title: "외부 노드",
                         subtitle: "범용 컴퓨터 · 여유 코어 빌려 쓰기",
