@@ -115,6 +115,10 @@ struct ProjectAudioRenderState {
     /// ConsoleChannelProcessor (the node links this library), so the sound matches.
     std::function<bool(const std::string& routeName, std::vector<float>& interleavedStereo)>
         remoteConsoleStrip;
+    /// Same contract for the MASTER insert chain: return true having processed the block on a
+    /// remote node, false to run the local chain. Null in every offline bounce, for the same
+    /// reason as above — a bounce must be reproducible with the node switched off.
+    std::function<bool(std::vector<float>& interleavedStereo)> remoteMasterInserts;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;

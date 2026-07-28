@@ -191,4 +191,22 @@ RemoteDspPluginCapability remoteDspCapabilityForInsert(const TrackInsertSlot& in
     return capability;
 }
 
+RemoteDspPluginCapability remoteDspCapabilityForMasterInsert(const InsertState& insert,
+                                                             bool remoteServerEnabled,
+                                                             bool remoteServerReachable) {
+    TrackInsertSlot slot;
+    slot.pluginName = insert.pluginName;
+    slot.pluginFormat = insert.pluginFormat;
+    slot.pluginPath = insert.pluginPath;
+    slot.bypassed = insert.bypassed;
+    slot.enabled = insert.available;
+    slot.dspExecutionMode = insert.dspExecutionMode;
+    slot.assignedDspServerId = insert.assignedDspServerId;
+    slot.serverModuleId = insert.serverModuleId;
+    slot.pluginClassId = insert.pluginClassId;
+    slot.pluginClassName = insert.pluginClassName;
+    slot.parameters = insert.parameters;
+    return remoteDspCapabilityForInsert(slot, remoteServerEnabled, remoteServerReachable);
+}
+
 } // namespace neuracoust::daw

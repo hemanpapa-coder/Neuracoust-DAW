@@ -2501,7 +2501,12 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     if (plan.hasActiveVst3Inserts) {
         state.masterInsertDryFallback = interleavedStereo;
     }
-    if (plan.hasActiveVst3Inserts &&
+    // A master chain assigned to a remote machine takes the detour; a block the node misses
+    // falls through to the LOCAL chain below, so the master never goes dry mid-song. Offline
+    // bounces never install the hook — see its declaration.
+    const bool masterHandledRemotely = plan.hasActiveVst3Inserts &&
+        state.remoteMasterInserts && state.remoteMasterInserts(interleavedStereo);
+    if (plan.hasActiveVst3Inserts && !masterHandledRemotely &&
         !state.masterInsertChain.processInterleavedStereo(
             interleavedStereo,
             static_cast<int>(frameCount),

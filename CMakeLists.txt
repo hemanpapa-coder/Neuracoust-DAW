@@ -658,6 +658,12 @@ target_link_libraries(neuracoust_remote_dsp_discover_probe PRIVATE neuracoust_da
 add_executable(neuracoust_node_console_parity_check tools/node_console_parity_check.cpp)
 target_link_libraries(neuracoust_node_console_parity_check PRIVATE neuracoust_daw_core)
 
+# Bounces a generated project locally and through a node, compares the files, and proves the
+# strict-remote contract from both sides (match on success, hard failure on a dead node).
+# Not in ctest — needs a node hosting the console module.
+add_executable(neuracoust_remote_bounce_probe tools/remote_bounce_probe.cpp)
+target_link_libraries(neuracoust_remote_bounce_probe PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
 

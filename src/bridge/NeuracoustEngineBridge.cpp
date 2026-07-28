@@ -433,6 +433,26 @@ namespace {
 // requested core reserve is user-facing here; the rest stays at the shipped defaults.
 // A connected node's reported core_count still wins inside makeRemoteDspCorePlan — this
 // is the hint used before/without a report and the count DW asks the manager to hold.
+// From the DOCUMENT, not the engine: the background bounce renders a serialized snapshot with no
+// NCEngine anywhere near it, and its remote settings must come from the same fields.
+neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
+        const neuracoust::daw::ProjectDocument& project) {
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.totalCoreHint =
+        static_cast<uint16_t>(std::max(1, std::min(16, project.externalDspCoreCount)));
+    settings.host = project.remoteDspHost.empty() ? std::string("studio.local") : project.remoteDspHost;
+    settings.enabled = project.externalDspEnabled;
+    settings.ndsHost = project.ndsHost.empty() ? std::string("192.168.0.198") : project.ndsHost;
+    settings.ndsEnabled = project.ndsEnabled;
+    settings.roleMonitor = project.dspRoleMonitor;
+    settings.roleChannelStrip = project.dspRoleChannelStrip;
+    settings.roleMaster = project.dspRoleMaster;
+    settings.roleInserts = project.dspRoleInserts;
+    settings.autoOverflow = project.dspAutoOverflow;
+    settings.nodes.clear();
+    return settings;
+}
+
 neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine) {
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
@@ -5808,6 +5828,28 @@ bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBoun
     return result.ok;
 }
 
+bool nc_bounce_snapshot_to_wav_remote(const char* projectText, const char* path, NCBounceResult* out) {
+    if (out != nullptr) {
+        std::memset(out, 0, sizeof(*out));
+    }
+    if (projectText == nullptr || path == nullptr || *path == '\0') {
+        if (out != nullptr) copyText(out->message, NC_TEXT_LEN, "no project or no output path");
+        return false;
+    }
+    neuracoust::daw::ProjectDocument project;
+    std::string error;
+    if (!neuracoust::daw::deserializeProject(projectText, project, error)) {
+        if (out != nullptr) copyText(out->message, NC_TEXT_LEN, error.empty() ? "could not parse the project" : error);
+        return false;
+    }
+    neuracoust::daw::BounceOptions options;
+    options.useAssignedRemoteDsp = true;
+    options.remoteDsp = buildRemoteDspSettingsFromProject(project);
+    const auto result = neuracoust::daw::bounceProjectToWav(project, path, options);
+    fillBounceResult(result, out);
+    return result.ok;
+}
+
 namespace {
 
 /// Peaks are cached at a fixed sample resolution, not a fixed bucket count, so a long clip does
@@ -6839,6 +6881,22 @@ bool nc_master_insert_set_dsp_mode(NCEngine* engine, int slot, const char* mode)
     return true;
 }
 
+void nc_master_insert_dsp_machine(NCEngine* engine, int slot, char* out, size_t outLen) {
+    const auto* insert = masterInsertAt(engine, slot);
+    copyText(out, outLen, insert != nullptr ? insert->assignedDspServerId : std::string{});
+}
+
+void nc_master_insert_set_dsp_machine(NCEngine* engine, int slot, const char* machine) {
+    auto* insert = masterInsertAt(engine, slot);
+    if (insert == nullptr || machine == nullptr) return;
+    const std::string next = machine;
+    if (next != "" && next != "internal" && next != "nds" && next != "external") return;
+    if (insert->assignedDspServerId == next) return;
+    insert->assignedDspServerId = next;
+    engine->reconcileProjectDeclicked();
+    engine->recordStep("Master insert DSP");
+}
+
 // ---------------------------------------------------------------------------
 // Monitor station
 // ---------------------------------------------------------------------------
@@ -7243,6 +7301,7 @@ int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* ou
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.nodes.clear();          // the address given is the target, not a starting point
     settings.host = host;
+    neuracoust::daw::applyRemoteDspHostPort(settings);   // "ip:port" probes a scratch instance
     settings.timeoutMs = timeoutMs > 0 ? timeoutMs : 150;
     return fillNodeInfo(settings, out);
 }
@@ -7300,9 +7359,11 @@ void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine) {
     if (field == &engine->project.dspRoleMonitor && !engine->project.dspAutoOverflow) {
         engine->monitorDspPathMode = monitorPathModeForRole(next);
     }
-    // Re-apply live so the change takes effect without an audio restart, the same way the host
-    // setter does. Everything else reads the roles out of the settings the engine now holds.
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    // And REBUILD the offload lists: the console strips and master stages are derived at
+    // insert-chain prepare time, so without this a role change sat dormant until the next
+    // unrelated edit happened to reconcile — the row looked live and did nothing.
+    engine->reconcileProjectDeclicked();
     engine->recordStep("DSP role");
 }
 
@@ -7320,6 +7381,7 @@ void nc_dsp_set_auto_overflow(NCEngine* engine, int enabled) {
     engine->monitorDspPathMode = next ? std::string("auto")
                                       : monitorPathModeForRole(engine->project.dspRoleMonitor);
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();   // rebuild the offload lists — see nc_dsp_set_role
     engine->recordStep("DSP overflow");
 }
 
@@ -7336,6 +7398,7 @@ void nc_dsp_set_nds_host(NCEngine* engine, const char* host) {
     if (engine->project.ndsHost == next) return;
     engine->project.ndsHost = next;
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();   // availability feeds the offload lists
 }
 
 int nc_dsp_nds_enabled(NCEngine* engine) {
@@ -7348,6 +7411,7 @@ void nc_dsp_set_nds_enabled(NCEngine* engine, int enabled) {
     if (engine->project.ndsEnabled == next) return;
     engine->project.ndsEnabled = next;
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();   // availability feeds the offload lists
 }
 
 namespace {

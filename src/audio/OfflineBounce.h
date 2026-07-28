@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/ProjectAudioRenderer.h"
+#include "audio/RemoteDspServerClient.h"
 #include "audio/ProjectRenderTypes.h"
 #include "project/ProjectDocument.h"
 #include <cstdint>
@@ -41,6 +42,12 @@ enum class BounceRangeMode {
 
 struct BounceOptions {
     BounceRenderMode renderMode = BounceRenderMode::Offline;
+    /// Render the DSP-role-assigned processing (console strips, master inserts) on the remote
+    /// node instead of locally. STRICT on purpose: a block the node misses ABORTS the bounce
+    /// with an error rather than quietly finishing on the local processors — a mixdown whose
+    /// provenance is "mostly the node, except the bits that timed out" is worthless.
+    bool useAssignedRemoteDsp = false;
+    RemoteDspServerSettings remoteDsp;
     BounceRangeMode rangeMode = BounceRangeMode::FullProject;
     bool ditherEnabled = false;
     int sourceBitDepth = 0;

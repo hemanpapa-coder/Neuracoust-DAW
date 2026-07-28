@@ -590,6 +590,26 @@ std::string realtimeInsertGraphSignature(const ProjectAudioRenderPlan& plan,
     out << "sr=" << settings.sampleRate
         << ";block=" << maxBlockSize
         << ";pdc=" << (settings.delayCompensationEnabled ? '1' : '0') << '\n';
+    // The DSP assignment is a prepare-time input like everything else here: the offload lists
+    // (remote console strips, remote master stages, per-machine insert chains) are derived when
+    // the chains are prepared. Left out of the signature, a role or machine change matched the
+    // old signature, the prepare was skipped as a no-op, and the new assignment sat dormant
+    // until some unrelated edit happened to rebuild — the row looked live and did nothing.
+    const auto& remote = settings.remoteDspServer;
+    out << "remote=" << (remote.enabled ? '1' : '0') << remote.host
+        << ";nds=" << (remote.ndsEnabled ? '1' : '0') << remote.ndsHost
+        << ";roles=" << remote.roleMonitor << ',' << remote.roleChannelStrip << ','
+        << remote.roleMaster << ',' << remote.roleInserts
+        << ";overflow=" << (remote.autoOverflow ? '1' : '0') << '\n';
+    for (const auto& track : plan.tracks) {
+        const auto& c = track.consoleChannel;
+        const bool anyModuleOn = c.filterEnabled || c.eqEnabled || c.compEnabled ||
+                                 c.gateEnabled || c.saturatorEnabled;
+        if (anyModuleOn || !track.consoleDspMachine.empty()) {
+            out << "strip:" << track.name << '=' << (anyModuleOn ? '1' : '0')
+                << ',' << track.consoleDspMachine << '\n';
+        }
+    }
     out << "master\n";
     for (const auto& insert : plan.activeVst3Inserts) {
         appendInsertSignature(out, insert);
@@ -708,6 +728,12 @@ bool realtimeTrackPlaybackMuted(const ProjectAudioRenderPlan& plan, const TrackS
 }
 
 } // namespace
+
+// Public face of the anonymous-namespace mapping above, so the offline bounce can pack the same
+// parameters the realtime engine does. One mapping — the 4001E id table lives here only.
+std::vector<RemoteDspParameterValue> remoteInsertParameterValues(const TrackInsertSlot& insert) {
+    return remoteParametersForInsert(insert);
+}
 
 bool NeuracoustDspEngine::configure(const AudioEngineSettings& settings, int maxBlockSize, std::string& error) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1392,7 +1418,29 @@ bool NeuracoustDspEngine::updateTrackConsoleChannel(const std::string& trackName
     if (trackIt == projectPlan_.tracks.end()) return false;
     // The ConsoleChannelProcessor (kept in the render state, keyed by route) ramps its coefficients
     // toward these params per sample, so pushing them here is click-free.
+    const auto& before = trackIt->consoleChannel;
+    const bool enabledSetChanged =
+        before.filterEnabled != console.filterEnabled ||
+        before.eqEnabled != console.eqEnabled ||
+        before.compEnabled != console.compEnabled ||
+        before.gateEnabled != console.gateEnabled ||
+        before.saturatorEnabled != console.saturatorEnabled;
     trackIt->consoleChannel = console;
+    // Switching a module on/off changes whether this strip belongs on a remote machine at all —
+    // the offload list skips all-modules-off strips, and it is derived, not live. Without this,
+    // enabling the first module on an NDS-assigned channel streamed nothing until some unrelated
+    // edit happened to reconcile. Cheap (rebuilds a map, no plug-in loads), so per-toggle is fine;
+    // plain knob turns skip it.
+    if (enabledSetChanged) {
+        prepareRemoteConsoleStripsLocked(maxBlockSize_);
+    } else if (auto strip = remoteConsoleStrips_.find(trackName); strip != remoteConsoleStrips_.end()) {
+        // The strip is remote and a parameter moved: refresh the values the stream sends, or the
+        // node keeps processing with the settings from assignment time.
+        strip->second.parameters.clear();
+        for (const auto& parameter : consoleChannelParameterValues(console)) {
+            strip->second.parameters.push_back({static_cast<uint32_t>(parameter.index), parameter.normalized});
+        }
+    }
     return true;
 }
 
@@ -2844,6 +2892,7 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
     // Last, so the realignment inside it sees every latency this pass established rather than
     // being wiped by the delayCompensationSamples_ reset that starts the function.
     prepareRemoteConsoleStripsLocked(maxBlockSize);
+    prepareRemoteMasterInsertsLocked(maxBlockSize);
     realtimeInsertGraphSignature_ = realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize);
     error.clear();
     return true;
@@ -3116,6 +3165,103 @@ bool NeuracoustDspEngine::remoteMonitorDspRequestedLocked() const {
     return monitorDspModeRequestsRemoteLocked(settings_.monitorDspPathMode);
 }
 
+// Which master inserts leave the host. All-or-nothing on purpose: the master chain is SERIAL,
+// and splitting it (slot 1 local, slot 2 remote, slot 3 local) would reorder the processing —
+// so either every active slot resolves to a Neuracoust module on one reachable machine, or the
+// whole chain stays local and the message says why.
+void NeuracoustDspEngine::prepareRemoteMasterInsertsLocked(int maxBlockSize) {
+    remoteMasterInserts_.clear();
+    remoteMasterMode_.clear();
+    projectRenderState_.remoteMasterInserts = nullptr;
+
+    // Active slots only — a bypassed slot is not part of the sound.
+    std::vector<const InsertState*> active;
+    for (const auto& insert : projectPlan_.activeVst3Inserts) {
+        if (!insert.bypassed && insert.available) {
+            active.push_back(&insert);
+        }
+    }
+    if (active.empty()) {
+        return;
+    }
+
+    std::string mode;
+    std::vector<RemoteMasterInsertStage> stages;
+    for (const auto* insert : active) {
+        const std::string machine =
+            effectiveDspMachine(insert->assignedDspServerId, settings_.remoteDspServer.roleMaster);
+        const std::string insertMode = remoteDspModeForRole(settings_.remoteDspServer, machine);
+        if (!remoteDspModeAvailable(settings_.remoteDspServer, insertMode)) {
+            return;   // this slot stays local, so the whole serial chain does
+        }
+        const auto capability = remoteDspCapabilityForMasterInsert(*insert, true, true);
+        if (capability.moduleId.empty()) {
+            return;   // a third-party plug-in cannot leave the host, and the chain is serial
+        }
+        if (mode.empty()) {
+            mode = insertMode;
+        } else if (mode != insertMode) {
+            return;   // two machines inside one serial chain is two crossings; keep it local
+        }
+        RemoteMasterInsertStage stage;
+        stage.moduleId = capability.moduleId;
+        TrackInsertSlot slot;
+        slot.parameters = insert->parameters;
+        slot.pluginName = insert->pluginName;
+        slot.pluginClassName = insert->pluginClassName;
+        stage.parameters = remoteParametersForInsert(slot);
+        stage.stream = std::make_unique<RemoteDspAsyncStream>();
+        stages.push_back(std::move(stage));
+    }
+
+    remoteMasterMode_ = mode;
+    remoteMasterInserts_ = std::move(stages);
+    // The chain crosses the network once per stage; the whole mix is equally delayed, so this
+    // only feeds the PDC total, not any relative alignment.
+    if (settings_.delayCompensationEnabled) {
+        delayCompensationSamples_ += static_cast<unsigned int>(remoteMasterInserts_.size()) *
+            remoteDspCrossingLatencySamples(settings_.remoteDspServer, maxBlockSize);
+    }
+    projectRenderState_.remoteMasterInserts = [this](std::vector<float>& block) {
+        return processRemoteMasterInsertsLocked(block);
+    };
+    message_ = "마스터 인서트 " + std::to_string(remoteMasterInserts_.size()) +
+               "개를 " + remoteMasterMode_ + " 노드로 배정했습니다.";
+}
+
+// Called from the renderer on the render thread, with mutex_ held by the caller.
+bool NeuracoustDspEngine::processRemoteMasterInsertsLocked(std::vector<float>& interleavedStereo) {
+    if (remoteMasterInserts_.empty() || interleavedStereo.empty()) {
+        return false;
+    }
+    auto settings = remoteDspSettingsForMode(settings_.remoteDspServer, remoteMasterMode_);
+    settings.channelCount = 2;
+    settings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));
+    settings.sampleRate = settings_.sampleRate;
+    const uint16_t networkBufferFrames =
+        std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
+    settings.networkBufferFrames = networkBufferFrames;
+    const double bufferLatencyMs = settings_.sampleRate > 0.0
+        ? (static_cast<double>(networkBufferFrames) * 1000.0 / settings_.sampleRate)
+        : 2.7;
+    settings.timeoutMs = std::max<int>(8, static_cast<int>(std::ceil(bufferLatencyMs + 5.0)));
+
+    // Serial, in slot order — the same order the local chain would run. Any stage that misses
+    // returns false and the WHOLE block runs locally instead: half-remote processing would apply
+    // some of the chain twice.
+    for (auto& stage : remoteMasterInserts_) {
+        settings.loadedPluginIdHint = stage.moduleId;
+        if (stage.stream == nullptr ||
+            !stage.stream->process(settings, interleavedStereo, stage.parameters, remoteMasterScratch_) ||
+            remoteMasterScratch_.size() != interleavedStereo.size()) {
+            return false;
+        }
+        interleavedStereo = remoteMasterScratch_;
+        recordRemoteDspRoundTripLocked(stage.stream->status().averageRoundTripMs);
+    }
+    return true;
+}
+
 // Work out which channels run their console strip elsewhere, and hand the renderer a detour for
 // them. Keyed by track name, which is also the route name the renderer asks about.
 void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
@@ -3157,6 +3303,12 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
         ++activeRemoteConsoleStripCount_;
     }
     remoteConsoleStrips_ = std::move(next);
+    if (getenv("NC_DIAG_REMOTE") != nullptr) {
+        fprintf(stderr, "[nc-remote] strips prepared: %zu (nds=%d host=%s role=%s)\n",
+                remoteConsoleStrips_.size(), settings_.remoteDspServer.ndsEnabled ? 1 : 0,
+                settings_.remoteDspServer.ndsHost.c_str(),
+                settings_.remoteDspServer.roleChannelStrip.c_str());
+    }
     realignRemoteConsoleStripsLocked(maxBlockSize);
     if (remoteConsoleStrips_.empty()) {
         projectRenderState_.remoteConsoleStrip = nullptr;
@@ -3245,6 +3397,13 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
         // Warming up or the node missed a block. Returning false runs the LOCAL strip for this
         // block instead of dropping it — the same processor, so the channel keeps its sound
         // rather than going momentarily dry.
+        if (getenv("NC_DIAG_REMOTE") != nullptr) {
+            static int logged = 0;
+            if (logged < 20 && (logged++ % 4) == 0) {
+                fprintf(stderr, "[nc-remote] strip %s fallback: %s\n", routeName.c_str(),
+                        found->second.stream->status().message.c_str());
+            }
+        }
         return false;
     }
     interleavedStereo = remoteConsoleProcessedBlock_;

@@ -633,7 +633,8 @@ final class EngineController: ObservableObject {
             return InsertSlot(id: slot,
                               name: readEngineString { nc_master_insert_name(handle, s, $0, $1) },
                               bypassed: nc_master_insert_bypassed(handle, s),
-                              modeBadge: "")
+                              modeBadge: "",
+                              dspMachine: readEngineString { nc_master_insert_dsp_machine(handle, s, $0, $1) })
         }
     }
 
@@ -2980,6 +2981,12 @@ final class EngineController: ObservableObject {
         /// shipped as a row that quietly does nothing.
         var routed: Bool { true }
     }
+    /// Bounce through the node (strict). Persisted per user, not per project — it is a workflow
+    /// choice about THIS machine's relationship to the node, not part of the song.
+    @Published var bounceUseRemoteDsp = UserDefaults.standard.bool(forKey: "nc.bounceUseRemoteDsp") {
+        didSet { UserDefaults.standard.set(bounceUseRemoteDsp, forKey: "nc.bounceUseRemoteDsp") }
+    }
+
     @Published private(set) var dspRoles: [String: DspMachine] = [:]
     @Published private(set) var dspAutoOverflow = false
     @Published var ndsHost = "192.168.0.198"
@@ -4417,6 +4424,14 @@ final class EngineController: ObservableObject {
         reloadTracks(); refreshHistory()
     }
 
+    /// Which machine runs one MASTER insert. The chain is serial, so the engine offloads only
+    /// when every active slot lands on a Neuracoust module on one machine — otherwise all local.
+    func setMasterInsertDspMachine(_ slot: Int, _ machine: String) {
+        guard let handle else { return }
+        machine.withCString { nc_master_insert_set_dsp_machine(handle, Int32(slot), $0) }
+        reloadMasterInserts(); refreshHistory()
+    }
+
     /// The picker's options, as (stored value, label). The empty value is first because following
     /// the project assignment is the normal case and an override is the exception.
     static let dspMachineChoices: [(String, String)] = [
@@ -5784,10 +5799,15 @@ final class EngineController: ObservableObject {
         bouncing = true
         bounceSummary = nil
         let outputPath = url.path
+        let useRemote = bounceUseRemoteDsp
 
         Task.detached(priority: .userInitiated) {
             var result = NCBounceResult()
-            let ok = nc_bounce_snapshot_to_wav(snapshot, outputPath, &result)
+            // The remote variant is STRICT: a node miss fails the bounce instead of quietly
+            // finishing locally — a mix whose provenance is "mostly the node" is worthless.
+            let ok = useRemote
+                ? nc_bounce_snapshot_to_wav_remote(snapshot, outputPath, &result)
+                : nc_bounce_snapshot_to_wav(snapshot, outputPath, &result)
 
             let message = withUnsafePointer(to: result.message) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(NC_TEXT_LEN)) { String(cString: $0) }

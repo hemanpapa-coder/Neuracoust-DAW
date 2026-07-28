@@ -308,6 +308,27 @@ RemoteDspServerSettings defaultRemoteDspServerSettings() {
     return settings;
 }
 
+// "host:port" picks a non-default engine port (status stays port+1, the engine's own layout).
+// This is what lets a second engine instance on one box be addressed at all — including verifying
+// a new engine on a scratch port while the production one keeps running on 20000.
+void applyRemoteDspHostPort(RemoteDspServerSettings& settings) {
+    std::string& host = settings.host;
+    const auto colon = host.rfind(':');
+    if (colon == std::string::npos || colon + 1 >= host.size()) {
+        return;
+    }
+    const std::string portText = host.substr(colon + 1);
+    if (portText.find_first_not_of("0123456789") != std::string::npos) {
+        return;   // IPv6 or a stray colon — leave it alone
+    }
+    const long port = std::strtol(portText.c_str(), nullptr, 10);
+    if (port > 0 && port <= 65535) {
+        settings.rtEnginePort = static_cast<uint16_t>(port);
+        settings.statusPort = static_cast<uint16_t>(port + 1);
+        host = host.substr(0, colon);
+    }
+}
+
 bool remoteDspModeAvailable(const RemoteDspServerSettings& settings, const std::string& mode) {
     if (mode == "nds") {
         return settings.ndsEnabled && !settings.ndsHost.empty();
@@ -344,6 +365,7 @@ std::string remoteDspModeForRole(const RemoteDspServerSettings& settings, const 
 RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& settings,
                                                  const std::string& mode) {
     RemoteDspServerSettings resolved = settings;
+
     const bool ndsUsable = settings.ndsEnabled && !settings.ndsHost.empty();
     const bool externalUsable = settings.enabled && !settings.host.empty();
     // "auto" prefers the appliance: it is the machine whose timing we control.
@@ -354,6 +376,7 @@ RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& 
     } else {
         resolved.enabled = externalUsable;
     }
+    applyRemoteDspHostPort(resolved);
     // The node list would otherwise steer the client back to whatever it lists; the chosen
     // machine is the target, full stop.
     resolved.nodes.clear();

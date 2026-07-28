@@ -1,5 +1,8 @@
 #include "audio/OfflineBounce.h"
+#include "audio/ConsoleChannelProcessor.h"
 #include "audio/MasterInsertProcessor.h"
+#include "audio/RemoteDspPluginCatalog.h"
+#include "audio/RemoteDspServerClient.h"
 #include "audio/ProjectAudioRenderer.h"
 #include "audio/WavFile.h"
 #include "project/EditOperations.h"
@@ -844,6 +847,203 @@ ProjectDocument projectForStemTrack(const ProjectDocument& project, const TrackS
 
 } // namespace
 
+/// The node-side processing for a STRICT remote bounce. Same derivations as the realtime engine
+/// (which channel goes where, which module, which parameters), but offline discipline: generous
+/// timeouts, a few retries, and any block the node still misses poisons the whole render — the
+/// caller must then fail the bounce, never fall back. Sessions are per track / per master stage,
+/// so concurrent state on the node stays private, same as realtime.
+class StrictRemoteBounceDsp {
+public:
+    StrictRemoteBounceDsp(const ProjectDocument& project,
+                          const ProjectAudioRenderPlan& plan,
+                          const RemoteDspServerSettings& base)
+        : base_(base) {
+        // Console strips: every track whose strip resolves to a remote machine and has a module
+        // switched on. The bounce follows the same assignment the realtime path plays.
+        for (const auto& track : plan.tracks) {
+            const bool isMaster = track.trackType == "master" || track.name == "Master";
+            const std::string& role = isMaster ? base.roleMaster : base.roleChannelStrip;
+            const std::string mode =
+                remoteDspModeForRole(base, effectiveDspMachine(track.consoleDspMachine, role));
+            if (!remoteDspModeAvailable(base, mode)) {
+                continue;
+            }
+            const auto& c = track.consoleChannel;
+            if (!c.filterEnabled && !c.eqEnabled && !c.compEnabled && !c.gateEnabled && !c.saturatorEnabled) {
+                continue;
+            }
+            auto& strip = strips_[track.name];
+            strip.mode = mode;
+            for (const auto& parameter : consoleChannelParameterValues(c)) {
+                strip.parameters.push_back({static_cast<uint32_t>(parameter.index), parameter.normalized});
+            }
+            strip.session = std::make_unique<RemoteDspProcessSession>();
+        }
+
+        // Master inserts, all-or-nothing on one machine (the chain is serial) — the same rule the
+        // realtime engine applies. A chain that cannot fully offload fails STRICT mode loudly.
+        std::string masterMode;
+        bool masterBlocked = false;
+        for (const auto& insert : plan.activeVst3Inserts) {
+            if (insert.bypassed || !insert.available) {
+                continue;
+            }
+            const std::string mode = remoteDspModeForRole(
+                base, effectiveDspMachine(insert.assignedDspServerId, base.roleMaster));
+            const auto capability = remoteDspCapabilityForMasterInsert(insert, true, true);
+            if (!remoteDspModeAvailable(base, mode) || capability.moduleId.empty() ||
+                (!masterMode.empty() && masterMode != mode)) {
+                if (remoteDspModeAvailable(base, mode) && capability.moduleId.empty()) {
+                    // Assigned remote but not a Neuracoust module — impossible to honour.
+                    masterBlocked = true;
+                    blockedReason_ = "마스터 인서트 '" + insert.pluginName +
+                                     "' 는 누라쿠스트 모듈이 아니라 노드에서 렌더할 수 없습니다";
+                }
+                masterMode.clear();
+                break;
+            }
+            masterMode = mode;
+            MasterStage stage;
+            stage.moduleId = capability.moduleId;
+            TrackInsertSlot slot;
+            slot.parameters = insert.parameters;
+            slot.pluginName = insert.pluginName;
+            slot.pluginClassName = insert.pluginClassName;
+            stage.parameters = remoteInsertParameterValues(slot);
+            stage.session = std::make_unique<RemoteDspProcessSession>();
+            masterStages_.push_back(std::move(stage));
+        }
+        if (masterMode.empty()) {
+            masterStages_.clear();
+        }
+        masterMode_ = masterMode;
+        if (masterBlocked && !masterStages_.empty()) {
+            masterStages_.clear();
+        }
+        (void)project;
+    }
+
+    bool anythingRemote() const { return !strips_.empty() || !masterStages_.empty(); }
+    bool failed() const { return failed_; }
+    const std::string& failure() const { return failure_; }
+    const std::string& blockedReason() const { return blockedReason_; }
+
+    void install(ProjectAudioRenderState& state) {
+        if (!strips_.empty()) {
+            state.remoteConsoleStrip = [this](const std::string& route, std::vector<float>& block) {
+                return processStrip(route, block);
+            };
+        }
+        if (!masterStages_.empty()) {
+            state.remoteMasterInserts = [this](std::vector<float>& block) {
+                return processMaster(block);
+            };
+        }
+    }
+
+private:
+    struct Strip {
+        std::string mode;
+        std::vector<RemoteDspParameterValue> parameters;
+        std::unique_ptr<RemoteDspProcessSession> session;
+    };
+    struct MasterStage {
+        std::string moduleId;
+        std::vector<RemoteDspParameterValue> parameters;
+        std::unique_ptr<RemoteDspProcessSession> session;
+    };
+
+    RemoteDspServerSettings settingsFor(const std::string& mode, size_t frames,
+                                        const std::string& moduleId) const {
+        auto settings = remoteDspSettingsForMode(base_, mode);
+        settings.channelCount = 2;
+        settings.frameCount = static_cast<uint16_t>(std::min<size_t>(frames, 1024u));
+        settings.timeoutMs = 250;   // offline: correctness over latency
+        settings.loadedPluginIdHint = moduleId;
+        return settings;
+    }
+
+    /// The offline renderer hands the hooks the WHOLE span as one block (it does not run in
+    /// realtime-sized slices), while a NART packet carries at most 256 frames — so the block is
+    /// walked through the session in wire-sized chunks. Same session throughout, so the module's
+    /// state on the node is continuous across chunks, exactly like consecutive realtime blocks.
+    bool runWithRetries(RemoteDspProcessSession& session,
+                        const RemoteDspServerSettings& settings,
+                        const std::vector<float>& in,
+                        const std::vector<RemoteDspParameterValue>& parameters,
+                        std::vector<float>& out,
+                        const std::string& what) {
+        constexpr size_t kWireFrames = 256;
+        const size_t totalFrames = in.size() / 2u;
+        out.resize(in.size());
+        std::vector<float> chunkIn;
+        std::vector<float> chunkOut;
+        for (size_t start = 0; start < totalFrames; start += kWireFrames) {
+            const size_t frames = std::min(kWireFrames, totalFrames - start);
+            chunkIn.assign(in.begin() + static_cast<long>(start * 2u),
+                           in.begin() + static_cast<long>((start + frames) * 2u));
+            auto chunkSettings = settings;
+            chunkSettings.frameCount = static_cast<uint16_t>(frames);
+            bool chunkOk = false;
+            for (int attempt = 0; attempt < 3 && !chunkOk; ++attempt) {
+                const auto result = session.process(chunkSettings, chunkIn, parameters, chunkOut);
+                chunkOk = result.processed && chunkOut.size() == chunkIn.size();
+                if (!chunkOk) {
+                    failure_ = what + ": " + result.message;
+                }
+            }
+            if (!chunkOk) {
+                failed_ = true;
+                return false;
+            }
+            std::copy(chunkOut.begin(), chunkOut.end(), out.begin() + static_cast<long>(start * 2u));
+        }
+        return true;
+    }
+
+    bool processStrip(const std::string& route, std::vector<float>& block) {
+        if (failed_) {
+            return true;   // poisoned: stop doing network work, the caller will discard the render
+        }
+        auto found = strips_.find(route);
+        if (found == strips_.end()) {
+            return false;   // this track's strip is assigned local — run the local processor
+        }
+        auto settings = settingsFor(found->second.mode, block.size() / 2u,
+                                    "na.neuracoust.console.channel");
+        if (!runWithRetries(*found->second.session, settings, block,
+                            found->second.parameters, scratch_, "콘솔 스트립 (" + route + ")")) {
+            return true;
+        }
+        block = scratch_;
+        return true;
+    }
+
+    bool processMaster(std::vector<float>& block) {
+        if (failed_) {
+            return true;
+        }
+        for (auto& stage : masterStages_) {
+            auto settings = settingsFor(masterMode_, block.size() / 2u, stage.moduleId);
+            if (!runWithRetries(*stage.session, settings, block, stage.parameters, scratch_,
+                                "마스터 인서트 (" + stage.moduleId + ")")) {
+                return true;
+            }
+            block = scratch_;
+        }
+        return true;
+    }
+
+    RemoteDspServerSettings base_;
+    std::map<std::string, Strip> strips_;
+    std::vector<MasterStage> masterStages_;
+    std::string masterMode_;
+    std::vector<float> scratch_;
+    bool failed_ = false;
+    std::string failure_;
+    std::string blockedReason_;
+};
+
 BounceResult bounceProjectToWav(const ProjectDocument& project, const std::string& outputPath, const BounceOptions& options) {
     BounceResult result;
     const auto bounceStartTime = std::chrono::steady_clock::now();
@@ -875,9 +1075,28 @@ BounceResult bounceProjectToWav(const ProjectDocument& project, const std::strin
     mix.channels = 2;
     mix.sampleRate = sampleRate;
     ProjectAudioRenderState renderState;
+    // The strict node renderer, only when asked. Every failure path here must END the bounce —
+    // the option's whole meaning is "this file came from the node", so half-and-half is a lie.
+    std::unique_ptr<StrictRemoteBounceDsp> remoteDsp;
+    if (options.useAssignedRemoteDsp) {
+        remoteDsp = std::make_unique<StrictRemoteBounceDsp>(project, plan, options.remoteDsp);
+        if (!remoteDsp->blockedReason().empty()) {
+            result.message = "원격 바운스 불가: " + remoteDsp->blockedReason();
+            return result;
+        }
+        if (!remoteDsp->anythingRemote()) {
+            result.message = "원격 바운스 불가: DSP 역할 배정에 원격으로 지정된 처리가 없습니다";
+            return result;
+        }
+        remoteDsp->install(renderState);
+    }
     // offline=true: prepare insert chains synchronously (the async preparer can't keep up with
     // faster-than-realtime rendering, and a bounce must not drop inserts to dry).
     renderProjectAudioBlockWithStateAndMeters(plan, renderState, startFrame, frameCount, mix.interleavedSamples, nullptr, true);
+    if (remoteDsp != nullptr && remoteDsp->failed()) {
+        result.message = "원격 바운스 실패 (렌더 폐기): " + remoteDsp->failure();
+        return result;
+    }
     if (renderState.masterInsertProcessingFailed) {
         result.message = "VST3 insert failed: master insert: " + renderState.masterInsertLastError;
         return result;

@@ -146,6 +146,8 @@ struct NeuracoustApp: App {
                 Button("바운스…") { engine.bounceProject() }
                     .keyboardShortcut("b", modifiers: [.command, .option])  // Pro Tools
                     .disabled(engine.bouncing)
+                Toggle("바운스를 원격 DSP로 (엄격)", isOn: $engine.bounceUseRemoteDsp)
+                    .help("DSP 역할 배정에 따라 콘솔 스트립·마스터 인서트를 노드에서 렌더합니다. 노드가 한 블록이라도 놓치면 바운스가 실패합니다 — 조용한 로컬 폴백은 없습니다.")
                 Button("스템 내보내기 (트랙별 WAV)…") { engine.exportStems() }
                     .help("트랙마다 WAV 하나 · 전부 00:00에서 시작하므로 다른 DAW에 0에 놓으면 그대로 맞습니다")
                     .disabled(engine.bouncing)

@@ -231,6 +231,20 @@ private:
     std::vector<float> remoteConsoleProcessedBlock_;
     int activeRemoteConsoleStripCount_ = 0;
 
+    /// One master insert offloaded to a node: its module, its parameters, its stream. The chain
+    /// is SERIAL, so the stages run in order, each through its own session on the node.
+    struct RemoteMasterInsertStage {
+        std::string moduleId;
+        std::vector<RemoteDspParameterValue> parameters;
+        std::unique_ptr<RemoteDspAsyncStream> stream;
+    };
+    std::vector<RemoteMasterInsertStage> remoteMasterInserts_;
+    std::string remoteMasterMode_;
+    std::vector<float> remoteMasterScratch_;
+
+    void prepareRemoteMasterInsertsLocked(int maxBlockSize);
+    bool processRemoteMasterInsertsLocked(std::vector<float>& interleavedStereo);
+
     void prepareRemoteConsoleStripsLocked(int maxBlockSize);
     /// Declare each remote strip's crossing into the mixer's delay compensation, so a channel
     /// that leaves the host does not simply arrive late against the rest of the mix.

@@ -1065,6 +1065,10 @@ bool nc_apply_monitor_template(NCEngine* engine, const char* serialized);
 /// Renders a serialized document. Touches no shared state — safe to call from a
 /// background thread while the user keeps editing.
 bool nc_bounce_snapshot_to_wav(const char* projectText, const char* path, NCBounceResult* out);
+// Same render, but the DSP-role-assigned processing (console strips, master inserts) runs ON THE
+// NODE, and STRICTLY: any block the node misses fails the bounce with an error instead of
+// quietly finishing on the local processors. Fails up front when nothing is assigned remote.
+bool nc_bounce_snapshot_to_wav_remote(const char* projectText, const char* path, NCBounceResult* out);
 
 // AAF session import (libAAF). Reads audio tracks, clips and markers from a Pro Tools / Media
 // Composer / Resolve AAF and REPLACES the open document with it — an AAF is a whole session.
@@ -1318,6 +1322,10 @@ void nc_track_console_dsp_machine(NCEngine* engine, int trackIndex, char* out, s
 void nc_track_set_console_dsp_machine(NCEngine* engine, int trackIndex, const char* machine);
 void nc_track_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, char* out, size_t outLen);
 void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot, const char* machine);
+// The same per-slot override for the MASTER chain. The chain is serial, so the engine only
+// offloads when every active slot resolves to a Neuracoust module on one machine.
+void nc_master_insert_dsp_machine(NCEngine* engine, int slot, char* out, size_t outLen);
+void nc_master_insert_set_dsp_machine(NCEngine* engine, int slot, const char* machine);
 
 // The "use this node" master switch: whether the external DSP node participates at all. Off gates the
 // node out of the monitor/DAW/plugin core plan regardless of the requested reserve. Applies live.

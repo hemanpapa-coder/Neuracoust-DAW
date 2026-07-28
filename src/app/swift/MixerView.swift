@@ -419,6 +419,7 @@ private struct InsertSlotChipView: View {
         Button {
             if isMaster {
                 engine.setMasterInsertDspMode(slot: slot, mode: "remote_internal")
+                engine.setMasterInsertDspMachine(slot, machine)
             } else {
                 engine.setInsertDspMode(track: ownerId, slot: slot, mode: "remote_internal")
                 engine.setInsertDspMachine(ownerId, slot, machine)
@@ -426,9 +427,6 @@ private struct InsertSlotChipView: View {
         } label: {
             if checked { Label(label, systemImage: "checkmark") } else { Text(label) }
         }
-        // The master chain has no per-slot machine field yet; offering the choice there would
-        // set the mode and silently ignore the machine.
-        .disabled(isMaster && !machine.isEmpty)
     }
 
     /// Distinct non-empty values for a key, sorted — the submenu headings.

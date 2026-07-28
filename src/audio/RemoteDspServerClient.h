@@ -175,6 +175,8 @@ RemoteDspServerSettings defaultRemoteDspServerSettings();
 /// single-address and none of them has to know which machine it is speaking to.
 RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& settings,
                                                  const std::string& mode);
+/// Split an optional ":port" off settings.host into rtEnginePort/statusPort (port+1).
+void applyRemoteDspHostPort(RemoteDspServerSettings& settings);
 /// True when `mode` names a remote machine that is switched on.
 bool remoteDspModeAvailable(const RemoteDspServerSettings& settings, const std::string& mode);
 
