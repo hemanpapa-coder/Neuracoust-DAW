@@ -294,7 +294,9 @@ struct NeuracoustApp: App {
                 .environmentObject(ai)
         }
         .defaultSize(width: 420, height: 950)
-        .windowResizability(.contentSize)
+        // Height stays free (the dock's own ScrollView carries long content on short displays);
+        // only the width is pinned to the rack.
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -323,7 +325,7 @@ struct MonitorStationWindowRoot: View {
     var body: some View {
         MonitorDock()
             .frame(width: Theme.monitorDockWidth)
-            .frame(maxHeight: .infinity)
+            .frame(minHeight: 480, maxHeight: .infinity)
             .background(Theme.Palette.panel)
             .preferredColorScheme(.dark)
             .onAppear { engine.showMonitorDock = false }

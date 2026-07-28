@@ -4,6 +4,7 @@ import AppKit
 struct MonitorDock: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var listen: ListenRoomController
+    @Environment(\.openWindow) private var openWindow
 
     /// Opens the searchable model picker sheet. Nested context submenus of ~200 items do
     /// not render on macOS, so model selection uses this instead.
@@ -98,6 +99,20 @@ struct MonitorDock: View {
                     .foregroundStyle(Theme.Palette.textFaint)
             }
             Spacer()
+            // Pop the station out into its own window — the same jump the 윈도우 menu offers,
+            // but visible where the station actually lives. The dock column yields while the
+            // window is open and returns when it closes (MonitorStationWindowRoot).
+            Button {
+                openWindow(id: "monitor-station")
+            } label: {
+                Image(systemName: "rectangle.on.rectangle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                    .frame(width: 24, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("모니터 스테이션을 별도 창으로 엽니다 (윈도우 메뉴 → 모니터 스테이션 창)")
             Button {
                 launchVocalConverter()
             } label: {
@@ -959,9 +974,13 @@ struct MonitorDock: View {
                         .frame(width: 62, alignment: .leading)
                     ForEach(EngineController.DspMachine.allCases) { machine in
                         let picked = engine.dspRole(job) == machine
+                        // The machine card's own switch (below) gates its column here: a machine
+                        // that is turned OFF cannot take new assignments, and an assignment it
+                        // already holds reads amber — saved, but not running anywhere.
+                        let machineOn = dspMachineEnabled(machine)
                         // A job with no remote path yet still stores its assignment, but it must
                         // not look live: amber, not teal, so the row reads as "saved, not routed".
-                        let live = picked && (job.routed || machine == .internalDsp)
+                        let live = picked && machineOn && (job.routed || machine == .internalDsp)
                         Button { engine.setDspRole(job, machine) } label: {
                             Text(machine.label)
                                 .font(Theme.Font.mono(7.5, picked ? .bold : .regular))
@@ -973,6 +992,9 @@ struct MonitorDock: View {
                                           : live ? Theme.Palette.teal : Theme.Palette.amber))
                         }
                         .buttonStyle(.plain)
+                        .disabled(!machineOn && !picked)
+                        .opacity(machineOn || picked ? 1 : 0.3)
+                        .help(machineOn ? "" : "\(machine.label) 기계가 꺼져 있습니다 — 아래 카드에서 켜면 선택할 수 있습니다")
                     }
                 }
             }
@@ -1262,8 +1284,21 @@ struct MonitorDock: View {
         }
     }
 
+    /// The machine cards' switches gate everything above them that names the machine — the
+    /// role-table columns and these source buttons. Off machine, dead controls.
+    private func dspMachineEnabled(_ machine: EngineController.DspMachine) -> Bool {
+        switch machine {
+        case .internalDsp: return true
+        case .nds: return engine.ndsEnabled
+        case .external: return engine.externalDspEnabled
+        }
+    }
+
     private func dspSourceButton(_ title: String, _ source: EngineController.DspSource) -> some View {
         let on = engine.usesDspSource(source)
+        let available = source == .internalDsp ? true
+                      : source == .nds ? engine.ndsEnabled
+                      : engine.externalDspEnabled
         return Button { engine.toggleDspSource(source) } label: {
             Text(title)
                 .font(Theme.Font.ui(9, on ? .semibold : .regular))
@@ -1280,6 +1315,9 @@ struct MonitorDock: View {
                 )
         }
         .buttonStyle(.plain)
+        .disabled(!available)
+        .opacity(available ? 1 : 0.3)
+        .help(available ? "" : "이 기계가 꺼져 있습니다 — 원격 코어 카드에서 켜면 선택할 수 있습니다")
     }
 
     private var listenRoom: some View {
