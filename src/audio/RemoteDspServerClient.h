@@ -174,6 +174,15 @@ RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& 
                                                  const std::string& mode);
 /// True when `mode` names a remote machine that is switched on.
 bool remoteDspModeAvailable(const RemoteDspServerSettings& settings, const std::string& mode);
+
+/// What one trip to a remote machine costs, in samples, for delay compensation.
+///
+/// DECLARED, NOT MEASURED — the way Pro Tools HDX charges a host crossing. Adding the measured
+/// round trip would make the compensation move whenever the network did, realigning every other
+/// path in the mix against a drifting number: an audible phase shift. A fixed budget the trip
+/// comfortably fits inside is the point; a block that misses it is a dropout to report, never a
+/// delay to renegotiate. Everything that compensates for a crossing must use this one number.
+unsigned int remoteDspCrossingLatencySamples(const RemoteDspServerSettings& settings, int maxBlockSize);
 /// The routing mode a job's assignment resolves to. Explicit assignment is the mode itself;
 /// with auto-overflow on every job becomes "auto" — use whatever machine has room.
 std::string remoteDspModeForRole(const RemoteDspServerSettings& settings, const std::string& role);

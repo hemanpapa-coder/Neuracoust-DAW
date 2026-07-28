@@ -231,7 +231,10 @@ private:
     std::vector<float> remoteConsoleProcessedBlock_;
     int activeRemoteConsoleStripCount_ = 0;
 
-    void prepareRemoteConsoleStripsLocked();
+    void prepareRemoteConsoleStripsLocked(int maxBlockSize);
+    /// Declare each remote strip's crossing into the mixer's delay compensation, so a channel
+    /// that leaves the host does not simply arrive late against the rest of the mix.
+    void realignRemoteConsoleStripsLocked(int maxBlockSize);
     bool processRemoteConsoleStripLocked(const std::string& routeName,
                                          std::vector<float>& interleavedStereo);
 

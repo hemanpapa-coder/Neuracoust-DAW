@@ -65,23 +65,13 @@ std::string effectiveTrackInsertDspExecutionMode(const TrackInsertSlot& insert) 
     return insert.dspExecutionMode.empty() ? "native" : insert.dspExecutionMode;
 }
 
-/// What a trip to a remote machine costs, in samples, for delay compensation.
-///
-/// DECLARED, NOT MEASURED — the way Pro Tools HDX charges a host crossing. This used to add the
-/// measured round trip, so the compensation moved whenever the network did: every other path in
-/// the mix was realigned against a number that drifts, which is a phase shift you can hear and
-/// cannot predict. A fixed budget is the whole point. The round trip on a LAN is ~0.6 ms against
-/// a 5.3 ms buffer at 48 k, so two buffers plus a block is a budget the trip fits inside with
-/// room to spare; a block that misses it is a dropout to report, never a delay to renegotiate.
-constexpr int kRemoteDspCrossingBuffers = 2;
-
+// The crossing cost now lives in RemoteDspServerClient so the mixer's delay compensation and the
+// stream that pays the cost read the same number. Two copies of it is how a channel ends up
+// compensated by a different amount than it is actually delayed.
 unsigned int estimatedRemoteDspLatencySamples(const RemoteDspServerSettings& settings,
                                               double /*sampleRate*/,
                                               int maxBlockSize) {
-    const uint16_t networkBufferFrames = static_cast<uint16_t>(
-        std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames)));
-    return static_cast<unsigned int>(kRemoteDspCrossingBuffers * static_cast<int>(networkBufferFrames) +
-                                     std::max(1, maxBlockSize));
+    return remoteDspCrossingLatencySamples(settings, maxBlockSize);
 }
 
 float dbToGain(float db) {
@@ -2573,7 +2563,6 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         }
     }
     activeRemoteDspTrackInsertCount_ = 0;
-    prepareRemoteConsoleStripsLocked();
     delayCompensationSamples_ = 0;
     if (projectPlan_.hasActiveVst3Inserts &&
         !realtimeInsertChain_.prepare(projectPlan_, settings_.sampleRate, std::max(1, maxBlockSize), error)) {
@@ -2840,6 +2829,9 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         message_ = "Prepared " + std::to_string(activeRemoteDspTrackInsertCount_) +
             " NDS track insert(s) for 누라쿠스트 DSP 서버.";
     }
+    // Last, so the realignment inside it sees every latency this pass established rather than
+    // being wiped by the delayCompensationSamples_ reset that starts the function.
+    prepareRemoteConsoleStripsLocked(maxBlockSize);
     realtimeInsertGraphSignature_ = realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize);
     error.clear();
     return true;
@@ -3110,7 +3102,7 @@ bool NeuracoustDspEngine::remoteMonitorDspRequestedLocked() const {
 
 // Work out which channels run their console strip elsewhere, and hand the renderer a detour for
 // them. Keyed by track name, which is also the route name the renderer asks about.
-void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked() {
+void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
     std::map<std::string, RemoteConsoleStrip> next;
     activeRemoteConsoleStripCount_ = 0;
     for (const auto& track : projectPlan_.tracks) {
@@ -3149,6 +3141,7 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked() {
         ++activeRemoteConsoleStripCount_;
     }
     remoteConsoleStrips_ = std::move(next);
+    realignRemoteConsoleStripsLocked(maxBlockSize);
     if (remoteConsoleStrips_.empty()) {
         projectRenderState_.remoteConsoleStrip = nullptr;
         return;
@@ -3159,6 +3152,52 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked() {
         [this](const std::string& routeName, std::vector<float>& block) {
             return processRemoteConsoleStripLocked(routeName, block);
         };
+}
+
+// A channel whose strip runs on a node comes back a crossing later than one processed here. If
+// nothing says so, that channel simply sits behind the rest of the mix — the timing smears and
+// anything sharing a source with it phases.
+//
+// The renderer already has the fix, the same one every DAW uses when a linear-phase EQ makes one
+// track late: each route declares its latency, the longest path wins, and every shorter route is
+// delayed to match. Track inserts were declared there; the console strips were not. This adds the
+// crossing to each remote strip's route and re-derives the compensation for all of them.
+//
+// Done here rather than in buildMixerGraph because the graph is built from the project alone and
+// the crossing cost comes from the network settings — and because the offline bounce, which shares
+// the graph and never runs a remote strip, must not be handed a compensation for a trip it does
+// not take.
+void NeuracoustDspEngine::realignRemoteConsoleStripsLocked(int maxBlockSize) {
+    if (!settings_.delayCompensationEnabled) {
+        return;
+    }
+    const unsigned int crossing =
+        remoteConsoleStrips_.empty()
+            ? 0u
+            : remoteDspCrossingLatencySamples(settings_.remoteDspServer, maxBlockSize);
+
+    // Each route's total latency: what the graph already knew, plus a crossing if this channel's
+    // strip is leaving the host.
+    unsigned int longestPath = 0;
+    std::map<std::string, unsigned int> pathLatency;
+    for (const auto& route : projectPlan_.mixerGraph.routes) {
+        if (!route.audioCarrying) continue;
+        const unsigned int total =
+            route.pathLatencySamples +
+            (remoteConsoleStrips_.count(route.name) != 0 ? crossing : 0u);
+        pathLatency[route.name] = total;
+        longestPath = std::max(longestPath, total);
+    }
+    for (const auto& [routeName, total] : pathLatency) {
+        if (total >= longestPath) {
+            projectPlan_.routeDelayCompensationSamples.erase(routeName);
+        } else {
+            projectPlan_.routeDelayCompensationSamples[routeName] = longestPath - total;
+        }
+    }
+    projectPlan_.delayCompensationSamples =
+        std::max(projectPlan_.delayCompensationSamples, longestPath);
+    delayCompensationSamples_ = std::max(delayCompensationSamples_, longestPath);
 }
 
 // Called from the renderer, on the render thread, with mutex_ already held by the caller.

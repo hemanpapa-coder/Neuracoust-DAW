@@ -782,6 +782,28 @@ int main() {
             std::cerr << "auto-overflow must turn every assignment into a starting point\n";
             return 39;
         }
+
+        // The crossing cost the mixer compensates for must be DECLARED, so it depends only on the
+        // buffer sizes and not on anything measured at runtime. If it moved with the network, the
+        // whole mix would be realigned against a drifting number every time it was rebuilt — an
+        // audible phase shift, and the reason Pro Tools HDX charges a fixed cost instead.
+        const auto crossing = neuracoust::daw::remoteDspCrossingLatencySamples(twoMachines, 256);
+        if (crossing != neuracoust::daw::remoteDspCrossingLatencySamples(twoMachines, 256)) {
+            std::cerr << "the crossing cost must be deterministic\n";
+            return 40;
+        }
+        // It has to cover a trip that is buffered on both ends, so a block never returns later
+        // than the compensation assumed.
+        if (crossing <= twoMachines.networkBufferFrames) {
+            std::cerr << "the crossing cost must exceed one network buffer\n";
+            return 41;
+        }
+        auto biggerBlocks = twoMachines;
+        biggerBlocks.networkBufferFrames = 512;
+        if (neuracoust::daw::remoteDspCrossingLatencySamples(biggerBlocks, 256) <= crossing) {
+            std::cerr << "a larger network buffer must cost more, not the same\n";
+            return 42;
+        }
     }
 
     return 0;
