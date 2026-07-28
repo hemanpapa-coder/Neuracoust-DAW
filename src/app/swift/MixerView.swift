@@ -997,9 +997,24 @@ struct ChannelStrip: View {
     /// same choice to every strip through `globalModuleFocusRevision`.
     private var moduleFocusPanel: some View {
         let order = moduleDisplayOrder
+        // The number each ACTIVE module carries: its position in the signal path among the
+        // modules that are actually engaged. "3" on CMP means the compressor is the third thing
+        // the signal meets — a rack legend, not a row index. Off modules carry no number.
+        var engagedRank: [MixerModuleFocus: Int] = [:]
+        var rank = 0
+        for module in order where moduleIsEnabled(module) {
+            rank += 1
+            engagedRank[module] = rank
+        }
+        // Two columns, reading across then down, so the list is half its old height. The path
+        // order stays legible through the numbers rather than through vertical position.
+        let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
         return VStack(spacing: 0) {
-            ForEach(Array(order.enumerated()), id: \.element) { idx, module in
-                moduleRow(module, index: idx, count: order.count)
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(Array(order.enumerated()), id: \.element) { idx, module in
+                    moduleRow(module, index: idx, count: order.count,
+                              engagedRank: engagedRank[module])
+                }
             }
             channelDspMachineRow
         }
@@ -1050,27 +1065,44 @@ struct ChannelStrip: View {
     }
 
     /// One module row: enable dot + name, and ▲▼ reorder arrows. Click selects (shift-click adds).
-    private func moduleRow(_ module: MixerModuleFocus, index: Int, count: Int) -> some View {
+    private func moduleRow(_ module: MixerModuleFocus, index: Int, count: Int,
+                           engagedRank: Int?) -> some View {
         let enabled = moduleIsEnabled(module)
         let focused = selectedModules.contains(module)
-        return HStack(spacing: 5) {
-            // The lamp is the module's on/off switch (the ▲▼ reorder arrows are gone — a selected
-            // module is moved with the ↑/↓ keys instead).
-            Circle()
-                .fill(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.45))
-                .frame(width: 7, height: 7)
-                .contentShape(Rectangle().inset(by: -4))
-                .onTapGesture { toggleModuleEnabled(module) }
-                .help(canToggle(module) ? "켜기 / 끄기" : "")
+        return HStack(spacing: 4) {
+            // The lamp grew a meaning: an engaged module shows its NUMBER in the signal path
+            // (1 = first thing the signal meets), an off module an empty ring. Still the on/off
+            // switch, exactly as the lamp was — the ↑/↓ keys still move a selected module.
+            // A Button, not a tap gesture: the row underneath carries select-on-tap AND drag-to-
+            // reorder, and a bare gesture on a 10 pt child loses that argument often enough to
+            // feel broken. A button always wins the hit.
+            Button { toggleModuleEnabled(module) } label: {
+                ZStack {
+                    Circle()
+                        .fill(enabled ? Theme.Palette.green.opacity(0.9) : Color.clear)
+                    Circle()
+                        .stroke(enabled ? Theme.Palette.green : Theme.Palette.textFainter.opacity(0.5),
+                                lineWidth: 1)
+                    if let engagedRank {
+                        Text("\(engagedRank)")
+                            .font(Theme.Font.mono(7, .bold))
+                            .foregroundStyle(Theme.Palette.deepBorder)
+                    }
+                }
+                .frame(width: 10, height: 10)
+                .contentShape(Rectangle().inset(by: -3))
+            }
+            .buttonStyle(.plain)
+            .help(canToggle(module) ? "켜기 / 끄기 · 숫자 = 신호 경로 순서" : "숫자 = 신호 경로 순서")
             Text(module.label)
-                .font(Theme.Font.ui(9, focused || enabled ? .bold : .semibold))
+                .font(Theme.Font.ui(8.5, focused || enabled ? .bold : .semibold))
                 .foregroundStyle(focused ? Color(hex: 0xf4d9b8)
                                          : (enabled ? Theme.Palette.textBright : Theme.Palette.textDim))
-                .lineLimit(1).minimumScaleFactor(0.8).allowsTightening(true)
-            Spacer(minLength: 2)
+                .lineLimit(1).minimumScaleFactor(0.7).allowsTightening(true)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 6)
-        .frame(height: 17)
+        .padding(.horizontal, 4)
+        .frame(height: 15)
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(focused ? accent.opacity(0.30)
