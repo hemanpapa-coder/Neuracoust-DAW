@@ -2985,19 +2985,16 @@ final class EngineController: ObservableObject {
     enum DspJob: String, CaseIterable, Identifiable {
         // The strip / master / insert rows are GONE from this table by request: each plug-in's
         // DSP 실행 위치 menu and each channel's DSP chip decide those automatically now — NDS on
-        // the plug-in runs it on NDS, 네이티브 runs it here, no global step in between. What the
-        // table assigns instead is the DAW itself: playback, recording, the mixer, and every
-        // audio bus — the paths the machine cards will grow into.
-        // 재생·녹음 and 믹서·버스 are ONE assignment each by request — recording follows
-        // playback's machine, the buses follow the mixer's. rawValues stay the bridge names.
+        // the plug-in runs it on NDS, 네이티브 runs it here, no global step in between. 재생·녹음
+        // sat here for a day and was CUT by request as well — feasibility explored, decided
+        // against; playback and recording stay on this Mac. What remains: 모니터, which routes
+        // today, and 믹서·버스, the SoundGrid-style remote mixer this table is growing toward.
         case monitor
-        case playbackRecording = "playback"
         case mixerBuses = "mixer"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .monitor: return "모니터"
-            case .playbackRecording: return "재생·녹음"
             case .mixerBuses: return "믹서·버스"
             }
         }
