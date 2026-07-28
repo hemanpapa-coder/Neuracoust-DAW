@@ -25,6 +25,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Quitting is the last chance to save. Autosave is a safety net, not a save.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Remember which detached windows are open, BEFORE they close: relaunch brings them
+        // back, so "the mixer in its own window" survives a restart instead of quietly
+        // reverting to the docked arrangement.
+        let openAux = NSApplication.shared.windows.compactMap { window -> String? in
+            guard window.isVisible, let id = window.identifier?.rawValue else { return nil }
+            if id.contains("mixer") { return "mixer" }
+            if id.contains("monitor-station") { return "monitor-station" }
+            return nil
+        }
+        UserDefaults.standard.set(Array(Set(openAux)), forKey: "nc.openAuxWindows")
         guard let engine else { return .terminateNow }
         return MainActor.assumeIsolated {
             guard engine.confirmDiscardingChanges() else { return .terminateCancel }
@@ -336,6 +346,8 @@ struct MonitorStationWindowRoot: View {
 struct RootView: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var ai: AiAssistantController
+    @Environment(\.openWindow) private var openWindow
+    @State private var restoredAuxWindows = false
 
     /// Diagnostic only: NC_DIAG_STRIP="transport,edit,dock,…" removes pieces of the view tree so
     /// the idle-CPU cost can be bisected by measurement instead of by guessing — two hypotheses
@@ -358,6 +370,15 @@ struct RootView: View {
         // Resize the window to fit the active mode (compact monitor vs full DAW), remembering the
         // DAW frame so expanding restores it. The engine keeps running across the switch.
         .background(WindowConfigurator(compact: engine.compactMonitorMode))
+        // Bring back the detached windows the last session had open (snapshotted at quit),
+        // so the mixer/monitor-station arrangement survives a restart.
+        .task {
+            guard !restoredAuxWindows else { return }
+            restoredAuxWindows = true
+            for id in UserDefaults.standard.stringArray(forKey: "nc.openAuxWindows") ?? [] {
+                openWindow(id: id)
+            }
+        }
     }
 
     private var fullDawView: some View {

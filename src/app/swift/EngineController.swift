@@ -2988,15 +2988,17 @@ final class EngineController: ObservableObject {
         // the plug-in runs it on NDS, 네이티브 runs it here, no global step in between. What the
         // table assigns instead is the DAW itself: playback, recording, the mixer, and every
         // audio bus — the paths the machine cards will grow into.
-        case monitor, playback, recording, mixer, buses
+        // 재생·녹음 and 믹서·버스 are ONE assignment each by request — recording follows
+        // playback's machine, the buses follow the mixer's. rawValues stay the bridge names.
+        case monitor
+        case playbackRecording = "playback"
+        case mixerBuses = "mixer"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .monitor: return "모니터"
-            case .playback: return "재생"
-            case .recording: return "녹음"
-            case .mixer: return "믹서"
-            case .buses: return "트랙·버스"
+            case .playbackRecording: return "재생·녹음"
+            case .mixerBuses: return "믹서·버스"
             }
         }
         /// Whether picking a machine for this job actually changes where the audio is processed.

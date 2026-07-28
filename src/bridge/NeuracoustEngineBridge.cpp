@@ -7358,6 +7358,13 @@ void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine) {
     if (next != "internal" && next != "nds" && next != "external") return;
     if (*field == next) return;
     *field = next;
+    // 재생·녹음 and 믹서·버스 are one row each in the UI — keep the paired field in lockstep so
+    // the project never records a split the table cannot express.
+    if (field == &engine->project.dspRolePlayback) {
+        engine->project.dspRoleRecording = next;
+    } else if (field == &engine->project.dspRoleMixer) {
+        engine->project.dspRoleBuses = next;
+    }
     // The monitor's assignment IS the monitor path mode — assigning it here is what makes the
     // row do something rather than describe something.
     if (field == &engine->project.dspRoleMonitor && !engine->project.dspAutoOverflow) {
