@@ -132,9 +132,12 @@ struct TransportBar: View {
                 // Displays + tempo on top, the thin meter row tucked underneath — so the meters cost
                 // vertical space, not the ~310 px of width they used to take on the right.
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: Theme.Space.lg) {
+                    HStack(alignment: .top, spacing: Theme.Space.lg) {
                         displays
-                        tempoPods
+                        VStack(alignment: .leading, spacing: 5) {
+                            tempoPods
+                            beatDots
+                        }
                     }
                     thinMeters
                 }
@@ -152,8 +155,18 @@ struct TransportBar: View {
             }
         }
         .padding(.horizontal, Theme.Space.xxl)
-        .frame(height: 64)
+        .frame(height: 72)
         .frame(maxWidth: .infinity)
+        // The design's one moving element outside the numerals: a 2 pt line across the top of the
+        // bar showing where the playhead sits inside the visible timeline.
+        .overlay(alignment: .top) {
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: geo.size.width * playheadFraction, height: 2)
+            }
+            .frame(height: 2)
+        }
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -582,22 +595,24 @@ struct TransportBar: View {
         .buttonStyle(.plain)
     }
 
+    /// Type-led, after the transport-bar design: the timecode is the one large element and
+    /// everything else steps down from it in size and brightness. No panel behind them — the
+    /// design drops the recessed boxes and lets the numerals carry the block on their own.
     private var displays: some View {
         let position = engine.barsBeats
-        return HStack(spacing: 0) {
-            display {
-                HStack(spacing: Theme.Space.md) {
-                    numeric(String(format: "%03d", position.bar))
-                    divider
-                    numeric(String(format: "%02d", position.beat))
-                    divider
-                    numeric(String(format: "%03d", position.tick))
-                }
-                caption("BARS | BEATS")
-            }
-            display {
-                numeric(engine.timecode)
-                caption("HH:MM:SS:FF · 25fps")
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(engine.timecode)
+                .font(Theme.Font.mono(30, .medium))
+                .monospacedDigit()
+                .foregroundStyle(Theme.Palette.text)
+                .fixedSize()
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text(String(format: "%03d.%02d.%03d", position.bar, position.beat, position.tick))
+                    .font(Theme.Font.mono(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Palette.accent)
+                caption("BARS·BEATS")
+                caption("25 FPS")
             }
         }
         // Never let the clock digits truncate to "00:0…" when the window is tight — the flexible
@@ -633,6 +648,26 @@ struct TransportBar: View {
                     .fill(Theme.Palette.recess)
             )
             .padding(.horizontal, 1)
+    }
+
+    /// Four dots under the tempo, one lit on the current beat — the design's way of showing the
+    /// meter without a second numeric readout.
+    /// Where the playhead sits inside the visible timeline, 0…1 — drives the line across the top.
+    private var playheadFraction: CGFloat {
+        let span = max(0.0001, engine.visibleDuration)
+        return CGFloat(min(1, max(0, (clock.seconds - engine.visibleStart) / span)))
+    }
+
+    private var beatDots: some View {
+        let beat = engine.barsBeats.beat
+        return HStack(spacing: 4) {
+            ForEach(1...max(1, engine.timeSignature.numerator), id: \.self) { i in
+                Rectangle()
+                    .fill(engine.transportRunning && i == beat ? Theme.Palette.accent
+                                                               : Theme.Palette.divider)
+                    .frame(width: 13, height: 3)
+            }
+        }
     }
 
     private var tempoPods: some View {
@@ -690,29 +725,46 @@ struct TransportBar: View {
     /// that width for the tabs, so narrowing the window no longer pushes them off (user's idea).
     private var thinMeters: some View {
         HStack(spacing: Theme.Space.md) {
-            // Grouped IN / MIDI / OUT the way the transport-bar design lays them out: one block with
-            // a row label each, and OUT as a stacked L/R pair rather than two separate meters. OUT
-            // is the control-room meter (the monitor bus before its level), so it follows solo and
-            // mono/stereo but not the monitor knob; IN and MIDI are activity indicators.
-            HStack(spacing: 5) {
-                meterRowLabel("IN")
-                meterBarCell(meterFraction(engine.inputPeak), Theme.Palette.green)
-            }
-            HStack(spacing: 5) {
-                meterRowLabel("MIDI")
-                meterBarCell(Double(engine.midiActivity), Theme.Palette.purple)
-            }
-            HStack(spacing: 5) {
-                meterRowLabel("OUT")
-                VStack(spacing: 2) {
-                    meterBarCell(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
-                    meterBarCell(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+            // Two groups, because they do two different jobs. INPUT is what is arriving at the
+            // interface — activity indicators, not calibrated metering. CONTROL ROOM is the monitor
+            // bus taken before its level, so it follows solo and mono/stereo but not the monitor
+            // knob. The rows within each group follow the transport-bar design: a label, a bar, and
+            // the output as a stacked L/R pair under one OUT rather than two separate meters.
+            meterGroup("입력") {
+                HStack(spacing: 5) {
+                    meterRowLabel("IN")
+                    meterBarCell(meterFraction(engine.inputPeak), Theme.Palette.green)
+                }
+                HStack(spacing: 5) {
+                    meterRowLabel("MIDI")
+                    meterBarCell(Double(engine.midiActivity), Theme.Palette.purple)
                 }
             }
-            Text(dbLabel)
-                .font(Theme.Font.mono(8, .semibold))
-                .foregroundStyle(Theme.Palette.yellow)
-                .frame(width: 30, alignment: .trailing)
+            meterGroup("컨트롤룸") {
+                HStack(spacing: 5) {
+                    meterRowLabel("OUT")
+                    VStack(spacing: 2) {
+                        meterBarCell(meterFraction(engine.monitorPrePeakLeft), Theme.Palette.yellow)
+                        meterBarCell(meterFraction(engine.monitorPrePeakRight), Theme.Palette.yellow)
+                    }
+                }
+                Text(dbLabel)
+                    .font(Theme.Font.mono(8, .semibold))
+                    .foregroundStyle(Theme.Palette.yellow)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+    }
+
+    /// A titled cluster of meter rows. The caption is what separates the input indicators from the
+    /// control-room meter — they sit side by side but are not the same measurement.
+    @ViewBuilder private func meterGroup<Content: View>(_ title: String,
+                                                       @ViewBuilder _ rows: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFainter)
+            rows()
         }
     }
 
