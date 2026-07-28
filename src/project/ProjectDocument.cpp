@@ -2032,6 +2032,8 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"dspRoleInserts\": \"" << escapeJsonString(project.dspRoleInserts) << "\",\n";
     out << "  \"remoteNetworkBufferFrames\": " << project.remoteNetworkBufferFrames << ",\n";
     out << "  \"remoteMixerChannels\": " << project.remoteMixerChannels << ",\n";
+    out << "  \"remoteLatencyMode\": \"" << escapeJsonString(project.remoteLatencyMode) << "\",\n";
+    out << "  \"remoteTrackingBufferFrames\": " << project.remoteTrackingBufferFrames << ",\n";
     out << "  \"dspRolePlayback\": \"" << escapeJsonString(project.dspRolePlayback) << "\",\n";
     out << "  \"dspRoleRecording\": \"" << escapeJsonString(project.dspRoleRecording) << "\",\n";
     out << "  \"dspRoleMixer\": \"" << escapeJsonString(project.dspRoleMixer) << "\",\n";
@@ -2746,6 +2748,12 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         static_cast<int>(numberAfterKey(text, "remoteNetworkBufferFrames", 128))));
     parsed.remoteMixerChannels = std::max(8, std::min(64,
         static_cast<int>(numberAfterKey(text, "remoteMixerChannels", 32))));
+    {
+        const auto mode = stringAfterKey(text, "remoteLatencyMode");
+        parsed.remoteLatencyMode = (mode == "mixing" || mode == "tracking") ? mode : "auto";
+    }
+    parsed.remoteTrackingBufferFrames = std::max(40, std::min(1024,
+        static_cast<int>(numberAfterKey(text, "remoteTrackingBufferFrames", 48))));
     parsed.dspRolePlayback = role("dspRolePlayback");
     parsed.dspRoleRecording = role("dspRoleRecording");
     parsed.dspRoleMixer = role("dspRoleMixer");

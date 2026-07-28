@@ -348,7 +348,7 @@ unsigned int remoteDspCrossingLatencySamples(const RemoteDspServerSettings& sett
     // 5.3 ms buffer at 48 k, so this is a budget it fits inside with room to spare.
     constexpr int kCrossingBuffers = 2;
     const int networkBufferFrames =
-        std::max(128, std::min(1024, static_cast<int>(settings.networkBufferFrames)));
+        std::max(40, std::min(1024, static_cast<int>(settings.networkBufferFrames)));
     return static_cast<unsigned int>(kCrossingBuffers * networkBufferFrames + std::max(1, maxBlockSize));
 }
 

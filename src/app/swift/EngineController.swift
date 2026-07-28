@@ -3062,6 +3062,8 @@ final class EngineController: ObservableObject {
         ndsEnabled = nc_dsp_nds_enabled(handle) != 0
         setIfChanged(\.remoteNetworkBufferFrames, Int(nc_dsp_network_buffer_frames(handle)))
         setIfChanged(\.remoteMixerChannels, Int(nc_dsp_mixer_channels(handle)))
+        setIfChanged(\.remoteLatencyMode, readEngineString { nc_dsp_latency_mode(handle, $0, $1) })
+        setIfChanged(\.remoteTrackingBufferFrames, Int(nc_dsp_tracking_buffer_frames(handle)))
         // The 모니터 assignment and the DSP-source row are the same decision; the bridge keeps
         // them equal, so read the mode back here rather than letting the two views drift.
         monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
@@ -3072,6 +3074,24 @@ final class EngineController: ObservableObject {
     /// ladder the M1+ sessions size themselves for.
     @Published private(set) var remoteNetworkBufferFrames = 128
     @Published private(set) var remoteMixerChannels = 32
+    /// SoundGrid's two performance modes: 믹스(여유 버퍼) / 녹음(타이트, 40프레임 = 0.83ms까지).
+    /// "auto"는 세션을 따라간다 — 암/인풋 모니터 트랙이 하나라도 있으면 녹음 버퍼.
+    @Published private(set) var remoteLatencyMode = "auto"
+    @Published private(set) var remoteTrackingBufferFrames = 48
+
+    func setRemoteLatencyMode(_ mode: String) {
+        guard let handle else { return }
+        mode.withCString { nc_dsp_set_latency_mode(handle, $0) }
+        remoteLatencyMode = readEngineString { nc_dsp_latency_mode(handle, $0, $1) }
+        refreshHistory()
+    }
+
+    func setRemoteTrackingBufferFrames(_ frames: Int) {
+        guard let handle else { return }
+        nc_dsp_set_tracking_buffer_frames(handle, Int32(frames))
+        remoteTrackingBufferFrames = Int(nc_dsp_tracking_buffer_frames(handle))
+        refreshHistory()
+    }
 
     func setRemoteNetworkBufferFrames(_ frames: Int) {
         guard let handle else { return }

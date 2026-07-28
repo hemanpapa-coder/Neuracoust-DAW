@@ -1302,6 +1302,19 @@ struct MonitorDock: View {
         }
     }
 
+    private func latencyModeButton(_ label: String, _ mode: String) -> some View {
+        Button { engine.setRemoteLatencyMode(mode) } label: {
+            Text((engine.remoteLatencyMode == mode ? "✓ " : "") + label)
+        }
+    }
+
+    private func bufferButton(_ frames: Int, current: Int, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text((current == frames ? "✓ " : "")
+                 + "\(frames) / \(String(format: "%.1f", Double(frames) / 48.0)) ms")
+        }
+    }
+
     /// The machine cards' switches gate everything above them that names the machine — the
     /// role-table columns and these source buttons. Off machine, dead controls.
     private func dspMachineEnabled(_ machine: EngineController.DspMachine) -> Bool {
@@ -1566,14 +1579,25 @@ struct MonitorDock: View {
                         detail: machineDetail(.nds, on: engine.ndsEnabled))
                 // SoundGrid-style server options, where SoundGrid puts them: on the server card.
                 .contextMenu {
-                    Menu("서버 네트워크 버퍼") {
-                        ForEach([64, 96, 128, 192, 256, 384, 512], id: \.self) { frames in
-                            let ms = Double(frames) / 48.0
-                            Button {
+                    // SoundGrid's two performance modes, split the way the user works: tracking
+                    // wants the wire tight, mixing wants it roomy. 자동 follows arming — the
+                    // same trigger the monitor EQ uses for its minimum-phase fallback.
+                    Menu("레이턴시 모드") {
+                        latencyModeButton("자동 (암 상태 따라감)", "auto")
+                        latencyModeButton("믹스 · DSP 최적화", "mixing")
+                        latencyModeButton("녹음 · 지연 최적화", "tracking")
+                    }
+                    Menu("네트워크 버퍼 · 믹스") {
+                        ForEach([96, 128, 192, 256, 384, 512], id: \.self) { frames in
+                            bufferButton(frames, current: engine.remoteNetworkBufferFrames) {
                                 engine.setRemoteNetworkBufferFrames(frames)
-                            } label: {
-                                Text((engine.remoteNetworkBufferFrames == frames ? "✓ " : "")
-                                     + "\(frames) / \(String(format: "%.1f", ms)) ms")
+                            }
+                        }
+                    }
+                    Menu("네트워크 버퍼 · 녹음") {
+                        ForEach([40, 48, 64, 96, 128], id: \.self) { frames in
+                            bufferButton(frames, current: engine.remoteTrackingBufferFrames) {
+                                engine.setRemoteTrackingBufferFrames(frames)
                             }
                         }
                     }
@@ -1587,7 +1611,7 @@ struct MonitorDock: View {
                             }
                         }
                     }
-                    Text("버퍼가 작을수록 지연이 짧고, 클수록 LAN 지터에 강합니다. 채널 구성은 원격 믹서(M1+)가 준비할 용량입니다.")
+                    Text("녹음 모드는 40프레임(0.8 ms)까지 조입니다. 자동이면 트랙을 암하는 순간 녹음 버퍼로, 전부 해제하면 믹스 버퍼로 스트림이 스스로 갈아탑니다.")
                 }
 
             machineCard(title: "외부 노드",

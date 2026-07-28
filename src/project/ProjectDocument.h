@@ -251,6 +251,13 @@ struct ProjectDocument {
     // 8/16/32/64, the SoundGrid configuration ladder.
     int remoteNetworkBufferFrames = 128;
     int remoteMixerChannels = 32;
+    // SoundGrid's two performance modes, split the way the user works: MIXING rides a roomy
+    // buffer (DSP optimized), TRACKING runs the wire tight (latency optimized — 40 frames is
+    // 0.83 ms at 48k, the Waves floor). "auto" follows the session: any record-armed or
+    // input-monitoring track switches the streams to the tracking buffer, the same trigger the
+    // monitor EQ already uses for its minimum-phase fallback.
+    std::string remoteLatencyMode = "auto";   // auto | mixing | tracking
+    int remoteTrackingBufferFrames = 48;
     // The "use this node" master switch — whether the external DSP node participates at all.
     // Off gates it out of the monitor/DAW/plugin core plan regardless of the reserve above.
     // Default on preserves the prior always-available behaviour.

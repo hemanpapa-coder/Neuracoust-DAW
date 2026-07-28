@@ -3001,7 +3001,7 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
             // engine that does not host it refuses the stream instead of processing the audio
             // through whatever it happens to have loaded.
             remoteSettings.loadedPluginIdHint = trackChain.remoteModuleId;
-            const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
+            const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(40u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
             remoteSettings.channelCount = 2;
             remoteSettings.frameCount = static_cast<uint16_t>(std::min<int64_t>(frameCount, networkBufferFrames));
             remoteSettings.sampleRate = settings_.sampleRate;
@@ -3239,7 +3239,7 @@ bool NeuracoustDspEngine::processRemoteMasterInsertsLocked(std::vector<float>& i
     settings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));
     settings.sampleRate = settings_.sampleRate;
     const uint16_t networkBufferFrames =
-        std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
+        std::max<uint16_t>(40u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
     settings.networkBufferFrames = networkBufferFrames;
     const double bufferLatencyMs = settings_.sampleRate > 0.0
         ? (static_cast<double>(networkBufferFrames) * 1000.0 / settings_.sampleRate)
@@ -3382,7 +3382,7 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
     settings.sampleRate = settings_.sampleRate;
     settings.loadedPluginIdHint = "na.neuracoust.console.channel";
     const uint16_t networkBufferFrames =
-        std::max<uint16_t>(128u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
+        std::max<uint16_t>(40u, std::min<uint16_t>(1024u, settings.networkBufferFrames));
     settings.networkBufferFrames = networkBufferFrames;
     const double bufferLatencyMs = settings_.sampleRate > 0.0
         ? (static_cast<double>(networkBufferFrames) * 1000.0 / settings_.sampleRate)
@@ -3603,7 +3603,7 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
     // addresses, and streaming the monitor to the wrong one is silence, not a fallback.
     RemoteDspServerSettings remoteSettings =
         remoteDspSettingsForMode(settings_.remoteDspServer, settings_.monitorDspPathMode);
-    const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
+    const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(40u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
     remoteSettings.channelCount = 2;
     remoteSettings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));
     remoteSettings.sampleRate = settings_.sampleRate;

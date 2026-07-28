@@ -433,6 +433,28 @@ namespace {
 // requested core reserve is user-facing here; the rest stays at the shipped defaults.
 // A connected node's reported core_count still wins inside makeRemoteDspCorePlan — this
 // is the hint used before/without a report and the count DW asks the manager to hold.
+// The wire buffer the current work calls for. Two modes, split the way the user works: MIXING
+// rides a roomy buffer, TRACKING runs tight (40 frames = 0.83 ms at 48k, the SoundGrid floor).
+// "auto" follows the session — any record-armed or input-monitoring track means someone is
+// playing THROUGH the chain and latency is what matters; none means mixing, where resilience is.
+// The same trigger the monitor EQ uses for its minimum-phase fallback.
+uint16_t effectiveRemoteBufferFrames(const neuracoust::daw::ProjectDocument& project) {
+    const int mixing = std::max(40, std::min(1024, project.remoteNetworkBufferFrames));
+    const int tracking = std::max(40, std::min(1024, project.remoteTrackingBufferFrames));
+    if (project.remoteLatencyMode == "mixing") {
+        return static_cast<uint16_t>(mixing);
+    }
+    if (project.remoteLatencyMode == "tracking") {
+        return static_cast<uint16_t>(tracking);
+    }
+    for (const auto& track : project.tracks) {
+        if (track.recordArmed || track.inputMonitoring) {
+            return static_cast<uint16_t>(tracking);
+        }
+    }
+    return static_cast<uint16_t>(mixing);
+}
+
 // From the DOCUMENT, not the engine: the background bounce renders a serialized snapshot with no
 // NCEngine anywhere near it, and its remote settings must come from the same fields.
 neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
@@ -440,8 +462,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
         static_cast<uint16_t>(std::max(1, std::min(16, project.externalDspCoreCount)));
-    settings.networkBufferFrames =
-        static_cast<uint16_t>(std::max(64, std::min(1024, project.remoteNetworkBufferFrames)));
+    settings.networkBufferFrames = effectiveRemoteBufferFrames(project);
     settings.host = project.remoteDspHost.empty() ? std::string("studio.local") : project.remoteDspHost;
     settings.enabled = project.externalDspEnabled;
     settings.ndsHost = project.ndsHost.empty() ? std::string("192.168.0.198") : project.ndsHost;
@@ -459,8 +480,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.totalCoreHint =
         static_cast<uint16_t>(std::max(1, std::min(16, engine->project.externalDspCoreCount)));
-    settings.networkBufferFrames =
-        static_cast<uint16_t>(std::max(64, std::min(1024, engine->project.remoteNetworkBufferFrames)));
+    settings.networkBufferFrames = effectiveRemoteBufferFrames(engine->project);
     // Point the engine at the user's node. Clearing the default node list makes the
     // top-level host the effective target, so External/NDS reach a real server instead
     // of the hardcoded "studio.local" default.
@@ -1558,10 +1578,26 @@ void nc_track_set_solo(NCEngine* engine, int index, bool solo) {
     engine->recordStep("Solo");
 }
 
+namespace {
+// Auto latency mode: when arming flips the session between "someone plays through the chain"
+// and "nobody does", the remote streams re-buffer (tracking <-> mixing). Compare the effective
+// buffer before/after rather than counting armed tracks — fixed modes then never re-push.
+template <typename Fn>
+void withAutoLatencyRepush(NCEngine* engine, Fn&& change) {
+    const auto before = effectiveRemoteBufferFrames(engine->project);
+    change();
+    if (effectiveRemoteBufferFrames(engine->project) != before) {
+        engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    }
+}
+}  // namespace
+
 void nc_track_set_record_armed(NCEngine* engine, int index, bool armed) {
     auto* track = trackAt(engine, index);
     if (track == nullptr) return;
-    neuracoust::daw::setTrackRecordArmed(engine->project, track->name, armed);
+    withAutoLatencyRepush(engine, [&] {
+        neuracoust::daw::setTrackRecordArmed(engine->project, track->name, armed);
+    });
     pushTrackRealtimeState(engine, *track);
     engine->recordStep("Record arm");
 }
@@ -1569,7 +1605,9 @@ void nc_track_set_record_armed(NCEngine* engine, int index, bool armed) {
 void nc_track_set_input_monitoring(NCEngine* engine, int index, bool monitoring) {
     auto* track = trackAt(engine, index);
     if (track == nullptr) return;
-    neuracoust::daw::setTrackInputMonitoring(engine->project, track->name, monitoring);
+    withAutoLatencyRepush(engine, [&] {
+        neuracoust::daw::setTrackInputMonitoring(engine->project, track->name, monitoring);
+    });
     pushTrackRealtimeState(engine, *track);
     engine->recordStep("Input monitoring");
 }
@@ -7392,10 +7430,41 @@ int nc_dsp_network_buffer_frames(NCEngine* engine) {
 
 void nc_dsp_set_network_buffer_frames(NCEngine* engine, int frames) {
     if (engine == nullptr) return;
-    const int clamped = std::max(64, std::min(1024, frames));
+    const int clamped = std::max(40, std::min(1024, frames));
     if (clamped == engine->project.remoteNetworkBufferFrames) return;
     engine->project.remoteNetworkBufferFrames = clamped;
     engine->recordStep("Server network buffer");
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();
+}
+
+// The latency mode (auto | mixing | tracking) and the tracking-mode buffer. In auto the streams
+// re-buffer themselves when arming changes — see the arm/input-monitor setters.
+void nc_dsp_latency_mode(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.remoteLatencyMode : std::string("auto"));
+}
+
+void nc_dsp_set_latency_mode(NCEngine* engine, const char* mode) {
+    if (engine == nullptr || mode == nullptr) return;
+    const std::string next = mode;
+    if (next != "auto" && next != "mixing" && next != "tracking") return;
+    if (engine->project.remoteLatencyMode == next) return;
+    engine->project.remoteLatencyMode = next;
+    engine->recordStep("Remote latency mode");
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();
+}
+
+int nc_dsp_tracking_buffer_frames(NCEngine* engine) {
+    return engine != nullptr ? engine->project.remoteTrackingBufferFrames : 48;
+}
+
+void nc_dsp_set_tracking_buffer_frames(NCEngine* engine, int frames) {
+    if (engine == nullptr) return;
+    const int clamped = std::max(40, std::min(1024, frames));
+    if (clamped == engine->project.remoteTrackingBufferFrames) return;
+    engine->project.remoteTrackingBufferFrames = clamped;
+    engine->recordStep("Tracking network buffer");
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
     engine->reconcileProjectDeclicked();
 }

@@ -1273,6 +1273,14 @@ int nc_dsp_network_buffer_frames(NCEngine* engine);
 void nc_dsp_set_network_buffer_frames(NCEngine* engine, int frames);
 int nc_dsp_mixer_channels(NCEngine* engine);
 void nc_dsp_set_mixer_channels(NCEngine* engine, int channels);
+// Two performance modes, SoundGrid-style: MIXING (roomy buffer, DSP optimized) and TRACKING
+// (tight buffer, latency optimized — floor 40 frames = 0.83 ms at 48k). "auto" follows arming:
+// any record-armed or input-monitoring track selects the tracking buffer live.
+// nc_dsp_network_buffer_frames above is the MIXING buffer; this pair is the mode + tracking buffer.
+void nc_dsp_latency_mode(NCEngine* engine, char* out, size_t outLen);
+void nc_dsp_set_latency_mode(NCEngine* engine, const char* mode);
+int nc_dsp_tracking_buffer_frames(NCEngine* engine);
+void nc_dsp_set_tracking_buffer_frames(NCEngine* engine, int frames);
 
 // ---------------------------------------------------------------------------
 // DSP role assignment
