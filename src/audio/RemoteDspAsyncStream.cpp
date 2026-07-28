@@ -70,6 +70,8 @@ void RemoteDspAsyncStream::stopLocked(std::unique_lock<std::mutex>& lock) {
 }
 
 void RemoteDspAsyncStream::reset() {
+    consecutiveFailures_ = 0;
+    blocksSinceProbe_ = 0;
     std::unique_lock<std::mutex> lock(mutex_);
     stopLocked(lock);
     status_ = {};
@@ -100,6 +102,20 @@ bool RemoteDspAsyncStream::process(const RemoteDspServerSettings& settings,
     // network round trip with an 8 ms timeout against a 5.33 ms buffer period — so an unreachable
     // node made every single block overrun, forever, because processedBlocks never left zero.
     // The worker primes instead; until it succeeds this returns false and the caller stays dry.
+
+    // A node that has failed repeatedly is treated as absent: submit nothing, wait for nothing,
+    // and tell the caller to stay dry. One block in every 256 still goes out so the stream can
+    // recover on its own when the node comes back. Without this the render thread paid the queue
+    // wait on every single block for as long as the node stayed unreachable.
+    constexpr uint32_t kFailuresBeforeBackoff = 8;
+    constexpr uint64_t kProbeInterval = 256;
+    if (consecutiveFailures_ >= kFailuresBeforeBackoff) {
+        const bool probe = (blocksSinceProbe_++ % kProbeInterval) == 0;
+        if (!probe) {
+            status_.outputReady = false;
+            return false;
+        }
+    }
 
     if (inputQueue_.size() >= kMaxInputQueueBlocks) {
         inputQueue_.pop_front();
@@ -193,9 +209,11 @@ void RemoteDspAsyncStream::workerLoop() {
         }
         if (!result.processed || processed.size() != block.samples.size()) {
             ++status_.failedBlocks;
+            ++consecutiveFailures_;
             status_.message = "Remote DSP async block failed: " + result.message;
             continue;
         }
+        consecutiveFailures_ = 0;
         recordRoundTripLocked(result.roundTripMs);
         if (outputQueue_.size() >= kMaxOutputQueueBlocks) {
             outputQueue_.pop_front();

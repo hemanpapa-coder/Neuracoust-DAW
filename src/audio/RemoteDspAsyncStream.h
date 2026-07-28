@@ -54,6 +54,12 @@ private:
         std::vector<RemoteDspParameterValue> parameters;
     };
 
+    /// Consecutive worker failures. A node that is not answering must cost the render thread
+    /// NOTHING — otherwise every block pays the queue wait forever — so past the threshold
+    /// process() returns dry immediately and only lets one block through every so often to probe.
+    uint32_t consecutiveFailures_ = 0;
+    uint64_t blocksSinceProbe_ = 0;
+
     bool settingsMatchLocked(const RemoteDspServerSettings& settings, size_t frameCount) const;
     void configureLocked(const RemoteDspServerSettings& settings, size_t frameCount, std::unique_lock<std::mutex>& lock);
     void stopLocked(std::unique_lock<std::mutex>& lock);

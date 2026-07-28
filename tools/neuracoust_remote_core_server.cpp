@@ -1,5 +1,6 @@
 #include "audio/RemoteDspServerClient.h"
 #include "audio/MasterInsertProcessor.h"
+#include "audio/ConsoleChannelProcessor.h"
 #include "audio/MonitorDspProcessor.h"
 #include "audio/ProjectAudioRenderer.h"
 #include "audio/RemoteDspPluginCatalog.h"
@@ -856,6 +857,7 @@ std::string buildPluginCatalogPayload(const RemoteCoreOptions& options,
 
 enum class BuiltInModuleKind {
     Gain,
+    ConsoleChannel,
     MonitorSpeaker,
     MonitorHeadphone,
     MonitorRoom,
@@ -867,6 +869,8 @@ const char* moduleKindName(BuiltInModuleKind kind) {
     switch (kind) {
         case BuiltInModuleKind::Gain:
             return "gain";
+        case BuiltInModuleKind::ConsoleChannel:
+            return "console.channel";
         case BuiltInModuleKind::MonitorSpeaker:
             return "monitor.speaker";
         case BuiltInModuleKind::MonitorHeadphone:
@@ -885,6 +889,9 @@ BuiltInModuleKind moduleKindForId(const std::string& moduleId) {
     if (moduleId == "na.neuracoust.monitor.speaker") {
         return BuiltInModuleKind::MonitorSpeaker;
     }
+    if (moduleId == "na.neuracoust.console.channel") {
+        return BuiltInModuleKind::ConsoleChannel;
+    }
     if (moduleId == "na.neuracoust.monitor.headphone") {
         return BuiltInModuleKind::MonitorHeadphone;
     }
@@ -902,6 +909,60 @@ BuiltInModuleKind moduleKindForId(const std::string& moduleId) {
 
 bool isProductModuleId(const std::string& moduleId) {
     return moduleKindForId(moduleId) == BuiltInModuleKind::ProductPlaceholder;
+}
+
+/// Rebuild a ConsoleChannelState from the NART parameter list. Indices are the wire contract
+/// between the DAW's remoteParametersForConsole() and this — keep the two in step. Anything the
+/// packet omits keeps the struct's default, so an older DAW talking to a newer server still works.
+neuracoust::daw::ConsoleChannelState consoleStateFromParameters(const std::vector<ParsedParameter>& parameters) {
+    neuracoust::daw::ConsoleChannelState console;
+    console.model = "4000e";
+    const auto flag = [](float v) { return v >= 0.5f; };
+    for (const auto& parameter : parameters) {
+        switch (parameter.index) {
+            case 0:  console.filterEnabled = flag(parameter.value); break;
+            case 1:  console.highPassEnabled = flag(parameter.value); break;
+            case 2:  console.lowPassEnabled = flag(parameter.value); break;
+            case 3:  console.highPassHz = parameter.value; break;
+            case 4:  console.lowPassHz = parameter.value; break;
+            case 5:  console.eqEnabled = flag(parameter.value); break;
+            case 6:  console.eqHfGainDb = parameter.value; break;
+            case 7:  console.eqHfHz = parameter.value; break;
+            case 8:  console.eqHmfGainDb = parameter.value; break;
+            case 9:  console.eqHmfHz = parameter.value; break;
+            case 10: console.eqHmfQ = parameter.value; break;
+            case 11: console.eqLmfGainDb = parameter.value; break;
+            case 12: console.eqLmfHz = parameter.value; break;
+            case 13: console.eqLmfQ = parameter.value; break;
+            case 14: console.eqLfGainDb = parameter.value; break;
+            case 15: console.eqLfHz = parameter.value; break;
+            case 16: console.compEnabled = flag(parameter.value); break;
+            case 17: console.compThresholdDb = parameter.value; break;
+            case 18: console.compRatio = parameter.value; break;
+            case 19: console.compAttackMs = parameter.value; break;
+            case 20: console.compReleaseMs = parameter.value; break;
+            case 21: console.compMix = parameter.value; break;
+            case 22: console.gateEnabled = flag(parameter.value); break;
+            case 23: console.gateThresholdDb = parameter.value; break;
+            case 24: console.gateRangeDb = parameter.value; break;
+            case 25: console.gateAttackMs = parameter.value; break;
+            case 26: console.gateReleaseMs = parameter.value; break;
+            case 27: console.saturatorEnabled = flag(parameter.value); break;
+            case 28: console.saturatorDriveDb = parameter.value; break;
+            case 29: console.saturatorMix = parameter.value; break;
+            case 30: console.eqEMode = flag(parameter.value); break;
+            case 31: console.expanderMode = flag(parameter.value); break;
+            case 32: console.compFastAttack = flag(parameter.value); break;
+            case 33: console.gateFastAttack = flag(parameter.value); break;
+            case 34: console.compCircuitMode = flag(parameter.value); break;
+            case 35: console.eqCircuitMode = flag(parameter.value); break;
+            case 36: console.saturatorCircuitMode = flag(parameter.value); break;
+            case 37: console.channelBiasSeed = static_cast<int>(parameter.value); break;
+            case 38: console.channelBiasDepth = parameter.value; break;
+            default: break;
+        }
+    }
+    return console;
 }
 
 std::vector<neuracoust::daw::MonitorDspModule> monitorModulesForKind(BuiltInModuleKind kind) {
@@ -940,6 +1001,7 @@ std::vector<neuracoust::daw::MonitorDspModule> monitorModulesForKind(BuiltInModu
             enable("crossfeed");
             break;
         case BuiltInModuleKind::Gain:
+        case BuiltInModuleKind::ConsoleChannel:
         case BuiltInModuleKind::ProductPlaceholder:
             break;
     }
@@ -1019,6 +1081,36 @@ bool processAudioPacket(const RemoteCoreOptions& options,
         if (std::isfinite(options.gain) && std::abs(options.gain - 1.0f) > 0.000001f) {
             for (auto& sample : processed) {
                 sample *= options.gain;
+            }
+        }
+    } else if (kind == BuiltInModuleKind::ConsoleChannel) {
+        // The channel strip, run here instead of in the DAW. This is the SAME
+        // neuracoust::daw::ConsoleChannelProcessor the app uses — the server already links
+        // neuracoust_daw_core — so the sound is identical by construction rather than by two
+        // implementations being kept in step. The packet carries one stereo pair per strip, so a
+        // 128-channel packet is 64 strips in a single round trip; per-strip state persists across
+        // packets in `strips`, keyed by pair index, because the compressor and gate are stateful.
+        static std::vector<neuracoust::daw::ConsoleChannelProcessor> strips;
+        static std::vector<float> pair;
+        const size_t pairCount = static_cast<size_t>(channels) / 2u;
+        if (strips.size() < pairCount) strips.resize(pairCount);
+        const auto console = consoleStateFromParameters(parameters);
+        pair.assign(static_cast<size_t>(frames) * 2u, 0.0f);
+        for (size_t p = 0; p < pairCount; ++p) {
+            // Packet layout is channel-planar (all of L, then all of R), so gather to interleaved,
+            // process, and scatter back.
+            const size_t leftPlane = (p * 2u) * frames;
+            const size_t rightPlane = (p * 2u + 1u) * frames;
+            for (uint16_t f = 0; f < frames; ++f) {
+                pair[static_cast<size_t>(f) * 2u] = processed[leftPlane + f];
+                pair[static_cast<size_t>(f) * 2u + 1u] = processed[rightPlane + f];
+            }
+            strips[p].processInterleavedStereo(pair, console, options.sampleRate);
+            for (uint16_t f = 0; f < frames; ++f) {
+                const float l = pair[static_cast<size_t>(f) * 2u];
+                const float r = pair[static_cast<size_t>(f) * 2u + 1u];
+                processed[leftPlane + f] = std::isfinite(l) ? l * options.gain : 0.0f;
+                processed[rightPlane + f] = std::isfinite(r) ? r * options.gain : 0.0f;
             }
         }
     } else if (kind == BuiltInModuleKind::MonitorSpeaker ||
