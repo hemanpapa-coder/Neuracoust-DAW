@@ -927,6 +927,51 @@ struct MonitorDock: View {
 
     // MARK: Meters
 
+    /// Job -> machine, one row each, plus the auto-overflow switch that turns the assignments into
+    /// starting points. A machine that is switched off or unreachable is still selectable: the
+    /// assignment is intent, and the load rows above say whether it is being honoured.
+    private var dspRoleTable: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            HStack {
+                sectionLabel("DSP 역할 배정")
+                Spacer(minLength: 0)
+                Text(engine.dspAutoOverflow ? "자동 넘김" : "직접 배정")
+                    .font(Theme.Font.mono(7))
+                    .foregroundStyle(engine.dspAutoOverflow ? Theme.Palette.teal : Theme.Palette.textFaint)
+                Toggle("", isOn: Binding(get: { engine.dspAutoOverflow },
+                                         set: { engine.setDspAutoOverflow($0) }))
+                    .labelsHidden().toggleStyle(.switch).scaleEffect(0.7).frame(width: 34)
+            }
+            ForEach(EngineController.DspJob.allCases) { job in
+                HStack(spacing: Theme.Space.sm) {
+                    Text(job.label)
+                        .font(Theme.Font.ui(9))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(width: 62, alignment: .leading)
+                    ForEach(EngineController.DspMachine.allCases) { machine in
+                        let picked = engine.dspRole(job) == machine
+                        Button { engine.setDspRole(job, machine) } label: {
+                            Text(machine.label)
+                                .font(Theme.Font.mono(7.5, picked ? .bold : .regular))
+                                .foregroundStyle(picked ? Theme.Palette.background : Theme.Palette.textFaint)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 3)
+                                .background(RoundedRectangle(cornerRadius: 3)
+                                    .fill(picked ? Theme.Palette.teal : Theme.Palette.keyFace))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Text(engine.dspAutoOverflow
+                    ? "배정한 기계가 모자라면 내장 → NDS → 외부 노드 순으로 넘어갑니다."
+                    : "배정한 기계에서만 처리합니다. 모자라도 다른 기계로 넘어가지 않습니다.")
+                .font(Theme.Font.mono(6.5))
+                .foregroundStyle(Theme.Palette.textFainter)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     /// A remote kind's load: the node's own busiest core while it is carrying work, "사용 안 함"
     /// when that source is not selected, "대기" when it is selected but nothing has answered.
     private func remoteLoadText(active: Bool) -> String {
@@ -1374,49 +1419,48 @@ struct MonitorDock: View {
                     .foregroundStyle(engine.remoteDspActive ? Theme.Palette.teal : Theme.Palette.textFaint)
             }
 
-            // The node the engine streams External/NDS monitor audio to. Type a host or
-            // IP, or 검색 to broadcast-probe the LAN.
-            RemoteHostField()
+            Divider().overlay(Theme.Palette.divider)
+
+            // Which machine handles what. This is the control that actually decides routing; the
+            // machine cards below only say where each machine is and whether it is switched on.
+            // Explicit by default because a path that changes under you mid-take is worse than
+            // one that runs short predictably.
+            dspRoleTable
+
+            Divider().overlay(Theme.Palette.divider)
+
+            // Two machines, two cards. They speak the same NART protocol but they are not
+            // interchangeable: NDS is the dedicated appliance (its own OS, its own timing, the
+            // one a live console would run on), 외부 노드 is a general-purpose computer lent to
+            // the session. One address and one switch each, so either can carry work alone.
+            //
+            // No internal core-isolation control here: macOS cannot reserve cores for a process.
+            // THREAD_AFFINITY_POLICY returns KERN_NOT_SUPPORTED on Apple Silicon (measured), and
+            // the render already runs on CoreAudio's IO thread, which the OS gives
+            // time-constraint priority and audio-workgroup membership.
+            machineCard(title: "NDS · 전용 어플라이언스",
+                        subtitle: "고정 지연 · OS 독립",
+                        on: engine.ndsEnabled,
+                        setOn: { engine.setNdsEnabled($0) },
+                        host: RemoteHostField(kind: .nds),
+                        detail: engine.ndsEnabled ? (engine.usesDspSource(.nds) ? "작업 배정됨" : "배정 대기")
+                                                  : "사용 안 함")
+
+            machineCard(title: "외부 노드 · 범용 컴퓨터",
+                        subtitle: "여유 코어 빌려 쓰기",
+                        on: engine.externalDspEnabled,
+                        setOn: { engine.setExternalDspEnabled($0) },
+                        host: RemoteHostField(kind: .external),
+                        // No core-count stepper: a connected node reports its own core count and
+                        // that report wins, so the number only ever applied to a node that was
+                        // not answering — it read as control over something it did not control.
+                        detail: engine.externalDspEnabled
+                                    ? (engine.remoteNodeSpecs.map { "코어 \($0.coreCount)개 (노드 보고)" } ?? "노드 대기")
+                                    : "사용 안 함")
 
             // The discovered node's own hardware — shown once 검색 (or a refresh) gets a reply.
             if let specs = engine.remoteNodeSpecs {
                 remoteNodeSpecsView(specs)
-            }
-
-            Divider().overlay(Theme.Palette.divider)
-
-            // No internal core-isolation control: macOS cannot reserve cores for a process.
-            // THREAD_AFFINITY_POLICY returns KERN_NOT_SUPPORTED on Apple Silicon (measured), and
-            // the render already runs on CoreAudio's IO thread, which the OS gives time-constraint
-            // priority and audio-workgroup membership. The toggle and its core count changed
-            // nothing but a status string. The EXTERNAL reserve below is real — it is a hint to a
-            // remote DSP node, which does have its own cores.
-
-            // The external DSP Manager's core reserve. Settable here or in the manager
-            // itself; a connected node's own report wins over this hint. The switch is the
-            // "use this node" master — off gates the node out of the core plan entirely.
-            HStack {
-                Toggle("", isOn: Binding(
-                    get: { engine.externalDspEnabled },
-                    set: { engine.setExternalDspEnabled($0) }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .scaleEffect(0.7)
-                    .frame(width: 34)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("외부 노드 사용")
-                        .font(Theme.Font.ui(9, .medium))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                    // No core-count stepper: a connected node reports its own core count and that
-                    // report wins, so the number only ever applied to a node that was not
-                    // answering — it read as control over something it did not control.
-                    Text(engine.externalDspEnabled
-                            ? (engine.remoteNodeSpecs.map { "코어 \($0.coreCount)개 (노드 보고)" } ?? "노드 대기")
-                            : "사용 안 함")
-                        .font(Theme.Font.mono(7))
-                        .foregroundStyle(Theme.Palette.textFaint)
-                }
-                Spacer()
             }
         }
         .padding(Theme.Space.xl)
@@ -1424,6 +1468,44 @@ struct MonitorDock: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .fill(Theme.Palette.background)
         )
+    }
+
+    /// One remote machine: name, what it is for, its master switch, its address, and one line of
+    /// state. Both machines use the same card so the difference between them is the text, not the
+    /// layout — the two were previously impossible to tell apart because only one had a card.
+    private func machineCard(title: String,
+                             subtitle: String,
+                             on: Bool,
+                             setOn: @escaping (Bool) -> Void,
+                             host: RemoteHostField,
+                             detail: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            HStack(spacing: Theme.Space.sm) {
+                Toggle("", isOn: Binding(get: { on }, set: setOn))
+                    .labelsHidden().toggleStyle(.switch).scaleEffect(0.7).frame(width: 34)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(Theme.Font.ui(9, .medium))
+                        .foregroundStyle(on ? Theme.Palette.text : Theme.Palette.textFaint)
+                    Text(subtitle)
+                        .font(Theme.Font.mono(6.5))
+                        .foregroundStyle(Theme.Palette.textFainter)
+                }
+                Spacer(minLength: 0)
+                Text(detail)
+                    .font(Theme.Font.mono(7))
+                    .foregroundStyle(on ? Theme.Palette.textFaint : Theme.Palette.textFainter)
+            }
+            host
+        }
+        .padding(Theme.Space.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                .fill(Theme.Palette.recess)
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
+                    .stroke(on ? Theme.Palette.divider : Theme.Palette.divider.opacity(0.4), lineWidth: 1))
+        )
+        .opacity(on ? 1.0 : 0.65)
     }
 
     // The discovered node's hardware, laid out as label/value rows. Only meaningful fields show —
@@ -1493,17 +1575,26 @@ struct MonitorDock: View {
 
 /// The remote DSP node address field: edits a draft locally and commits on Enter or
 /// blur so the engine is not retargeted (and history recorded) on every keystroke.
+/// The address of one remote machine. Both machines get one; only the external node offers 검색,
+/// because the broadcast probe answers with whatever general-purpose node replies first and would
+/// happily overwrite the appliance's fixed address with it.
 private struct RemoteHostField: View {
+    enum Kind { case nds, external }
+    let kind: Kind
+
     @EnvironmentObject private var engine: EngineController
     @State private var draft = ""
     @FocusState private var focused: Bool
 
+    private var current: String { kind == .nds ? engine.ndsHost : engine.remoteDspHost }
+    private var placeholder: String { kind == .nds ? "192.168.0.198" : "studio.local" }
+
     var body: some View {
         HStack(spacing: Theme.Space.sm) {
-            Text("노드")
+            Text("주소")
                 .font(Theme.Font.mono(7.5))
                 .foregroundStyle(Theme.Palette.textFaint)
-            TextField("studio.local", text: $draft)
+            TextField(placeholder, text: $draft)
                 .textFieldStyle(.plain)
                 .font(Theme.Font.mono(9))
                 .foregroundStyle(Theme.Palette.text)
@@ -1514,30 +1605,35 @@ private struct RemoteHostField: View {
                 .padding(.vertical, 3)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(Theme.Palette.recess)
+                        .fill(Theme.Palette.background)
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.button)
                             .stroke(Theme.Palette.divider, lineWidth: 1))
                 )
-            Button { engine.discoverRemoteDspHost() } label: {
-                Text("검색")
-                    .font(Theme.Font.ui(8.5, .medium))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+            if kind == .external {
+                Button { engine.discoverRemoteDspHost() } label: {
+                    Text("검색")
+                        .font(Theme.Font.ui(8.5, .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.button).fill(Theme.Palette.button))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
-        .onAppear { draft = engine.remoteDspHost }
-        .onChange(of: engine.remoteDspHost) { draft = $1 }   // reflect discover / project load
+        .onAppear { draft = current }
+        .onChange(of: current) { draft = $1 }   // reflect discover / project load
     }
 
     private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty, trimmed != engine.remoteDspHost {
-            engine.setRemoteDspHost(trimmed)
-        } else {
-            draft = engine.remoteDspHost
+        guard !trimmed.isEmpty, trimmed != current else {
+            draft = current
+            return
+        }
+        switch kind {
+        case .nds: engine.setNdsHost(trimmed)
+        case .external: engine.setRemoteDspHost(trimmed)
         }
     }
 }

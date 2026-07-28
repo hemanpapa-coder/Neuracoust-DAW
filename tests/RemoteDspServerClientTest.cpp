@@ -719,5 +719,70 @@ int main() {
         return 13;
     }
 
+    // NDS and the external node are two machines, not two names for one. Sending a job to the
+    // wrong address is silence, not a fallback, so the chooser gets pinned here.
+    {
+        neuracoust::daw::RemoteDspServerSettings twoMachines;
+        twoMachines.host = "192.168.0.190";      // external: a general-purpose computer
+        twoMachines.enabled = true;
+        twoMachines.ndsHost = "192.168.0.198";   // NDS: the dedicated appliance
+        twoMachines.ndsEnabled = true;
+
+        if (neuracoust::daw::remoteDspSettingsForMode(twoMachines, "nds").host != twoMachines.ndsHost) {
+            std::cerr << "nds mode must address the appliance\n";
+            return 30;
+        }
+        if (neuracoust::daw::remoteDspSettingsForMode(twoMachines, "remote_external").host != twoMachines.host) {
+            std::cerr << "external mode must address the external node\n";
+            return 31;
+        }
+        // auto prefers the appliance while it is on, because its timing is the predictable one.
+        if (neuracoust::daw::remoteDspSettingsForMode(twoMachines, "auto").host != twoMachines.ndsHost) {
+            std::cerr << "auto should prefer the appliance when it is enabled\n";
+            return 32;
+        }
+
+        // Each machine has its own switch: turning the external node off must not disable NDS.
+        auto ndsOnly = twoMachines;
+        ndsOnly.enabled = false;
+        if (!neuracoust::daw::remoteDspModeAvailable(ndsOnly, "nds")) {
+            std::cerr << "switching the external node off must not disable NDS\n";
+            return 33;
+        }
+        if (neuracoust::daw::remoteDspModeAvailable(ndsOnly, "remote_external")) {
+            std::cerr << "a switched-off external node must not be available\n";
+            return 34;
+        }
+        auto externalOnly = twoMachines;
+        externalOnly.ndsEnabled = false;
+        if (neuracoust::daw::remoteDspModeAvailable(externalOnly, "nds")) {
+            std::cerr << "a switched-off appliance must not be available\n";
+            return 35;
+        }
+        if (neuracoust::daw::remoteDspSettingsForMode(externalOnly, "auto").host != externalOnly.host) {
+            std::cerr << "auto must fall to the external node when the appliance is off\n";
+            return 36;
+        }
+
+        // An assignment is honoured literally until auto-overflow is switched on.
+        auto assigned = twoMachines;
+        assigned.roleInserts = "nds";
+        if (neuracoust::daw::remoteDspModeForRole(assigned, assigned.roleInserts) != "nds") {
+            std::cerr << "an explicit assignment must be honoured literally\n";
+            return 37;
+        }
+        assigned.roleInserts = "internal";
+        if (neuracoust::daw::remoteDspModeAvailable(assigned,
+                neuracoust::daw::remoteDspModeForRole(assigned, assigned.roleInserts))) {
+            std::cerr << "a job assigned to the internal DSP must not leave the host\n";
+            return 38;
+        }
+        assigned.autoOverflow = true;
+        if (neuracoust::daw::remoteDspModeForRole(assigned, assigned.roleInserts) != "auto") {
+            std::cerr << "auto-overflow must turn every assignment into a starting point\n";
+            return 39;
+        }
+    }
+
     return 0;
 }

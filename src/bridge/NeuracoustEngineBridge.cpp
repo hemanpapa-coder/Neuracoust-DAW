@@ -445,8 +445,33 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     // The "use this node" master switch. When off, makeRemoteDspCorePlan gates the node out of the
     // monitor/DAW/plugin core plan (settings.enabled already drives those flags).
     settings.enabled = engine->project.externalDspEnabled;
+    // The NDS appliance is a second, separately addressed machine — not another name for the
+    // external node. It carries its own switch so one can be off while the other works.
+    settings.ndsHost = engine->project.ndsHost.empty()
+                           ? std::string("192.168.0.198") : engine->project.ndsHost;
+    settings.ndsEnabled = engine->project.ndsEnabled;
+    settings.roleMonitor = engine->project.dspRoleMonitor;
+    settings.roleChannelStrip = engine->project.dspRoleChannelStrip;
+    settings.roleMaster = engine->project.dspRoleMaster;
+    settings.roleInserts = engine->project.dspRoleInserts;
+    settings.autoOverflow = engine->project.dspAutoOverflow;
     settings.nodes.clear();
     return settings;
+}
+
+// The 모니터 assignment and the monitor path mode are one decision under two names: the dock's
+// DSP-source row writes the mode, the role table writes the role. Keeping them equal here means
+// neither control can disagree with the other, whichever one the user touched.
+std::string monitorPathModeForRole(const std::string& role) {
+    if (role == "nds") return "nds";
+    if (role == "external") return "remote_external";
+    return "internal";
+}
+
+std::string monitorRoleForPathMode(const std::string& mode) {
+    if (mode == "nds" || mode == "external") return "nds";
+    if (mode == "remote_external") return "external";
+    return "internal";
 }
 
 AudioEngineSettings buildEngineSettings(NCEngine* engine) {
@@ -7126,6 +7151,14 @@ void nc_monitor_set_path_mode(NCEngine* engine, const char* mode) {
         return;
     }
     engine->monitorDspPathMode = mode;
+    // Mirror the choice into the 모니터 assignment so the role table and the DSP-source row
+    // never show two different answers. "auto" is the overflow policy, not a machine.
+    if (engine->monitorDspPathMode == "auto") {
+        engine->project.dspAutoOverflow = true;
+    } else {
+        engine->project.dspRoleMonitor = monitorRoleForPathMode(engine->monitorDspPathMode);
+        engine->project.dspAutoOverflow = false;
+    }
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode,
                                          buildRemoteDspSettings(engine));
 }
@@ -7243,8 +7276,13 @@ void nc_dsp_set_role(NCEngine* engine, const char* role, const char* machine) {
     if (next != "internal" && next != "nds" && next != "external") return;
     if (*field == next) return;
     *field = next;
+    // The monitor's assignment IS the monitor path mode — assigning it here is what makes the
+    // row do something rather than describe something.
+    if (field == &engine->project.dspRoleMonitor && !engine->project.dspAutoOverflow) {
+        engine->monitorDspPathMode = monitorPathModeForRole(next);
+    }
     // Re-apply live so the change takes effect without an audio restart, the same way the host
-    // setter does. The engine still runs on one routing string; the roles decide what feeds it.
+    // setter does. Everything else reads the roles out of the settings the engine now holds.
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
     engine->recordStep("DSP role");
 }
@@ -7258,6 +7296,10 @@ void nc_dsp_set_auto_overflow(NCEngine* engine, int enabled) {
     const bool next = enabled != 0;
     if (engine->project.dspAutoOverflow == next) return;
     engine->project.dspAutoOverflow = next;
+    // Overflow on means "use whatever has room" — the engine's auto mode. Off restores the
+    // monitor to the machine the user actually assigned it to.
+    engine->monitorDspPathMode = next ? std::string("auto")
+                                      : monitorPathModeForRole(engine->project.dspRoleMonitor);
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
     engine->recordStep("DSP overflow");
 }

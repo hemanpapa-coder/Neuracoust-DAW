@@ -2899,6 +2899,85 @@ final class EngineController: ObservableObject {
     @Published private(set) var remoteDspRoundTripMs: Double = 0
     // The "use this node" master switch (whether the external node participates at all).
     @Published private(set) var externalDspEnabled = true
+
+    /// Which machine handles each job. Explicit assignment is the default; auto-overflow turns
+    /// these into starting points that spill internal -> NDS -> external as each one fills.
+    enum DspMachine: String, CaseIterable, Identifiable {
+        case internalDsp = "internal", nds, external
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .internalDsp: return "내장"
+            case .nds: return "NDS"
+            case .external: return "외부 노드"
+            }
+        }
+    }
+    enum DspJob: String, CaseIterable, Identifiable {
+        case monitor, channelStrip, master, inserts
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .monitor: return "모니터"
+            case .channelStrip: return "채널 스트립"
+            case .master: return "마스터"
+            case .inserts: return "인서트"
+            }
+        }
+    }
+    @Published private(set) var dspRoles: [String: DspMachine] = [:]
+    @Published private(set) var dspAutoOverflow = false
+    @Published var ndsHost = "192.168.0.198"
+    @Published private(set) var ndsEnabled = false
+
+    func dspRole(_ job: DspJob) -> DspMachine { dspRoles[job.rawValue] ?? .internalDsp }
+
+    func setDspRole(_ job: DspJob, _ machine: DspMachine) {
+        guard let handle else { return }
+        job.rawValue.withCString { j in
+            machine.rawValue.withCString { m in nc_dsp_set_role(handle, j, m) }
+        }
+        reloadDspRoles()
+        refreshHistory()
+    }
+
+    func setDspAutoOverflow(_ on: Bool) {
+        guard let handle else { return }
+        nc_dsp_set_auto_overflow(handle, on ? 1 : 0)
+        reloadDspRoles()
+        refreshHistory()
+    }
+
+    func setNdsHost(_ host: String) {
+        guard let handle else { return }
+        _ = host.withCString { nc_dsp_set_nds_host(handle, $0) }
+        reloadDspRoles()
+    }
+
+    func setNdsEnabled(_ on: Bool) {
+        guard let handle else { return }
+        nc_dsp_set_nds_enabled(handle, on ? 1 : 0)
+        reloadDspRoles()
+    }
+
+    func reloadDspRoles() {
+        guard let handle else { return }
+        var roles: [String: DspMachine] = [:]
+        for job in DspJob.allCases {
+            let raw = job.rawValue.withCString { j in
+                readString { nc_dsp_role(handle, j, $0, $1) }
+            }
+            roles[job.rawValue] = DspMachine(rawValue: raw) ?? .internalDsp
+        }
+        dspRoles = roles
+        dspAutoOverflow = nc_dsp_auto_overflow(handle) != 0
+        ndsHost = readString { nc_dsp_nds_host(handle, $0, $1) }
+        ndsEnabled = nc_dsp_nds_enabled(handle) != 0
+        // The 모니터 assignment and the DSP-source row are the same decision; the bridge keeps
+        // them equal, so read the mode back here rather than letting the two views drift.
+        monitorPathMode = readString { nc_monitor_path_mode(handle, $0, $1) }
+        dspSources = dspSourcesFromMode(monitorPathMode)
+    }
     // Discovered/queried node hardware, shown in the Remote Core panel. Populated on 검색/refresh.
     struct RemoteNodeSpecs: Equatable {
         var model = ""
@@ -7590,6 +7669,7 @@ final class EngineController: ObservableObject {
         dspCoreCount = Int(nc_dsp_core_count(handle))
         externalDspCoreCount = Int(nc_dsp_external_core_count(handle))
         externalDspEnabled = nc_dsp_external_enabled(handle) != 0
+        reloadDspRoles()
         remoteDspHost = readString { nc_dsp_remote_host(handle, $0, $1) }
         physicalSpeakerModel = readString { nc_monitor_physical_speaker_model(handle, $0, $1) }
         physicalHeadphoneModel = readString { nc_monitor_physical_headphone_model(handle, $0, $1) }
@@ -9651,6 +9731,7 @@ final class EngineController: ObservableObject {
         }
         dspSources = selected
         setMonitorPathMode(modeFromDspSources(selected))
+        reloadDspRoles()   // the bridge mirrors the mode into the 모니터 assignment
     }
 
     // MARK: - Poll loop

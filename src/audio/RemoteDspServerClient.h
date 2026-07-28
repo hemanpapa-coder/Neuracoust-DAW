@@ -26,12 +26,27 @@ struct RemoteDspServerNode {
 };
 
 struct RemoteDspServerSettings {
+    // Two distinct machines answer the same NART protocol, and they are not interchangeable:
+    // `host` is the EXTERNAL node, a general-purpose computer borrowed for spare cores;
+    // `ndsHost` is the dedicated NDS appliance, which owns its own OS and timing. Each has its
+    // own address and its own master switch so one can be off while the other carries work.
     bool enabled = true;
     bool autoAssignTrackGroups = true;
     bool dawDspEnabled = false;
     bool pluginDspEnabled = false;
     bool autoAssignPluginCores = true;
     std::string host = "studio.local";
+    std::string ndsHost = "192.168.0.198";
+    bool ndsEnabled = false;
+    // Which machine carries which job ("internal" | "nds" | "external"). The user assigns these
+    // explicitly; autoOverflow turns them into starting points that spill to the next machine
+    // when one runs short. Carried here because this struct is what already reaches every place
+    // that has to decide where a block is processed.
+    std::string roleMonitor = "internal";
+    std::string roleChannelStrip = "internal";
+    std::string roleMaster = "internal";
+    std::string roleInserts = "internal";
+    bool autoOverflow = false;
     uint16_t rtEnginePort = 20000;
     uint16_t statusPort = 20001;
     uint16_t channelCount = 2;
@@ -149,6 +164,20 @@ struct RemoteDspDiscoveryResult {
 };
 
 RemoteDspServerSettings defaultRemoteDspServerSettings();
+
+/// Which machine a routing mode talks to, and whether it is switched on at all.
+/// "nds" is the appliance; "external"/"remote_external" the borrowed computer; "auto" prefers
+/// the appliance when it is on, because it is the one with predictable timing. The returned
+/// settings carry that machine's address in `host`, so every caller downstream stays
+/// single-address and none of them has to know which machine it is speaking to.
+RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& settings,
+                                                 const std::string& mode);
+/// True when `mode` names a remote machine that is switched on.
+bool remoteDspModeAvailable(const RemoteDspServerSettings& settings, const std::string& mode);
+/// The routing mode a job's assignment resolves to. Explicit assignment is the mode itself;
+/// with auto-overflow on every job becomes "auto" — use whatever machine has room.
+std::string remoteDspModeForRole(const RemoteDspServerSettings& settings, const std::string& role);
+
 std::vector<RemoteDspServerNode> defaultRemoteDspServerNodes();
 std::vector<RemoteDspServerNode> effectiveRemoteDspServerNodes(const RemoteDspServerSettings& settings);
 RemoteDspServerSettings settingsForRemoteDspServerNode(const RemoteDspServerSettings& settings,

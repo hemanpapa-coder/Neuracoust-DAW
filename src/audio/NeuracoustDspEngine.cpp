@@ -2613,7 +2613,16 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             break;
         }
     }
-    RemoteDspServerSettings remotePlanSettings = settings_.remoteDspServer;
+    // Track inserts go to whichever machine the 인서트 job is assigned to. An insert only
+    // declares that it *can* run remotely ("remote_internal"); it does not name a machine, so
+    // the assignment is the only thing that can. Assigned to 내장, nothing leaves the host.
+    const std::string trackInsertMode =
+        remoteDspModeForRole(settings_.remoteDspServer, settings_.remoteDspServer.roleInserts);
+    RemoteDspServerSettings remotePlanSettings =
+        remoteDspSettingsForMode(settings_.remoteDspServer, trackInsertMode);
+    if (!remoteDspModeAvailable(settings_.remoteDspServer, trackInsertMode)) {
+        remotePlanSettings.enabled = false;
+    }
     // Never resolve a hostname on the realtime render thread: getaddrinfo() for an
     // mDNS ".local" name can block for seconds if the node is absent, freezing audio
     // (the app then looks crashed). Only probe when the host is a numeric IPv4, which
@@ -2655,7 +2664,9 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
     std::vector<std::string> skippedRemoteInserts;
     if (hasRemoteCapableTrackInsert && !pluginRemoteDspAvailable) {
         if (!remotePlanSettings.enabled) {
-            skippedRemoteInserts.push_back("remote server disabled");
+            skippedRemoteInserts.push_back(trackInsertMode == "internal"
+                ? std::string("인서트가 내장 DSP에 배정됨")
+                : ("배정된 " + trackInsertMode + " 노드가 꺼져 있거나 주소가 없음"));
         } else if (!remotePlanSettings.pluginDspEnabled) {
             skippedRemoteInserts.push_back("plugin DSP disabled");
         } else if (remoteCorePlan.pluginCores == 0) {
@@ -2898,7 +2909,11 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
         }
         const float insertInputPeak = stereoPeak(trackInsertProcessedBlock_);
         if (trackChain.remoteDsp) {
-            RemoteDspServerSettings remoteSettings = settings_.remoteDspServer;
+            // Same machine the plan picked for the 인서트 job, resolved again here so the
+            // stream keeps talking to the address the assignment names.
+            RemoteDspServerSettings remoteSettings = remoteDspSettingsForMode(
+                settings_.remoteDspServer,
+                remoteDspModeForRole(settings_.remoteDspServer, settings_.remoteDspServer.roleInserts));
             const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
             remoteSettings.channelCount = 2;
             remoteSettings.frameCount = static_cast<uint16_t>(std::min<int64_t>(frameCount, networkBufferFrames));
@@ -3064,8 +3079,10 @@ bool NeuracoustDspEngine::remoteMonitorDspRequestedLocked() const {
 }
 
 bool NeuracoustDspEngine::monitorDspModeRequestsRemoteLocked(const std::string& mode) const {
-    return settings_.remoteDspServer.enabled &&
-        (mode == "external" || mode == "nds" || mode == "remote_external" || mode == "auto");
+    // Each remote machine has its own switch, so "nds" asks whether the appliance is on and
+    // "external" whether the borrowed computer is. Gating both on one flag meant turning the
+    // external node off also silently disabled NDS.
+    return remoteDspModeAvailable(settings_.remoteDspServer, mode);
 }
 
 bool NeuracoustDspEngine::projectMonitorDspCanRenderInGraphLocked() const {
@@ -3249,7 +3266,10 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
         remoteMonitorDspStream_.reset();
         return false;
     }
-    RemoteDspServerSettings remoteSettings = settings_.remoteDspServer;
+    // Resolve WHICH machine first: the appliance and the borrowed computer have different
+    // addresses, and streaming the monitor to the wrong one is silence, not a fallback.
+    RemoteDspServerSettings remoteSettings =
+        remoteDspSettingsForMode(settings_.remoteDspServer, settings_.monitorDspPathMode);
     const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
     remoteSettings.channelCount = 2;
     remoteSettings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));

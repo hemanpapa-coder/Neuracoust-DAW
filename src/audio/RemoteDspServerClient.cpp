@@ -289,6 +289,49 @@ RemoteDspServerSettings defaultRemoteDspServerSettings() {
     return settings;
 }
 
+bool remoteDspModeAvailable(const RemoteDspServerSettings& settings, const std::string& mode) {
+    if (mode == "nds") {
+        return settings.ndsEnabled && !settings.ndsHost.empty();
+    }
+    if (mode == "external" || mode == "remote_external") {
+        return settings.enabled && !settings.host.empty();
+    }
+    if (mode == "auto") {
+        return (settings.ndsEnabled && !settings.ndsHost.empty()) ||
+               (settings.enabled && !settings.host.empty());
+    }
+    return false;
+}
+
+std::string remoteDspModeForRole(const RemoteDspServerSettings& settings, const std::string& role) {
+    if (settings.autoOverflow) {
+        return "auto";
+    }
+    if (role == "nds" || role == "external" || role == "remote_external") {
+        return role;
+    }
+    return "internal";
+}
+
+RemoteDspServerSettings remoteDspSettingsForMode(const RemoteDspServerSettings& settings,
+                                                 const std::string& mode) {
+    RemoteDspServerSettings resolved = settings;
+    const bool ndsUsable = settings.ndsEnabled && !settings.ndsHost.empty();
+    const bool externalUsable = settings.enabled && !settings.host.empty();
+    // "auto" prefers the appliance: it is the machine whose timing we control.
+    const bool useNds = (mode == "nds") || (mode == "auto" && ndsUsable);
+    if (useNds) {
+        resolved.host = settings.ndsHost;
+        resolved.enabled = ndsUsable;
+    } else {
+        resolved.enabled = externalUsable;
+    }
+    // The node list would otherwise steer the client back to whatever it lists; the chosen
+    // machine is the target, full stop.
+    resolved.nodes.clear();
+    return resolved;
+}
+
 std::vector<RemoteDspServerNode> defaultRemoteDspServerNodes() {
     RemoteDspServerNode node;
     node.id = "neuracoust-dsp-server";
