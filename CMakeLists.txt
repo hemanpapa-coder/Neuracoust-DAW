@@ -652,6 +652,12 @@ target_link_libraries(neuracoust_dsp_load_bench PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_remote_dsp_discover_probe tools/remote_dsp_discover_probe.cpp)
 target_link_libraries(neuracoust_remote_dsp_discover_probe PRIVATE neuracoust_daw_core)
 
+# Sends a tone to a real DSP node and compares what comes back against the same tone processed
+# here. The one claim about the remote path that no unit test can make: that a channel actually
+# sounds the same on the node. Not in ctest — it needs a node on the LAN.
+add_executable(neuracoust_node_console_parity_check tools/node_console_parity_check.cpp)
+target_link_libraries(neuracoust_node_console_parity_check PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
 
