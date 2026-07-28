@@ -793,6 +793,8 @@ void NeuracoustDspEngine::resetRuntime() {
         inputMonitorBuffer_.clear();
         talkbackMonoBuffer_.clear();
         inputPeak_ = 0.0f;
+        inputPeakLeft_ = 0.0f;
+        inputPeakRight_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActive_ = false;
     }
@@ -1023,6 +1025,8 @@ void NeuracoustDspEngine::setMonitorStationControls(bool mono, const std::string
         inputMonitorBuffer_.clear();
         talkbackMonoBuffer_.clear();
         inputPeak_ = 0.0f;
+        inputPeakLeft_ = 0.0f;
+        inputPeakRight_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActive_ = false;
         physicalInputMonitoringActiveForStatus_.store(false, std::memory_order_relaxed);
@@ -3354,6 +3358,8 @@ void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
         listenResampleRatio_ = 1.0;
         listenSmoothedDepth_ = 0.0;
         inputPeak_ = 0.0f;
+        inputPeakLeft_ = 0.0f;
+        inputPeakRight_ = 0.0f;
         inputMonitorChannels_ = 0;
         physicalInputMonitoringActiveForStatus_.store(false, std::memory_order_relaxed);
         inputMonitorChannelsForStatus_.store(0, std::memory_order_relaxed);
@@ -3719,10 +3725,18 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
             listenReadPosFrames_ -= static_cast<double>(consumedFrames);
         }
         inputPeak_ *= 0.96f;
+        inputPeakLeft_ *= 0.96f;
+        inputPeakRight_ *= 0.96f;
         if (referenceBuffer_.empty() && inputPeak_ < 0.0001f) {
             inputPeak_ = 0.0f;
+        inputPeakLeft_ = 0.0f;
+        inputPeakRight_ = 0.0f;
+            inputPeakLeft_ = 0.0f;
+            inputPeakRight_ = 0.0f;
         }
         inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
+        inputPeakLeftForStatus_.store(inputPeakLeft_, std::memory_order_relaxed);
+        inputPeakRightForStatus_.store(inputPeakRight_, std::memory_order_relaxed);
         inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
         return;
     }
@@ -3776,6 +3790,8 @@ void NeuracoustDspEngine::mixInputMonitorLocked(int64_t frameCount, std::vector<
     inputPeak_ *= 0.96f;
     if (inputMonitorBuffer_.empty() && inputPeak_ < 0.0001f) {
         inputPeak_ = 0.0f;
+        inputPeakLeft_ = 0.0f;
+        inputPeakRight_ = 0.0f;
     }
     inputPeakForStatus_.store(inputPeak_, std::memory_order_relaxed);
     inputMonitorChannelsForStatus_.store(inputMonitorChannels_, std::memory_order_relaxed);
