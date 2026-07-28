@@ -2633,6 +2633,10 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
         RemoteDspServerSettings settings;
         bool available = false;
         std::string unavailableReason;
+        /// Every module the node hosts (empty on an old single-module engine, whose one module
+        /// is loadedPluginIdHint). Membership here is what lets DIFFERENT inserts offload to
+        /// DIFFERENT modules of one node in the same session.
+        std::vector<std::string> hostedModules;
     };
     std::map<std::string, RemoteInsertPlan> remoteInsertPlans;
     auto planForMode = [&](const std::string& mode) -> const RemoteInsertPlan& {
@@ -2657,6 +2661,7 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             const auto serverInfo = queryRemoteDspServerInfo(infoSettings);
             if (serverInfo.reachable) {
                 plan.settings.loadedPluginIdHint = serverInfo.pluginId;
+                plan.hostedModules = serverInfo.pluginIds;
                 measuredRemoteRoundTripMs = serverInfo.roundTripMs;
             }
         }
@@ -2709,8 +2714,11 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
             const auto& plan = planForMode(insertMode);
             const auto remoteCapability = remoteDspCapabilityForInsert(insert, plan.available, true);
             const std::string effectiveMode = effectiveTrackInsertDspExecutionMode(insert);
-            const bool serverModuleMatches = plan.settings.loadedPluginIdHint.empty() ||
-                plan.settings.loadedPluginIdHint == remoteCapability.moduleId;
+            const bool serverModuleMatches = !plan.hostedModules.empty()
+                ? std::find(plan.hostedModules.begin(), plan.hostedModules.end(),
+                            remoteCapability.moduleId) != plan.hostedModules.end()
+                : (plan.settings.loadedPluginIdHint.empty() ||
+                   plan.settings.loadedPluginIdHint == remoteCapability.moduleId);
             if (isRemoteInternalDspExecutionMode(effectiveMode) &&
                 plan.available &&
                 remoteCapability.mode == RemoteDspInsertMode::RemoteActive &&
@@ -2940,6 +2948,10 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
             // its inserts named rather than to whatever the project-wide assignment says now.
             RemoteDspServerSettings remoteSettings =
                 remoteDspSettingsForMode(settings_.remoteDspServer, trackChain.remoteMode);
+            // And the MODULE it expects there: a multi-module engine routes on this, and any
+            // engine that does not host it refuses the stream instead of processing the audio
+            // through whatever it happens to have loaded.
+            remoteSettings.loadedPluginIdHint = trackChain.remoteModuleId;
             const uint16_t networkBufferFrames = static_cast<uint16_t>(std::max<uint16_t>(128u, std::min<uint16_t>(1024u, remoteSettings.networkBufferFrames)));
             remoteSettings.channelCount = 2;
             remoteSettings.frameCount = static_cast<uint16_t>(std::min<int64_t>(frameCount, networkBufferFrames));

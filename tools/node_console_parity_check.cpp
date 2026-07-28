@@ -14,6 +14,7 @@
 #include "audio/ConsoleChannelProcessor.h"
 #include "audio/RemoteDspServerClient.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -114,12 +115,26 @@ int main(int argc, char** argv) {
         std::cout << "no node at " << host << ':' << statusPort << " — skipping parity check\n";
         return 0;
     }
-    std::cout << "node " << host << " loaded module: " << info.pluginId << '\n';
-    if (info.pluginId != "na.neuracoust.console.channel") {
-        std::cout << "node is hosting a different module — skipping (start it with "
+    constexpr const char* kConsoleModule = "na.neuracoust.console.channel";
+    const bool multiModule = !info.pluginIds.empty();
+    const bool hosted = multiModule
+        ? std::find(info.pluginIds.begin(), info.pluginIds.end(), kConsoleModule) != info.pluginIds.end()
+        : info.pluginId == kConsoleModule;
+    std::cout << "node " << host << " hosts: ";
+    if (multiModule) {
+        for (const auto& id : info.pluginIds) std::cout << id << ' ';
+        std::cout << "(multi-module, routed)\n";
+    } else {
+        std::cout << info.pluginId << " (single-module)\n";
+    }
+    if (!hosted) {
+        std::cout << "node does not host the console module — skipping (start it with "
                      "--module na_console_channel.so to run this check)\n";
         return 0;
     }
+    // On a multi-module engine the session routes by this hint; on an old engine it is only a
+    // guard. Either way the strip must land on the console module, never on its neighbours.
+    settings.loadedPluginIdHint = kConsoleModule;
 
     const std::string mode = argc > 4 ? argv[4] : "full";
     const auto console = busyStrip(mode);
@@ -149,6 +164,12 @@ int main(int argc, char** argv) {
     ConsoleChannelProcessor local;
     local.reset(kSampleRate);
 
+    // The SESSION class, not the one-shot helper: only the session carries the routing block
+    // (module id + private state session) a multi-module engine needs. The first run of this
+    // tool against such an engine used the one-shot helper and measured a rock-steady 0.97
+    // "mismatch" — the audio was coming back beautifully processed by the WRONG module.
+    RemoteDspProcessSession sessionStream;
+
     double worst = 0.0;
     double localEnergy = 0.0;
     for (int pass = 0; pass < kWarmupBlocks + kComparedBlocks; ++pass) {
@@ -158,7 +179,7 @@ int main(int argc, char** argv) {
         local.processInterleavedStereo(expected, console, kSampleRate);
 
         std::vector<float> returned;
-        const auto result = processRemoteDspInterleavedStereo(settings, block, parameters, returned);
+        const auto result = sessionStream.process(settings, block, parameters, returned);
         if (!result.processed || returned.size() != expected.size()) {
             std::cerr << "node did not process block " << pass << ": " << result.message << '\n';
             return 2;

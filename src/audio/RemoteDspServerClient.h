@@ -138,6 +138,9 @@ struct RemoteDspServerInfo {
     std::string lpee;
     std::string pluginId;
     std::string pluginName;
+    /// Every module a multi-module engine hosts. Non-empty is also the capability signal that
+    /// the engine understands per-packet routing; an old single-module engine leaves it empty.
+    std::vector<std::string> pluginIds;
     std::vector<RemoteDspPluginInfo> pluginCatalog;
     uint64_t packetsIn = 0;
     uint64_t packetsOut = 0;

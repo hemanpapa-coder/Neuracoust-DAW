@@ -15,8 +15,10 @@ IP="${NODE_IP:-192.168.0.198}"
 PORT="${NODE_PORT:-20010}"
 STATUS_PORT=$((PORT + 1))
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="\$HOME/neuracoust-node/node-module/na_console_channel.so"
-ENGINE=/opt/neuracoust/rt_engine/neuracoust-rt-engine
+# The freshly built multi-module engine, hosting BOTH modules — the parity check then also
+# proves per-packet routing picks the right one (module 0 is deliberately NOT the console).
+ENGINE="\$HOME/neuracoust-node/rt_engine/build/neuracoust-rt-engine"
+MODULE="--module \$HOME/neuracoust-node/rt_engine/build/na_4001e.so --module \$HOME/neuracoust-node/node-module/na_console_channel.so"
 
 # Two things this has to get right, both of which cost a debugging round when they are wrong:
 #
@@ -30,7 +32,7 @@ restart_node() {
     ssh -o BatchMode=yes "$HOST" \
         "[ -f /tmp/console-module-$PORT.pid ] && kill \$(cat /tmp/console-module-$PORT.pid) 2>/dev/null; \
          sleep 0.5; \
-         setsid $ENGINE --module $MODULE --port $PORT --monitor-port $STATUS_PORT \
+         setsid $ENGINE $MODULE --port $PORT --monitor-port $STATUS_PORT \
              </dev/null >/tmp/console-module-$PORT.log 2>&1 & \
          echo \$! > /tmp/console-module-$PORT.pid; \
          exit 0" </dev/null >/dev/null 2>&1

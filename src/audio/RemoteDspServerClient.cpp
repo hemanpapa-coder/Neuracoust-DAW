@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <random>
 #include <set>
 #include <sstream>
 
@@ -36,6 +37,13 @@ constexpr uint32_t kNaRtMagic = 0x4e415254u;
 constexpr uint16_t kNaRtVersion = 1u;
 constexpr size_t kNaRtHeaderSize = 20u;
 constexpr uint32_t kNaRtFlagParameters = 1u;
+// Optional routing block right after the header: 48-byte NUL-padded module id + 8-byte session.
+// Which module of a multi-module engine this stream addresses, and which private state instance —
+// two streams through one module must not share filter memories. Only sent to servers that
+// advertise plugin_ids (the capability signal); an older engine never sees the flag.
+constexpr uint32_t kNaRtFlagRoute = 2u;
+constexpr size_t kNaRtModuleIdLen = 48u;
+constexpr size_t kNaRtRouteBlockLen = kNaRtModuleIdLen + 8u;
 constexpr uint16_t kMaxProbeChannels = 64u;
 constexpr uint16_t kMaxProbeFrames = 1024u;
 constexpr size_t kMaxRemoteParameterCount = 64u;
@@ -200,19 +208,30 @@ std::vector<uint8_t> makeProbePacket(uint32_t sequence, uint16_t channelCount, u
 std::vector<uint8_t> makeStereoProcessPacket(uint32_t sequence,
                                              uint16_t frameCount,
                                              const std::vector<float>& interleavedStereo,
-                                             const std::vector<RemoteDspParameterValue>& parameters = {}) {
+                                             const std::vector<RemoteDspParameterValue>& parameters = {},
+                                             const std::string& routeModuleId = {},
+                                             uint64_t routeSessionId = 0u) {
     std::vector<uint8_t> packet;
     constexpr uint16_t channelCount = 2u;
     const size_t parameterCount = std::min(parameters.size(), kMaxRemoteParameterCount);
     const size_t parameterBytes = parameterCount > 0 ? 4u + parameterCount * 8u : 0u;
-    packet.reserve(kNaRtHeaderSize + parameterBytes + static_cast<size_t>(channelCount) * frameCount * sizeof(float));
+    const bool routed = !routeModuleId.empty();
+    packet.reserve(kNaRtHeaderSize + (routed ? kNaRtRouteBlockLen : 0u) + parameterBytes +
+                   static_cast<size_t>(channelCount) * frameCount * sizeof(float));
     appendU32(packet, kNaRtMagic);
     appendU16(packet, kNaRtVersion);
     appendU16(packet, static_cast<uint16_t>(kNaRtHeaderSize));
     appendU32(packet, sequence);
     appendU16(packet, channelCount);
     appendU16(packet, frameCount);
-    appendU32(packet, parameterCount > 0 ? kNaRtFlagParameters : 0u);
+    appendU32(packet, (parameterCount > 0 ? kNaRtFlagParameters : 0u) | (routed ? kNaRtFlagRoute : 0u));
+    if (routed) {
+        uint8_t moduleField[kNaRtModuleIdLen] = {0};
+        std::memcpy(moduleField, routeModuleId.data(), std::min(routeModuleId.size(), kNaRtModuleIdLen));
+        packet.insert(packet.end(), moduleField, moduleField + kNaRtModuleIdLen);
+        appendU32(packet, static_cast<uint32_t>(routeSessionId >> 32));
+        appendU32(packet, static_cast<uint32_t>(routeSessionId & 0xffffffffu));
+    }
     if (parameterCount > 0) {
         appendU16(packet, static_cast<uint16_t>(parameterCount));
         appendU16(packet, 0u);
@@ -714,6 +733,15 @@ struct RemoteDspProcessSession::Impl {
     sockaddr_in target {};
     std::string key;
     std::atomic<uint32_t> sequenceCounter {200000u};
+    /// This stream's private state on the node. Random per session object, so two streams
+    /// through the same module never share filter memories there.
+    uint64_t sessionId = 0;
+    /// What the endpoint said it hosts, learned once per (host, port). Empty plus
+    /// routeChecked=true means an old engine that never reported plugin_ids — no route block is
+    /// sent to it, ever, so it keeps counting our packets as good.
+    bool routeChecked = false;
+    bool serverRoutes = false;
+    std::vector<std::string> serverModules;
 
     ~Impl() {
         reset();
@@ -767,12 +795,50 @@ struct RemoteDspProcessSession::Impl {
             return false;
         }
         key = nextKey;
+        routeChecked = false;
+        serverRoutes = false;
+        serverModules.clear();
         return true;
+    }
+
+    /// One status query per endpoint, and only when a stream actually names a module. Runs on
+    /// the caller's thread — which for every stream in the app is the async worker, never the
+    /// audio thread.
+    void checkRoutingCapability(const RemoteDspServerSettings& settings) {
+        if (routeChecked) {
+            return;
+        }
+        routeChecked = true;
+        RemoteDspServerSettings query = settings;
+        query.timeoutMs = query.timeoutMs > 0 ? std::min(query.timeoutMs * 10, 250) : 250;
+        const auto info = queryRemoteDspServerInfo(query);
+        if (!info.reachable) {
+            routeChecked = false;   // ask again next block; the node may just be starting
+            return;
+        }
+        serverRoutes = !info.pluginIds.empty();
+        serverModules = serverRoutes ? info.pluginIds : std::vector<std::string> {info.pluginId};
+    }
+
+    bool serverHosts(const std::string& moduleId) const {
+        for (const auto& id : serverModules) {
+            if (id == moduleId) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
 RemoteDspProcessSession::RemoteDspProcessSession()
     : impl_(std::make_unique<Impl>()) {
+    // Random, once, off the audio path. Zero would collide every stream on the node's default
+    // state, which is exactly the shared-state bug sessions exist to end.
+    std::random_device entropy;
+    impl_->sessionId = (static_cast<uint64_t>(entropy()) << 32) | entropy();
+    if (impl_->sessionId == 0) {
+        impl_->sessionId = 1;
+    }
 }
 
 RemoteDspProcessSession::~RemoteDspProcessSession() = default;
@@ -807,8 +873,25 @@ RemoteDspProcessResult RemoteDspProcessSession::process(const RemoteDspServerSet
         return result;
     }
 
+    // A stream that names a module must not run through whatever module the node happens to
+    // host. Before routing existed, a console-strip stream against a node loaded with na_4001e
+    // was silently processed BY THE 4001E — plausible audio, wrong processor. Refusing here
+    // makes the caller fall back to its local copy of the module, which is always right.
+    std::string routeModuleId;
+    if (!settings.loadedPluginIdHint.empty()) {
+        impl_->checkRoutingCapability(settings);
+        if (impl_->routeChecked && !impl_->serverHosts(settings.loadedPluginIdHint)) {
+            result.message = "server does not host module " + settings.loadedPluginIdHint;
+            return result;
+        }
+        if (impl_->serverRoutes) {
+            routeModuleId = settings.loadedPluginIdHint;
+        }
+    }
+
     const uint32_t sequence = impl_->sequenceCounter.fetch_add(1u, std::memory_order_relaxed);
-    const auto packet = makeStereoProcessPacket(sequence, frameCount, interleavedStereo, parameters);
+    const auto packet = makeStereoProcessPacket(sequence, frameCount, interleavedStereo, parameters,
+                                                routeModuleId, impl_->sessionId);
     const auto started = std::chrono::steady_clock::now();
     const int sent = send(impl_->socketHandle,
                           reinterpret_cast<const char*>(packet.data()),
@@ -1041,6 +1124,22 @@ RemoteDspServerInfo queryRemoteDspServerInfo(const RemoteDspServerSettings& sett
     info.lpfc = text("lpfc");
     info.lpee = text("lpee");
     info.pluginId = text("plugin_id");
+    {
+        // plugin_ids is both the module list and the routing-capability signal.
+        const std::string joined = text("plugin_ids");
+        size_t start = 0;
+        while (start < joined.size()) {
+            const size_t end = joined.find(',', start);
+            const std::string id = joined.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!id.empty()) {
+                info.pluginIds.push_back(id);
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1u;
+        }
+    }
     info.pluginName = text("plugin_name");
     info.pluginCatalog = parseRemotePluginCatalog(text("plugin_catalog"));
     info.packetsIn = integer("packets_in");
@@ -1197,6 +1296,21 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
         result.info.packetsOut = integer("packets_out");
         result.info.badPackets = integer("bad_packets");
         result.info.pluginId = text("plugin_id");
+        {
+            const std::string joined = text("plugin_ids");
+            size_t start = 0;
+            while (start < joined.size()) {
+                const size_t end = joined.find(',', start);
+                const std::string id = joined.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                if (!id.empty()) {
+                    result.info.pluginIds.push_back(id);
+                }
+                if (end == std::string::npos) {
+                    break;
+                }
+                start = end + 1u;
+            }
+        }
         result.info.pluginName = text("plugin_name");
         result.info.pluginCatalog = parseRemotePluginCatalog(text("plugin_catalog"));
         result.info.message = "RT DSP discovery response";
