@@ -1055,16 +1055,14 @@ struct ChannelStrip: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: overridden ? "cpu.fill" : "cpu")
-                Text(overridden ? EngineController.dspMachineLabel(assigned) : "DSP 전역")
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .font(Theme.Font.mono(6.5, .semibold))
-            .foregroundStyle(overridden ? accent : Theme.Palette.textFainter)
-            .padding(.horizontal, 3)
-            .frame(height: 14)
+            // Icon only, by request — the grid cell truncated any text to "DS…" anyway. The
+            // filled CPU + accent tint says "overridden"; the tooltip carries the words.
+            Image(systemName: overridden ? "cpu.fill" : "cpu")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(overridden ? accent : Theme.Palette.textFainter)
+                .frame(maxWidth: .infinity)
+                .frame(height: 14)
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

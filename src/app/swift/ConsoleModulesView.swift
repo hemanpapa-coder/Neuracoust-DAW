@@ -972,7 +972,14 @@ struct NeuracoustConsoleModulesView: View {
             moduleBody
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: width, height: moduleHeight(module) * scale, alignment: .top)
+                .clipped()   // whatever the tightened height cuts, it stops HERE — never under the plate
             modelPlate
+                .padding(.top, 3)
+                .padding(.bottom, 1)
+                .background(Color(hex: 0x232527))   // opaque seat: the plate is its own layer
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Color.black.opacity(0.85)).frame(height: 1)
+                }
         }
     }
 
