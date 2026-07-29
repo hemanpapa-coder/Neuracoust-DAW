@@ -178,6 +178,51 @@ int main(int argc, char** argv) {
     }
     std::cout << "remote render is alive (insert path included)\n";
 
+    // ── Phase 1.5: GR telemetry (M3) — the reply's meter tail must carry real gain reduction.
+    // A hot sine through the node's console strip with the compressor leaned on it: the ABI-2
+    // meter hook reports [comp GR dB, gate GR dB], and a working wire shows compression.
+    {
+        auto settings = defaultRemoteDspServerSettings();
+        settings.nodes.clear();
+        settings.host = host;
+        applyRemoteDspHostPort(settings);
+        settings.timeoutMs = 100;
+        settings.loadedPluginIdHint = "na.neuracoust.console.channel";
+        RemoteDspProcessSession session;
+        std::vector<float> hot(256 * 2);
+        for (size_t frame = 0; frame < 256; ++frame) {
+            const float sample = 0.9f * static_cast<float>(std::sin(0.13 * static_cast<double>(frame)));
+            hot[frame * 2u] = sample;
+            hot[frame * 2u + 1u] = sample;
+        }
+        // Console params ride the packet: comp on, threshold low, ratio high — GR guaranteed.
+        std::vector<RemoteDspParameterValue> params = {
+            {16u, 1.0f},   // comp enabled
+            {17u, 0.1f},   // threshold (normalized — near the bottom of its range)
+            {18u, 0.9f},   // ratio (high)
+        };
+        std::vector<float> processed;
+        RemoteDspProcessResult last;
+        for (int i = 0; i < 24; ++i) {   // let the envelope settle
+            last = session.process(settings, hot, params, processed);
+            if (!last.processed) break;
+        }
+        if (!last.processed) {
+            std::cerr << "GR telemetry: strip stream failed — " << last.message << '\n';
+            return 8;
+        }
+        if (last.meterCount < 2u) {
+            std::cerr << "GR TELEMETRY MISSING — reply carried no meter tail (node not ABI 2?)\n";
+            return 8;
+        }
+        std::cout << "GR telemetry: reply meters [comp " << last.meters[0]
+                  << " dB, gate " << last.meters[1] << " dB]\n";
+        if (last.meters[0] <= 0.1f) {
+            std::cerr << "GR telemetry: compressor shows no reduction on a hot signal\n";
+            return 8;
+        }
+    }
+
     // ── Phase 2: the M1b parity gate — remote MIXER ONLY, and the judge is memcmp. ──────────
     // Two generator tracks, no console modules, no inserts: the only thing that differs between
     // the two renders is WHERE the summing happened, and the summing bus is bit-exact, so the

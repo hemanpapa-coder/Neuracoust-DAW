@@ -648,6 +648,9 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->referenceOverrunDrops = s.referenceOverrunDrops;
     out->remoteDspMonitorActive = s.remoteDspMonitorActive;
     out->remoteDspRoundTripMs = s.remoteDspRoundTripMs;
+    out->remoteMixBusCount = s.remoteMixBusCount;
+    out->remoteMixSums = s.remoteMixSums;
+    out->remoteMixMisses = s.remoteMixMisses;
     out->activeRealtimeVst3TrackInserts = s.activeRealtimeVst3TrackInsertCount;
     out->activeRealtimeVst3MasterInserts = s.activeRealtimeVst3MasterInsertCount;
     out->activeRemoteDspTrackInserts = s.activeRemoteDspTrackInsertCount;

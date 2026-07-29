@@ -1180,6 +1180,7 @@ RemoteDspProcessResult RemoteDspProcessSession::process(const RemoteDspServerSet
     const uint32_t returnedSequence = readU32(data + 8);
     const uint16_t channels = readU16(data + 12);
     const uint16_t frames = readU16(data + 14);
+    const uint32_t replyFlags = readU32(data + 16);
     const size_t payloadBytes = static_cast<size_t>(channels) * frames * sizeof(float);
 
     result.reachable = true;
@@ -1187,17 +1188,36 @@ RemoteDspProcessResult RemoteDspProcessSession::process(const RemoteDspServerSet
     result.channelCount = channels;
     result.frameCount = frames;
     result.roundTripMs = std::chrono::duration<double, std::milli>(finished - started).count();
+    // ABI-2 replies may carry a meter tail after the audio: [u16 count][u16 pad][count floats].
+    // The length check must admit it, or the first metered module would break every stream.
+    size_t expectedBytes = kNaRtHeaderSize + payloadBytes;
+    uint32_t meterCount = 0;
+    if ((replyFlags & 8u) != 0u &&
+        static_cast<size_t>(received) >= expectedBytes + 4u) {
+        meterCount = readU16(data + expectedBytes);
+        if (meterCount <= 8u &&
+            static_cast<size_t>(received) == expectedBytes + 4u + meterCount * sizeof(float)) {
+            expectedBytes += 4u + meterCount * sizeof(float);
+        } else {
+            meterCount = 0;
+        }
+    }
     result.protocolMatched = magic == kNaRtMagic &&
         version == kNaRtVersion &&
         headerSize == kNaRtHeaderSize &&
         returnedSequence == sequence &&
         channels == 2u &&
         frames == frameCount &&
-        static_cast<size_t>(received) == kNaRtHeaderSize + payloadBytes;
+        static_cast<size_t>(received) == expectedBytes;
     if (!result.protocolMatched) {
         result.message = "response did not match Neuracoust RT UDP protocol";
         impl_->reset();
         return result;
+    }
+    if (meterCount > 0) {
+        result.meterCount = meterCount;
+        std::memcpy(result.meters, data + kNaRtHeaderSize + payloadBytes + 4u,
+                    meterCount * sizeof(float));
     }
 
     const auto* payload = reinterpret_cast<const float*>(data + kNaRtHeaderSize);

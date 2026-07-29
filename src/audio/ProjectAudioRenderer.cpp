@@ -2263,15 +2263,27 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             if (!handledRemotely) {
                 consoleProcessor.processInterleavedStereo(routeInput, track->consoleChannel, plan.sampleRate);
             }
-            if (!handledRemotely && meters != nullptr) {
+            if (meters != nullptr) {
                 const auto meterIt = meterIndexByTrack.find(route->name);
                 if (meterIt != meterIndexByTrack.end() &&
                     meterIt->second < meters->trackConsoleGainReductionDb.size()) {
-                    meters->trackConsoleGainReductionDb[meterIt->second] =
-                        consoleProcessor.compressorGainReductionDb();
-                    if (meterIt->second < meters->trackConsoleGateGainReductionDb.size()) {
-                        meters->trackConsoleGateGainReductionDb[meterIt->second] =
-                            consoleProcessor.gateGainReductionDb();
+                    float compGr = 0.0f;
+                    float gateGr = 0.0f;
+                    bool haveGr = false;
+                    if (!handledRemotely) {
+                        compGr = consoleProcessor.compressorGainReductionDb();
+                        gateGr = consoleProcessor.gateGainReductionDb();
+                        haveGr = true;
+                    } else if (state.remoteConsoleGr) {
+                        // The node processed this strip; its reply carried the GR. Without this
+                        // the needles froze the moment a strip went remote.
+                        haveGr = state.remoteConsoleGr(route->name, compGr, gateGr);
+                    }
+                    if (haveGr) {
+                        meters->trackConsoleGainReductionDb[meterIt->second] = compGr;
+                        if (meterIt->second < meters->trackConsoleGateGainReductionDb.size()) {
+                            meters->trackConsoleGateGainReductionDb[meterIt->second] = gateGr;
+                        }
                     }
                 }
             }

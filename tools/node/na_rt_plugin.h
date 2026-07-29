@@ -3,7 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define NA_RT_PLUGIN_ABI_VERSION 1u
+/* ABI 2 adds the optional meter() hook at the TAIL of NaRtPlugin, so a v1 module still loads
+ * (the engine only calls meter() when abi_version >= 2 AND the pointer is set). GR telemetry
+ * exists because a strip processed on the node otherwise leaves the DAW's gain-reduction
+ * needles frozen — the local processor that used to feed them never ran. */
+#define NA_RT_PLUGIN_ABI_VERSION 2u
+#define NA_RT_MAX_METERS 8u
 #define NA_RT_MAX_PARAMS 64u
 #define NA_RT_MAX_CHANNELS 64u
 #define NA_RT_MAX_FRAMES 256u
@@ -46,6 +51,9 @@ typedef struct {
     void (*init)(void *state, double sample_rate);
     void (*process)(void *state, NaRtAudioBlock *block);
     void (*set_param)(void *state, uint32_t index, float value);
+    /* ABI >= 2, optional (NULL fine): fill up to NA_RT_MAX_METERS values describing the last
+     * processed block (a console strip reports [comp GR dB, gate GR dB]); return how many. */
+    uint32_t (*meter)(void *state, float *values, uint32_t capacity);
 } NaRtPlugin;
 
 typedef const NaRtPlugin *(*NaRtGetPluginFn)(void);

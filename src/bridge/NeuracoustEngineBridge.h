@@ -86,6 +86,11 @@ typedef struct {
 
     bool remoteDspMonitorActive;
     double remoteDspRoundTripMs;
+    // Remote-mixer provenance: buses the node sums right now + cumulative sums/misses (a miss
+    // is bit-identical locally — an honesty meter, not a quality alarm).
+    unsigned int remoteMixBusCount;
+    unsigned long long remoteMixSums;
+    unsigned long long remoteMixMisses;
 
     // How many inserts the engine is actually running, and where. The only honest
     // way to tell that a plug-in really loaded.

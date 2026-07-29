@@ -143,6 +143,12 @@ struct AudioEngineStatus {
     std::string monitorDspPathMode = "internal";
     bool remoteDspMonitorActive = false;
     double remoteDspRoundTripMs = 0.0;
+    // Remote-mixer provenance (M3): how many summing buses the node is carrying right now, and
+    // the cumulative sum/miss counts — a missed block is bit-identical locally, so the miss
+    // counter is an honesty meter, not a quality alarm.
+    uint32_t remoteMixBusCount = 0;
+    uint64_t remoteMixSums = 0;
+    uint64_t remoteMixMisses = 0;
     double remoteDspAverageRoundTripJitterUs = 0.0;
     double remoteDspMaxRoundTripJitterUs = 0.0;
     RemoteDspCorePlan remoteDspCorePlan;

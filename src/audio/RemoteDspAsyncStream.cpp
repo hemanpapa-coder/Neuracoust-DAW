@@ -218,6 +218,10 @@ void RemoteDspAsyncStream::workerLoop() {
             continue;
         }
         consecutiveFailures_ = 0;
+        status_.meterCount = result.meterCount;
+        if (result.meterCount > 0) {
+            std::memcpy(status_.meters, result.meters, sizeof(status_.meters));
+        }
         recordRoundTripLocked(result.roundTripMs);
         if (outputQueue_.size() >= kMaxOutputQueueBlocks) {
             outputQueue_.pop_front();

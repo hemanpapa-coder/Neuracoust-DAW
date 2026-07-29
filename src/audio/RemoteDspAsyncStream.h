@@ -13,6 +13,10 @@
 namespace neuracoust::daw {
 
 struct RemoteDspAsyncStreamStatus {
+    /// Meter telemetry from the latest successful reply (ABI-2 modules — the console strip
+    /// reports [comp GR dB, gate GR dB]). Zero count when the module sends none.
+    uint32_t meterCount = 0;
+    float meters[8] = {};
     bool running = false;
     bool outputReady = false;
     uint32_t queuedInputBlocks = 0;

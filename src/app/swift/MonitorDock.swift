@@ -1016,6 +1016,12 @@ struct MonitorDock: View {
                     }
                 }
             }
+            if engine.remoteMixBusCount > 0 {
+                Text("합산 버스 \(engine.remoteMixBusCount)개 노드 구동 · 합산 \(engine.remoteMixSums.formatted()) · 미스 \(engine.remoteMixMisses.formatted()) (미스 = 로컬로 동일 처리)")
+                    .font(Theme.Font.mono(6.5))
+                    .foregroundStyle(Theme.Palette.teal)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(engine.dspAutoOverflow
                     ? "배정한 기계가 모자라면 내장 → NDS → 외부 노드 순으로 넘어갑니다."
                     : "배정한 기계에서만 처리합니다. 모자라도 다른 기계로 넘어가지 않습니다.")

@@ -133,6 +133,16 @@ void moduleProcess(void* ptr, NaRtAudioBlock* block) {
     // and silently zeroing the rest would look like a routing fault on the DAW side.
 }
 
+// GR telemetry (ABI 2): the DAW's gain-reduction needles read THESE numbers when the strip
+// runs here — the local processor that used to feed them is skipped on the remote path.
+uint32_t moduleMeter(void* state, float* values, uint32_t capacity) {
+    if (capacity < 2u) return 0u;
+    auto* module = static_cast<ConsoleModuleState*>(state);
+    values[0] = module->processor.compressorGainReductionDb();
+    values[1] = module->processor.gateGainReductionDb();
+    return 2u;
+}
+
 const NaRtPlugin g_plugin = {
     {
         NA_RT_PLUGIN_ABI_VERSION,
@@ -145,6 +155,7 @@ const NaRtPlugin g_plugin = {
     moduleInit,
     moduleProcess,
     moduleSetParam,
+    moduleMeter,
 };
 
 struct ParamTableBuilder {

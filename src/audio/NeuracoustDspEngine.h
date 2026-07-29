@@ -256,11 +256,16 @@ private:
     // reached backoff and burned its timeout every block instead.
     std::map<std::string, int> remoteMixerMissStreaks_;
     std::map<std::string, uint32_t> remoteMixerProbeCountdowns_;
+    uint64_t remoteMixSums_ = 0;
+    uint64_t remoteMixMisses_ = 0;
 
     void prepareRemoteMixerLocked();
     bool processRealtimeBusSumLocked(const std::string& busName,
                                      const std::deque<std::vector<float>>& contributions,
                                      std::vector<float>& summed);
+
+    /// Latest comp/gate GR per remotely-processed strip, from the node's reply meters.
+    std::map<std::string, std::pair<float, float>> remoteStripGr_;
 
     void prepareRemoteConsoleStripsLocked(int maxBlockSize);
     /// Declare each remote strip's crossing into the mixer's delay compensation, so a channel

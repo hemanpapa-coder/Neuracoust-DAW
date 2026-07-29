@@ -34,6 +34,7 @@
  * with no route flag runs module 0, session 0: exactly the old single-module behaviour, so an
  * old DAW keeps working against a new engine. */
 #define NA_RT_FLAG_ROUTE 2u
+#define NA_RT_FLAG_METERS 8u
 #define NA_RT_MODULE_ID_LEN 48u
 #define NA_RT_ROUTE_BLOCK_LEN (NA_RT_MODULE_ID_LEN + 8u)
 #define NA_RT_MAX_MODULES 8u
@@ -681,6 +682,26 @@ static void run_engine(void) {
             got = (ssize_t)(sizeof(NaRtPacketHeader) + payload_bytes);
             header = (NaRtPacketHeader *)packet;
             header->flags = htonl(0u);
+        }
+
+        /* GR/meter telemetry (ABI >= 2): the module describes the block it just processed and
+         * the values ride the reply — [u16 count][u16 pad][count floats] after the audio. The
+         * DAW's needles otherwise freeze the moment a strip goes remote. */
+        {
+            const NaRtPlugin *plugin = route_graph->nodes[module_index].plugin;
+            if (plugin->info.abi_version >= 2u && plugin->meter != NULL) {
+                float meter_values[NA_RT_MAX_METERS];
+                const uint32_t meter_count = plugin->meter(session_state, meter_values, NA_RT_MAX_METERS);
+                if (meter_count > 0u && meter_count <= NA_RT_MAX_METERS) {
+                    uint8_t *tail = packet + got;
+                    tail[0] = (uint8_t)(meter_count >> 8);
+                    tail[1] = (uint8_t)(meter_count & 0xffu);
+                    tail[2] = 0u; tail[3] = 0u;
+                    memcpy(tail + 4, meter_values, meter_count * sizeof(float));
+                    got += (ssize_t)(4u + meter_count * sizeof(float));
+                    header->flags = htonl(ntohl(header->flags) | NA_RT_FLAG_METERS);
+                }
+            }
         }
 
         if (sendto(audio_fd, packet, (size_t)got, 0,

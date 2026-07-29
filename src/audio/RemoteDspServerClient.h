@@ -90,6 +90,10 @@ struct RemoteDspServerProbeResult {
 };
 
 struct RemoteDspProcessResult {
+    /// Meter telemetry riding the reply (ABI 2 modules): a console strip reports
+    /// [comp GR dB, gate GR dB]. Zero when the module sent none.
+    uint32_t meterCount = 0;
+    float meters[8] = {};
     bool processed = false;
     bool reachable = false;
     bool protocolMatched = false;

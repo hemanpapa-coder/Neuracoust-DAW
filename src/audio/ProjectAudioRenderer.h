@@ -115,6 +115,10 @@ struct ProjectAudioRenderState {
     /// ConsoleChannelProcessor (the node links this library), so the sound matches.
     std::function<bool(const std::string& routeName, std::vector<float>& interleavedStereo)>
         remoteConsoleStrip;
+    /// GR telemetry for a REMOTELY processed strip (M3): comp/gate gain reduction from the
+    /// node's reply, so the DAW's needles keep moving when the local processor is skipped.
+    std::function<bool(const std::string& routeName, float& compGrDb, float& gateGrDb)>
+        remoteConsoleGr;
     /// Same contract for the MASTER insert chain: return true having processed the block on a
     /// remote node, false to run the local chain. Null in every offline bounce, for the same
     /// reason as above — a bounce must be reproducible with the node switched off.

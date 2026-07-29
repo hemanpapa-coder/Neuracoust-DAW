@@ -2972,6 +2972,11 @@ final class EngineController: ObservableObject {
     // The remote DSP node address the engine streams to (External/NDS target).
     @Published var remoteDspHost = "studio.local"
     @Published private(set) var remoteDspRoundTripMs: Double = 0
+    /// Remote-mixer provenance: buses the node sums right now + cumulative sums/misses. A miss
+    /// is bit-identical locally, so the number is honesty, not alarm.
+    @Published private(set) var remoteMixBusCount = 0
+    @Published private(set) var remoteMixSums: UInt64 = 0
+    @Published private(set) var remoteMixMisses: UInt64 = 0
     // The "use this node" master switch (whether the external node participates at all).
     @Published private(set) var externalDspEnabled = true
 
@@ -10181,6 +10186,9 @@ final class EngineController: ObservableObject {
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 10).rounded() / 10)  // 0.1 ms display
+            setIfChanged(\.remoteMixBusCount, Int(status.remoteMixBusCount))
+            setIfChanged(\.remoteMixSums, status.remoteMixSums)
+            setIfChanged(\.remoteMixMisses, status.remoteMixMisses)
             // Ask each remote machine what it is doing. Self-rate-limited to ~2 s and run off
             // the main thread; a connected node reported no load at all before this, because
             // only a manual 검색 ever asked.

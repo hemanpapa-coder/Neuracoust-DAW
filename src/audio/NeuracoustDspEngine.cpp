@@ -2506,6 +2506,10 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.monitorDspPathMode = settings_.monitorDspPathMode;
     status.remoteDspMonitorActive = remoteDspMonitorActive_;
     status.remoteDspRoundTripMs = remoteDspRoundTripMs_;
+    status.remoteMixBusCount = remoteMixerMode_.empty()
+        ? 0u : static_cast<uint32_t>(realtimeMixSessions_.size());
+    status.remoteMixSums = remoteMixSums_;
+    status.remoteMixMisses = remoteMixMisses_;
     status.referenceUnderrunBlocks = referenceUnderrunBlocks_.load(std::memory_order_relaxed);
     status.referenceOverrunDrops = referenceOverrunDrops_.load(std::memory_order_relaxed);
     status.remoteDspAverageRoundTripJitterUs = remoteDspAverageRoundTripJitterUs_;
@@ -3227,6 +3231,7 @@ bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName
     const auto result = session->mix(settings, contributions, summed);
     if (!result.processed) {
         ++missStreak;
+        ++remoteMixMisses_;
         if (getenv("NC_DIAG_REMOTE") != nullptr) {
             static int logged = 0;
             if (logged++ < 24) {
@@ -3237,6 +3242,7 @@ bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName
         return false;
     }
     missStreak = 0;
+    ++remoteMixSums_;
     recordRemoteDspRoundTripLocked(result.roundTripMs);
     return true;
 }
@@ -3379,6 +3385,18 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
         ++activeRemoteConsoleStripCount_;
     }
     remoteConsoleStrips_ = std::move(next);
+    remoteStripGr_.clear();
+    projectRenderState_.remoteConsoleGr = remoteConsoleStrips_.empty()
+        ? std::function<bool(const std::string&, float&, float&)>()
+        : [this](const std::string& route, float& compGr, float& gateGr) {
+              const auto found = remoteStripGr_.find(route);
+              if (found == remoteStripGr_.end()) {
+                  return false;
+              }
+              compGr = found->second.first;
+              gateGr = found->second.second;
+              return true;
+          };
     if (getenv("NC_DIAG_REMOTE") != nullptr) {
         fprintf(stderr, "[nc-remote] strips prepared: %zu (nds=%d host=%s role=%s)\n",
                 remoteConsoleStrips_.size(), settings_.remoteDspServer.ndsEnabled ? 1 : 0,
@@ -3465,6 +3483,8 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
         : 2.7;
     settings.timeoutMs = std::max<int>(8, static_cast<int>(std::ceil(bufferLatencyMs + 5.0)));
 
+    const auto streamStatusBefore = found->second.stream != nullptr;
+    (void)streamStatusBefore;
     if (!found->second.stream->process(settings,
                                        interleavedStereo,
                                        found->second.parameters,
@@ -3481,6 +3501,14 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
             }
         }
         return false;
+    }
+    {
+        // GR telemetry rode the reply (ABI-2 console module): keep the latest per strip so the
+        // renderer can feed the needles the local processor no longer runs to feed.
+        const auto streamStatus = found->second.stream->status();
+        if (streamStatus.meterCount >= 2u) {
+            remoteStripGr_[routeName] = {streamStatus.meters[0], streamStatus.meters[1]};
+        }
     }
     interleavedStereo = remoteConsoleProcessedBlock_;
     recordRemoteDspRoundTripLocked(found->second.stream->status().averageRoundTripMs);
