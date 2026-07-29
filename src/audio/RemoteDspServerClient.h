@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -228,6 +229,11 @@ public:
     void reset();
     RemoteDspProcessResult mix(const RemoteDspServerSettings& settings,
                                const std::vector<std::vector<float>>& trackInterleavedStereo,
+                               std::vector<float>& summedInterleavedStereo);
+    /// The realtime renderer collects contributions in a deque (its targets hold pointers into
+    /// it while it grows); this overload takes it as-is.
+    RemoteDspProcessResult mix(const RemoteDspServerSettings& settings,
+                               const std::deque<std::vector<float>>& trackInterleavedStereo,
                                std::vector<float>& summedInterleavedStereo);
 
 private:

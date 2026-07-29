@@ -599,7 +599,7 @@ std::string realtimeInsertGraphSignature(const ProjectAudioRenderPlan& plan,
     out << "remote=" << (remote.enabled ? '1' : '0') << remote.host
         << ";nds=" << (remote.ndsEnabled ? '1' : '0') << remote.ndsHost
         << ";roles=" << remote.roleMonitor << ',' << remote.roleChannelStrip << ','
-        << remote.roleMaster << ',' << remote.roleInserts
+        << remote.roleMaster << ',' << remote.roleInserts << ',' << remote.roleMixer
         << ";overflow=" << (remote.autoOverflow ? '1' : '0') << '\n';
     for (const auto& track : plan.tracks) {
         const auto& c = track.consoleChannel;
@@ -2893,6 +2893,7 @@ bool NeuracoustDspEngine::prepareRealtimeInsertChainLocked(int maxBlockSize, std
     // being wiped by the delayCompensationSamples_ reset that starts the function.
     prepareRemoteConsoleStripsLocked(maxBlockSize);
     prepareRemoteMasterInsertsLocked(maxBlockSize);
+    prepareRemoteMixerLocked();
     realtimeInsertGraphSignature_ = realtimeInsertGraphSignature(projectPlan_, settings_, maxBlockSize);
     error.clear();
     return true;
@@ -3163,6 +3164,65 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
 
 bool NeuracoustDspEngine::remoteMonitorDspRequestedLocked() const {
     return monitorDspModeRequestsRemoteLocked(settings_.monitorDspPathMode);
+}
+
+// The realtime summing buses. Engaged at prepare time (same place the strips and master stages
+// derive), resolved per block on the render thread with a hard 2 ms timeout per bus. Eight
+// consecutive misses back the wire off to one probe every 256 blocks, so a dead node costs the
+// render two milliseconds once, not per block.
+void NeuracoustDspEngine::prepareRemoteMixerLocked() {
+    remoteMixerMode_.clear();
+    projectRenderState_.remoteBusSum = nullptr;
+    const auto& remote = settings_.remoteDspServer;
+    if (remote.roleMixer != "nds" && remote.roleMixer != "external") {
+        realtimeMixSessions_.clear();
+        return;
+    }
+    const std::string mode = remoteDspModeForRole(remote, remote.roleMixer);
+    if (!remoteDspModeAvailable(remote, mode)) {
+        realtimeMixSessions_.clear();
+        return;
+    }
+    remoteMixerMode_ = mode;
+    remoteMixerMissStreak_ = 0;
+    remoteMixerProbeCountdown_ = 0;
+    projectRenderState_.remoteBusSum = [this](const std::string& busName,
+                                              const std::deque<std::vector<float>>& contributions,
+                                              std::vector<float>& summed) {
+        return processRealtimeBusSumLocked(busName, contributions, summed);
+    };
+    message_ = "믹서 합산을 " + remoteMixerMode_ + " 노드로 배정했습니다.";
+}
+
+// Render thread, mutex_ held by the caller (renderInterleavedStereo).
+bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName,
+                                                      const std::deque<std::vector<float>>& contributions,
+                                                      std::vector<float>& summed) {
+    if (remoteMixerMode_.empty() || contributions.empty() || contributions.size() > 64u) {
+        return false;
+    }
+    if (remoteMixerMissStreak_ >= 8) {
+        if (remoteMixerProbeCountdown_ > 0u) {
+            --remoteMixerProbeCountdown_;
+            return false;
+        }
+        remoteMixerProbeCountdown_ = 256u;   // one probe per ~1.4 s at 256/48k
+    }
+    auto& session = realtimeMixSessions_[busName];
+    if (session == nullptr) {
+        session = std::make_unique<RemoteMixSession>();
+    }
+    auto settings = remoteDspSettingsForMode(settings_.remoteDspServer, remoteMixerMode_);
+    settings.channelCount = 2;
+    settings.timeoutMs = 2;   // the local fallback is bit-identical; never bleed the block budget
+    const auto result = session->mix(settings, contributions, summed);
+    if (!result.processed) {
+        ++remoteMixerMissStreak_;
+        return false;
+    }
+    remoteMixerMissStreak_ = 0;
+    recordRemoteDspRoundTripLocked(result.roundTripMs);
+    return true;
 }
 
 // Which master inserts leave the host. All-or-nothing on purpose: the master chain is SERIAL,

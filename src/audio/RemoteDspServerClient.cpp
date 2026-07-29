@@ -804,6 +804,15 @@ RemoteMixSession::~RemoteMixSession() = default;
 void RemoteMixSession::reset() { impl_->reset(); }
 
 RemoteDspProcessResult RemoteMixSession::mix(const RemoteDspServerSettings& settings,
+                                             const std::deque<std::vector<float>>& trackInterleavedStereo,
+                                             std::vector<float>& summedInterleavedStereo) {
+    // One copy into the contiguous shape; ~2 KB per track, ~130 µs at the 64-track ceiling —
+    // cheaper than maintaining two packet builders that could drift apart.
+    std::vector<std::vector<float>> blocks(trackInterleavedStereo.begin(), trackInterleavedStereo.end());
+    return mix(settings, blocks, summedInterleavedStereo);
+}
+
+RemoteDspProcessResult RemoteMixSession::mix(const RemoteDspServerSettings& settings,
                                              const std::vector<std::vector<float>>& trackInterleavedStereo,
                                              std::vector<float>& summedInterleavedStereo) {
     RemoteDspProcessResult result;

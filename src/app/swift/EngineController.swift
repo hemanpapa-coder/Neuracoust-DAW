@@ -3005,9 +3005,9 @@ final class EngineController: ObservableObject {
             }
         }
         /// Whether picking a machine for this job actually changes where the audio is processed.
-        /// Only the monitor routes today; the others are stored intent (amber in the table) until
-        /// their engine paths exist — a row must never quietly do nothing while looking live.
-        var routed: Bool { self == .monitor }
+        /// Monitor and the mixer buses both route now (M2 realtime); a row must never quietly do
+        /// nothing while looking live.
+        var routed: Bool { true }
     }
     /// Bounce through the node (strict). Persisted per user, not per project — it is a workflow
     /// choice about THIS machine's relationship to the node, not part of the song.

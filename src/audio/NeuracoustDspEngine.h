@@ -245,6 +245,21 @@ private:
     void prepareRemoteMasterInsertsLocked(int maxBlockSize);
     bool processRemoteMasterInsertsLocked(std::vector<float>& interleavedStereo);
 
+    /// Remote summing buses in REALTIME (remote-mixer M2): one session per bus, engaged when
+    /// 믹서·버스 resolves to a reachable machine. Synchronous with a short timeout on purpose —
+    /// the local fallback produces bit-identical samples (same buffers, same order), so a missed
+    /// block costs provenance and nothing audible; a one-block async pipeline would instead
+    /// time-shift send paths against direct paths and comb on transients.
+    std::string remoteMixerMode_;
+    std::map<std::string, std::unique_ptr<RemoteMixSession>> realtimeMixSessions_;
+    int remoteMixerMissStreak_ = 0;
+    uint32_t remoteMixerProbeCountdown_ = 0;
+
+    void prepareRemoteMixerLocked();
+    bool processRealtimeBusSumLocked(const std::string& busName,
+                                     const std::deque<std::vector<float>>& contributions,
+                                     std::vector<float>& summed);
+
     void prepareRemoteConsoleStripsLocked(int maxBlockSize);
     /// Declare each remote strip's crossing into the mixer's delay compensation, so a channel
     /// that leaves the host does not simply arrive late against the rest of the mix.
