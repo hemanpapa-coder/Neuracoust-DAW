@@ -2104,40 +2104,43 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     }
     std::map<std::string, std::vector<float>> busBlocks;
     const auto blockSampleCount = static_cast<size_t>(frameCount) * 2u;
-    // Remote summing bus (remote-mixer M1b): with the hook set, every route's contribution to
-    // the Master bus is DIVERTED into its own buffer here, in route-iteration order — the same
-    // order the local accumulator would have added them, which is what makes the node's
-    // ascending-index sum bit-identical. Reserved up front because the edge targets hold raw
-    // pointers into it.
-    const bool collectMasterContributions = static_cast<bool>(state.remoteMasterSum);
-    std::vector<std::vector<float>> masterContributions;
-    bool masterContributionsResolved = false;
-    if (collectMasterContributions) {
-        masterContributions.reserve(graph != nullptr ? graph->routes.size() + 4u : 64u);
-    }
-    const auto resolveMasterContributions = [&]() {
-        if (!collectMasterContributions || masterContributionsResolved) {
+    // Remote summing buses (remote-mixer M2): with the hook set, EVERY bus's contributions —
+    // send taps and direct route outputs alike — are DIVERTED into their own buffers, in exact
+    // local addition order (taps precede a route's direct output; routes follow the iteration
+    // order). Each bus resolves at the point its consumer would first read it: the node's
+    // ascending-index sum, or the same buffers summed locally in the same order on a miss —
+    // which per sample reproduces the undiverted accumulator's addition sequence exactly.
+    // Deques, because the collection targets hold raw pointers into them while they grow.
+    const bool collectBusContributions = static_cast<bool>(state.remoteBusSum);
+    std::map<std::string, std::deque<std::vector<float>>> busContributions;
+    std::set<std::string> busContributionsResolved;
+    const auto divertedBusTarget = [&](const std::string& busName) -> std::vector<float>* {
+        auto& contributions = busContributions[busName];
+        contributions.emplace_back(blockSampleCount, 0.0f);
+        return &contributions.back();
+    };
+    const auto resolveBusContributions = [&](const std::string& busName) {
+        if (!collectBusContributions || !busContributionsResolved.insert(busName).second) {
             return;
         }
-        masterContributionsResolved = true;
-        auto& master = busBlocks["Master"];
-        if (master.size() < blockSampleCount) {
-            master.resize(blockSampleCount, 0.0f);
+        const auto found = busContributions.find(busName);
+        if (found == busContributions.end() || found->second.empty()) {
+            return;
+        }
+        auto& bus = busBlocks[busName];
+        if (bus.size() < blockSampleCount) {
+            bus.resize(blockSampleCount, 0.0f);
         }
         std::vector<float> summed;
-        if (!masterContributions.empty() &&
-            state.remoteMasterSum(masterContributions, summed) &&
-            summed.size() == blockSampleCount) {
+        if (state.remoteBusSum(busName, found->second, summed) && summed.size() == blockSampleCount) {
             for (size_t i = 0; i < blockSampleCount; ++i) {
-                master[i] += summed[i];
+                bus[i] += summed[i];
             }
             return;
         }
-        // Local fallback: same buffers, same ascending order — per sample this reproduces the
-        // exact addition sequence the undiverted accumulator would have performed.
-        for (const auto& contribution : masterContributions) {
+        for (const auto& contribution : found->second) {
             for (size_t i = 0; i < std::min(blockSampleCount, contribution.size()); ++i) {
-                master[i] += contribution[i];
+                bus[i] += contribution[i];
             }
         }
     };
@@ -2174,6 +2177,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     // Destination buffers for the route being mixed. std::map nodes are stable, so a pointer taken
     // here stays valid while later routes add their own buses.
     std::vector<std::pair<std::vector<float>*, bool>> routeEdgeTargets;   // (bus, physicalOutput)
+    std::vector<std::vector<float>*> routeSendTapTargets;   // diverted per-send targets (M2)
     // Scratch buffers reused across routes. These used to be constructed inside the route loop,
     // so a 100-track session performed ~19,000 heap allocations a second ON THE AUDIO THREAD.
     // malloc can take a lock, which is exactly the unbounded pause that shows up as jitter.
@@ -2238,10 +2242,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                 }
             }
         }
-        if (route->kind == MixerRouteKind::Master) {
-            resolveMasterContributions();
-        }
         const std::string receiveBus = !route->inputBus.empty() ? route->inputBus : route->name;
+        resolveBusContributions(receiveBus);
         if (const auto bus = busBlocks.find(receiveBus); bus != busBlocks.end()) {
             for (size_t index = 0; index < std::min(routeInput.size(), bus->second.size()); ++index) {
                 routeInput[index] += bus->second[index];
@@ -2397,6 +2399,17 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
 
         // Resolve where this route's output goes once, not once per sample (see edgesBySource).
+        // Send-tap targets first: within a frame the taps are added before the direct output, so
+        // their contribution buffers must precede the edge's in every bus's deque.
+        routeSendTapTargets.clear();
+        if (collectBusContributions && track != nullptr) {
+            for (const auto& send : track->sends) {
+                if (!send.enabled || send.busName.empty()) {
+                    continue;
+                }
+                routeSendTapTargets.push_back(divertedBusTarget(send.busName));
+            }
+        }
         routeEdgeTargets.clear();
         {
             const auto edgesIt = edgesBySource.find(route->name);
@@ -2406,9 +2419,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                     routeEdgeTargets.emplace_back(nullptr, true);
                     continue;
                 }
-                if (collectMasterContributions && edge->busName == "Master") {
-                    masterContributions.emplace_back(blockSampleCount, 0.0f);
-                    routeEdgeTargets.emplace_back(&masterContributions.back(), false);
+                if (collectBusContributions) {
+                    routeEdgeTargets.emplace_back(divertedBusTarget(edge->busName), false);
                     continue;
                 }
                 auto& sum = busBlocks[edge->busName];
@@ -2456,17 +2468,31 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                                                                       "route:" + route->name,
                                                                       postProcessorFrame,
                                                                       routeDelaySamples);
-            for (const auto& sendTap : processedRoute.sendTaps) {
-                const auto delayedSendFrame = applyRouteDelayCompensation(state.routeDelayLines,
-                                                                         "send:" + route->name + ":" + sendTap.busName,
-                                                                         sendTap.frame,
-                                                                         routeDelaySamples);
-                auto& sum = busBlocks[sendTap.busName];
-                if (sum.size() < blockSampleCount) {
-                    sum.resize(blockSampleCount, 0.0f);
+            {
+                size_t tapIndex = 0;
+                for (const auto& sendTap : processedRoute.sendTaps) {
+                    const auto delayedSendFrame = applyRouteDelayCompensation(state.routeDelayLines,
+                                                                             "send:" + route->name + ":" + sendTap.busName,
+                                                                             sendTap.frame,
+                                                                             routeDelaySamples);
+                    // Diverted when the summing buses collect. Index-aligned with the targets
+                    // built above: the tap SET is stable across frames (enabled is static
+                    // config; only gains automate), which is what makes the mapping safe.
+                    if (collectBusContributions && tapIndex < routeSendTapTargets.size()) {
+                        auto& sum = *routeSendTapTargets[tapIndex];
+                        sum[index] += delayedSendFrame.left;
+                        sum[index + 1u] += delayedSendFrame.right;
+                        ++tapIndex;
+                        continue;
+                    }
+                    ++tapIndex;
+                    auto& sum = busBlocks[sendTap.busName];
+                    if (sum.size() < blockSampleCount) {
+                        sum.resize(blockSampleCount, 0.0f);
+                    }
+                    sum[index] += delayedSendFrame.left;
+                    sum[index + 1u] += delayedSendFrame.right;
                 }
-                sum[index] += delayedSendFrame.left;
-                sum[index + 1u] += delayedSendFrame.right;
             }
 
             if (meters != nullptr && track != nullptr &&
@@ -2493,7 +2519,8 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
     }
 
-    resolveMasterContributions();
+    resolveBusContributions("Master");
+    resolveBusContributions("Monitor");
     if (findTrack(plan, "Master") == nullptr) {
         if (const auto masterBus = busBlocks.find("Master"); masterBus != busBlocks.end()) {
             for (size_t index = 0; index < std::min(interleavedStereo.size(), masterBus->second.size()); ++index) {

@@ -250,6 +250,78 @@ int main(int argc, char** argv) {
                   << flatPeak << ")\n";
     }
 
+    // ── Phase 3: M2 — buses and sends through the summing service, still memcmp. ────────────
+    // Two generator tracks, an aux bus, one track sending to it: three summing buses now (the
+    // aux's receive, the Master), every contribution travelling. Identical files or bust.
+    {
+        ProjectDocument routed = defaultProject();
+        routed.ndsHost = host;
+        routed.ndsEnabled = true;
+        routed.dspRoleMixer = "nds";
+        int voiced = 0;
+        for (auto& track : routed.tracks) {
+            if (track.trackType != "audio") continue;
+            TrackInsertSlot generator;
+            generator.pluginName = "Signal Generator";
+            generator.pluginFormat = "Builtin";
+            generator.enabled = true;
+            generator.dspExecutionMode = "native";
+            generator.parameters = {
+                {0u, "On Off", 1.0f},
+                {1u, "Waveform", 0.0f},
+                {2u, "Frequency", voiced == 0 ? 0.55f : 0.62f},
+                {3u, "Level", 0.8f},
+                {4u, "Channel", 0.5f},
+                {5u, "Polarity", 0.0f},
+            };
+            track.inserts.push_back(generator);
+            if (voiced == 0) {
+                TrackSendState send;
+                send.busName = "Aux 1";
+                send.gainDb = -6.0f;
+                track.sends.push_back(send);
+            }
+            if (++voiced == 2) break;
+        }
+        TrackState aux;
+        aux.name = "Aux 1";
+        aux.trackType = "aux";
+        aux.outputBus = "Master";
+        aux.inputBus.clear();
+        routed.tracks.push_back(aux);
+
+        const std::string routedLocal = (dir / "routed-local.wav").string();
+        const std::string routedRemote = (dir / "routed-remote.wav").string();
+        const auto localRouted = bounceProjectToWav(routed, routedLocal);
+        BounceOptions mixerOptions;
+        mixerOptions.useAssignedRemoteDsp = true;
+        {
+            auto settings = defaultRemoteDspServerSettings();
+            settings.nodes.clear();
+            settings.ndsHost = routed.ndsHost;
+            settings.ndsEnabled = true;
+            settings.roleMixer = routed.dspRoleMixer;
+            mixerOptions.remoteDsp = settings;
+        }
+        const auto remoteRouted = bounceProjectToWav(routed, routedRemote, mixerOptions);
+        if (!localRouted.ok || !remoteRouted.ok) {
+            std::cerr << "bus/send parity: bounce failed — local: " << localRouted.message
+                      << " / remote: " << remoteRouted.message << '\n';
+            return 7;
+        }
+        WavAudioData a;
+        WavAudioData b;
+        std::string wavError3;
+        if (!readPcmWavFile(routedLocal, a, wavError3) || !readPcmWavFile(routedRemote, b, wavError3) ||
+            a.interleavedSamples.size() != b.interleavedSamples.size() ||
+            std::memcmp(a.interleavedSamples.data(), b.interleavedSamples.data(),
+                        a.interleavedSamples.size() * sizeof(float)) != 0) {
+            std::cerr << "BUS/SEND PARITY FAILED — routed remote render differs from local\n";
+            return 7;
+        }
+        std::cout << "bus/send parity: aux + send through the summing service, BIT-IDENTICAL\n";
+    }
+
     // Strictness: an unreachable node must FAIL the bounce, not fall back.
     auto strictProject = project;
     strictProject.ndsHost = badHost;

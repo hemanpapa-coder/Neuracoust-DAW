@@ -913,25 +913,14 @@ public:
             }
         }
 
-        // The summing bus (remote-mixer M1b): engaged when 믹서·버스 is assigned to a remote
-        // machine AND the mix is flat enough for M1 — no sends, no aux/bus tracks. Buses and
-        // sends are M2; a mix the bus cannot express stays local rather than half-remote.
+        // The summing buses (remote-mixer M2): engaged whenever 믹서·버스 is assigned to a
+        // remote machine that answers. Sends and aux/bus tracks are expressible now — every
+        // bus's contributions travel and sum server-side, each bus through its own session.
         {
             const std::string mode = remoteDspModeForRole(base, base.roleMixer);
-            bool flat = remoteDspModeAvailable(base, mode) &&
-                        isRemoteInternalDspExecutionMode("remote_internal");
-            if (flat && (base.roleMixer == "nds" || base.roleMixer == "external")) {
-                for (const auto& track : plan.tracks) {
-                    if (!track.sends.empty() ||
-                        track.trackType == "aux" || track.trackType == "bus" ||
-                        track.trackType == "bus_folder") {
-                        flat = false;
-                        break;
-                    }
-                }
-                if (flat) {
-                    mixerMode_ = mode;
-                }
+            if ((base.roleMixer == "nds" || base.roleMixer == "external") &&
+                remoteDspModeAvailable(base, mode)) {
+                mixerMode_ = mode;
             }
         }
 
@@ -1003,9 +992,10 @@ public:
             };
         }
         if (!mixerMode_.empty()) {
-            state.remoteMasterSum = [this](const std::vector<std::vector<float>>& contributions,
-                                           std::vector<float>& summed) {
-                return processMasterSum(contributions, summed);
+            state.remoteBusSum = [this](const std::string& busName,
+                                        const std::deque<std::vector<float>>& contributions,
+                                        std::vector<float>& summed) {
+                return processBusSum(busName, contributions, summed);
             };
         }
     }
@@ -1127,12 +1117,25 @@ private:
         }
     }
 
-    /// The whole span's Master contributions, summed on the node in 256-frame windows. STRICT
-    /// like everything here: a window the node misses (after retries) poisons the render.
-    bool processMasterSum(const std::vector<std::vector<float>>& contributions,
-                          std::vector<float>& summed) {
+    /// One bus's whole-span contributions, summed on the node in 256-frame windows — each bus
+    /// through its own session, so their banks on the node never collide. STRICT like everything
+    /// here: a window the node misses (after retries) poisons the render, and a bus wider than
+    /// the wire's 64 tracks fails loudly rather than going quietly local.
+    bool processBusSum(const std::string& busName,
+                       const std::deque<std::vector<float>>& contributions,
+                       std::vector<float>& summed) {
         if (failed_ || contributions.empty()) {
             return false;
+        }
+        if (contributions.size() > 64u) {
+            failure_ = "합산 버스 (" + busName + "): 기여 " +
+                       std::to_string(contributions.size()) + "개 — 와이어 한도 64";
+            failed_ = true;
+            return false;
+        }
+        auto& sessionSlot = mixSessions_[busName];
+        if (sessionSlot == nullptr) {
+            sessionSlot = std::make_unique<RemoteMixSession>();
         }
         const size_t totalSamples = contributions.front().size();
         summed.assign(totalSamples, 0.0f);
@@ -1145,17 +1148,18 @@ private:
         std::vector<float> windowSum;
         for (size_t start = 0; start < totalFrames; start += kWireFrames) {
             const size_t frames = std::min(kWireFrames, totalFrames - start);
-            for (size_t track = 0; track < contributions.size(); ++track) {
-                const auto& source = contributions[track];
+            size_t track = 0;
+            for (const auto& source : contributions) {
                 window[track].assign(source.begin() + static_cast<long>(start * 2u),
                                      source.begin() + static_cast<long>((start + frames) * 2u));
+                ++track;
             }
             bool ok = false;
             for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
-                const auto result = mixSession_.mix(settings, window, windowSum);
+                const auto result = sessionSlot->mix(settings, window, windowSum);
                 ok = result.processed && windowSum.size() == frames * 2u;
                 if (!ok) {
-                    failure_ = "합산 버스: " + result.message;
+                    failure_ = "합산 버스 (" + busName + "): " + result.message;
                 }
             }
             if (!ok) {
@@ -1169,7 +1173,7 @@ private:
     }
 
     RemoteDspServerSettings base_;
-    RemoteMixSession mixSession_;
+    std::map<std::string, std::unique_ptr<RemoteMixSession>> mixSessions_;
     std::string mixerMode_;
     std::map<std::string, Strip> strips_;
     std::vector<MasterStage> masterStages_;

@@ -125,15 +125,18 @@ struct ProjectAudioRenderState {
     /// them on the node, after the route's local inserts, in slot order.
     std::function<void(const std::string& routeName, std::vector<float>& interleavedStereo)>
         remoteRouteInserts;
-    /// The remote SUMMING BUS (remote-mixer M1b). When set, every route's contribution to the
-    /// Master bus is collected as its own block instead of being added locally, and the node
-    /// returns the ascending-order sum — bit-exact against the local order, which is why the
-    /// collection order below is the route iteration order and nothing else. Returning false
-    /// makes the renderer sum the SAME collected blocks locally (same order, same result), so
-    /// audio never breaks; the strict bounce flags the failure itself. Null everywhere except a
-    /// strict remote bounce that opted the mixer in.
-    std::function<bool(const std::vector<std::vector<float>>& contributions,
-                       std::vector<float>& summed)> remoteMasterSum;
+    /// The remote SUMMING BUSES (remote-mixer M2). When set, every contribution to every bus —
+    /// direct route outputs AND send taps, Master included — is collected as its own block in
+    /// EXACT local addition order (send taps precede a route's direct output, routes follow the
+    /// iteration order), and the node returns each bus's ascending-order sum, which is therefore
+    /// bit-exact against what the local accumulator would have produced. Returning false makes
+    /// the renderer sum the SAME blocks locally in the SAME order, so audio never breaks; the
+    /// strict bounce flags the failure itself. A deque because the collection targets hold raw
+    /// pointers into it while it grows. Null everywhere except a strict remote bounce that opted
+    /// the mixer in.
+    std::function<bool(const std::string& busName,
+                       const std::deque<std::vector<float>>& contributions,
+                       std::vector<float>& summed)> remoteBusSum;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;
