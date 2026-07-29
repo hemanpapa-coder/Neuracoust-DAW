@@ -86,6 +86,10 @@ private struct ConsoleKnob: View {
     var wheelLog: Bool = false          // if true, wheelStep is octaves/notch, applied multiplicatively
     var logScale: Bool = false          // pointer + drag map logarithmically (frequency knobs)
     var reverse: Bool = false           // high value at the left (e.g. SSL comp threshold)
+    /// Detent positions (rotary-switch feel): drags snap to the nearest entry, a wheel notch moves
+    /// one entry, and a tick ring marks each stop — the Neve/API stepped selectors from the
+    /// "EQ Model Faceplates" design spec. nil = continuous (every existing knob).
+    var steps: [Float]? = nil
     var onChange: (Float) -> Void = { _ in }
     var onCommit: () -> Void = {}
     @State private var dragStart: Float?
@@ -96,13 +100,18 @@ private struct ConsoleKnob: View {
     @State private var valueShown = false
     @State private var fadeWork: DispatchWorkItem?
 
-    private var normalized: Double {
-        let v = Double(liveValue ?? value)
+    private func normalizedFor(_ raw: Float) -> Double {
+        let v = Double(raw)
         let lo = Double(range.lowerBound), hi = Double(range.upperBound)
         if logScale && lo > 0 && hi > lo {
             return (log(max(lo, min(hi, v))) - log(lo)) / (log(hi) - log(lo))
         }
         return (v - lo) / max(0.0001, hi - lo)
+    }
+    private var normalized: Double { normalizedFor(liveValue ?? value) }
+    private func snap(_ v: Float) -> Float {
+        guard let steps, !steps.isEmpty else { return v }
+        return steps.min(by: { abs($0 - v) < abs($1 - v) }) ?? v
     }
     private var valueDeg: Double {
         let n = reverse ? (1 - normalized) : normalized
@@ -122,6 +131,19 @@ private struct ConsoleKnob: View {
                 .fill(color.mid)
                 .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 1))
                 .frame(width: diameter - 8, height: diameter - 8)
+            // Detent tick ring for a stepped knob (design spec: 1px ticks in the faint ink just
+            // outside the bezel), one per stop, so the rotary-switch positions are visible.
+            if let steps {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, stop in
+                    let n = normalizedFor(stop)
+                    let deg = markStart + (reverse ? 1 - n : n) * (markEnd - markStart)
+                    Rectangle()
+                        .fill(Color(hex: 0x6f6d65))
+                        .frame(width: 1.5, height: 5)
+                        .offset(y: -(diameter / 2 + 3.5))
+                        .rotationEffect(.degrees(deg))
+                }
+            }
             // Pointer line, near the rim, in the bezel grey. Grows 3pt further inward (outer end
             // pinned at the rim): height 8→11, centre shifted so only the inner end moves.
             RoundedRectangle(cornerRadius: 1.5)
@@ -162,11 +184,12 @@ private struct ConsoleKnob: View {
                     let dv = Float(-drag.translation.height / 90) * (hi - lo)
                     next = min(hi, max(lo, start + (reverse ? -dv : dv)))
                 }
+                next = snap(next)   // detents: value only changes at a step boundary
                 liveValue = next; onChange(next); flashValue()
             }
             .onEnded { _ in dragStart = nil; liveValue = nil; onCommit() })
         .highPriorityGesture(TapGesture(count: 2).onEnded {
-            onChange(defaultValue); onCommit(); flashValue()
+            onChange(snap(defaultValue)); onCommit(); flashValue()
         })
     }
 
@@ -199,6 +222,20 @@ private struct ConsoleKnob: View {
         guard notches != 0 else { return }
         let dir = Float(notches) * (reverse ? -1 : 1)
         let base = liveValue ?? value
+        // A stepped knob is a rotary switch: one wheel notch = one adjacent stop.
+        if let steps, !steps.isEmpty {
+            let ordered = steps.sorted()
+            let currentIndex = ordered.enumerated().min(by: { abs($0.element - base) < abs($1.element - base) })?.offset ?? 0
+            let next = ordered[max(0, min(ordered.count - 1, currentIndex + (dir > 0 ? 1 : -1)))]
+            liveValue = next
+            onChange(next)
+            flashValue()
+            scrollCommit?.cancel()
+            let work = DispatchWorkItem { onCommit(); liveValue = nil }
+            scrollCommit = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+            return
+        }
         var next: Float
         if wheelLog {
             let oct = wheelStep > 0 ? wheelStep : 1.0 / 12    // default one semitone per notch
@@ -939,6 +976,50 @@ private struct ConsoleModuleChrome<Content: View>: View {
 
 // MARK: - Wired module view
 
+/// How a console model's EQUALISER is OPERATED — from the "EQ Model Faceplates" design spec.
+/// SSL E/G and NC keep continuous knobs; Neve gets stepped frequency selectors; API gets stepped
+/// frequency AND 2 dB-stepped gain. Q knobs disappear for Neve/API (the model fixes the Q — the
+/// engine's family curve does the shaping). Step values are documented-topology approximations,
+/// not measurements; the ENGINE stays continuous, the UI just quantises what it sends.
+private struct EqModelSpec {
+    var hfFreqSteps: [Float]? = nil
+    var hmfFreqSteps: [Float]? = nil
+    var lmfFreqSteps: [Float]? = nil
+    var lfFreqSteps: [Float]? = nil
+    var gainStepDb: Float = 0            // 0 = continuous
+    var gainLimit: Float = 18
+    var hidesQ = false
+    var hfRange: ClosedRange<Float> = 1500...16000
+    var hmfRange: ClosedRange<Float> = 600...7000
+    var lmfRange: ClosedRange<Float> = 400...2500
+    var lfRange: ClosedRange<Float> = 30...450
+
+    var gainSteps: [Float]? {
+        gainStepDb > 0 ? Array(stride(from: -gainLimit, through: gainLimit, by: gainStepDb)) : nil
+    }
+
+    static func forModel(_ raw: String) -> EqModelSpec {
+        let m = raw.lowercased()
+        if m.contains("neve") || m.contains("8078") || m.contains("1073") || m.contains("33609") {
+            return EqModelSpec(hfFreqSteps: [3300, 4700, 6800, 10000, 12000, 16000],
+                               hmfFreqSteps: [1500, 2200, 3300, 4700, 6800],
+                               lmfFreqSteps: [180, 270, 390, 560, 820, 1200],
+                               lfFreqSteps: [33, 56, 100, 180, 330],
+                               gainLimit: 16, hidesQ: true,
+                               lmfRange: 100...2000, lfRange: 30...450)
+        }
+        if m.contains("api") || m.contains("vision") || m.contains("2500") {
+            return EqModelSpec(hfFreqSteps: [2500, 5000, 7500, 10000, 12500, 15000, 20000],
+                               hmfFreqSteps: [800, 1500, 3000, 5000, 7000],
+                               lmfFreqSteps: [100, 200, 300, 500, 700, 1000, 1500],
+                               lfFreqSteps: [30, 40, 50, 100, 200, 300, 400],
+                               gainStepDb: 2, gainLimit: 12, hidesQ: true,
+                               hfRange: 1500...20000, lmfRange: 100...2000)
+        }
+        return EqModelSpec()   // SSL 4000E / 4000G / 9000K / NC: continuous, current layout
+    }
+}
+
 struct NeuracoustConsoleModulesView: View {
     @EnvironmentObject private var trackMeters: EngineController.TrackMeters
     let module: MixerModuleFocus
@@ -1031,13 +1112,14 @@ struct NeuracoustConsoleModulesView: View {
                       unitAtZero: Bool = false, dotDiameter: CGFloat = 0, dimpleSize: CGFloat = 8,
                       extraBottom: CGFloat = 0, centerFormat: ((Float) -> String)? = nil,
                       wheelStep: Float = 0, wheelLog: Bool = false, logScale: Bool = false,
-                      reverse: Bool = false, unitAbove: Bool = false) -> some View {
+                      reverse: Bool = false, unitAbove: Bool = false, steps: [Float]? = nil) -> some View {
         ConsoleKnob(color: color, marks: marks, markRadius: markRadius, unit: unit,
                     value: engine.consoleValue(trackId, param), range: range, defaultValue: def,
                     diameter: diameter, markFont: markFont, unitFont: unitFont, unitAtZero: unitAtZero, unitAbove: unitAbove,
                     dotDiameter: dotDiameter, dimpleSize: dimpleSize,
                     extraBottom: extraBottom, centerFormat: centerFormat,
                     wheelStep: wheelStep, wheelLog: wheelLog, logScale: logScale, reverse: reverse,
+                    steps: steps,
                     onChange: { engine.setConsoleValue(trackId, param, $0) },
                     onCommit: { engine.recordGesture("4000E \(param)") })
     }
@@ -1096,18 +1178,34 @@ struct NeuracoustConsoleModulesView: View {
             // The response curve lives in the strip's "EQ · 스펙트럼" visualiser panel now
             // (ConsoleVizStrip), which draws filter + EQ together — one graph, not two.
             // Gain: -/0/+ text. Freq: two end numbers + live value. Q: narrow/wide bell icons.
+            // The MODEL decides the controls (EqModelSpec): Neve/API get stepped selectors and
+            // lose their Q knobs — the engine's family curve fixes the Q for them.
+            let spec = EqModelSpec.forModel(
+                engine.tracks.first(where: { $0.id == trackId })?.consoleModel ?? "")
             let lx: CGFloat = 58, rx: CGFloat = 148, sz: CGFloat = 112
             ZStack {
-                placed(lx, 52, eqGain("eqHfGainDb", .red), size: sz)
-                placed(rx, 106, eqFreq("eqHfHz", 1500...16000, 8000, .red, ["1.5", "16"], "kHz"), size: sz)
-                placed(lx, 162, eqGain("eqHmfGainDb", .green), size: sz)
-                placed(rx, 216, eqFreq("eqHmfHz", 600...7000, 3000, .green, [".6", "7"], "kHz"), size: sz)
-                placed(lx, 272, eqQ("eqHmfQ", .green), size: sz)
-                placed(rx, 326, eqQ("eqLmfQ", .blue), size: sz)
-                placed(lx, 382, eqGain("eqLmfGainDb", .blue), size: sz)
-                placed(rx, 436, eqFreq("eqLmfHz", 400...2500, 1000, .blue, [".4", "2.5"], "kHz"), size: sz)
-                placed(lx, 492, eqGain("eqLfGainDb", .brown), size: sz)
-                placed(rx, 546, eqFreq("eqLfHz", 30...450, 200, .brown, ["30", "450"], "Hz"), size: sz)
+                placed(lx, 52, eqGain("eqHfGainDb", .red, spec), size: sz)
+                placed(rx, 106, eqFreq("eqHfHz", spec.hfRange, 8000, .red,
+                                       ["1.5", spec.hfRange.upperBound >= 20000 ? "20" : "16"], "kHz",
+                                       steps: spec.hfFreqSteps), size: sz)
+                placed(lx, 162, eqGain("eqHmfGainDb", .green, spec), size: sz)
+                placed(rx, 216, eqFreq("eqHmfHz", spec.hmfRange, 3000, .green, [".6", "7"], "kHz",
+                                       steps: spec.hmfFreqSteps), size: sz)
+                if spec.hidesQ {
+                    fixedQCaption.position(x: lx, y: 272)
+                    fixedQCaption.position(x: rx, y: 326)
+                } else {
+                    placed(lx, 272, eqQ("eqHmfQ", .green), size: sz)
+                    placed(rx, 326, eqQ("eqLmfQ", .blue), size: sz)
+                }
+                placed(lx, 382, eqGain("eqLmfGainDb", .blue, spec), size: sz)
+                placed(rx, 436, eqFreq("eqLmfHz", spec.lmfRange, 1000, .blue,
+                                       [spec.lmfRange.lowerBound <= 100 ? ".1" : ".4",
+                                        spec.lmfRange.upperBound >= 2000 ? "2" : "2.5"], "kHz",
+                                       steps: spec.lmfFreqSteps), size: sz)
+                placed(lx, 492, eqGain("eqLfGainDb", .brown, spec), size: sz)
+                placed(rx, 546, eqFreq("eqLfHz", spec.lfRange, 200, .brown, ["30", "450"], "Hz",
+                                       steps: spec.lfFreqSteps), size: sz)
                 bellButton("eqHfBell", on: engine.consoleBool(trackId, "eqHfBell")).position(x: rx, y: 25)
                 bellButton("eqLfBell", on: engine.consoleBool(trackId, "eqLfBell")).position(x: lx, y: 560)
                 circuitChip(.eq).position(x: lx, y: 596)   // below the left (LF) bell button
@@ -1117,16 +1215,28 @@ struct NeuracoustConsoleModulesView: View {
         }
     }
 
+    // Where the Q knobs sit for SSL/NC, Neve/API show why they are gone.
+    private var fixedQCaption: some View {
+        VStack(spacing: 2) {
+            Text("Q").font(.system(size: 13, weight: .bold, design: .monospaced))
+            Text("모델 고정").font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(Color(hex: 0x6f6d65))
+    }
+
     // EQ knob categories. Shared: 60pt body, 14pt labels, 5pt dots 2pt off the rim.
-    private func eqGain(_ param: String, _ color: ConsoleKnobColor) -> some View {
-        knob(param, -18...18, 0, color, marks: gainMarks, unit: "",
-             diameter: 73, markFont: 15, centerFormat: Self.dbLabel, wheelStep: 1)   // 1 dB per notch
+    private func eqGain(_ param: String, _ color: ConsoleKnobColor, _ spec: EqModelSpec) -> some View {
+        knob(param, -spec.gainLimit...spec.gainLimit, 0, color, marks: gainMarks, unit: "",
+             diameter: 73, markFont: 15, centerFormat: Self.dbLabel,
+             wheelStep: max(1, spec.gainStepDb), steps: spec.gainSteps)   // 1 dB (or a 2 dB detent) per notch
     }
     private func eqFreq(_ param: String, _ range: ClosedRange<Float>, _ def: Float,
-                        _ color: ConsoleKnobColor, _ marks: [String], _ unit: String) -> some View {
+                        _ color: ConsoleKnobColor, _ marks: [String], _ unit: String,
+                        steps: [Float]? = nil) -> some View {
         knob(param, range, def, color, marks: marks, unit: unit, markRadius: 14,
              diameter: 73, markFont: 15, unitFont: 15,
-             centerFormat: Self.freqLabel, wheelLog: true, logScale: true)   // log pointer + semitone wheel
+             centerFormat: Self.freqLabel, wheelLog: true, logScale: true,
+             steps: steps)   // log pointer + semitone wheel; stepped models snap to their selector
     }
     private func eqQ(_ param: String, _ color: ConsoleKnobColor) -> some View {
         // Reversed: turning toward the wide-bell side lowers Q, narrow side raises it (SSL feel).

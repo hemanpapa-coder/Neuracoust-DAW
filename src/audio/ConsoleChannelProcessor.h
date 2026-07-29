@@ -38,7 +38,9 @@ private:
         void lowPass(double sr, float hz);
         void clear() { z1 = z2 = 0; }
     };
-    std::array<std::array<Biquad, 6>, 2> eq_;
+    // 0 HP · 1 LP · 2 HF · 3 HMF · 4 LMF · 5 LF · 6/7 model companions (shelf overshoot /
+    // inductor dip). The companions sit at unity for models that have no such behaviour.
+    std::array<std::array<Biquad, 8>, 2> eq_;
     std::array<float, 2> compDetector_ {0, 0};
     std::array<float, 2> gateDetector_ {0, 0};
     std::array<float, 2> compGainDb_ {0, 0};

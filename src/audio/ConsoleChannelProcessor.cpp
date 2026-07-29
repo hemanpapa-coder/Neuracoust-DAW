@@ -59,6 +59,39 @@ const char* consoleModelFamilyName(int family) {
         default: return "4000e";
     }
 }
+// How a console family's EQ SECTION behaves — the curve the same knob position produces, which
+// is where the classics actually differ (the comp/gate timing lives in ConsoleModelChar). All
+// documented-topology approximations, not measurements: proportional Q is the published API 550
+// behaviour, the shelf overshoot dip is the published SSL G curve, the LF dip is the Neve
+// inductor shelf. Bounded so no setting can leave the strip's safe range.
+struct EqModelChar {
+    float bellQScale = 1.0f;        // <1 = broader bells than dialled (Neve)
+    float bellQGainCoupling = 0.0f; // 0 = constant Q; 1 = fully proportional Q (API)
+    float shelfOvershoot = 0.0f;    // opposing dip beside a shelf corner (SSL G)
+    float lfInductorDip = 0.0f;     // resonant dip above the LF shelf corner (Neve)
+    float cutNarrower = 0.0f;       // cuts run narrower than boosts (Neve/API practice)
+};
+EqModelChar eqModelChar(int family) {
+    switch (family) {
+        case 1: return {0.85f, 0.35f, 0.22f, 0.00f, 0.00f};  // SSL G: gentler, overshoot shelves
+        case 2: return {0.60f, 0.00f, 0.00f, 0.16f, 0.25f};  // Neve: broad bells, inductor LF
+        case 3: return {1.00f, 1.00f, 0.00f, 0.00f, 0.35f};  // API: proportional Q
+        case 4: return {1.00f, 0.00f, 0.00f, 0.00f, 0.00f};  // NC: exactly as dialled
+        default: return {};                                   // SSL E baseline
+    }
+}
+// Effective bell Q for a family: scaled, optionally gain-coupled (broad at low gain, narrower
+// than dialled at high gain — proportional Q), cuts optionally narrower than boosts.
+float bellQFor(float q, float gainDb, const EqModelChar& ec) {
+    float effective = q * ec.bellQScale;
+    if (ec.bellQGainCoupling > 0.0f) {
+        const float t = clamp(std::abs(gainDb) / 15.0f, 0.0f, 1.0f);
+        const float proportional = 0.30f + 1.10f * t;
+        effective *= (1.0f - ec.bellQGainCoupling) + ec.bellQGainCoupling * proportional;
+    }
+    if (ec.cutNarrower > 0.0f && gainDb < 0.0f) effective *= 1.0f + ec.cutNarrower;
+    return clamp(effective, 0.15f, 12.0f);
+}
 ConsoleModelChar modelChar(const std::string& m) {
     ConsoleModelChar c;
     switch (consoleModelFamily(m)) {
@@ -226,17 +259,28 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
     const float freqBias = 1.0f + biasVal(p.channelBiasSeed, 30) * bd * 0.01f;   // ±1% EQ centres
     const float gainTrim = dbToGain(biasVal(p.channelBiasSeed, 31) * bd * 0.2f); // ±0.2 dB trim
     // Coefficients are set from the live params here; the Biquad ramps to them per sample.
+    // The EQ curves themselves are voiced by the console model: same knobs, family-true response.
+    const EqModelChar ec = eqModelChar(consoleModelFamily(p.model));
     for (auto& ch : eq_) {
         ch[0].highPass(sr, p.highPassHz * freqBias);
         ch[1].lowPass(sr, p.lowPassHz * freqBias);
-        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz * freqBias, 0.7f, p.eqHfGainDb);
+        if (p.eqHfBell) ch[2].peak(sr, p.eqHfHz * freqBias, bellQFor(0.7f, p.eqHfGainDb, ec), p.eqHfGainDb);
         else ch[2].shelf(sr, p.eqHfHz * freqBias, p.eqHfGainDb, true);
         const float hmfQ = p.eqEMode ? p.eqHmfQ : std::max(0.2f, p.eqHmfQ * 0.7f);
         const float lmfQ = p.eqEMode ? p.eqLmfQ : std::max(0.2f, p.eqLmfQ * 0.7f);
-        ch[3].peak(sr, p.eqHmfHz * freqBias, hmfQ, p.eqHmfGainDb);
-        ch[4].peak(sr, p.eqLmfHz * freqBias, lmfQ, p.eqLmfGainDb);
-        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz * freqBias, 0.7f, p.eqLfGainDb);
+        ch[3].peak(sr, p.eqHmfHz * freqBias, bellQFor(hmfQ, p.eqHmfGainDb, ec), p.eqHmfGainDb);
+        ch[4].peak(sr, p.eqLmfHz * freqBias, bellQFor(lmfQ, p.eqLmfGainDb, ec), p.eqLmfGainDb);
+        if (p.eqLfBell) ch[5].peak(sr, p.eqLfHz * freqBias, bellQFor(0.7f, p.eqLfGainDb, ec), p.eqLfGainDb);
         else ch[5].shelf(sr, p.eqLfHz * freqBias, p.eqLfGainDb, false);
+        // Companions: the LF slot carries the SSL G shelf overshoot and/or the Neve inductor
+        // dip (both an opposing peak above the shelf corner); the HF slot carries the G
+        // overshoot below its corner. Zero-gain peaks (identity) for every other family.
+        const float lfDip = (!p.eqLfBell) ? (ec.shelfOvershoot + ec.lfInductorDip) : 0.0f;
+        ch[6].peak(sr, clamp(p.eqLfHz * 2.2f, 40.0f, 2000.0f) * freqBias, 1.2f,
+                   -lfDip * p.eqLfGainDb);
+        const float hfDip = (!p.eqHfBell) ? ec.shelfOvershoot : 0.0f;
+        ch[7].peak(sr, clamp(p.eqHfHz * 0.45f, 400.0f, 12000.0f) * freqBias, 1.2f,
+                   -hfDip * p.eqHfGainDb);
     }
     // Per-model DSP character voices the shared comp/gate as a named classic (SSL E/G, Neve, API, …),
     // then the channel bias nudges each so no two strips are bit-identical.
@@ -270,8 +314,8 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 }
                 if (p.filterCircuitMode) { l=circuitStage(l,0.35f,mc.harmonic); r=circuitStage(r,0.35f,mc.harmonic); }
             } else if (module=="eq" && p.eqEnabled) {
-                for(size_t b=2;b<6;++b)l=eq_[0][b].process(l);
-                for(size_t b=2;b<6;++b)r=eq_[1][b].process(r);
+                for(size_t b=2;b<8;++b)l=eq_[0][b].process(l);
+                for(size_t b=2;b<8;++b)r=eq_[1][b].process(r);
                 if (p.eqCircuitMode) { l=circuitStage(l,0.55f,mc.harmonic); r=circuitStage(r,0.55f,mc.harmonic); }
             } else if (module=="comp" && p.compEnabled) {
                 const float dryL = l, dryR = r;
