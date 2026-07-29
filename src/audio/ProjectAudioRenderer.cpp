@@ -2104,6 +2104,43 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
     }
     std::map<std::string, std::vector<float>> busBlocks;
     const auto blockSampleCount = static_cast<size_t>(frameCount) * 2u;
+    // Remote summing bus (remote-mixer M1b): with the hook set, every route's contribution to
+    // the Master bus is DIVERTED into its own buffer here, in route-iteration order — the same
+    // order the local accumulator would have added them, which is what makes the node's
+    // ascending-index sum bit-identical. Reserved up front because the edge targets hold raw
+    // pointers into it.
+    const bool collectMasterContributions = static_cast<bool>(state.remoteMasterSum);
+    std::vector<std::vector<float>> masterContributions;
+    bool masterContributionsResolved = false;
+    if (collectMasterContributions) {
+        masterContributions.reserve(graph != nullptr ? graph->routes.size() + 4u : 64u);
+    }
+    const auto resolveMasterContributions = [&]() {
+        if (!collectMasterContributions || masterContributionsResolved) {
+            return;
+        }
+        masterContributionsResolved = true;
+        auto& master = busBlocks["Master"];
+        if (master.size() < blockSampleCount) {
+            master.resize(blockSampleCount, 0.0f);
+        }
+        std::vector<float> summed;
+        if (!masterContributions.empty() &&
+            state.remoteMasterSum(masterContributions, summed) &&
+            summed.size() == blockSampleCount) {
+            for (size_t i = 0; i < blockSampleCount; ++i) {
+                master[i] += summed[i];
+            }
+            return;
+        }
+        // Local fallback: same buffers, same ascending order — per sample this reproduces the
+        // exact addition sequence the undiverted accumulator would have performed.
+        for (const auto& contribution : masterContributions) {
+            for (size_t i = 0; i < std::min(blockSampleCount, contribution.size()); ++i) {
+                master[i] += contribution[i];
+            }
+        }
+    };
     // Resolve every route and track by name ONCE. Both lookups used to be linear scans run inside
     // the per-route loop, so a session's cost grew with the square of its track count: 100 empty
     // tracks took 5.5 ms a block — past the 5.3 ms deadline with no audio and no DSP in the
@@ -2200,6 +2237,9 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                     routeInput[index] += instrumentIt->second[index];
                 }
             }
+        }
+        if (route->kind == MixerRouteKind::Master) {
+            resolveMasterContributions();
         }
         const std::string receiveBus = !route->inputBus.empty() ? route->inputBus : route->name;
         if (const auto bus = busBlocks.find(receiveBus); bus != busBlocks.end()) {
@@ -2366,6 +2406,11 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
                     routeEdgeTargets.emplace_back(nullptr, true);
                     continue;
                 }
+                if (collectMasterContributions && edge->busName == "Master") {
+                    masterContributions.emplace_back(blockSampleCount, 0.0f);
+                    routeEdgeTargets.emplace_back(&masterContributions.back(), false);
+                    continue;
+                }
                 auto& sum = busBlocks[edge->busName];
                 if (sum.size() < blockSampleCount) {
                     sum.resize(blockSampleCount, 0.0f);
@@ -2448,6 +2493,7 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
     }
 
+    resolveMasterContributions();
     if (findTrack(plan, "Master") == nullptr) {
         if (const auto masterBus = busBlocks.find("Master"); masterBus != busBlocks.end()) {
             for (size_t index = 0; index < std::min(interleavedStereo.size(), masterBus->second.size()); ++index) {

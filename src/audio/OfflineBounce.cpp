@@ -913,6 +913,28 @@ public:
             }
         }
 
+        // The summing bus (remote-mixer M1b): engaged when 믹서·버스 is assigned to a remote
+        // machine AND the mix is flat enough for M1 — no sends, no aux/bus tracks. Buses and
+        // sends are M2; a mix the bus cannot express stays local rather than half-remote.
+        {
+            const std::string mode = remoteDspModeForRole(base, base.roleMixer);
+            bool flat = remoteDspModeAvailable(base, mode) &&
+                        isRemoteInternalDspExecutionMode("remote_internal");
+            if (flat && (base.roleMixer == "nds" || base.roleMixer == "external")) {
+                for (const auto& track : plan.tracks) {
+                    if (!track.sends.empty() ||
+                        track.trackType == "aux" || track.trackType == "bus" ||
+                        track.trackType == "bus_folder") {
+                        flat = false;
+                        break;
+                    }
+                }
+                if (flat) {
+                    mixerMode_ = mode;
+                }
+            }
+        }
+
         // Master inserts, all-or-nothing on one machine (the chain is serial) — the same rule the
         // realtime engine applies. A chain that cannot fully offload fails STRICT mode loudly.
         std::string masterMode;
@@ -957,7 +979,8 @@ public:
     }
 
     bool anythingRemote() const {
-        return !strips_.empty() || !masterStages_.empty() || !routeInserts_.empty();
+        return !strips_.empty() || !masterStages_.empty() || !routeInserts_.empty() ||
+               !mixerMode_.empty();
     }
     bool failed() const { return failed_; }
     const std::string& failure() const { return failure_; }
@@ -977,6 +1000,12 @@ public:
         if (!routeInserts_.empty()) {
             state.remoteRouteInserts = [this](const std::string& route, std::vector<float>& block) {
                 processRouteInserts(route, block);
+            };
+        }
+        if (!mixerMode_.empty()) {
+            state.remoteMasterSum = [this](const std::vector<std::vector<float>>& contributions,
+                                           std::vector<float>& summed) {
+                return processMasterSum(contributions, summed);
             };
         }
     }
@@ -1098,7 +1127,50 @@ private:
         }
     }
 
+    /// The whole span's Master contributions, summed on the node in 256-frame windows. STRICT
+    /// like everything here: a window the node misses (after retries) poisons the render.
+    bool processMasterSum(const std::vector<std::vector<float>>& contributions,
+                          std::vector<float>& summed) {
+        if (failed_ || contributions.empty()) {
+            return false;
+        }
+        const size_t totalSamples = contributions.front().size();
+        summed.assign(totalSamples, 0.0f);
+        constexpr size_t kWireFrames = 256;
+        const size_t totalFrames = totalSamples / 2u;
+        auto settings = remoteDspSettingsForMode(base_, mixerMode_);
+        settings.channelCount = 2;
+        settings.timeoutMs = 250;
+        std::vector<std::vector<float>> window(contributions.size());
+        std::vector<float> windowSum;
+        for (size_t start = 0; start < totalFrames; start += kWireFrames) {
+            const size_t frames = std::min(kWireFrames, totalFrames - start);
+            for (size_t track = 0; track < contributions.size(); ++track) {
+                const auto& source = contributions[track];
+                window[track].assign(source.begin() + static_cast<long>(start * 2u),
+                                     source.begin() + static_cast<long>((start + frames) * 2u));
+            }
+            bool ok = false;
+            for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+                const auto result = mixSession_.mix(settings, window, windowSum);
+                ok = result.processed && windowSum.size() == frames * 2u;
+                if (!ok) {
+                    failure_ = "합산 버스: " + result.message;
+                }
+            }
+            if (!ok) {
+                failed_ = true;
+                return false;
+            }
+            std::copy(windowSum.begin(), windowSum.end(),
+                      summed.begin() + static_cast<long>(start * 2u));
+        }
+        return true;
+    }
+
     RemoteDspServerSettings base_;
+    RemoteMixSession mixSession_;
+    std::string mixerMode_;
     std::map<std::string, Strip> strips_;
     std::vector<MasterStage> masterStages_;
     std::map<std::string, std::vector<InsertStage>> routeInserts_;

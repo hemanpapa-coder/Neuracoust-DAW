@@ -17,6 +17,7 @@
 #include "project/ProjectDocument.h"
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
@@ -176,6 +177,78 @@ int main(int argc, char** argv) {
         return 5;
     }
     std::cout << "remote render is alive (insert path included)\n";
+
+    // ── Phase 2: the M1b parity gate — remote MIXER ONLY, and the judge is memcmp. ──────────
+    // Two generator tracks, no console modules, no inserts: the only thing that differs between
+    // the two renders is WHERE the summing happened, and the summing bus is bit-exact, so the
+    // files must be IDENTICAL. Any deviation at all is an ordering or windowing bug.
+    {
+        ProjectDocument flat = defaultProject();
+        flat.ndsHost = host;
+        flat.ndsEnabled = true;
+        flat.dspRoleMixer = "nds";
+        int voiced = 0;
+        for (auto& track : flat.tracks) {
+            if (track.trackType != "audio") continue;
+            TrackInsertSlot generator;
+            generator.pluginName = "Signal Generator";
+            generator.pluginFormat = "Builtin";
+            generator.enabled = true;
+            generator.dspExecutionMode = "native";
+            generator.parameters = {
+                {0u, "On Off", 1.0f},
+                {1u, "Waveform", 0.0f},
+                {2u, "Frequency", voiced == 0 ? 0.55f : 0.62f},
+                {3u, "Level", 0.8f},
+                {4u, "Channel", 0.5f},
+                {5u, "Polarity", 0.0f},
+            };
+            track.inserts.push_back(generator);
+            if (++voiced == 2) break;
+        }
+        const std::string flatLocal = (dir / "flat-local.wav").string();
+        const std::string flatRemote = (dir / "flat-remote.wav").string();
+        const auto localFlat = bounceProjectToWav(flat, flatLocal);
+        BounceOptions mixerOptions;
+        mixerOptions.useAssignedRemoteDsp = true;
+        {
+            auto settings = defaultRemoteDspServerSettings();
+            settings.nodes.clear();
+            settings.ndsHost = flat.ndsHost;
+            settings.ndsEnabled = true;
+            settings.roleMixer = flat.dspRoleMixer;
+            mixerOptions.remoteDsp = settings;
+        }
+        const auto remoteFlat = bounceProjectToWav(flat, flatRemote, mixerOptions);
+        if (!localFlat.ok || !remoteFlat.ok) {
+            std::cerr << "mixer parity: bounce failed — local: " << localFlat.message
+                      << " / remote: " << remoteFlat.message << '\n';
+            return 6;
+        }
+        WavAudioData a;
+        WavAudioData b;
+        std::string wavError2;
+        if (!readPcmWavFile(flatLocal, a, wavError2) || !readPcmWavFile(flatRemote, b, wavError2) ||
+            a.interleavedSamples.size() != b.interleavedSamples.size()) {
+            std::cerr << "mixer parity: could not read the renders back\n";
+            return 6;
+        }
+        if (std::memcmp(a.interleavedSamples.data(), b.interleavedSamples.data(),
+                        a.interleavedSamples.size() * sizeof(float)) != 0) {
+            std::cerr << "MIXER PARITY FAILED — node-summed render differs from the local one\n";
+            return 6;
+        }
+        double flatPeak = 0.0;
+        for (const float sample : a.interleavedSamples) {
+            flatPeak = std::max(flatPeak, std::abs(static_cast<double>(sample)));
+        }
+        if (flatPeak < 0.01) {
+            std::cerr << "mixer parity: renders are silent — the gate proved nothing\n";
+            return 6;
+        }
+        std::cout << "mixer parity: node-summed bounce is BIT-IDENTICAL to the local render (peak "
+                  << flatPeak << ")\n";
+    }
 
     // Strictness: an unreachable node must FAIL the bounce, not fall back.
     auto strictProject = project;

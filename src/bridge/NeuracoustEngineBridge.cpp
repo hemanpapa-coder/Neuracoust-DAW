@@ -470,6 +470,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     settings.roleMonitor = project.dspRoleMonitor;
     settings.roleChannelStrip = project.dspRoleChannelStrip;
     settings.roleMaster = project.dspRoleMaster;
+    settings.roleMixer = project.dspRoleMixer;
     settings.roleInserts = project.dspRoleInserts;
     settings.autoOverflow = project.dspAutoOverflow;
     settings.nodes.clear();
@@ -497,6 +498,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     settings.roleMonitor = engine->project.dspRoleMonitor;
     settings.roleChannelStrip = engine->project.dspRoleChannelStrip;
     settings.roleMaster = engine->project.dspRoleMaster;
+    settings.roleMixer = engine->project.dspRoleMixer;
     settings.roleInserts = engine->project.dspRoleInserts;
     settings.autoOverflow = engine->project.dspAutoOverflow;
     settings.nodes.clear();
