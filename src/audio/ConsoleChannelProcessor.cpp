@@ -39,22 +39,49 @@ struct ConsoleModelChar {
     float harmonic = 0.5f;        // 0 = edgy/3rd, 1 = warm/2nd
 };
 bool has(const std::string& s, const char* k) { return s.find(k) != std::string::npos; }
+// The model/comp/gate selections are STRINGS in the project, but the wire to a remote node
+// carries floats — so a model rides as its FAMILY index (wire 39..41). The substring matching
+// here is the single source of truth for both modelChar() and the wire encode, so a string and
+// its decoded family name can never voice differently.
+int consoleModelFamily(const std::string& m) {
+    if (has(m, "4000G") || has(m, "4000 G") || has(m, "G Series") || has(m, "9000")) return 1;
+    if (has(m, "Neve") || has(m, "33609") || has(m, "88") || has(m, "8078") || has(m, "1073")) return 2;
+    if (has(m, "API") || has(m, "2500") || has(m, "Vision")) return 3;
+    if (has(m, "Neuracoust") || has(m, "NC") || has(m, "Clean") || has(m, "Transparent")) return 4;
+    return 0;   // SSL 4000E baseline
+}
+const char* consoleModelFamilyName(int family) {
+    switch (family) {
+        case 1: return "SSL 4000G";
+        case 2: return "Neve 8078";
+        case 3: return "API Vision";
+        case 4: return "Neuracoust NC";
+        default: return "4000e";
+    }
+}
 ConsoleModelChar modelChar(const std::string& m) {
     ConsoleModelChar c;
-    if (has(m, "4000G") || has(m, "4000 G") || has(m, "G Series") || has(m, "9000")) {
+    switch (consoleModelFamily(m)) {
+    case 1:
         // SSL G/9K: smoother than the E — a touch slower, softer knee, gentler drive.
         c = {1.15f, 1.35f, 3.0f, 0.62f, 1.2f, 1.3f, 0.55f};
-    } else if (has(m, "Neve") || has(m, "33609") || has(m, "88") || has(m, "8078") || has(m, "1073")) {
+        break;
+    case 2:
         // Neve diode-bridge: slow musical attack, long program-dependent release, soft knee, warm.
         c = {1.7f, 1.9f, 5.0f, 0.95f, 1.5f, 1.7f, 0.85f};
-    } else if (has(m, "API") || has(m, "2500") || has(m, "Vision")) {
+        break;
+    case 3:
         // API VCA "thrust": fast, punchy, hard-ish knee, edgy 3rd-harmonic.
         c = {0.7f, 0.85f, 0.8f, 0.85f, 0.8f, 0.9f, 0.30f};
-    } else if (has(m, "Neuracoust") || has(m, "NC") || has(m, "Clean") || has(m, "Transparent")) {
+        break;
+    case 4:
         // Neuracoust NC: clean/transparent — minimal colour, medium knee.
         c = {1.0f, 1.0f, 2.0f, 0.20f, 1.0f, 1.0f, 0.5f};
+        break;
+    default:
+        // SSL 4000E: punchy VCA — the previous baseline.
+        break;
     }
-    // default (SSL 4000E): punchy VCA — the previous baseline.
     return c;
 }
 
@@ -186,11 +213,12 @@ void ConsoleChannelProcessor::reset(double sr) {
 void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio,
                                                         const ConsoleChannelState& p,
                                                         double sr) {
-    // "4001e" is the legacy project identifier used before the built-in
-    // channel model was renamed. Keep it render-compatible on first load.
-    if ((p.model != "4000e" && p.model != "4001e") ||
-        (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
-         !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR)) return;
+    // Any model string processes — modelChar() voices the known families and defaults the rest
+    // to the SSL E baseline. This used to demand exactly "4000e"/"4001e", from before the model
+    // library existed; picking ANY model from the plate (the UI stores "SSL 4000G", "Neve 8078",
+    // even "SSL 4000E") silently bypassed the whole strip while its lamps kept shining.
+    if (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
+        !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR) return;
     if (sampleRate_ != sr) reset(sr);
     // Analog-console channel variation: a tiny per-strip EQ-frequency drift and an output trim,
     // both deterministic from the channel seed (no-op at depth 0). modelChar gets nudged too below.
@@ -342,6 +370,7 @@ ConsoleParameterRange consoleParameterRange(int index) {
         case 25: return {0.01f, 100.0f};       // gateAttackMs
         case 28: return {0.0f, 24.0f};         // saturatorDriveDb
         case 37: return {0.0f, 511.0f};        // channelBiasSeed (512 channels)
+        case 39: case 40: case 41: return {0.0f, 15.0f};   // model family indices
         default: return kUnit;                 // flags, mixes, bias depth
     }
 }
@@ -378,6 +407,11 @@ std::vector<ConsoleChannelParameter> consoleChannelParameterValues(const Console
         {32, flag(p.compFastAttack)},  {33, flag(p.gateFastAttack)},
         {34, flag(p.compCircuitMode)}, {35, flag(p.eqCircuitMode)},  {36, flag(p.saturatorCircuitMode)},
         {37, static_cast<float>(p.channelBiasSeed)},                 {38, p.channelBiasDepth},
+        // The console/comp/gate model selections, as family indices — before these rode the
+        // wire, a remote strip always processed with the SSL E character whatever the plate said.
+        {39, static_cast<float>(consoleModelFamily(p.model))},
+        {40, static_cast<float>(consoleModelFamily(p.compType))},
+        {41, static_cast<float>(consoleModelFamily(p.gateType))},
     };
     std::vector<ConsoleChannelParameter> values;
     values.reserve(std::size(raw));
@@ -430,6 +464,9 @@ void applyConsoleChannelParameter(ConsoleChannelState& p, int index, float norma
         case 36: p.saturatorCircuitMode = on; break;
         case 37: p.channelBiasSeed = static_cast<int>(value + 0.5f); break;
         case 38: p.channelBiasDepth = value; break;
+        case 39: p.model = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
+        case 40: p.compType = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
+        case 41: p.gateType = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
         default: break;
     }
 }

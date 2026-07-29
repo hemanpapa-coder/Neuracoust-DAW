@@ -669,6 +669,13 @@ target_link_libraries(neuracoust_remote_bounce_probe PRIVATE neuracoust_daw_core
 add_executable(neuracoust_remote_mix_probe tools/remote_mix_probe.cpp)
 target_link_libraries(neuracoust_remote_mix_probe PRIVATE neuracoust_daw_core)
 
+# Realtime-path console audibility: comp must duck, EQ must lift, headless, local or NDS.
+# No-arg = fully offline, so it runs in ctest; pass a host to also exercise the remote strips.
+# Caught the plate-model bypass: picking ANY console model muted the whole strip.
+add_executable(neuracoust_console_audibility_probe tools/console_audibility_probe.cpp)
+target_link_libraries(neuracoust_console_audibility_probe PRIVATE neuracoust_daw_core)
+add_test(NAME console_audibility COMMAND neuracoust_console_audibility_probe)
+
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
 
