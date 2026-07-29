@@ -252,8 +252,10 @@ private:
     /// time-shift send paths against direct paths and comb on transients.
     std::string remoteMixerMode_;
     std::map<std::string, std::unique_ptr<RemoteMixSession>> realtimeMixSessions_;
-    int remoteMixerMissStreak_ = 0;
-    uint32_t remoteMixerProbeCountdown_ = 0;
+    // PER BUS: a shared streak let one healthy bus keep resetting it, so a failing bus never
+    // reached backoff and burned its timeout every block instead.
+    std::map<std::string, int> remoteMixerMissStreaks_;
+    std::map<std::string, uint32_t> remoteMixerProbeCountdowns_;
 
     void prepareRemoteMixerLocked();
     bool processRealtimeBusSumLocked(const std::string& busName,

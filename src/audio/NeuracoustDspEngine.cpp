@@ -3184,8 +3184,8 @@ void NeuracoustDspEngine::prepareRemoteMixerLocked() {
         return;
     }
     remoteMixerMode_ = mode;
-    remoteMixerMissStreak_ = 0;
-    remoteMixerProbeCountdown_ = 0;
+    remoteMixerMissStreaks_.clear();
+    remoteMixerProbeCountdowns_.clear();
     projectRenderState_.remoteBusSum = [this](const std::string& busName,
                                               const std::deque<std::vector<float>>& contributions,
                                               std::vector<float>& summed) {
@@ -3199,14 +3199,23 @@ bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName
                                                       const std::deque<std::vector<float>>& contributions,
                                                       std::vector<float>& summed) {
     if (remoteMixerMode_.empty() || contributions.empty() || contributions.size() > 64u) {
+        if (getenv("NC_DIAG_REMOTE") != nullptr && !remoteMixerMode_.empty()) {
+            static int logged = 0;
+            if (logged++ < 8) {
+                fprintf(stderr, "[nc-mix] %s skipped: %zu contributions\n",
+                        busName.c_str(), contributions.size());
+            }
+        }
         return false;
     }
-    if (remoteMixerMissStreak_ >= 8) {
-        if (remoteMixerProbeCountdown_ > 0u) {
-            --remoteMixerProbeCountdown_;
+    int& missStreak = remoteMixerMissStreaks_[busName];
+    if (missStreak >= 8) {
+        uint32_t& countdown = remoteMixerProbeCountdowns_[busName];
+        if (countdown > 0u) {
+            --countdown;
             return false;
         }
-        remoteMixerProbeCountdown_ = 256u;   // one probe per ~1.4 s at 256/48k
+        countdown = 256u;   // one probe per ~1.4 s at 256/48k
     }
     auto& session = realtimeMixSessions_[busName];
     if (session == nullptr) {
@@ -3217,10 +3226,17 @@ bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName
     settings.timeoutMs = 2;   // the local fallback is bit-identical; never bleed the block budget
     const auto result = session->mix(settings, contributions, summed);
     if (!result.processed) {
-        ++remoteMixerMissStreak_;
+        ++missStreak;
+        if (getenv("NC_DIAG_REMOTE") != nullptr) {
+            static int logged = 0;
+            if (logged++ < 24) {
+                fprintf(stderr, "[nc-mix] %s miss (%zu contribs, streak %d): %s\n",
+                        busName.c_str(), contributions.size(), missStreak, result.message.c_str());
+            }
+        }
         return false;
     }
-    remoteMixerMissStreak_ = 0;
+    missStreak = 0;
     recordRemoteDspRoundTripLocked(result.roundTripMs);
     return true;
 }
