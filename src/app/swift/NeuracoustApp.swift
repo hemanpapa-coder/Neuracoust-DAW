@@ -108,13 +108,12 @@ struct NeuracoustApp: App {
                     engine.shutdown()
                 }
         }
-        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1600, height: 980)
         // The shortcut is delivered by EngineController's NSEvent monitor, which
         // matches on key code. SwiftUI's keyboardShortcut matches on characters and
         // therefore never fires while a Korean input source is active.
         .commands {
-            VirtualKeyboardCommands()
+            VirtualKeyboardCommands(engine: engine)
             CommandGroup(replacing: .newItem) {
                 Button("새 프로젝트") { engine.newProject() }
                     .keyboardShortcut("n", modifiers: .command)
@@ -370,6 +369,21 @@ struct RootView: View {
         // Resize the window to fit the active mode (compact monitor vs full DAW), remembering the
         // DAW frame so expanding restores it. The engine keeps running across the switch.
         .background(WindowConfigurator(compact: engine.compactMonitorMode))
+        // The NATIVE titlebar carries the document now — name beside the traffic lights, the
+        // standard macOS arrangement the custom in-content title row imitated one line lower.
+        // isDocumentEdited draws the dirty state the way every Mac document window does.
+        .onReceive(engine.objectWillChange) { _ in
+            DispatchQueue.main.async {
+                guard let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue.contains("main") == true }) else { return }
+                let label = engine.projectPath.isEmpty
+                    ? "\(engine.projectName).ndaw"
+                    : (engine.projectPath as NSString).lastPathComponent
+                if window.title != label { window.title = label }
+                if window.isDocumentEdited != engine.projectDirty {
+                    window.isDocumentEdited = engine.projectDirty
+                }
+            }
+        }
         // Bring back the detached windows the last session had open (snapshotted at quit),
         // so the mixer/monitor-station arrangement survives a restart.
         .task {
@@ -383,7 +397,6 @@ struct RootView: View {
 
     private var fullDawView: some View {
         VStack(spacing: 0) {
-            if !stripped("title") { TitleBar() }
             if !stripped("transport") { TransportBar(clock: engine.playheadClock) }
             if !stripped("status") { StatusStrip() }
 

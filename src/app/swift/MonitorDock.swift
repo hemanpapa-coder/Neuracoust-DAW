@@ -1612,6 +1612,13 @@ struct MonitorDock: View {
                         }
                     }
                     Text("녹음 모드는 40프레임(0.8 ms)까지 조입니다. 자동이면 트랙을 암하는 순간 녹음 버퍼로, 전부 해제하면 믹스 버퍼로 스트림이 스스로 갈아탑니다.")
+                    Divider()
+                    // SoundGrid's firmware-update button, ours: sources over, rebuild there,
+                    // restart, confirm — key-auth ssh, so no login and no root, ever.
+                    Button("노드 엔진 업데이트") { engine.updateNodeEngine() }
+                    if !engine.nodeUpdateStatus.isEmpty {
+                        Text(engine.nodeUpdateStatus)
+                    }
                 }
 
             machineCard(title: "외부 노드",

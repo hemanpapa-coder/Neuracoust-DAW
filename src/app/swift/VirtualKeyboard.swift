@@ -175,10 +175,14 @@ struct VirtualKeyboardView: View {
 
 struct VirtualKeyboardCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    let engine: EngineController
     var body: some Commands {
         CommandMenu("윈도우") {
             Button("가상 MIDI 키보드") { openWindow(id: "virtual-keyboard") }
                 .keyboardShortcut("k", modifiers: [.command, .option])
+            // The titlebar's 모니터만 button, relocated here by request — collapse the whole
+            // DAW to the compact monitor-station shell (engine and playback keep running).
+            Button("모니터 스테이션만 (콤팩트)") { engine.collapseToMonitor() }
             Divider()
             // The Pro Tools window pair. Declared shortcuts are for discoverability; under a
             // Korean input source only the menu click is reliable (see the key-code note).

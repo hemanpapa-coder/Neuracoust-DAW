@@ -3097,6 +3097,42 @@ final class EngineController: ObservableObject {
         refreshHistory()
     }
 
+    /// The SoundGrid firmware-update flow: push sources to the node, rebuild there, restart the
+    /// user-owned engine, and confirm the module list — over ssh KEY auth, so no login prompt
+    /// and no root, ever. Runs tools/node/update-node-engine.sh from the source checkout.
+    @Published private(set) var nodeUpdateStatus = ""
+
+    func updateNodeEngine() {
+        guard nodeUpdateStatus != "업데이트 중…" else { return }
+        nodeUpdateStatus = "업데이트 중…"
+        let script = "/Volumes/Program Dev/DW/tools/node/update-node-engine.sh"
+        Task.detached(priority: .utility) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [script]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            var lastLine = ""
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                lastLine = String(data: data, encoding: .utf8)?
+                    .split(separator: "\n").last.map(String.init) ?? ""
+                let ok = process.terminationStatus == 0
+                await MainActor.run { [weak self] in
+                    self?.nodeUpdateStatus = ok ? "업데이트 완료 · \(lastLine.replacingOccurrences(of: "==> ", with: ""))"
+                                                : "업데이트 실패 · \(lastLine)"
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.nodeUpdateStatus = "업데이트 실패 · \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func setRemoteMixerChannels(_ channels: Int) {
         guard let handle else { return }
         nc_dsp_set_mixer_channels(handle, Int32(channels))

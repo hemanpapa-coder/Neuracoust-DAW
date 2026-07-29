@@ -956,8 +956,8 @@ struct NeuracoustConsoleModulesView: View {
         switch m {
         case .filter:    return 244
         case .eq:        return 660    // 798 − the 138 pt response graph, now in the viz strip
-        case .comp:      return 336
-        case .gate:      return 308
+        case .comp:      return 300   // was 336 — the GR lane moved out to the strip; the air stayed
+        case .gate:      return 280   // same trim, same reason
         case .saturator: return 244
         default:         return 258
         }

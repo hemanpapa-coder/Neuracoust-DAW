@@ -269,7 +269,9 @@ struct ProjectDocument {
     // The dedicated NDS appliance, addressed separately from the general-purpose node above.
     // They speak the same protocol but are not the same class of machine: the appliance runs its
     // own RT kernel and measures tighter in the tail, which is what decides quality for live work.
-    std::string ndsHost = "192.168.0.198";
+    // :20002 is the APPLIANCE engine (user-owned, crontab-kept); the old root service
+    // squats 20000 harmlessly until someone with its password retires it.
+    std::string ndsHost = "192.168.0.198:20002";
     bool ndsEnabled = false;
     // Which machine handles each job. "internal" (this Mac), "nds", or "external" (node computer).
     // Explicit assignment is the default because a path that changes under you mid-take is worse

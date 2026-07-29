@@ -465,7 +465,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     settings.networkBufferFrames = effectiveRemoteBufferFrames(project);
     settings.host = project.remoteDspHost.empty() ? std::string("studio.local") : project.remoteDspHost;
     settings.enabled = project.externalDspEnabled;
-    settings.ndsHost = project.ndsHost.empty() ? std::string("192.168.0.198") : project.ndsHost;
+    settings.ndsHost = project.ndsHost.empty() ? std::string("192.168.0.198:20002") : project.ndsHost;
     settings.ndsEnabled = project.ndsEnabled;
     settings.roleMonitor = project.dspRoleMonitor;
     settings.roleChannelStrip = project.dspRoleChannelStrip;
@@ -492,7 +492,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     // The NDS appliance is a second, separately addressed machine — not another name for the
     // external node. It carries its own switch so one can be off while the other works.
     settings.ndsHost = engine->project.ndsHost.empty()
-                           ? std::string("192.168.0.198") : engine->project.ndsHost;
+                           ? std::string("192.168.0.198:20002") : engine->project.ndsHost;
     settings.ndsEnabled = engine->project.ndsEnabled;
     settings.roleMonitor = engine->project.dspRoleMonitor;
     settings.roleChannelStrip = engine->project.dspRoleChannelStrip;
@@ -7580,12 +7580,18 @@ void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot,
 
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, std::string{});
-    const auto settings = engine != nullptr ? buildRemoteDspSettings(engine)
-                                            : neuracoust::daw::defaultRemoteDspServerSettings();
-    for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 600)) {
-        if (!found.node.host.empty()) {
-            copyText(out, outLen, found.node.host);
-            return;
+    auto settings = engine != nullptr ? buildRemoteDspSettings(engine)
+                                      : neuracoust::daw::defaultRemoteDspServerSettings();
+    // Two generations of status port: the appliance engine answers on 20003, the legacy
+    // remote_core_server on 20001. Probe both; an appliance answer wins and carries its port.
+    for (const uint16_t statusPort : {uint16_t(20003), settings.statusPort}) {
+        settings.statusPort = statusPort;
+        for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 400)) {
+            if (!found.node.host.empty()) {
+                copyText(out, outLen, statusPort == 20003 ? found.node.host + ":20002"
+                                                          : found.node.host);
+                return;
+            }
         }
     }
 }

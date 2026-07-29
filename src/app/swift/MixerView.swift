@@ -1016,8 +1016,15 @@ struct ChannelStrip: View {
                     moduleRow(module, index: idx, count: order.count,
                               engagedRank: engagedRank[module])
                 }
+                // The DSP-machine chip fills the grid's last cell (beside SND) — it was a row of
+                // its own below, spending a whole line on a half-width control.
+                if order.count % 2 == 1 {
+                    channelDspMachineRow
+                }
             }
-            channelDspMachineRow
+            if order.count % 2 == 0 {
+                channelDspMachineRow
+            }
         }
         .padding(2)
         .background(

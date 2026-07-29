@@ -1,66 +1,10 @@
 import SwiftUI
 
-struct TitleBar: View {
-    @EnvironmentObject private var engine: EngineController
-
-    var body: some View {
-        // The file name is centred on the top (traffic-light) line — the macOS title
-        // position — with the engine status on the right; a slim bar reclaims the band.
-        ZStack {
-            HStack(spacing: Theme.Space.md) {
-                Text("Neuracoust DAW")
-                    .font(Theme.Font.ui(10.5, .semibold))
-                    .foregroundStyle(Theme.Palette.textMuted)
-                Text(TitleBar.buildStamp)
-                    .font(Theme.Font.mono(9))
-                    .foregroundStyle(Theme.Palette.textFainter)
-                    .help("빌드 시각 (연월일.시분) — 실행 중인 바이너리")
-                Text("· \(documentLabel)")
-                    .font(Theme.Font.ui(10.5))
-                    .foregroundStyle(Theme.Palette.text)
-                Circle()
-                    .fill(engine.projectDirty ? Theme.Palette.amber : Theme.Palette.textFainter)
-                    .frame(width: 6, height: 6)
-            }
-
-            HStack {
-                Spacer()
-                HStack(spacing: Theme.Space.md) {
-                    // Collapse to the compact monitor-station shell (the engine keeps running).
-                    Button { engine.collapseToMonitor() } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "rectangle.compress.vertical")
-                                .font(.system(size: 9, weight: .semibold))
-                            Text("모니터만").font(Theme.Font.ui(9.5, .semibold))
-                        }
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                        .padding(.horizontal, 7).frame(height: 18)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Palette.button))
-                    }
-                    .buttonStyle(.plain)
-                    .help("모니터 스테이션만 남기고 DAW를 접습니다 (엔진·재생은 유지)")
-                    Circle()
-                        .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
-                        .frame(width: 6, height: 6)
-                    if engine.running {
-                        deviceMenu
-                    } else {
-                        Text("엔진 정지")
-                            .font(Theme.Font.mono(9))
-                            .foregroundStyle(Theme.Palette.textFaint)
-                    }
-                }
-                .padding(.trailing, Theme.Space.xxl)
-            }
-        }
-        .frame(height: 26)
-        .frame(maxWidth: .infinity)
-        .background(Theme.Gradient.titlebar)
-    }
-
-    /// Build identifier shown in the titlebar: the running binary's own modification time as
-    /// 연월일.시분 (e.g. "260715.1634"). Read from the executable so it always reflects the
-    /// binary actually running — no build-system plumbing, no chance of a stale hardcoded value.
+/// What's left of the old in-content titlebar after the window went native: the build stamp and
+/// the device/buffer menu, both now rendered inside the status strip.
+enum TitleBar {
+    /// Build identifier: the running binary's own modification time as 연월일.시분. Read from the
+    /// executable so it always reflects the binary actually running.
     static let buildStamp: String = {
         guard let url = Bundle.main.executableURL,
               let date = try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
@@ -70,42 +14,38 @@ struct TitleBar: View {
         return fmt.string(from: date)
     }()
 
-    /// The file name once the document has a home; otherwise its in-memory name.
-    private var documentLabel: String {
-        engine.projectPath.isEmpty
-            ? "\(engine.projectName).ndaw"
-            : (engine.projectPath as NSString).lastPathComponent
-    }
-
-    private func formatSampleRate(_ rate: Double) -> String {
-        rate <= 0 ? "—" : String(format: "%.1fk", rate / 1000.0)
-    }
-
     /// The device readout doubles as the buffer-size (latency) picker: smaller buffer =
-    /// lower latency, more CPU / dropout risk. The label shows the granted buffer and its
-    /// one-buffer latency in ms.
-    private var deviceMenu: some View {
-        Menu {
-            Section("버퍼 크기 — 작을수록 저지연 (CPU·드롭 위험↑)") {
-                ForEach(EngineController.bufferSizeChoices, id: \.self) { size in
-                    Button {
-                        engine.setBufferSize(size)
-                    } label: {
-                        let text = "\(size) samples · \(String(format: "%.1f", engine.bufferLatencyMs(size))) ms"
-                        if size == engine.requestedBufferSize {
-                            Label(text, systemImage: "checkmark")
-                        } else {
-                            Text(text)
+    /// lower latency, more CPU / dropout risk.
+    struct DeviceMenu: View {
+        @EnvironmentObject private var engine: EngineController
+
+        private func formatSampleRate(_ rate: Double) -> String {
+            rate <= 0 ? "—" : String(format: "%.1fk", rate / 1000.0)
+        }
+
+        var body: some View {
+            Menu {
+                Section("버퍼 크기 — 작을수록 저지연 (CPU·드롭 위험↑)") {
+                    ForEach(EngineController.bufferSizeChoices, id: \.self) { size in
+                        Button {
+                            engine.setBufferSize(size)
+                        } label: {
+                            let text = "\(size) samples · \(String(format: "%.1f", engine.bufferLatencyMs(size))) ms"
+                            if size == engine.requestedBufferSize {
+                                Label(text, systemImage: "checkmark")
+                            } else {
+                                Text(text)
+                            }
                         }
                     }
                 }
+            } label: {
+                Text("\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize) (\(String(format: "%.1f", engine.bufferLatencyMs(engine.bufferSize)))ms)")
+                    .font(Theme.Font.mono(9))
+                    .foregroundStyle(Theme.Palette.textFaint)
             }
-        } label: {
-            Text("\(engine.deviceName) · \(formatSampleRate(engine.sampleRate)) · \(engine.bufferSize) (\(String(format: "%.1f", engine.bufferLatencyMs(engine.bufferSize)))ms)")
-                .font(Theme.Font.mono(9))
-                .foregroundStyle(Theme.Palette.textFaint)
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
     }
 }
 
@@ -145,10 +85,7 @@ struct TransportBar: View {
             // Clips off with the rest of the toolbar when the window narrows (the dock stays put).
             // No Edit/Mix tabs: Pro Tools has no on-screen pair either — ⌘= toggles the two, and
             // that shortcut already works here. Dropping them returns the width to the toolbar.
-            HStack(spacing: Theme.Space.lg) {
-                panelToggles
-                helpChip
-            }
+            panelToggles
         }
         .padding(.horizontal, Theme.Space.xxl)
         .frame(height: 72)
@@ -482,11 +419,15 @@ struct TransportBar: View {
                 }}
             ))
             .textFieldStyle(.plain)
-            .font(Theme.Font.mono(8))
+            .font(Theme.Font.mono(8.5, .semibold))
+            .monospacedDigit()
+            .foregroundStyle(seconds > 0 ? Theme.Palette.textNumeric : Theme.Palette.textFaint)
             .multilineTextAlignment(.trailing)
-            .frame(width: 34, height: 18)
-            .padding(.horizontal, 3)
-            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.Palette.recess))
+            .frame(width: 34, height: 16)
+            .padding(.horizontal, 4)
+            // Same family as the TEMPO/SIG pods (ruler fill, numeric tint) — the recessed system
+            // box read as a foreign control in the middle of the transport.
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.display).fill(Theme.Palette.ruler))
             Text("s")
                 .font(Theme.Font.mono(7))
                 .foregroundStyle(Theme.Palette.textSecondary.opacity(0.7))
@@ -642,6 +583,21 @@ struct TransportBar: View {
                 panelChip("info.circle", "Inspector", on: engine.showInspector) { engine.showInspector.toggle() }
             }
             panelChip("hifispeaker.2.fill", "Monitor", on: engine.showMonitorDock) { engine.showMonitorDock.toggle() }
+            Rectangle().fill(Theme.Palette.divider).frame(width: 1, height: 16).padding(.horizontal, 1)
+            // The help toggle lives in the same box as the panel chips, at the same size — two
+            // side-by-side boxes with differently-sized icons read as clutter.
+            Button { engine.helpMode.toggle() } label: {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(engine.helpMode ? Theme.Palette.deepBorder : Theme.Palette.textDim)
+                    .frame(width: 28, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.button)
+                            .fill(engine.helpMode ? Theme.Palette.accent : .clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(engine.helpMode ? engine.tr("help.mode_off") : engine.tr("help.mode_on"))
         }
         .padding(3)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.surface))
@@ -662,24 +618,6 @@ struct TransportBar: View {
         }
         .buttonStyle(.plain)
         .help("\(label) 패널 표시/숨김")
-    }
-
-    /// Help toggle: while lit, every icon control shows a hover tooltip explaining it.
-    private var helpChip: some View {
-        Button { engine.helpMode.toggle() } label: {
-            Image(systemName: "questionmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(engine.helpMode ? Theme.Palette.deepBorder : Theme.Palette.textDim)
-                .frame(width: 28, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.button)
-                        .fill(engine.helpMode ? Theme.Palette.accent : .clear)
-                )
-        }
-        .buttonStyle(.plain)
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.panel).fill(Theme.Palette.surface))
-        .help(engine.helpMode ? engine.tr("help.mode_off") : engine.tr("help.mode_on"))
     }
 
 }
@@ -723,7 +661,42 @@ struct StatusStrip: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.xl) {
+            statusLeading
+            Spacer(minLength: Theme.Space.lg)
+            // The old titlebar's right side, relocated: build stamp, engine dot, device/buffer menu.
+            Text(TitleBar.buildStamp)
+                .font(Theme.Font.mono(8))
+                .foregroundStyle(Theme.Palette.textFainter)
+                .help("빌드 시각 (연월일.시분) — 실행 중인 바이너리")
+            Circle()
+                .fill(engine.running ? Theme.Palette.green : Theme.Palette.red)
+                .frame(width: 6, height: 6)
+            if engine.running {
+                TitleBar.DeviceMenu()
+            } else {
+                Text("엔진 정지")
+                    .font(Theme.Font.mono(9))
+                    .foregroundStyle(Theme.Palette.textFaint)
+            }
+        }
+        .padding(.horizontal, Theme.Space.xxl)
+        .frame(height: 22)
+        .frame(maxWidth: .infinity)
+        .background(Theme.Palette.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.Palette.border).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder private var statusLeading: some View {
+        HStack(spacing: Theme.Space.xl) {
             stat("DSP", engine.sampleRate > 0 ? String(format: "%.1fk", engine.sampleRate / 1000) : "—")
+            statusLeadingTail
+        }
+    }
+
+    @ViewBuilder private var statusLeadingTail: some View {
+        HStack(spacing: Theme.Space.xl) {
             stat("PDC", String(format: "%.2f ms", engine.delayCompensationMs))
             stat("RENDER", String(format: "%.1f ms", engine.maxRenderDurationUs / 1000.0))
 
@@ -750,14 +723,6 @@ struct StatusStrip: View {
                     .font(Theme.Font.mono(8.5))
                     .foregroundStyle(Theme.Palette.red)
             }
-
-        }
-        .padding(.horizontal, Theme.Space.xxl)
-        .frame(height: 22)
-        .frame(maxWidth: .infinity)
-        .background(Theme.Palette.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.Palette.border).frame(height: 1)
         }
     }
 
@@ -800,9 +765,31 @@ struct StatusStrip: View {
 /// views of one map, never two stores.
 private struct TransportConductorPods: View {
     @EnvironmentObject private var engine: EngineController
-    @ObservedObject var clock: PlayheadClock
+    let clock: PlayheadClock
     @State private var editingPod: String?
     @State private var podDraft = ""
+
+    /// What the block actually shows. Held in @State behind an equality gate so the 30 Hz clock
+    /// only re-renders this view when a value REALLY changes (a marker crossed, a beat ticked) —
+    /// re-evaluating every tick made the whole block re-solve its fractional layout and shimmer
+    /// side to side during playback.
+    private struct Shown: Equatable {
+        var tempo = 120.0
+        var numerator = 4
+        var denominator = 4
+        var beat = 1
+    }
+    @State private var shown = Shown()
+
+    private func recompute() -> Shown {
+        var next = Shown()
+        next.tempo = effectiveTempo
+        let signature = effectiveSignature
+        next.numerator = signature.numerator
+        next.denominator = signature.denominator
+        next.beat = engine.barsBeats.beat
+        return next
+    }
 
     private static let podWidth: CGFloat = 58
 
@@ -831,10 +818,9 @@ private struct TransportConductorPods: View {
     }
 
     var body: some View {
-        let signature = effectiveSignature
         VStack(alignment: .center, spacing: 5) {
             HStack(spacing: Theme.Space.xs) {
-                editablePod(String(format: "%.1f", effectiveTempo), "TEMPO") {
+                editablePod(String(format: "%.1f", shown.tempo), "TEMPO") {
                     guard let bpm = Double($0), bpm >= 20, bpm <= 999 else { return }
                     if let marker = governingTempoMarker {
                         engine.setTempoMarker(at: marker.timeSeconds, bpm: bpm)
@@ -842,7 +828,7 @@ private struct TransportConductorPods: View {
                         engine.setBaseTempo(Int(bpm.rounded()))
                     }
                 }
-                editablePod("\(signature.numerator)/\(signature.denominator)", "SIG") { text in
+                editablePod("\(shown.numerator)/\(shown.denominator)", "SIG") { text in
                     let parts = text.split(separator: "/")
                     guard parts.count == 2, let n = Int(parts[0]), let d = Int(parts[1]),
                           (1...32).contains(n), [1, 2, 4, 8, 16, 32].contains(d) else { return }
@@ -855,21 +841,29 @@ private struct TransportConductorPods: View {
             }
             // The beat row spans exactly the two pods above, one segment per beat of the
             // EFFECTIVE meter, so 3/4 shows three and 7/8 seven — aligned, not dangling.
-            beatDots(numerator: signature.numerator)
+            beatDots(numerator: shown.numerator, beat: shown.beat)
                 .frame(width: Self.podWidth * 2 + Theme.Space.xs)
         }
         .padding(.leading, Theme.Space.lg)
+        .onAppear { shown = recompute() }
+        .onReceive(clock.$seconds) { _ in
+            let next = recompute()
+            if next != shown { shown = next }
+        }
     }
 
-    private func beatDots(numerator: Int) -> some View {
-        let beat = engine.barsBeats.beat
+    private func beatDots(numerator: Int, beat: Int) -> some View {
+        // Integer segment widths, centred: flexible segments took fractional widths, and a
+        // fractional layout re-solved at clock rate is exactly what shimmers on a Retina grid.
+        let count = max(1, numerator)
+        let rowWidth = Self.podWidth * 2 + Theme.Space.xs
+        let segment = max(3, ((rowWidth - CGFloat(count - 1) * 4) / CGFloat(count)).rounded(.down))
         return HStack(spacing: 4) {
-            ForEach(1...max(1, numerator), id: \.self) { i in
+            ForEach(1...count, id: \.self) { i in
                 Rectangle()
                     .fill(engine.transportRunning && i == beat ? Theme.Palette.accent
                                                                : Theme.Palette.divider)
-                    .frame(height: 3)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: segment, height: 3)
             }
         }
     }
