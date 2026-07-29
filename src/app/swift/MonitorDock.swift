@@ -1537,7 +1537,9 @@ struct MonitorDock: View {
             }
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(engine.remoteDspActive ? "원격 코어 연결됨" : "검색된 코어 없음")
+                    Text(engine.remoteDspActive ? "원격 코어 연결됨"
+                         : engine.scanningForCores ? "검색 중…"
+                         : engine.discoveredCores.isEmpty ? "검색된 코어 없음" : "검색된 코어")
                         .font(Theme.Font.ui(9, .medium))
                         .foregroundStyle(Theme.Palette.textSecondary)
                     Text(engine.remoteDspActive
@@ -1547,12 +1549,72 @@ struct MonitorDock: View {
                         .foregroundStyle(Theme.Palette.textFaint)
                 }
                 Spacer()
+                Button { engine.scanForCores() } label: {
+                    Image(systemName: engine.scanningForCores ? "rays" : "arrow.clockwise")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textMuted)
+                        .frame(width: 20, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(engine.scanningForCores)
+                .help("LAN에서 DSP 서버를 다시 검색합니다")
                 Text(engine.remoteDspActive ? "● Connected" : "○ Idle")
                     .font(Theme.Font.mono(7.5))
                     .foregroundStyle(engine.remoteDspActive ? Theme.Palette.teal : Theme.Palette.textFaint)
             }
 
+            // The inventory, SoundGrid-style: every server the scan found, as a row you CLICK to
+            // connect — no address to transcribe. The 주소 fields on the machine cards below stay
+            // as the manual fallback.
+            ForEach(engine.discoveredCores) { core in
+                HStack(spacing: Theme.Space.md) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 10))
+                        .foregroundStyle(core.isAppliance ? Theme.Palette.teal : Theme.Palette.textMuted)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(core.model.isEmpty ? core.address : core.model)
+                            .font(Theme.Font.ui(9, .semibold))
+                            .foregroundStyle(Theme.Palette.text)
+                            .lineLimit(1)
+                        Text("\(core.address)\(core.coreCount > 0 ? " · 코어 \(core.coreCount)개" : "")\(core.roundTripMs > 0 ? String(format: " · %.1f ms", core.roundTripMs) : "")")
+                            .font(Theme.Font.mono(7))
+                            .foregroundStyle(Theme.Palette.textFaint)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: Theme.Space.sm)
+                    if engine.ndsEnabled && engine.ndsHost == core.address {
+                        Text("● NDS")
+                            .font(Theme.Font.mono(7.5, .semibold))
+                            .foregroundStyle(Theme.Palette.teal)
+                    } else {
+                        Button("연결") {
+                            engine.setNdsHost(core.address)
+                            engine.setNdsEnabled(true)
+                        }
+                        .font(Theme.Font.ui(8.5, .semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("이 서버를 NDS로 연결합니다 (우클릭: 외부 노드로)")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Color(hex: 0x22282e)))
+                .contextMenu {
+                    Button("NDS로 연결") {
+                        engine.setNdsHost(core.address)
+                        engine.setNdsEnabled(true)
+                    }
+                    Button("외부 노드로 연결") {
+                        engine.setRemoteDspHost(core.address)
+                        engine.setExternalDspEnabled(true)
+                    }
+                }
+            }
+
             Divider().overlay(Theme.Palette.divider)
+                .onAppear { if engine.discoveredCores.isEmpty { engine.scanForCores() } }
 
             // Which machine handles what. This is the control that actually decides routing; the
             // machine cards below only say where each machine is and whether it is switched on.

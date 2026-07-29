@@ -1267,6 +1267,9 @@ void nc_dsp_set_external_core_count(NCEngine* engine, int count);
 void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen);
 void nc_dsp_set_remote_host(NCEngine* engine, const char* host);
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen);
+// Inventory scan (engine-free, blocking ~1 s — background thread): every answering server,
+// newline-joined; appliance engines come back as host:20002, legacy cores as plain hosts.
+void nc_dsp_scan_lan(char* out, size_t outLen);
 // Waves-style server options: wire buffer per remote stream (frames, 64–1024, live) and the
 // remote-mixer channel capacity ladder (8/16/32/64, stored intent until the remote mixer lands).
 int nc_dsp_network_buffer_frames(NCEngine* engine);

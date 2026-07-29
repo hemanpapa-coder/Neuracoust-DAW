@@ -7580,6 +7580,31 @@ void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot,
     engine->recordStep("Insert DSP");
 }
 
+// SoundGrid-style inventory scan: broadcast on both status-port generations and return EVERY
+// server that answers — appliance engines (20003) normalized to their host:20002 audio address,
+// legacy remote_core_servers (20001) as plain hosts. Engine-free and blocking (~1 s): call it
+// from a background thread; the UI turns the result into a pick-to-connect list, which is the
+// whole point — a server is something you SELECT, not an IP you transcribe.
+void nc_dsp_scan_lan(char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.nodes.clear();
+    std::string joined;
+    std::set<std::string> seen;
+    for (const uint16_t statusPort : {uint16_t(20003), uint16_t(20001)}) {
+        settings.statusPort = statusPort;
+        for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 500)) {
+            if (found.node.host.empty()) continue;
+            const std::string address = statusPort == 20003 ? found.node.host + ":20002"
+                                                            : found.node.host;
+            if (!seen.insert(address).second) continue;
+            if (!joined.empty()) joined += '\n';
+            joined += address;
+        }
+    }
+    copyText(out, outLen, joined);
+}
+
 void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, std::string{});
     auto settings = engine != nullptr ? buildRemoteDspSettings(engine)

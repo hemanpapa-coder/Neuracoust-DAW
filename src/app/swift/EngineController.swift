@@ -3210,9 +3210,51 @@ final class EngineController: ObservableObject {
         }
     }
 
+    /// A server found by the inventory scan — something you SELECT, not an IP you transcribe.
+    struct DiscoveredCore: Identifiable, Equatable {
+        var id: String { address }
+        let address: String            // "192.168.0.198:20002" (appliance) or "192.168.0.186" (legacy)
+        var model = ""
+        var coreCount = 0
+        var roundTripMs: Double = 0
+        var isAppliance: Bool { address.contains(":") }
+    }
+    @Published private(set) var discoveredCores: [DiscoveredCore] = []
+    @Published private(set) var scanningForCores = false
+
+    /// SoundGrid-style inventory: broadcast, list every answering server with its specs. Runs
+    /// off the main thread (the scan blocks ~1 s); both the scan and the per-host probe are
+    /// engine-free bridge calls, so the main-thread-only engine rule is untouched.
+    func scanForCores() {
+        guard !scanningForCores else { return }
+        scanningForCores = true
+        Task.detached(priority: .utility) {
+            var buffer = [CChar](repeating: 0, count: 2048)
+            nc_dsp_scan_lan(&buffer, buffer.count)
+            let addresses = String(cString: buffer)
+                .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            var cores: [DiscoveredCore] = []
+            for address in addresses {
+                var core = DiscoveredCore(address: address)
+                if let specs = Self.probeNode(address) {
+                    core.model = specs.model
+                    core.coreCount = specs.coreCount
+                    core.roundTripMs = specs.roundTripMs
+                }
+                cores.append(core)
+            }
+            let found = cores
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.scanningForCores = false
+                if self.discoveredCores != found { self.discoveredCores = found }
+            }
+        }
+    }
+
     /// One blocking probe of one address. 120 ms is long enough for a LAN answer and short enough
     /// that both machines together stay well under the two-second poll period.
-    private static func probeNode(_ host: String) -> RemoteNodeSpecs? {
+    nonisolated private static func probeNode(_ host: String) -> RemoteNodeSpecs? {
         guard !host.isEmpty else { return nil }
         var info = NCRemoteNodeInfo()
         guard host.withCString({ nc_dsp_probe_node_info($0, 120, &info) }) != 0 else { return nil }
@@ -8136,7 +8178,7 @@ final class EngineController: ObservableObject {
     }
 
     /// Read a fixed-size C `char[]` field (imported into Swift as a tuple) as a String.
-    private static func cStringField<T>(_ tuple: inout T) -> String {
+    nonisolated private static func cStringField<T>(_ tuple: inout T) -> String {
         withUnsafePointer(to: &tuple) { ptr in
             ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) {
                 String(cString: $0)
