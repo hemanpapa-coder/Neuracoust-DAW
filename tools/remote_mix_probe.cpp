@@ -30,7 +30,9 @@ int main(int argc, char** argv) {
     settings.nodes.clear();
     settings.host = host;
     applyRemoteDspHostPort(settings);
-    settings.timeoutMs = 50;
+    // argv[4]: timeout ms — 2 reproduces the REALTIME condition, where the first-call warmup
+    // timeout used to leave a stale reply queued and desync every later sequence.
+    settings.timeoutMs = argc > 4 ? std::stoi(argv[4]) : 50;
 
     RemoteMixSession session;
     std::vector<std::vector<float>> tracks(trackCount);

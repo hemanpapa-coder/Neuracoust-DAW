@@ -841,6 +841,27 @@ RemoteDspProcessResult RemoteMixSession::mix(const RemoteDspServerSettings& sett
     const uint32_t sequence = impl_->sequenceCounter.fetch_add(1u, std::memory_order_relaxed);
     const auto started = std::chrono::steady_clock::now();
 
+    // Drain stale replies first. A sum that missed its short realtime window still ARRIVES and
+    // sits in the socket buffer; read against the next sequence it mismatches, whose own reply
+    // then queues behind it — the permanent off-by-one the first live run fell into ("response
+    // did not match the protocol", forever). Empty the queue, then this sequence's reply is the
+    // only thing that can be waiting.
+    {
+        char stale[2048];
+        while (true) {
+            fd_set drainSet;
+            FD_ZERO(&drainSet);
+            FD_SET(impl_->socketHandle, &drainSet);
+            timeval zero {};
+#ifdef _WIN32
+            if (select(0, &drainSet, nullptr, nullptr, &zero) <= 0) break;
+#else
+            if (select(impl_->socketHandle + 1, &drainSet, nullptr, nullptr, &zero) <= 0) break;
+#endif
+            if (recv(impl_->socketHandle, stale, sizeof(stale), 0) <= 0) break;
+        }
+    }
+
     // One packet per track, all under the same sequence; the node banks them and answers once,
     // so the whole set costs ONE round trip regardless of track count.
     std::vector<uint8_t> packet;
@@ -876,45 +897,57 @@ RemoteDspProcessResult RemoteMixSession::mix(const RemoteDspServerSettings& sett
         }
     }
 
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(impl_->socketHandle, &readSet);
     const int timeoutMs = settings.timeoutMs > 0 ? settings.timeoutMs : 4;
-    timeval timeout {};
-    timeout.tv_sec = timeoutMs / 1000;
-    timeout.tv_usec = (timeoutMs % 1000) * 1000;
-#ifdef _WIN32
-    const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
-#else
-    const int ready = select(impl_->socketHandle + 1, &readSet, nullptr, nullptr, &timeout);
-#endif
-    if (ready <= 0) {
-        result.message = "remote mix sum did not arrive before timeout";
-        return result;
-    }
+    const auto deadline = started + std::chrono::milliseconds(timeoutMs);
     std::array<uint8_t, kNaRtHeaderSize + 2u * kMaxProbeFrames * sizeof(float)> response {};
-    const int received = recv(impl_->socketHandle,
-                              reinterpret_cast<char*>(response.data()),
-                              static_cast<int>(response.size()), 0);
-    const auto finished = std::chrono::steady_clock::now();
-    if (received <= 0) {
-        result.message = "could not receive the remote mix sum";
-        return result;
-    }
-    const uint8_t* data = response.data();
     const size_t payloadBytes = static_cast<size_t>(2u) * frameCount * sizeof(float);
-    result.reachable = true;
-    result.roundTripMs = std::chrono::duration<double, std::milli>(finished - started).count();
-    result.protocolMatched = static_cast<size_t>(received) == kNaRtHeaderSize + payloadBytes &&
-        readU32(data) == kNaRtMagic &&
-        readU16(data + 4) == kNaRtVersion &&
-        readU32(data + 8) == sequence &&
-        readU16(data + 12) == 2u &&
-        readU16(data + 14) == frameCount;
-    if (!result.protocolMatched) {
-        result.message = "remote mix response did not match the protocol";
-        return result;
+    // Wait for THIS sequence's reply, discarding any straggler that slips through the drain —
+    // the loop spends the remaining window, not a fresh one per datagram.
+    while (true) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            result.message = "remote mix sum did not arrive before timeout";
+            return result;
+        }
+        const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now);
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(impl_->socketHandle, &readSet);
+        timeval timeout {};
+        timeout.tv_sec = static_cast<long>(remaining.count() / 1000000);
+        timeout.tv_usec = static_cast<int>(remaining.count() % 1000000);
+#ifdef _WIN32
+        const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+        const int ready = select(impl_->socketHandle + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
+        if (ready <= 0) {
+            result.message = "remote mix sum did not arrive before timeout";
+            return result;
+        }
+        const int received = recv(impl_->socketHandle,
+                                  reinterpret_cast<char*>(response.data()),
+                                  static_cast<int>(response.size()), 0);
+        if (received <= 0) {
+            result.message = "could not receive the remote mix sum";
+            return result;
+        }
+        const uint8_t* data = response.data();
+        result.reachable = true;
+        if (static_cast<size_t>(received) == kNaRtHeaderSize + payloadBytes &&
+            readU32(data) == kNaRtMagic &&
+            readU16(data + 4) == kNaRtVersion &&
+            readU32(data + 8) == sequence &&
+            readU16(data + 12) == 2u &&
+            readU16(data + 14) == frameCount) {
+            result.protocolMatched = true;
+            break;
+        }
+        // A stale or foreign datagram: discard and keep waiting within the same window.
     }
+    result.roundTripMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    const uint8_t* data = response.data();
     const auto* payload = reinterpret_cast<const float*>(data + kNaRtHeaderSize);
     summedInterleavedStereo.resize(sampleCount);
     for (uint16_t frame = 0; frame < frameCount; ++frame) {
