@@ -783,6 +783,7 @@ private struct EditView: View {
                     onToggleClipPolarity: { engine.toggleClipPolarity($0) },
                     onApplyClipTimePitch: { engine.applyClipTimePitch($0, timeRatio: $1, semitones: $2) },
                     onDenoiseClip: { engine.denoiseClip($0) },
+                    onExportClipConverted: { engine.exportClipConverted($0, spec: $1, ext: $2, label: $3) },
                     onOpenAraEditor: { engine.openAraEditor(clipId: $0, pluginName: $1, pluginPath: $2) },
                     onClearAraEdits: { engine.clearAraEdits($0) },
                     araPlugins: engine.araPlugins(),

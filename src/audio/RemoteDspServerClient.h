@@ -53,6 +53,10 @@ struct RemoteDspServerSettings {
     uint16_t statusPort = 20001;
     uint16_t channelCount = 2;
     uint16_t frameCount = 128;
+    /// The SoundGrid-style configuration ladder (8/16/32/64): how many mixer input channels the
+    /// remote summing sessions accept. A bus with more contributions than this stays local —
+    /// bit-identical, so raising it later changes cost, never sound. The node itself caps at 64.
+    uint16_t mixerChannels = 32;
     uint16_t networkBufferFrames = 256;
     double sampleRate = 48000.0;
     int timeoutMs = 250;

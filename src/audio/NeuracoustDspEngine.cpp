@@ -3218,7 +3218,12 @@ void NeuracoustDspEngine::prepareRemoteMixerLocked() {
 bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName,
                                                       const std::deque<std::vector<float>>& contributions,
                                                       std::vector<float>& summed) {
-    if (remoteMixerMode_.empty() || contributions.empty() || contributions.size() > 64u) {
+    // The configured channel ladder (8/16/32/64) is a real cap: a bus with more contributions
+    // than the configuration stays local, bit-identically — the same rule as the node's own
+    // 64-channel ceiling, just at the user's chosen size.
+    const size_t mixerChannelCap =
+        std::min<size_t>(64u, std::max<uint16_t>(uint16_t{8}, settings_.remoteDspServer.mixerChannels));
+    if (remoteMixerMode_.empty() || contributions.empty() || contributions.size() > mixerChannelCap) {
         if (getenv("NC_DIAG_REMOTE") != nullptr && !remoteMixerMode_.empty()) {
             static int logged = 0;
             if (logged++ < 8) {

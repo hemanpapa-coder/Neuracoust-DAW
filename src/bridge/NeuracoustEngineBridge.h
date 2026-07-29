@@ -1069,6 +1069,14 @@ bool nc_bounce_to_wav(NCEngine* engine, const char* path, NCBounceResult* out);
 /// self-contained: `nc_bounce_snapshot_to_wav` renders it without touching the
 /// engine, which is what makes an off-thread bounce safe.
 int nc_project_serialize(NCEngine* engine, char* out, size_t outLen);
+/// One clip as its own minimal project (clip at 0 s, bare track, flat master) for
+/// format-converted export. Same two-call length protocol as nc_project_serialize.
+int nc_clip_export_serialize(NCEngine* engine, const char* clip_id, char* out, size_t outLen);
+/// Render that snapshot and afconvert it to `spec` ("wav16"/"wav24"/"wavf32"/"aiff24"/"flac"/
+/// "aac", optionally ":<rate>"; 0 or absent keeps the session rate) at `path`. Engine-free —
+/// safe off the main thread, like the background bounce.
+bool nc_clip_snapshot_export(const char* projectText, const char* spec, const char* path,
+                             char* message, size_t messageLen);
 /// Apply only the monitor-station configuration from a serialized project onto the current
 /// one — the "전체 설정 저장" template a new session inherits. Returns false if it won't parse.
 bool nc_apply_monitor_template(NCEngine* engine, const char* serialized);

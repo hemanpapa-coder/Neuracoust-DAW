@@ -1458,6 +1458,56 @@ int main() {
         check(std::equal(maxs.begin(), maxs.end(), maxs2.begin()), "cached maxs match");
     }
 
+    // --- format-converted clip export ----------------------------------------
+    // Serialize one clip as its own mini project, render + afconvert it, and read the result
+    // back: the duration must be the clip's, the format the preset's.
+    if (nc_clip_count(engine) > 0) {
+        char clipId[128] = {0};
+        nc_clip_id(engine, 0, clipId, sizeof(clipId));
+        const double clipSeconds = nc_clip_duration_seconds(engine, 0);
+        const int needed = nc_clip_export_serialize(engine, clipId, NULL, 0);
+        check(needed > 0, "clip export snapshot serializes");
+        std::vector<char> snapshot(static_cast<size_t>(needed) + 1, 0);
+        nc_clip_export_serialize(engine, clipId, snapshot.data(), snapshot.size());
+
+        const std::filesystem::path dir = "/tmp/neuracoust-io-smoke-media";
+        char message[512] = {0};
+        const std::string wav24 = (dir / "export-24-48.wav").string();
+        check(nc_clip_snapshot_export(snapshot.data(), "wav24:48000", wav24.c_str(),
+                                      message, sizeof(message)),
+              "clip exports as WAV 24/48");
+        neuracoust::daw::WavAudioData exported;
+        std::string readError;
+        if (check(neuracoust::daw::readPcmWavFile(wav24, exported, readError),
+                  "the exported WAV reads back"), exported.sampleRate > 0) {
+            check(std::abs(static_cast<double>(exported.frameCount()) / exported.sampleRate -
+                           clipSeconds) < 0.1,
+                  "and it is the clip's length");
+            check(exported.sampleRate == 48000, "at 48 kHz");
+        }
+        const std::string wav16 = (dir / "export-16-441.wav").string();
+        check(nc_clip_snapshot_export(snapshot.data(), "wav16:44100", wav16.c_str(),
+                                      message, sizeof(message)),
+              "clip exports as WAV 16/44.1");
+        neuracoust::daw::WavAudioData resampled;
+        if (neuracoust::daw::readPcmWavFile(wav16, resampled, readError)) {
+            check(resampled.sampleRate == 44100, "resampled to 44.1 kHz");
+            check(resampled.bitsPerSample == 16, "at 16 bit");
+        } else {
+            check(0, "the 16/44.1 export reads back");
+        }
+        const std::string m4a = (dir / "export.m4a").string();
+        check(nc_clip_snapshot_export(snapshot.data(), "aac:0", m4a.c_str(),
+                                      message, sizeof(message)),
+              "clip exports as M4A (AAC)");
+        std::error_code fsError;
+        check(std::filesystem::file_size(m4a, fsError) > 4096, "and the M4A has real content");
+        check(!nc_clip_snapshot_export(snapshot.data(), "mp9:0",
+                                       (dir / "export.bad").string().c_str(),
+                                       message, sizeof(message)),
+              "an unknown spec is refused");
+    }
+
     nc_engine_destroy(engine);
 
     if (failures > 0) {

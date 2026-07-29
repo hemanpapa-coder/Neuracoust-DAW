@@ -257,6 +257,8 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
     var onToggleClipPolarity: ((String) -> Void)?
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)?   // (clipId, timeRatio, semitones)
     var onDenoiseClip: ((String) -> Void)?   // neural noise-floor removal, repoints the clip
+    /// Format-converted clip export: (clipId, spec, suggested extension, preset label).
+    var onExportClipConverted: ((String, String, String, String) -> Void)?
     /// (clipId, plug-in name, plug-in path) — opens the plug-in's own ARA editor over the clip.
     var onOpenAraEditor: ((String, String, String) -> Void)?
     var onClearAraEdits: ((String) -> Void)?
@@ -2367,6 +2369,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         init(_ clipId: String, _ curve: String) { self.clipId = clipId; self.curve = curve } }
     private final class SpotMenuRef: NSObject { let clipIds: [String]
         init(_ clipIds: [String]) { self.clipIds = clipIds } }
+    private final class ClipExportRef: NSObject {
+        let clipId: String; let spec: String; let ext: String; let label: String
+        init(_ clipId: String, _ spec: String, _ ext: String, _ label: String) {
+            self.clipId = clipId; self.spec = spec; self.ext = ext; self.label = label } }
     private final class AlignRef: NSObject { let dubId: String; let refId: String
         init(_ dubId: String, _ refId: String) { self.dubId = dubId; self.refId = refId } }
     private final class StemPresetRef: NSObject { let clipId: String; let preset: String
@@ -2440,6 +2446,31 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         clipProc("뮤트", #selector(muteClipMenu(_:)))
         clipProc("Ø 위상 반전", #selector(polarityClipMenu(_:)))
 
+        // Format-converted export: render THE CLIP (window, gain, fades, flags — no track DSP)
+        // and afconvert it to the chosen spec. Presets, not a dialog — the common specs are few.
+        if onExportClipConverted != nil {
+            let exportItem = NSMenuItem(title: "규격 변환 내보내기", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            let presets: [(String, String, String)] = [   // label, spec, extension
+                ("WAV 16bit · 44.1 kHz", "wav16:44100", "wav"),
+                ("WAV 16bit · 48 kHz", "wav16:48000", "wav"),
+                ("WAV 24bit · 48 kHz", "wav24:48000", "wav"),
+                ("WAV 24bit · 96 kHz", "wav24:96000", "wav"),
+                ("WAV 32f · 세션 레이트", "wavf32:0", "wav"),
+                ("AIFF 24bit · 48 kHz", "aiff24:48000", "aif"),
+                ("FLAC · 세션 레이트", "flac:0", "flac"),
+                ("M4A · AAC 256k", "aac:0", "m4a"),
+            ]
+            for (label, spec, ext) in presets {
+                let item = NSMenuItem(title: label, action: #selector(exportClipConvertedMenu(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = ClipExportRef(clip.id, spec, ext, label)
+                sub.addItem(item)
+            }
+            exportItem.submenu = sub
+            menu.addItem(exportItem)
+        }
         // Offline time/pitch print: open one manual editor instead of guessing from presets.
         if onApplyClipTimePitch != nil {
             let tpItem = NSMenuItem(title: "타임/피치 설정…", action: #selector(openTimePitchSettings(_:)), keyEquivalent: "")
@@ -2596,6 +2627,10 @@ final class TimelineNSView: NSView, NSTextFieldDelegate {
         onApplyClipTimePitch?(clipId, r, st)
     }
     @objc private func denoiseClipMenu(_ s: NSMenuItem) { if let id = s.representedObject as? String { onDenoiseClip?(id) } }
+    @objc private func exportClipConvertedMenu(_ s: NSMenuItem) {
+        guard let ref = s.representedObject as? ClipExportRef else { return }
+        onExportClipConverted?(ref.clipId, ref.spec, ref.ext, ref.label)
+    }
     @objc private func openAraEditorMenu(_ s: NSMenuItem) {
         if let ref = s.representedObject as? AraPluginRef {
             onOpenAraEditor?(ref.clipId, ref.pluginName, ref.pluginPath)
@@ -3400,6 +3435,7 @@ struct TimelineView: NSViewRepresentable {
     var onToggleClipPolarity: ((String) -> Void)? = nil
     var onApplyClipTimePitch: ((String, Double, Double) -> Void)? = nil
     var onDenoiseClip: ((String) -> Void)? = nil
+    var onExportClipConverted: ((String, String, String, String) -> Void)? = nil
     var onOpenAraEditor: ((String, String, String) -> Void)? = nil
     var onClearAraEdits: ((String) -> Void)? = nil
     var araPlugins: [(name: String, path: String)] = []
@@ -3539,6 +3575,7 @@ struct TimelineView: NSViewRepresentable {
         view.onNormalizeClip = onNormalizeClip
         view.onApplyClipTimePitch = onApplyClipTimePitch
         view.onDenoiseClip = onDenoiseClip
+        view.onExportClipConverted = onExportClipConverted
         view.onOpenAraEditor = onOpenAraEditor
         view.onClearAraEdits = onClearAraEdits
         view.araPlugins = araPlugins

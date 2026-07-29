@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <spawn.h>
+#include <vector>
 #include <sys/wait.h>
 
 extern char** environ;
@@ -73,7 +74,75 @@ int runAfconvert(const std::string& source, const std::string& target) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+// Runs afconvert with an arbitrary argument list (source/target already inside `argv`).
+int runAfconvertArgv(const std::vector<std::string>& args) {
+    const char* afconvert = "/usr/bin/afconvert";
+    std::vector<const char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(afconvert);
+    for (const auto& arg : args) {
+        argv.push_back(arg.c_str());
+    }
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    if (posix_spawn(&pid, afconvert, nullptr, nullptr,
+                    const_cast<char* const*>(argv.data()), environ) != 0) {
+        return -1;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        return -1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
 } // namespace
+
+bool convertAudioFileToSpec(const std::filesystem::path& sourceWav,
+                            const std::filesystem::path& targetPath,
+                            const std::string& spec,
+                            std::string& error) {
+    std::string format = spec;
+    int sampleRate = 0;
+    if (const auto colon = spec.find(':'); colon != std::string::npos) {
+        format = spec.substr(0, colon);
+        sampleRate = std::atoi(spec.c_str() + colon + 1);
+    }
+    // The output rate rides INSIDE the data format ("LEI16@44100") — afconvert has no separate
+    // resample flag, and a stray -r is silently ignored (project_io_smoke caught the 48 kHz file
+    // this produced by reading it back). Options precede the files.
+    std::string dataFormat;
+    std::string container;
+    if (format == "wav16")       { container = "WAVE"; dataFormat = "LEI16"; }
+    else if (format == "wav24")  { container = "WAVE"; dataFormat = "LEI24"; }
+    else if (format == "wavf32") { container = "WAVE"; dataFormat = "LEF32"; }
+    else if (format == "aiff24") { container = "AIFF"; dataFormat = "BEI24"; }
+    else if (format == "flac")   { container = "flac"; dataFormat = "flac"; }
+    else if (format == "aac")    { container = "m4af"; dataFormat = "aac"; }
+    else {
+        error = "지원하지 않는 규격: " + format;
+        return false;
+    }
+    if (sampleRate > 0) {
+        dataFormat += "@" + std::to_string(sampleRate);
+    }
+    std::vector<std::string> args{"-f", container, "-d", dataFormat};
+    if (format == "aac") {
+        args.insert(args.end(), {"-b", "256000"});
+    }
+    if (sampleRate > 0) {
+        // Best available sample-rate converter — an export is offline, so spend the quality.
+        args.insert(args.end(), {"--src-complexity", "bats"});
+    }
+    args.push_back(sourceWav.string());
+    args.push_back(targetPath.string());
+    const int status = runAfconvertArgv(args);
+    if (status != 0) {
+        error = "afconvert 변환 실패 (exit " + std::to_string(status) + ")";
+        return false;
+    }
+    return true;
+}
 
 bool isSupportedImportAudioExtension(const std::filesystem::path& path) {
     static const std::array<const char*, 7> kSupported{

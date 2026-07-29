@@ -34,6 +34,15 @@ std::filesystem::path projectAudioFilesDirectory(const std::filesystem::path& pr
 /// Where imports go before the project has been saved anywhere.
 std::filesystem::path temporaryImportAudioFilesDirectory();
 
+/// Converts `sourceWav` to the format `spec` names at `targetPath`, via afconvert.
+/// Specs: "wav16" / "wav24" / "wavf32" / "aiff24" / "flac" / "aac", optionally with a
+/// ":<sampleRate>" suffix (absent or 0 keeps the source rate). The clip-export menu's presets
+/// are exactly these strings. Returns false with `error` filled when afconvert refuses.
+bool convertAudioFileToSpec(const std::filesystem::path& sourceWav,
+                            const std::filesystem::path& targetPath,
+                            const std::string& spec,
+                            std::string& error);
+
 /// Converts any supported audio file to a float32 WAV inside `mediaDirectory`,
 /// choosing a filename that does not collide. Returns the written path.
 bool convertAudioFileToWavInDirectory(const std::filesystem::path& sourcePath,

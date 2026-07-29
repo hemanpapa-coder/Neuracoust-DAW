@@ -473,6 +473,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     settings.roleMixer = project.dspRoleMixer;
     settings.roleInserts = project.dspRoleInserts;
     settings.autoOverflow = project.dspAutoOverflow;
+    settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, project.remoteMixerChannels)));
     settings.nodes.clear();
     return settings;
 }
@@ -501,6 +502,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     settings.roleMixer = engine->project.dspRoleMixer;
     settings.roleInserts = engine->project.dspRoleInserts;
     settings.autoOverflow = engine->project.dspAutoOverflow;
+    settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, engine->project.remoteMixerChannels)));
     settings.nodes.clear();
     return settings;
 }
@@ -5731,6 +5733,85 @@ int nc_project_serialize(NCEngine* engine, char* out, size_t outLen) {
     return static_cast<int>(text.size());
 }
 
+// Serialize ONE clip as its own minimal project: the clip at 0 s on the first audio track of a
+// default project, everything else empty and flat, so a bounce of it is exactly the clip as it
+// sounds at clip level — window, gain, fades, reverse/normalize/Ø, prints — with no console,
+// inserts, fader or monitor colouring. Main-thread (reads the live project); the render itself
+// happens in nc_clip_snapshot_export, off-thread, the same split as the background bounce.
+int nc_clip_export_serialize(NCEngine* engine, const char* clip_id, char* out, size_t outLen) {
+    if (engine == nullptr || clip_id == nullptr) {
+        return 0;
+    }
+    const auto* clip = findClip(engine, clip_id);
+    if (clip == nullptr) {
+        return 0;
+    }
+    neuracoust::daw::ProjectDocument mini = neuracoust::daw::defaultProject();
+    mini.sampleRate = engine->project.sampleRate;   // render at the session rate; afconvert resamples
+    const auto audioTrack = std::find_if(mini.tracks.begin(), mini.tracks.end(),
+                                         [](const auto& track) { return track.trackType == "audio"; });
+    if (audioTrack == mini.tracks.end()) {
+        return 0;
+    }
+    neuracoust::daw::ClipState exported = *clip;
+    exported.trackName = audioTrack->name;
+    exported.startSeconds = 0.0;
+    exported.muted = false;         // exporting a muted clip should export its audio, not silence
+    exported.crossfadeInSeconds = 0.0;   // derived from neighbours that are not coming along
+    exported.crossfadeOutSeconds = 0.0;
+    mini.clips.clear();
+    mini.clips.push_back(std::move(exported));
+    neuracoust::daw::rebuildProjectEditModelFromClips(mini);
+    const std::string text = neuracoust::daw::serializeProject(mini);
+    if (out != nullptr && outLen > 0) {
+        copyText(out, outLen, text);
+    }
+    return static_cast<int>(text.size());
+}
+
+// Render a clip snapshot (from nc_clip_export_serialize) and convert it to `spec` at `path`.
+// Engine-free, so it can run off the main thread. Specs are AudioImport's convertAudioFileToSpec
+// strings ("wav24:48000", "flac:0", ...).
+bool nc_clip_snapshot_export(const char* projectText, const char* spec, const char* path,
+                             char* message, size_t messageLen) {
+    const auto say = [&](const std::string& text) {
+        if (message != nullptr && messageLen > 0) copyText(message, messageLen, text);
+    };
+    if (projectText == nullptr || spec == nullptr || path == nullptr || *path == '\0') {
+        say("내보낼 클립/규격/경로가 없습니다");
+        return false;
+    }
+    neuracoust::daw::ProjectDocument project;
+    std::string error;
+    if (!neuracoust::daw::deserializeProject(projectText, project, error)) {
+        say(error.empty() ? "클립 스냅샷을 읽을 수 없습니다" : error);
+        return false;
+    }
+    std::error_code fsError;
+    const auto tempWav = std::filesystem::temp_directory_path() /
+        ("nc-clip-export-" + std::to_string(::getpid()) + "-" +
+         std::to_string(reinterpret_cast<uintptr_t>(&project)) + ".wav");
+    const auto bounce = neuracoust::daw::bounceProjectToWav(project, tempWav.string());
+    if (!bounce.ok) {
+        std::filesystem::remove(tempWav, fsError);
+        say(bounce.message.empty() ? "클립 렌더에 실패했습니다" : bounce.message);
+        return false;
+    }
+    if (!bounce.missingMediaClipIds.empty()) {
+        std::filesystem::remove(tempWav, fsError);
+        say("클립의 소스 파일을 찾을 수 없습니다");
+        return false;
+    }
+    const bool converted = neuracoust::daw::convertAudioFileToSpec(tempWav, path, spec, error);
+    std::filesystem::remove(tempWav, fsError);
+    if (!converted) {
+        say(error);
+        return false;
+    }
+    say(std::string("클립 내보내기 완료: ") + path);
+    return true;
+}
+
 // Apply just the monitor-station configuration from a serialized project (used as the global
 // "전체 설정 저장" template) onto the current project, so a new/blank session inherits the
 // saved monitor setup — listen mode, mono/swap/phase, dim/talkback, input trim, volume, and
@@ -7477,8 +7558,8 @@ void nc_dsp_set_tracking_buffer_frames(NCEngine* engine, int frames) {
     engine->reconcileProjectDeclicked();
 }
 
-// The SoundGrid configuration ladder (8/16/32/64): how many channels the remote-mixer sessions
-// size themselves for. Stored intent until M1 lands; the card shows it either way.
+// The SoundGrid configuration ladder (8/16/32/64): how many mixer input channels the remote
+// summing sessions accept. A bus with more contributions than this stays local, bit-identically.
 int nc_dsp_mixer_channels(NCEngine* engine) {
     return engine != nullptr ? engine->project.remoteMixerChannels : 32;
 }
@@ -7489,6 +7570,10 @@ void nc_dsp_set_mixer_channels(NCEngine* engine, int channels) {
     if (clamped == engine->project.remoteMixerChannels) return;
     engine->project.remoteMixerChannels = clamped;
     engine->recordStep("Remote mixer channels");
+    // The ladder is a live cap on the remote summing sessions now, not stored intent — push the
+    // new settings so a bus over the new size falls back locally (bit-identical) at once.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();
 }
 
 int nc_dsp_auto_overflow(NCEngine* engine) {

@@ -1660,6 +1660,48 @@ final class EngineController: ObservableObject {
     /// window, denoises it off the main thread, then repoints the clip at the cleaned WAV (length
     /// preserved). Runs BEFORE clip gain in intent: clean first, then boost, so the boost lifts signal
     /// not hiss. `mix` 0…1 is the denoise strength (1 = full). Reuses the background-DSP status fields.
+    /// Format-converted clip export: render the clip AS A CLIP (window, gain, fades, reverse/
+    /// normalize/Ø — no track DSP, fader or monitor colouring) and afconvert it to the preset's
+    /// spec. Serialization happens here on the main actor; the render + conversion run detached,
+    /// the same split as the background bounce.
+    func exportClipConverted(_ clipId: String, spec: String, ext: String, label: String) {
+        guard let handle else { return }
+        let needed = Int(nc_clip_export_serialize(handle, clipId, nil, 0))
+        guard needed > 0 else {
+            lastError = "클립을 내보낼 수 없습니다 (클립을 찾지 못함)"
+            return
+        }
+        var buffer = [CChar](repeating: 0, count: needed + 1)
+        _ = nc_clip_export_serialize(handle, clipId, &buffer, buffer.count)
+        let snapshot = String(cString: buffer)
+
+        let clipName = clips.first(where: { $0.id == clipId }).map { clip -> String in
+            clip.name.isEmpty
+                ? (clip.sourcePath as NSString).lastPathComponent.replacingOccurrences(of: ".wav", with: "")
+                : clip.name
+        } ?? "Clip"
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: ext)].compactMap { $0 }
+        panel.nameFieldStringValue = "\(clipName) - \(label).\(ext)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let outputPath = url.path
+
+        Task.detached(priority: .userInitiated) {
+            var message = [CChar](repeating: 0, count: 512)
+            let ok = nc_clip_snapshot_export(snapshot, spec, outputPath, &message, message.count)
+            let text = String(cString: message)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if ok {
+                    // Show the result where the user can grab it, the way Logic reveals exports.
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: outputPath)])
+                } else {
+                    self.lastError = text.isEmpty ? "클립 내보내기에 실패했습니다" : text
+                }
+            }
+        }
+    }
+
     func denoiseClip(_ clipId: String, mix: Double = 1.0) {
         guard let handle, stemSeparationProgress == nil else { return }
         let helper = Bundle.main.bundlePath + "/Contents/MacOS/neuracoust_denoiser"
