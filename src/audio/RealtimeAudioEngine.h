@@ -167,6 +167,12 @@ struct AudioEngineStatus {
     /// hands the callback more frames than the buffer setting, so dividing the raw duration by the
     /// configured period reported a load several times the truth and pinned the meter at 100%.
     double realtimeMaxRenderLoad = 0.0;
+    /// realtimeMaxRenderLoad, split. Local = the render minus time spent waiting on remote
+    /// nodes (what the Mac actually computed); remoteWait = that waiting, which fills the
+    /// callback's wall clock while the CPU idles. The unsplit total above still drives the
+    /// dropout judgement — an overrun is an overrun whoever caused it.
+    double realtimeMaxLocalRenderLoad = 0.0;
+    double realtimeMaxRemoteWaitLoad = 0.0;
     int realtimeLateWakeCount = 0;
     int activeRealtimeVst3MasterInsertCount = 0;
     int activeRealtimeVst3TrackInsertCount = 0;

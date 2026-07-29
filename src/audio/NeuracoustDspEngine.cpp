@@ -2097,6 +2097,17 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    // Remote-wait accounting: every remote exchange below adds its wall time to the
+    // accumulator; publish whatever this block collected on EVERY exit path so the load
+    // meter's split can never go stale.
+    remoteWaitUsBlockAccum_ = 0.0;
+    struct PublishRemoteWait {
+        NeuracoustDspEngine* engine;
+        ~PublishRemoteWait() {
+            engine->remoteWaitUsLastBlock_.store(engine->remoteWaitUsBlockAccum_,
+                                                 std::memory_order_relaxed);
+        }
+    } publishRemoteWait {this};
     interleavedStereo.assign(static_cast<size_t>(frameCount) * 2, 0.0f);
     syncProjectMonitorDspRenderPathLocked();
     const ProjectAudioRenderPlan& renderPlan = projectPlan_;
@@ -3014,12 +3025,17 @@ void NeuracoustDspEngine::applyRealtimeTrackInsertChainsLocked(int64_t startFram
                 ? (static_cast<double>(networkBufferFrames) * 1000.0 / settings_.sampleRate)
                 : 2.7;
             remoteSettings.timeoutMs = std::max<int>(8, static_cast<int>(std::ceil(bufferLatencyMs + 5.0)));
-	            if (trackChain.remoteStream == nullptr ||
-	                !trackChain.remoteStream->process(remoteSettings,
-	                                                  trackInsertProcessedBlock_,
-	                                                  trackChain.remoteParameters,
-	                                                  remoteTrackInsertProcessedBlock_) ||
-	                remoteTrackInsertProcessedBlock_.size() != trackInsertProcessedBlock_.size()) {
+	            const auto exchangeStart = std::chrono::steady_clock::now();
+	            const bool exchanged =
+	                trackChain.remoteStream != nullptr &&
+	                trackChain.remoteStream->process(remoteSettings,
+	                                                 trackInsertProcessedBlock_,
+	                                                 trackChain.remoteParameters,
+	                                                 remoteTrackInsertProcessedBlock_) &&
+	                remoteTrackInsertProcessedBlock_.size() == trackInsertProcessedBlock_.size();
+	            remoteWaitUsBlockAccum_ += std::chrono::duration<double, std::micro>(
+	                std::chrono::steady_clock::now() - exchangeStart).count();
+	            if (!exchanged) {
 	                message_ = "Remote DSP track insert buffering: " + trackChain.trackName;
 	                storeTrackInsertMeterLocked(trackChain.trackName,
 	                                            trackChain.slotIndex,
@@ -3228,7 +3244,10 @@ bool NeuracoustDspEngine::processRealtimeBusSumLocked(const std::string& busName
     auto settings = remoteDspSettingsForMode(settings_.remoteDspServer, remoteMixerMode_);
     settings.channelCount = 2;
     settings.timeoutMs = 2;   // the local fallback is bit-identical; never bleed the block budget
+    const auto mixExchangeStart = std::chrono::steady_clock::now();
     const auto result = session->mix(settings, contributions, summed);
+    remoteWaitUsBlockAccum_ += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - mixExchangeStart).count();
     if (!result.processed) {
         ++missStreak;
         ++remoteMixMisses_;
@@ -3333,9 +3352,14 @@ bool NeuracoustDspEngine::processRemoteMasterInsertsLocked(std::vector<float>& i
     // some of the chain twice.
     for (auto& stage : remoteMasterInserts_) {
         settings.loadedPluginIdHint = stage.moduleId;
-        if (stage.stream == nullptr ||
-            !stage.stream->process(settings, interleavedStereo, stage.parameters, remoteMasterScratch_) ||
-            remoteMasterScratch_.size() != interleavedStereo.size()) {
+        const auto exchangeStart = std::chrono::steady_clock::now();
+        const bool exchanged =
+            stage.stream != nullptr &&
+            stage.stream->process(settings, interleavedStereo, stage.parameters, remoteMasterScratch_) &&
+            remoteMasterScratch_.size() == interleavedStereo.size();
+        remoteWaitUsBlockAccum_ += std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - exchangeStart).count();
+        if (!exchanged) {
             return false;
         }
         interleavedStereo = remoteMasterScratch_;
@@ -3483,13 +3507,15 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
         : 2.7;
     settings.timeoutMs = std::max<int>(8, static_cast<int>(std::ceil(bufferLatencyMs + 5.0)));
 
-    const auto streamStatusBefore = found->second.stream != nullptr;
-    (void)streamStatusBefore;
-    if (!found->second.stream->process(settings,
-                                       interleavedStereo,
-                                       found->second.parameters,
-                                       remoteConsoleProcessedBlock_) ||
-        remoteConsoleProcessedBlock_.size() != interleavedStereo.size()) {
+    const auto exchangeStart = std::chrono::steady_clock::now();
+    const bool exchanged = found->second.stream->process(settings,
+                                                         interleavedStereo,
+                                                         found->second.parameters,
+                                                         remoteConsoleProcessedBlock_) &&
+                           remoteConsoleProcessedBlock_.size() == interleavedStereo.size();
+    remoteWaitUsBlockAccum_ += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - exchangeStart).count();
+    if (!exchanged) {
         // Warming up or the node missed a block. Returning false runs the LOCAL strip for this
         // block instead of dropping it — the same processor, so the channel keeps its sound
         // rather than going momentarily dry.
@@ -3716,8 +3742,13 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
                                 settings_.monitorDspPathMode == "nds" ||
                                 settings_.monitorDspPathMode == "remote_external") ? 12 : 8;
 
-    if (remoteMonitorDspStream_.process(remoteSettings, interleavedStereo, remoteDspProcessedBlock_) &&
-        remoteDspProcessedBlock_.size() == interleavedStereo.size()) {
+    const auto exchangeStart = std::chrono::steady_clock::now();
+    const bool exchanged =
+        remoteMonitorDspStream_.process(remoteSettings, interleavedStereo, remoteDspProcessedBlock_) &&
+        remoteDspProcessedBlock_.size() == interleavedStereo.size();
+    remoteWaitUsBlockAccum_ += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - exchangeStart).count();
+    if (exchanged) {
         interleavedStereo = remoteDspProcessedBlock_;
         remoteDspMonitorActive_ = true;
         const auto streamStatus = remoteMonitorDspStream_.status();

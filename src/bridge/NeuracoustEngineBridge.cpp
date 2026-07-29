@@ -643,6 +643,9 @@ void nc_engine_status(NCEngine* engine, NCEngineStatus* out) {
     out->realtimeMaxWakeJitterUs = s.realtimeMaxWakeJitterUs;
     out->realtimeMaxRenderDurationUs = s.realtimeMaxRenderDurationUs;
     out->realtimeMaxRenderLoad = s.realtimeMaxRenderLoad;
+    out->realtimeMaxLocalRenderLoad = s.realtimeMaxLocalRenderLoad;
+    out->realtimeMaxRemoteWaitLoad = s.realtimeMaxRemoteWaitLoad;
+    out->remoteDspRoundTripJitterUs = s.remoteDspAverageRoundTripJitterUs;
     out->realtimeLateWakeCount = s.realtimeLateWakeCount;
     out->referenceUnderrunBlocks = s.referenceUnderrunBlocks;
     out->referenceOverrunDrops = s.referenceOverrunDrops;

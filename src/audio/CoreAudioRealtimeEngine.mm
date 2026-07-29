@@ -599,6 +599,8 @@ public:
         copy.realtimeMaxWakeJitterUs = realtimeMaxWakeJitterUs_.load();
         copy.realtimeMaxRenderDurationUs = realtimeMaxRenderDurationUs_.load();
         copy.realtimeMaxRenderLoad = realtimeMaxRenderLoad_.load();
+        copy.realtimeMaxLocalRenderLoad = realtimeMaxLocalRenderLoad_.load();
+        copy.realtimeMaxRemoteWaitLoad = realtimeMaxRemoteWaitLoad_.load();
         copy.realtimeLateWakeCount = realtimeLateWakeCount_.load();
         return copy;
     }
@@ -1430,6 +1432,14 @@ private:
         const double loadFraction = renderDurationUs / std::max(1.0, expectedPeriodUs);
         const double previousLoad = realtimeMaxRenderLoad_.load();
         realtimeMaxRenderLoad_.store(std::max(loadFraction, previousLoad * 0.985));
+        // Split the load: the block's remote-exchange wall time is waiting, not computing.
+        // Both halves get their own peak-hold — subtracting one peak-held figure from another
+        // would mix samples from different blocks and could even go negative.
+        const double remoteWaitUs = std::clamp(dspEngine_.lastBlockRemoteWaitUs(), 0.0, renderDurationUs);
+        const double localFraction = (renderDurationUs - remoteWaitUs) / std::max(1.0, expectedPeriodUs);
+        const double waitFraction = remoteWaitUs / std::max(1.0, expectedPeriodUs);
+        realtimeMaxLocalRenderLoad_.store(std::max(localFraction, realtimeMaxLocalRenderLoad_.load() * 0.985));
+        realtimeMaxRemoteWaitLoad_.store(std::max(waitFraction, realtimeMaxRemoteWaitLoad_.load() * 0.985));
         // What actually drops audio is the render not finishing inside the period it was given —
         // the wake being early or late does not, and on a burst-delivering driver (SoundGrid) the
         // interval is irregular by design, which is why counting jitter alone reported hundreds of
@@ -1447,6 +1457,8 @@ private:
         realtimeMaxWakeJitterUs_.store(0.0);
         realtimeMaxRenderDurationUs_.store(0.0);
         realtimeMaxRenderLoad_.store(0.0);
+        realtimeMaxLocalRenderLoad_.store(0.0);
+        realtimeMaxRemoteWaitLoad_.store(0.0);
         realtimeLateWakeCount_.store(0);
         lastRenderWakeTime_ = {};
     }
@@ -1539,6 +1551,8 @@ private:
     std::atomic<double> realtimeMaxWakeJitterUs_ {0.0};
     std::atomic<double> realtimeMaxRenderDurationUs_ {0.0};
     std::atomic<double> realtimeMaxRenderLoad_ {0.0};
+    std::atomic<double> realtimeMaxLocalRenderLoad_ {0.0};
+    std::atomic<double> realtimeMaxRemoteWaitLoad_ {0.0};
     std::atomic<int> realtimeLateWakeCount_ {0};
     std::atomic<int> realtimeTelemetrySuppressCallbacks_ {0};
     std::chrono::steady_clock::time_point lastRenderWakeTime_ {};

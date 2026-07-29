@@ -77,6 +77,12 @@ typedef struct {
     double realtimeMaxRenderDurationUs;
     /// Worst recent render as a fraction of the period that callback was allowed (see the engine).
     double realtimeMaxRenderLoad;
+    /// The same load, split: what the Mac actually computed vs. time the render callback spent
+    /// WAITING on remote DSP nodes (network round trips fill the wall clock while the CPU idles).
+    double realtimeMaxLocalRenderLoad;
+    double realtimeMaxRemoteWaitLoad;
+    /// Server-side timing wobble: EMA of block-to-block remote round-trip variation (µs).
+    double remoteDspRoundTripJitterUs;
     int realtimeLateWakeCount;
     // Reference-tap ("다른 앱") FIFO faults. The wake-jitter figures above describe the OUTPUT
     // render thread ONLY — a tap capture that starves or overflows crackles while the render

@@ -1095,11 +1095,21 @@ struct MonitorDock: View {
             // is idle, and a machine is ON by its own switch rather than by whether the monitor
             // happens to point at it (a node carrying only track inserts still has a load).
             sectionLabel("DSP 부하")
+            // 내장 = the Mac's own compute. Waiting on a node's reply fills the render
+            // callback's wall clock while the CPU idles, so it gets its OWN row below —
+            // offloading must never read as internal load.
             machineLoadMeter(label: "내장",
                              on: true,
-                             fraction: engine.dspLoadFraction,
-                             text: String(format: "%.0f%%", engine.dspLoadFraction * 100),
-                             hot: engine.dspLoadFraction > 0.8)
+                             fraction: engine.localDspLoadFraction,
+                             text: String(format: "%.0f%%", engine.localDspLoadFraction * 100),
+                             hot: engine.localDspLoadFraction > 0.8)
+            if engine.ndsEnabled || engine.externalDspEnabled || engine.remoteWaitFraction > 0.005 {
+                machineLoadMeter(label: "원격 대기",
+                                 on: engine.ndsEnabled || engine.externalDspEnabled,
+                                 fraction: engine.remoteWaitFraction,
+                                 text: String(format: "%.0f%%", engine.remoteWaitFraction * 100),
+                                 hot: engine.remoteWaitFraction > 0.5)
+            }
             machineLoadMeter(label: "NDS",
                              on: engine.ndsEnabled,
                              fraction: remoteLoadFraction(.nds),
@@ -1111,7 +1121,15 @@ struct MonitorDock: View {
                              text: remoteLoadText(.external, active: engine.externalDspEnabled),
                              hot: remoteLoadFraction(.external) > 0.8)
 
-            StatRow(label: "지터 (Jitter)", value: String(format: "%.0f µs", engine.wakeJitterUs))
+            // Two jitters, two rows: 내장 = the Mac render thread's wake timing; 서버 = the
+            // node's block-to-block round-trip variation. One number hid the other.
+            StatRow(label: "내장 지터", value: String(format: "%.0f µs", engine.wakeJitterUs))
+            if engine.ndsEnabled || engine.externalDspEnabled {
+                StatRow(label: "서버 지터",
+                        value: engine.remoteRoundTripJitterUs > 0
+                            ? String(format: "%.0f µs", engine.remoteRoundTripJitterUs)
+                            : "–")
+            }
             // The jitter row above watches the OUTPUT render thread. A crackle while listening to
             // another app comes from the TAP CAPTURE side, which that number can never see — so it
             // gets its own row. Only shown once the tap has actually faulted.

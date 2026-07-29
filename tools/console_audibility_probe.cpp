@@ -215,5 +215,47 @@ int main(int argc, char** argv) {
         std::cerr << "A PLATE-PICKED CONSOLE MODEL BYPASSES THE WHOLE STRIP\n";
         ok = false;
     }
+
+    // Remote-wait accounting: with strips local, the engine must report ZERO remote wait; on a
+    // node, most blocks must report real waiting time. That figure is what the dock subtracts
+    // from the 내장 load meter, so a lie here mislabels the load split.
+    {
+        AudioEngineSettings settings;
+        settings.sampleRate = 48000.0;
+        settings.bufferSize = 256;
+        settings.monitorDspEnabled = false;
+        settings.monitorInputTrimDb = 0.0f;
+        settings.monitorVolumeDb = 0.0f;
+        settings.transportRunning = true;
+        if (!ndsHost.empty()) {
+            settings.remoteDspServer.ndsEnabled = true;
+            settings.remoteDspServer.ndsHost = ndsHost;
+            settings.remoteDspServer.roleChannelStrip = "nds";
+            applyRemoteDspHostPort(settings.remoteDspServer);
+        }
+        NeuracoustDspEngine engine;
+        std::string error;
+        if (engine.configure(settings, settings.bufferSize, error) &&
+            engine.loadProject(makeProject(tonePath, ndsHost, 1), error)) {
+            std::vector<float> block;
+            double waitSum = 0.0;
+            int waitedBlocks = 0;
+            for (int i = 0; i < 200; ++i) {
+                engine.renderInterleavedStereo(256, block);
+                const double us = engine.lastBlockRemoteWaitUs();
+                if (us > 0.0) { waitSum += us; ++waitedBlocks; }
+            }
+            std::cout << "  remote wait        : " << waitedBlocks << "/200 blocks, avg "
+                      << (waitedBlocks > 0 ? waitSum / waitedBlocks : 0.0) << " us\n";
+            if (ndsHost.empty() && waitedBlocks != 0) {
+                std::cerr << "LOCAL RENDER REPORTED REMOTE WAIT TIME\n";
+                ok = false;
+            }
+            if (!ndsHost.empty() && waitedBlocks <= 100) {
+                std::cerr << "REMOTE STRIPS REPORTED NO WAIT TIME (load split would lie)\n";
+                ok = false;
+            }
+        }
+    }
     return ok ? 0 : 2;
 }

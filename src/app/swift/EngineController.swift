@@ -96,6 +96,13 @@ final class EngineController: ObservableObject {
     /// Worst recent render pass as a fraction of the period it was allowed. The engine normalises
     /// against the callback's OWN frame count, so a burst-delivering driver no longer reads 100%.
     @Published private(set) var maxRenderLoad: Double = 0
+    /// maxRenderLoad split: what the Mac actually computed, and the render-thread time spent
+    /// WAITING on remote DSP nodes (network fills the callback's wall clock while the CPU
+    /// idles). 내장 미터 shows the local half; the wait gets its own row.
+    @Published private(set) var localRenderLoad: Double = 0
+    @Published private(set) var remoteWaitLoad: Double = 0
+    /// Server-side timing wobble (µs): block-to-block variation of the remote round trip.
+    @Published private(set) var remoteRoundTripJitterUs: Double = 0
     // Cumulative render-deadline misses (late wakes) — each is a potential audible dropout even when
     // playback keeps rolling. A safe session should hold this at (or near) 0.
     @Published private(set) var lateWakeCount: Int = 0
@@ -3292,6 +3299,12 @@ final class EngineController: ObservableObject {
     /// This is render headroom, which is what actually predicts dropouts — raw
     /// wake jitter reads ~1 buffer period even when idle on Waves SoundGrid.
     var dspLoadFraction: Double { min(1.0, max(0.0, maxRenderLoad)) }
+    /// 내장 미터: the Mac's own compute, with remote waiting stripped out. Falls back to the
+    /// unsplit figure until the engine has published a split (fresh start, older status).
+    var localDspLoadFraction: Double {
+        localRenderLoad > 0 || remoteWaitLoad > 0 ? min(1.0, max(0.0, localRenderLoad)) : dspLoadFraction
+    }
+    var remoteWaitFraction: Double { min(1.0, max(0.0, remoteWaitLoad)) }
 
     /// `NCEngine` is opaque in C, so Swift imports the handle as an OpaquePointer.
     /// Marked nonisolated so `deinit` can free it; nothing else ever holds it.
@@ -10140,6 +10153,9 @@ final class EngineController: ObservableObject {
     private var telemetrySmoothedJitterUs: Double = 0
     private var telemetrySmoothedRenderUs: Double = 0
     private var telemetrySmoothedRenderLoad: Double = 0
+    private var telemetrySmoothedLocalLoad: Double = 0
+    private var telemetrySmoothedRemoteWait: Double = 0
+    private var telemetrySmoothedRemoteJitterUs: Double = 0
 
     private func tick() {
         guard let handle else { return }
@@ -10182,6 +10198,15 @@ final class EngineController: ObservableObject {
             setIfChanged(\.maxRenderDurationUs, (telemetrySmoothedRenderUs / 100).rounded() * 100)   // 0.1 ms display
             telemetrySmoothedRenderLoad = telemetrySmoothedRenderLoad * 0.7 + status.realtimeMaxRenderLoad * 0.3
             setIfChanged(\.maxRenderLoad, (telemetrySmoothedRenderLoad * 100).rounded() / 100)       // 1% display
+            // The split: Mac compute vs. render-thread time spent waiting on remote nodes. The
+            // 내장 meter shows the local half; the wait gets its own row so offloading cannot
+            // masquerade as internal load.
+            telemetrySmoothedLocalLoad = telemetrySmoothedLocalLoad * 0.7 + status.realtimeMaxLocalRenderLoad * 0.3
+            setIfChanged(\.localRenderLoad, (telemetrySmoothedLocalLoad * 100).rounded() / 100)
+            telemetrySmoothedRemoteWait = telemetrySmoothedRemoteWait * 0.7 + status.realtimeMaxRemoteWaitLoad * 0.3
+            setIfChanged(\.remoteWaitLoad, (telemetrySmoothedRemoteWait * 100).rounded() / 100)
+            telemetrySmoothedRemoteJitterUs = telemetrySmoothedRemoteJitterUs * 0.7 + status.remoteDspRoundTripJitterUs * 0.3
+            setIfChanged(\.remoteRoundTripJitterUs, telemetrySmoothedRemoteJitterUs.rounded())
             setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }

@@ -181,6 +181,10 @@ public:
     }
 
     void renderInterleavedStereo(int64_t frameCount, std::vector<float>& interleavedStereo);
+    /// Wall-clock µs the LAST rendered block spent waiting on remote DSP exchanges. The
+    /// realtime engine subtracts this from the callback duration so the load meter can report
+    /// Mac compute and network waiting separately. Lock-free — safe right after a render call.
+    double lastBlockRemoteWaitUs() const { return remoteWaitUsLastBlock_.load(std::memory_order_relaxed); }
     AudioEngineStatus statusSnapshot() const;
     // Fills `status` reusing its vector capacity; caller MUST hold mutex_. Used by the render's
     // throttled publish into statusShadow_.
@@ -599,6 +603,13 @@ private:
     double remoteDspAverageRoundTripJitterUs_ = 0.0;
     double remoteDspMaxRoundTripJitterUs_ = 0.0;
     bool remoteDspRoundTripInitialized_ = false;
+    // Wall-clock µs the CURRENT render block has spent inside remote exchanges (node round
+    // trips + stream hand-offs). Accumulated on the render thread under mutex_, published
+    // atomically at block end so the realtime engine can split its load meter into "Mac
+    // compute" and "waiting on the network" — the wait shows up in the callback's wall time
+    // even though the CPU is idle for all of it.
+    double remoteWaitUsBlockAccum_ = 0.0;
+    std::atomic<double> remoteWaitUsLastBlock_ {0.0};
     int activeRemoteDspTrackInsertCount_ = 0;
     std::vector<std::string> trackInsertMeterTrackNames_;
     std::vector<int> trackInsertMeterSlotIndices_;
