@@ -7,6 +7,12 @@ import SwiftUI
 /// The moving playhead, split off the main EngineController so its 30 Hz updates re-render ONLY the
 /// views that draw it (timeline, transport, piano roll) instead of the whole engine-observing UI.
 @MainActor
+extension Notification.Name {
+    /// Open a detached window scene by id ("mixer" / "monitor-station"). Posted by the key-code
+    /// monitor; received by RootView, which holds the openWindow environment.
+    static let ncOpenAuxWindow = Notification.Name("nc.openAuxWindow")
+}
+
 final class PlayheadClock: ObservableObject {
     @Published var seconds: Double = 0
 }
@@ -3692,6 +3698,20 @@ final class EngineController: ObservableObject {
 
         let shift = event.modifierFlags.contains(.shift)
         let option = event.modifierFlags.contains(.option)
+
+        // Detached windows: ⌘⌥M mixer, ⌘⌥U monitor station. Delivered HERE because menu
+        // shortcuts never fire under a Korean input source; a notification carries the scene id
+        // to RootView, the only place that can openWindow.
+        if option {
+            if event.keyCode == KeyCode.m {
+                NotificationCenter.default.post(name: .ncOpenAuxWindow, object: "mixer")
+                return nil
+            }
+            if event.keyCode == 32 {   // U
+                NotificationCenter.default.post(name: .ncOpenAuxWindow, object: "monitor-station")
+                return nil
+            }
+        }
 
         switch event.keyCode {
         // Pro Tools horizontal zoom: ⌘] in, ⌘[ out. ⌘⌥] / ⌘⌥[ frames the session (fit).

@@ -45,6 +45,7 @@ struct RemoteDspServerSettings {
     std::string roleMonitor = "internal";
     std::string roleChannelStrip = "internal";
     std::string roleMaster = "internal";
+    std::string roleMixer = "internal";
     std::string roleInserts = "internal";
     bool autoOverflow = false;
     uint16_t rtEnginePort = 20000;

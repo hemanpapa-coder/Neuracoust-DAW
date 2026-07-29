@@ -389,9 +389,18 @@ struct RootView: View {
         .task {
             guard !restoredAuxWindows else { return }
             restoredAuxWindows = true
-            for id in UserDefaults.standard.stringArray(forKey: "nc.openAuxWindows") ?? [] {
-                openWindow(id: id)
-            }
+            let ids = UserDefaults.standard.stringArray(forKey: "nc.openAuxWindows") ?? []
+            guard !ids.isEmpty else { return }
+            // Cold launch: openWindow silently no-ops until the window scenes register, so the
+            // restore that worked on a warm relaunch skipped on a fresh one. Give the scene
+            // phase a beat first.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            for id in ids { openWindow(id: id) }
+        }
+        // ⌘⌥M / ⌘⌥U arrive from the key-code monitor (menu shortcuts never fire under a Korean
+        // input source — the app-wide rule), relayed here because only a View can openWindow.
+        .onReceive(NotificationCenter.default.publisher(for: .ncOpenAuxWindow)) { note in
+            if let id = note.object as? String { openWindow(id: id) }
         }
     }
 
