@@ -211,6 +211,29 @@ RemoteDspProcessResult processRemoteDspInterleavedStereo(const RemoteDspServerSe
                                                          const std::vector<RemoteDspParameterValue>& parameters,
                                                          std::vector<float>& processedInterleavedStereo);
 
+/// One remote SUMMING BUS (remote-mixer M1): send every track's stereo block for a render
+/// block — one packet per track, same sequence — and receive the node's sum in ONE round trip.
+/// The node adds in ascending track order, which the parity gate pins: float addition order is
+/// visible to a bit-compare even when no ear could ever find it. Master-chain processing stays
+/// on the per-module session path; this class is the bus, nothing else.
+class RemoteMixSession {
+public:
+    RemoteMixSession();
+    ~RemoteMixSession();
+
+    RemoteMixSession(const RemoteMixSession&) = delete;
+    RemoteMixSession& operator=(const RemoteMixSession&) = delete;
+
+    void reset();
+    RemoteDspProcessResult mix(const RemoteDspServerSettings& settings,
+                               const std::vector<std::vector<float>>& trackInterleavedStereo,
+                               std::vector<float>& summedInterleavedStereo);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 class RemoteDspProcessSession {
 public:
     RemoteDspProcessSession();

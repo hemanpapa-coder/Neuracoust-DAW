@@ -40,6 +40,18 @@
 #define NA_RT_MAX_SESSIONS 64u
 #define NA_RT_MAX_PACKET_PARAMS 64u
 
+/* ── Remote mixer (M1): flat deterministic summing ─────────────────────────────────────────
+ * The DAW sends one MIX packet per track (same sequence, same mix key), the engine banks each
+ * track's stereo block, and when the LAST track of the set arrives it replies ONCE with the
+ * sum — summed in ascending track_index order, because float addition order is audible to a
+ * parity check even when it is not audible to an ear. One round trip per block, not one per
+ * track. Master-chain processing stays on the existing per-module session path; this is the
+ * summing bus only. */
+#define NA_RT_FLAG_MIX 4u
+#define NA_RT_MIX_BLOCK_LEN 16u          /* key(8) track_index(4) track_count(4) */
+#define NA_RT_MAX_MIX_SESSIONS 4u
+#define NA_RT_MAX_MIX_TRACKS 64u
+
 typedef struct {
     uint32_t magic;
     uint16_t version;
@@ -79,6 +91,19 @@ typedef struct {
 
 static NaSession g_sessions[NA_RT_MAX_SESSIONS];
 static uint64_t g_session_stamp = 0u;
+
+typedef struct {
+    uint64_t key;                        /* 0 = free */
+    uint32_t sequence;
+    uint32_t track_count;
+    uint64_t received_mask;
+    uint16_t frame_count;
+    uint64_t stamp;
+    float buffers[NA_RT_MAX_MIX_TRACKS][2u * NA_RT_MAX_FRAMES];
+} NaMixSession;
+
+static NaMixSession g_mix_sessions[NA_RT_MAX_MIX_SESSIONS];
+static uint64_t g_mix_stamp = 0u;
 
 typedef struct {
     _Atomic uint64_t packets_in;
@@ -452,6 +477,91 @@ static int run_self_test(const char *const *module_paths, uint32_t module_count)
     return 0;
 }
 
+static NaMixSession *resolve_mix_session(uint64_t key) {
+    NaMixSession *oldest = &g_mix_sessions[0];
+    for (uint32_t i = 0u; i < NA_RT_MAX_MIX_SESSIONS; ++i) {
+        NaMixSession *slot = &g_mix_sessions[i];
+        if (slot->key == key) {
+            slot->stamp = ++g_mix_stamp;
+            return slot;
+        }
+        if (slot->key == 0u) {
+            oldest = slot;
+            break;
+        }
+        if (slot->stamp < oldest->stamp) {
+            oldest = slot;
+        }
+    }
+    memset(oldest, 0, sizeof(*oldest));
+    oldest->key = key;
+    oldest->stamp = ++g_mix_stamp;
+    return oldest;
+}
+
+/* One track of a mix set. Replies with the deterministic sum when the set completes. */
+static void handle_mix_packet(int audio_fd, const struct sockaddr_in *peer, socklen_t peer_len,
+                              uint8_t *packet, size_t got, uint32_t frames) {
+    const size_t mix_offset = sizeof(NaRtPacketHeader);
+    const size_t audio_offset = mix_offset + NA_RT_MIX_BLOCK_LEN;
+    const size_t audio_bytes = (size_t)2u * frames * sizeof(float);
+    if (got != audio_offset + audio_bytes) {
+        atomic_fetch_add_explicit(&g_stats.bad_packets, 1u, memory_order_relaxed);
+        return;
+    }
+    const uint64_t key = ((uint64_t)read_u32_network(packet + mix_offset) << 32) |
+                         read_u32_network(packet + mix_offset + 4u);
+    const uint32_t track_index = read_u32_network(packet + mix_offset + 8u);
+    const uint32_t track_count = read_u32_network(packet + mix_offset + 12u);
+    NaRtPacketHeader *header = (NaRtPacketHeader *)packet;
+    const uint32_t sequence = ntohl(header->sequence);
+    if (key == 0u || track_count == 0u || track_count > NA_RT_MAX_MIX_TRACKS ||
+        track_index >= track_count) {
+        atomic_fetch_add_explicit(&g_stats.bad_packets, 1u, memory_order_relaxed);
+        return;
+    }
+
+    NaMixSession *mix = resolve_mix_session(key);
+    if (mix->sequence != sequence || mix->track_count != track_count ||
+        mix->frame_count != (uint16_t)frames) {
+        /* A new block starts (or the set shape changed): any incomplete previous set is
+         * abandoned — the DAW's own timeout already re-rendered that block locally. */
+        if (mix->received_mask != 0u &&
+            mix->received_mask != ((track_count >= 64u) ? ~0ull : ((1ull << mix->track_count) - 1ull))) {
+            atomic_fetch_add_explicit(&g_stats.overruns, 1u, memory_order_relaxed);
+        }
+        mix->sequence = sequence;
+        mix->track_count = track_count;
+        mix->frame_count = (uint16_t)frames;
+        mix->received_mask = 0u;
+    }
+    memcpy(mix->buffers[track_index], packet + audio_offset, audio_bytes);
+    mix->received_mask |= (1ull << track_index);
+    atomic_fetch_add_explicit(&g_stats.packets_in, 1u, memory_order_relaxed);
+
+    const uint64_t full = (track_count >= 64u) ? ~0ull : ((1ull << track_count) - 1ull);
+    if (mix->received_mask != full) {
+        return;
+    }
+
+    /* Complete: sum ascending (the deterministic order the parity gate pins) and reply once. */
+    float *out = (float *)(packet + sizeof(NaRtPacketHeader));
+    memcpy(out, mix->buffers[0], audio_bytes);
+    for (uint32_t trk = 1u; trk < track_count; ++trk) {
+        const float *src = mix->buffers[trk];
+        for (uint32_t i = 0u; i < 2u * frames; ++i) {
+            out[i] += src[i];
+        }
+    }
+    mix->received_mask = 0u;
+    header->flags = htonl(NA_RT_FLAG_MIX);
+    const size_t reply_bytes = sizeof(NaRtPacketHeader) + audio_bytes;
+    if (sendto(audio_fd, packet, reply_bytes, 0,
+               (const struct sockaddr *)peer, peer_len) == (ssize_t)reply_bytes) {
+        atomic_fetch_add_explicit(&g_stats.packets_out, 1u, memory_order_relaxed);
+    }
+}
+
 static void run_engine(void) {
     uint8_t packet[sizeof(NaRtPacketHeader) +
                    4u + (NA_RT_MAX_PACKET_PARAMS * 8u) +
@@ -499,6 +609,15 @@ static void run_engine(void) {
             channels == 0u || channels > NA_RT_MAX_CHANNELS ||
             frames == 0u || frames > NA_RT_MAX_FRAMES) {
             atomic_fetch_add_explicit(&g_stats.bad_packets, 1u, memory_order_relaxed);
+            continue;
+        }
+
+        if ((flags & NA_RT_FLAG_MIX) != 0u) {
+            if (channels == 2u) {
+                handle_mix_packet(audio_fd, &peer, peer_len, packet, (size_t)got, frames);
+            } else {
+                atomic_fetch_add_explicit(&g_stats.bad_packets, 1u, memory_order_relaxed);
+            }
             continue;
         }
 

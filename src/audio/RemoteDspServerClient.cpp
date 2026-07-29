@@ -748,6 +748,178 @@ RemoteDspProcessResult processRemoteDspInterleavedStereo(const RemoteDspServerSe
     return result;
 }
 
+constexpr uint32_t kNaRtFlagMix = 4u;
+constexpr size_t kNaRtMixBlockLen = 16u;   // key(8) track_index(4) track_count(4)
+constexpr size_t kNaRtMaxMixTracks = 64u;
+
+struct RemoteMixSession::Impl {
+    SocketHandle socketHandle = kInvalidSocket;
+    std::string configuredEndpoint;
+    std::atomic<uint32_t> sequenceCounter {1u};
+    uint64_t mixKey = 0u;
+
+    ~Impl() { reset(); }
+
+    void reset() {
+        if (socketHandle != kInvalidSocket) {
+            closeSocket(socketHandle);
+            socketHandle = kInvalidSocket;
+        }
+        configuredEndpoint.clear();
+    }
+
+    bool ensureConfigured(const RemoteDspServerSettings& settings, std::string& message) {
+        const std::string endpoint = settings.host + ":" + std::to_string(settings.rtEnginePort);
+        if (socketHandle != kInvalidSocket && endpoint == configuredEndpoint) {
+            return true;
+        }
+        reset();
+        sockaddr_in target {};
+        if (!resolveIpv4Endpoint(settings.host, settings.rtEnginePort, target, message)) {
+            return false;
+        }
+        socketHandle = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socketHandle == kInvalidSocket) {
+            message = "could not open a UDP socket for the remote mix bus";
+            return false;
+        }
+        if (connect(socketHandle, reinterpret_cast<const sockaddr*>(&target),
+                    static_cast<SocketLength>(sizeof(target))) != 0) {
+            message = "could not connect the remote mix socket";
+            reset();
+            return false;
+        }
+        if (mixKey == 0u) {
+            std::random_device entropy;
+            mixKey = (static_cast<uint64_t>(entropy()) << 32) | entropy();
+            if (mixKey == 0u) mixKey = 1u;
+        }
+        configuredEndpoint = endpoint;
+        return true;
+    }
+};
+
+RemoteMixSession::RemoteMixSession() : impl_(std::make_unique<Impl>()) {}
+RemoteMixSession::~RemoteMixSession() = default;
+void RemoteMixSession::reset() { impl_->reset(); }
+
+RemoteDspProcessResult RemoteMixSession::mix(const RemoteDspServerSettings& settings,
+                                             const std::vector<std::vector<float>>& trackInterleavedStereo,
+                                             std::vector<float>& summedInterleavedStereo) {
+    RemoteDspProcessResult result;
+    summedInterleavedStereo.clear();
+    const size_t trackCount = trackInterleavedStereo.size();
+    if (trackCount == 0u || trackCount > kNaRtMaxMixTracks) {
+        result.message = "remote mix track count is out of range";
+        return result;
+    }
+    const size_t sampleCount = trackInterleavedStereo.front().size();
+    if (sampleCount == 0u || sampleCount % 2u != 0u || sampleCount / 2u > kMaxProbeFrames) {
+        result.message = "remote mix block must be interleaved stereo of up to 256 frames";
+        return result;
+    }
+    for (const auto& block : trackInterleavedStereo) {
+        if (block.size() != sampleCount) {
+            result.message = "remote mix blocks must all be the same length";
+            return result;
+        }
+    }
+    if (!impl_->ensureConfigured(settings, result.message)) {
+        return result;
+    }
+
+    const auto frameCount = static_cast<uint16_t>(sampleCount / 2u);
+    const uint32_t sequence = impl_->sequenceCounter.fetch_add(1u, std::memory_order_relaxed);
+    const auto started = std::chrono::steady_clock::now();
+
+    // One packet per track, all under the same sequence; the node banks them and answers once,
+    // so the whole set costs ONE round trip regardless of track count.
+    std::vector<uint8_t> packet;
+    for (size_t track = 0; track < trackCount; ++track) {
+        packet.clear();
+        packet.reserve(kNaRtHeaderSize + kNaRtMixBlockLen + sampleCount * sizeof(float));
+        appendU32(packet, kNaRtMagic);
+        appendU16(packet, kNaRtVersion);
+        appendU16(packet, static_cast<uint16_t>(kNaRtHeaderSize));
+        appendU32(packet, sequence);
+        appendU16(packet, 2u);
+        appendU16(packet, frameCount);
+        appendU32(packet, kNaRtFlagMix);
+        appendU32(packet, static_cast<uint32_t>(impl_->mixKey >> 32));
+        appendU32(packet, static_cast<uint32_t>(impl_->mixKey & 0xffffffffu));
+        appendU32(packet, static_cast<uint32_t>(track));
+        appendU32(packet, static_cast<uint32_t>(trackCount));
+        const size_t payloadStart = packet.size();
+        packet.resize(payloadStart + sampleCount * sizeof(float), 0u);
+        auto* payload = reinterpret_cast<float*>(packet.data() + payloadStart);
+        const auto& block = trackInterleavedStereo[track];
+        for (uint16_t frame = 0; frame < frameCount; ++frame) {
+            payload[frame] = block[static_cast<size_t>(frame) * 2u];
+            payload[static_cast<size_t>(frameCount) + frame] = block[static_cast<size_t>(frame) * 2u + 1u];
+        }
+        const int sent = send(impl_->socketHandle,
+                              reinterpret_cast<const char*>(packet.data()),
+                              static_cast<int>(packet.size()), 0);
+        if (sent != static_cast<int>(packet.size())) {
+            result.message = "could not send remote mix packet";
+            impl_->reset();
+            return result;
+        }
+    }
+
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(impl_->socketHandle, &readSet);
+    const int timeoutMs = settings.timeoutMs > 0 ? settings.timeoutMs : 4;
+    timeval timeout {};
+    timeout.tv_sec = timeoutMs / 1000;
+    timeout.tv_usec = (timeoutMs % 1000) * 1000;
+#ifdef _WIN32
+    const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+    const int ready = select(impl_->socketHandle + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
+    if (ready <= 0) {
+        result.message = "remote mix sum did not arrive before timeout";
+        return result;
+    }
+    std::array<uint8_t, kNaRtHeaderSize + 2u * kMaxProbeFrames * sizeof(float)> response {};
+    const int received = recv(impl_->socketHandle,
+                              reinterpret_cast<char*>(response.data()),
+                              static_cast<int>(response.size()), 0);
+    const auto finished = std::chrono::steady_clock::now();
+    if (received <= 0) {
+        result.message = "could not receive the remote mix sum";
+        return result;
+    }
+    const uint8_t* data = response.data();
+    const size_t payloadBytes = static_cast<size_t>(2u) * frameCount * sizeof(float);
+    result.reachable = true;
+    result.roundTripMs = std::chrono::duration<double, std::milli>(finished - started).count();
+    result.protocolMatched = static_cast<size_t>(received) == kNaRtHeaderSize + payloadBytes &&
+        readU32(data) == kNaRtMagic &&
+        readU16(data + 4) == kNaRtVersion &&
+        readU32(data + 8) == sequence &&
+        readU16(data + 12) == 2u &&
+        readU16(data + 14) == frameCount;
+    if (!result.protocolMatched) {
+        result.message = "remote mix response did not match the protocol";
+        return result;
+    }
+    const auto* payload = reinterpret_cast<const float*>(data + kNaRtHeaderSize);
+    summedInterleavedStereo.resize(sampleCount);
+    for (uint16_t frame = 0; frame < frameCount; ++frame) {
+        summedInterleavedStereo[static_cast<size_t>(frame) * 2u] = payload[frame];
+        summedInterleavedStereo[static_cast<size_t>(frame) * 2u + 1u] =
+            payload[static_cast<size_t>(frameCount) + frame];
+    }
+    result.processed = true;
+    result.frameCount = frameCount;
+    result.channelCount = 2u;
+    result.sequence = sequence;
+    return result;
+}
+
 struct RemoteDspProcessSession::Impl {
 #ifdef _WIN32
     WinsockSession winsock;

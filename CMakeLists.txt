@@ -664,6 +664,11 @@ target_link_libraries(neuracoust_node_console_parity_check PRIVATE neuracoust_da
 add_executable(neuracoust_remote_bounce_probe tools/remote_bounce_probe.cpp)
 target_link_libraries(neuracoust_remote_bounce_probe PRIVATE neuracoust_daw_core)
 
+# The remote-mixer M1 gate: the node's summing bus must return BIT-EXACT ascending-order sums.
+# Not in ctest — needs the appliance.
+add_executable(neuracoust_remote_mix_probe tools/remote_mix_probe.cpp)
+target_link_libraries(neuracoust_remote_mix_probe PRIVATE neuracoust_daw_core)
+
 add_executable(neuracoust_vst3_realtime_process_probe tools/vst3_realtime_process_probe.cpp)
 target_link_libraries(neuracoust_vst3_realtime_process_probe PRIVATE neuracoust_daw_core)
 
