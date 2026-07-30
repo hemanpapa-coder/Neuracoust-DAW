@@ -85,14 +85,20 @@ private final class Api525AAssets {
         images[name] = image
         return image
     }
-    /// One frame of a vertical film strip, as a cropped CGImage (cheap: no recompression).
+    /// One frame of a vertical film strip. The whole strip is sliced ONCE per asset and cached —
+    /// deriving a CGImage from the 19k-pixel-tall NSImage per render is what made drags stutter.
+    private var strips: [String: [CGImage]] = [:]
     func frame(_ name: String, index: Int, frames: Int) -> CGImage? {
-        guard let image = image(name),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let frameHeight = cg.height / frames
-        let clamped = max(0, min(frames - 1, index))
-        return cg.cropping(to: CGRect(x: 0, y: clamped * frameHeight,
-                                      width: cg.width, height: frameHeight))
+        if strips[name] == nil {
+            guard let image = image(name),
+                  let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+            let frameHeight = cg.height / frames
+            strips[name] = (0..<frames).compactMap { i in
+                cg.cropping(to: CGRect(x: 0, y: i * frameHeight, width: cg.width, height: frameHeight))
+            }
+        }
+        guard let sliced = strips[name], !sliced.isEmpty else { return nil }
+        return sliced[max(0, min(sliced.count - 1, index))]
     }
 }
 
@@ -108,6 +114,9 @@ private struct FilmStripKnob: View {
     var steps: [Float]? = nil           // detents in normalized space (rotary-switch feel)
 
     @State private var dragStart: Float?
+    @State private var hovering = false
+    @State private var wheelAccum: CGFloat = 0
+    @State private var wheelCommit: DispatchWorkItem?
 
     var body: some View {
         let frameIndex = Int((CGFloat(max(0, min(1, value))) * CGFloat(knob.frames - 1)).rounded())
@@ -125,6 +134,10 @@ private struct FilmStripKnob: View {
         .contentShape(Circle().path(in: CGRect(x: knob.centre.x * scale - side / 2,
                                                y: knob.centre.y * scale - side / 2,
                                                width: side, height: side)))
+        .onHover { hovering = $0 }
+        // The wheel over a knob turns the KNOB — never the mixer's scroll view under it.
+        .overlay(KnobScrollWheel(active: hovering) { dy, precise in applyWheel(dy, precise) }
+            .frame(width: 0, height: 0))
         .gesture(DragGesture(minimumDistance: 1)
             .onChanged { drag in
                 let start = dragStart ?? value
@@ -137,6 +150,37 @@ private struct FilmStripKnob: View {
             }
             .onEnded { _ in dragStart = nil; onCommit() })
         .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(defaultValue); onCommit() })
+    }
+
+    /// One mouse notch = one detent on a stepped knob, a fine nudge on a continuous one.
+    /// Trackpads accumulate ~25 pt of travel per step so a flick isn't a leap.
+    private func applyWheel(_ delta: CGFloat, _ precise: Bool) {
+        var notches = 0
+        if precise {
+            if wheelAccum != 0 && (delta > 0) != (wheelAccum > 0) { wheelAccum = 0 }
+            wheelAccum += delta
+            if abs(wheelAccum) >= 25 {
+                notches = wheelAccum > 0 ? 1 : -1
+                wheelAccum -= CGFloat(notches) * 25
+            }
+        } else {
+            notches = delta > 0 ? 1 : -1
+        }
+        guard notches != 0 else { return }
+        var next: Float
+        if let steps, !steps.isEmpty {
+            let ordered = steps.sorted()
+            let currentIndex = ordered.enumerated()
+                .min(by: { abs($0.element - value) < abs($1.element - value) })?.offset ?? 0
+            next = ordered[max(0, min(ordered.count - 1, currentIndex + notches))]
+        } else {
+            next = max(0, min(1, value + Float(notches) * 0.02))
+        }
+        onChange(next)
+        wheelCommit?.cancel()
+        let work = DispatchWorkItem { onCommit() }
+        wheelCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 }
 

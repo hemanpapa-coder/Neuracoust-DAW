@@ -4,7 +4,9 @@ import AppKit
 // Scroll-wheel adjust for a knob: a zero-footprint view that never hit-tests (so it blocks no
 // clicks/drags), and reports wheel deltas only while the cursor is over the knob, via a local
 // scroll-event monitor.
-private struct KnobScrollWheel: NSViewRepresentable {
+// Shared with the skeuomorphic model plates (Api525APlate) — same rule everywhere: the wheel
+// over a knob turns the KNOB, never the scroll view under it.
+struct KnobScrollWheel: NSViewRepresentable {
     var active: Bool                        // true while the cursor hovers this knob (SwiftUI, scale-aware)
     var onScroll: (CGFloat, Bool) -> Void   // (delta, isPreciseTrackpad)
     func makeNSView(context: Context) -> NSView {
