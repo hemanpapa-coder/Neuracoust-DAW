@@ -791,7 +791,11 @@ struct ConsoleVizStrip: View {
         }
         var items: [(Int, Panel)] = []
         if let p = pos([("filter", t.consoleFilterEnabled), ("eq", t.consoleEqEnabled)]) { items.append((p, .freq)) }
-        if let p = pos([("comp", t.consoleCompEnabled), ("gate", t.consoleGateEnabled)]) { items.append((p, .dynamics)) }
+        // A skeuomorphic comp plate carries its own GR meter, so the dynamics panel only opens
+        // for the gate then — per-model control, not per-module.
+        let compPlateHasOwnMeter = t.consoleCompType == "API 525A"
+        if let p = pos([("comp", t.consoleCompEnabled && !compPlateHasOwnMeter),
+                        ("gate", t.consoleGateEnabled)]) { items.append((p, .dynamics)) }
         // No harmonics panel: the saturator shows its harmonics as small bars above its DRIVE knob.
         return items.sorted { $0.0 < $1.0 }.map { $0.1 }
     }
@@ -1039,7 +1043,7 @@ struct NeuracoustConsoleModulesView: View {
         switch m {
         case .filter:    return 244
         case .eq:        return 660    // 798 − the 138 pt response graph, now in the viz strip
-        case .comp:      return compIsApi525A ? 758 : 300   // 525A plate = 205×(640/182) + chrome
+        case .comp:      return compIsApi525A ? width * 640 / 182 + 30 : 300   // native plate + chrome
         case .gate:      return 280   // same trim, same reason
         case .saturator: return 244
         default:         return 258
@@ -1052,10 +1056,19 @@ struct NeuracoustConsoleModulesView: View {
         // model name-plate renders here, UNSCALED, at the strip's real width, so it stays legible and
         // clickable (the scaled module chrome would shrink it to nothing).
         VStack(spacing: 0) {
-            moduleBody
-                .scaleEffect(scale, anchor: .top)
-                .frame(width: width, height: moduleHeight(module) * scale, alignment: .top)
-                .clipped()   // whatever the tightened height cuts, it stops HERE — never under the plate
+            if module == .comp && compIsApi525A {
+                // A skeuomorphic plate is width-parametric: rendering it native keeps the
+                // silkscreen crisp (scaleEffect rasterizes the 205 design and GPU-scales it soft).
+                // At the EXPANDED strip width (182) the 2x assets land 1:1 on Retina pixels.
+                moduleBody
+                    .frame(width: width, height: moduleHeight(module), alignment: .top)
+                    .clipped()
+            } else {
+                moduleBody
+                    .scaleEffect(scale, anchor: .top)
+                    .frame(width: width, height: moduleHeight(module) * scale, alignment: .top)
+                    .clipped()   // whatever the tightened height cuts, it stops HERE — never under the plate
+            }
             modelPlate
                 .padding(.top, 3)
                 .padding(.bottom, 1)
@@ -1456,11 +1469,13 @@ struct NeuracoustConsoleModulesView: View {
         if compIsApi525A {
             // The skeuomorphic 525A plate carries its own controls (incl. bypass); the chrome
             // stays for the title + model selector so the user can switch back.
-            ConsoleModuleChrome(title: "COMPRESS", modelName: "API 525A",
+            // Short title: the plate renders NATIVE (unscaled), so at narrow strip widths the
+            // full "COMPRESS" clipped to a stray "PRESS".
+            ConsoleModuleChrome(title: "COMP", modelName: "API 525A",
                                 models: EngineController.compModels,
                                 onSelectModel: { engine.setCompModel(trackId, $0) },
                                 inOn: inOn, onToggleIn: onToggleIn) {
-                Api525APlate(engine: engine, trackId: trackId, width: 205)
+                Api525APlate(engine: engine, trackId: trackId, width: width)
             }
         } else {
             compressSsl

@@ -1748,22 +1748,26 @@ struct ChannelStrip: View {
             )
     }
 
-    /// A corner toggle — click to switch this channel (and the whole mixer selection)
-    /// between the default (large) and the narrow (small) width. Two states, no free
-    /// widening past the default.
+    /// A corner toggle — click cycles this channel (and the whole mixer selection) through
+    /// narrow → default → EXPANDED. The expanded tier (182 pt) renders a skeuomorphic model
+    /// plate at its native panel width, where the 500-series silkscreen is exactly crisp.
     private var widthResizeHandle: some View {
-        // Midpoint test so it flips reliably whichever exact widths are in play.
-        let isNarrow = engine.channelWidthFor(track.id) < (EngineController.channelWidthMin + EngineController.channelWidthDefault) / 2
+        // Midpoint tests so the tier reads reliably whichever exact widths are in play.
+        let width = engine.channelWidthFor(track.id)
+        let isNarrow = width < (EngineController.channelWidthMin + EngineController.channelWidthDefault) / 2
+        let isExpanded = width > (EngineController.channelWidthDefault + EngineController.channelWidthExpanded) / 2
         return Button {
             // Only this channel — or, if it is part of a multi-selection, the whole
             // selection. Never every strip.
             let sel = engine.selectedMixerTrackIds
             let targets: [Int] = (sel.contains(track.id) && sel.count > 1) ? Array(sel) : [track.id]
-            engine.setChannelWidth(trackIds: targets,
-                                   width: isNarrow ? EngineController.channelWidthDefault : EngineController.channelWidthMin)
+            let next: CGFloat = isNarrow ? EngineController.channelWidthDefault
+                : isExpanded ? EngineController.channelWidthMin
+                : EngineController.channelWidthExpanded
+            engine.setChannelWidth(trackIds: targets, width: next)
             engine.commitChannelWidth()
         } label: {
-            Text(isNarrow ? "‹ ›" : "› ‹")
+            Text(isExpanded ? "» «" : isNarrow ? "‹ ›" : "« »")
                 .font(Theme.Font.mono(7, .bold))
                 .foregroundStyle(Color.white.opacity(0.5))
                 .frame(width: 16, height: 15)

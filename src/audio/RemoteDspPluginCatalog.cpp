@@ -59,6 +59,18 @@ bool isNeuracoustQf2dEq(const TrackInsertSlot& insert) {
         searchable.find("qf2d") != std::string::npos;
 }
 
+// The 525A plugin family: the VST3/AU halves carry this name; the node half is
+// na.neuracoust.api525a (tools/node/na_api525a.cpp).
+bool isNeuracoust525A(const TrackInsertSlot& insert) {
+    const auto name = lowerCopy(insert.pluginName);
+    const auto path = lowerCopy(insert.pluginPath);
+    const auto searchable = name + " " + path;
+    return searchable.find("neuracoust 525a") != std::string::npos ||
+        searchable.find("neuracoust-525a") != std::string::npos ||
+        searchable.find("api 525a") != std::string::npos ||
+        searchable.find("525a") != std::string::npos;
+}
+
 bool isNeuracoustMirage991(const TrackInsertSlot& insert) {
     const auto name = lowerCopy(insert.pluginName);
     const auto path = lowerCopy(insert.pluginPath);
@@ -163,6 +175,8 @@ RemoteDspPluginCapability remoteDspCapabilityForInsert(const TrackInsertSlot& in
         capability.moduleId = "na.neuracoust.compressor201";
     } else if (isNeuracoustCompLimiter340(insert)) {
         capability.moduleId = "na.neuracoust.comp-limiter-340";
+    } else if (isNeuracoust525A(insert)) {
+        capability.moduleId = "na.neuracoust.api525a";
     } else if (isNeuracoustMirage991(insert)) {
         capability.moduleId = "na.neuracoust.mirage991";
     } else if (isNeuracoustMirage8(insert)) {

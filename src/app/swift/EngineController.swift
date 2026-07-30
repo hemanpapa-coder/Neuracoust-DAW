@@ -262,8 +262,11 @@ final class EngineController: ObservableObject {
     // Width narrows left-right only (height is unchanged); the strip keeps every element,
     // the scales just tuck behind the fader cap as it tightens.
     static let channelWidthMin: CGFloat = 58
-    // No free widening past the default — the width toggle is small ↔ large only.
-    static let channelWidthMax: CGFloat = channelWidthDefault
+    // The EXPANDED tier: 182 pt is the skeuomorphic plates' native panel width (the 2x assets
+    // land 1:1 on Retina pixels), so a 500-series faceplate's silkscreen is exactly crisp here —
+    // the whole reason this tier exists. The toggle cycles narrow → default → expanded.
+    static let channelWidthExpanded: CGFloat = 182
+    static let channelWidthMax: CGFloat = channelWidthExpanded
     // Per-track width so narrowing a channel touches only that channel (or the current
     // multi-selection), never the whole mixer. Strips default to the full width, so a new
     // aux — or the master — is never narrower than the channels.

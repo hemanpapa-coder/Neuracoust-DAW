@@ -41,6 +41,7 @@ ssh -o BatchMode=yes "$HOST" "mkdir -p $REMOTE_DIR/node-module/audio $REMOTE_DIR
 # Only what the module needs. The node gets source, never a binary: it has to compile the strip
 # with its own compiler for its own CPU, and a macOS object could not be loaded there anyway.
 scp -q "$SOURCE_DIR/tools/node/na_console_channel.cpp" \
+       "$SOURCE_DIR/tools/node/na_api525a.cpp" \
        "$SOURCE_DIR/tools/node/na_rt_plugin.h" \
        "$HOST:$REMOTE_DIR/node-module/"
 scp -q "$SOURCE_DIR/src/audio/ConsoleChannelProcessor.cpp" \
@@ -60,8 +61,12 @@ ssh -o BatchMode=yes "$HOST" "cd $REMOTE_DIR/node-module && \
   g++ -std=c++20 -O3 -fPIC -shared -fno-math-errno -DNDEBUG \
       -I. na_console_channel.cpp audio/ConsoleChannelProcessor.cpp \
       -o na_console_channel.so -lm && \
-  ls -la na_console_channel.so && \
-  nm -D na_console_channel.so | grep na_rt_get_plugin"
+  g++ -std=c++20 -O3 -fPIC -shared -fno-math-errno -DNDEBUG \
+      -I. na_api525a.cpp audio/ConsoleChannelProcessor.cpp \
+      -o na_api525a.so -lm && \
+  ls -la na_console_channel.so na_api525a.so && \
+  nm -D na_console_channel.so | grep na_rt_get_plugin && \
+  nm -D na_api525a.so | grep na_rt_get_plugin"
 
 cat <<EOF
 
