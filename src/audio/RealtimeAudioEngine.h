@@ -223,7 +223,8 @@ public:
     void setTapInputHold(bool active);
     /// Audio recording-to-disk (V1). source 1 = physical mic (device channels [offset, offset+count)),
     /// source 2 = reference tap (stereo). endInputRecording saves the take to `path` and reports it.
-    void beginInputRecording(int source, int channelOffset, int channels);
+    void beginInputRecording(int source, int channelOffset, int channels,
+                             const std::string& busRouteName = {});
     bool endInputRecording(const std::string& path, int bitDepth, std::string& error,
                            double& durationSeconds, int& channels);
     void cancelInputRecording();

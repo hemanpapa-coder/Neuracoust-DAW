@@ -670,7 +670,7 @@ public:
     void setMonitorReferenceArmed(bool) {}  // No NeuracoustDspEngine on this backend.
     void setTapInputMonitor(bool) {}
     void setTapInputHold(bool) {}
-    void beginInputRecording(int, int, int) {}
+    void beginInputRecording(int, int, int, const std::string&) {}
     bool endInputRecording(const std::string&, int, std::string& error, double&, int&) { error = "no engine"; return false; }
     void cancelInputRecording() {}
     bool inputRecordingActive() const { return false; }
@@ -1685,7 +1685,7 @@ void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonito
 void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
 void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
 void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
-void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels, const std::string& busRouteName) { impl_->beginInputRecording(source, channelOffset, channels, busRouteName); }
 bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
 void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
 bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }
@@ -1821,7 +1821,7 @@ public:
     void setMonitorReferenceArmed(bool) {}  // No NeuracoustDspEngine on this backend.
     void setTapInputMonitor(bool) {}
     void setTapInputHold(bool) {}
-    void beginInputRecording(int, int, int) {}
+    void beginInputRecording(int, int, int, const std::string&) {}
     bool endInputRecording(const std::string&, int, std::string& error, double&, int&) { error = "no engine"; return false; }
     void cancelInputRecording() {}
     bool inputRecordingActive() const { return false; }
@@ -1906,7 +1906,7 @@ void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonito
 void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
 void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
 void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
-void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels, const std::string& busRouteName) { impl_->beginInputRecording(source, channelOffset, channels, busRouteName); }
 bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
 void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
 bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }

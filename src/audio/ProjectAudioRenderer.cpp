@@ -2252,10 +2252,15 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
         }
         const std::string receiveBus = !route->inputBus.empty() ? route->inputBus : route->name;
         resolveBusContributions(receiveBus);
+        const float* receivedBusBlock = nullptr;
         if (const auto bus = busBlocks.find(receiveBus); bus != busBlocks.end()) {
             for (size_t index = 0; index < std::min(routeInput.size(), bus->second.size()); ++index) {
                 routeInput[index] += bus->second[index];
             }
+            receivedBusBlock = bus->second.data();
+        }
+        if (state.captureBusInput) {
+            state.captureBusInput(route->name, receivedBusBlock, frameCount);
         }
         applyTrackChannelFormatToBlock(routeInput, track, route->kind);
 

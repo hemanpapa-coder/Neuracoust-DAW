@@ -7703,8 +7703,13 @@ final class EngineController: ObservableObject {
     /// Must match `kReferenceTapInputBus` in the bridge.
     static let referenceTapInputBus = "다른 앱"
 
+    /// Pro-Tools-style internal buses: virtual names any track can OUTPUT to and any audio track
+    /// can take as its INPUT — and record. Must match `kInternalBusPrefix` in the bridge.
+    static let internalBusOptions = (1...8).map { "내부 버스 \($0)" }
+
     func audioInputOptions() -> [String] {
         ["Input 1-2", "Input 3-4", "Input 5-6", "Input 7-8", EngineController.referenceTapInputBus]
+        + EngineController.internalBusOptions
     }
 
     func setTrackInputBus(_ id: Int, _ bus: String) {

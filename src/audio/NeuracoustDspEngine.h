@@ -343,7 +343,11 @@ public:
     /// arriving on the input thread — source 1 = physical mic (channels [offset, offset+count) of
     /// pushInputMonitorInterleaved), source 2 = reference tap (stereo, pushReferenceInterleaved).
     /// endRecording saves the accumulated take to a WAV and reports its duration/channels.
-    void beginRecording(int source, int channelOffset, int channels, int sampleRate);
+    /// source: 1 physical input pair, 2 reference tap, 3 INTERNAL BUS (busRouteName = the armed
+    /// track whose received bus block the render thread appends — sample-locked to the timeline,
+    /// unlike the input-thread sources).
+    void beginRecording(int source, int channelOffset, int channels, int sampleRate,
+                        const std::string& busRouteName = {});
     bool endRecording(const std::string& path, int bitDepth, std::string& error,
                       double& outDurationSeconds, int& outChannels);
     /// Stop capturing and DROP the take without saving — the background pass was never committed
@@ -462,6 +466,8 @@ private:
     int recordChannelOffset_ = 0;         // device channel offset for a physical-mic record
     int recordChannels_ = 2;
     std::unique_ptr<RecordingTake> recordTake_;
+    std::string recordBusRouteName_;      // source 3: the armed track's route (written under mutex_)
+    std::vector<float> recordSilentScratch_;   // zero block for silent bus appends (recordMutex_)
     mutable std::mutex recordMutex_;      // guards recordTake_ + live peaks create/append/finish/read
     // Live take peaks for the timeline: coarse L/R abs-max per kRecordPeakSamples samples,
     // stored interleaved (2 floats per bucket) so a stereo take draws two envelopes live.

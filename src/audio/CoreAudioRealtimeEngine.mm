@@ -739,8 +739,10 @@ public:
     }
     void setTapInputMonitor(bool active) { dspEngine_.setTapInputMonitor(active); }
     void setTapInputHold(bool active) { dspEngine_.setTapInputHold(active); }
-    void beginInputRecording(int source, int channelOffset, int channels) {
-        dspEngine_.beginRecording(source, channelOffset, channels, static_cast<int>(settings_.sampleRate));
+    void beginInputRecording(int source, int channelOffset, int channels,
+                             const std::string& busRouteName) {
+        dspEngine_.beginRecording(source, channelOffset, channels, static_cast<int>(settings_.sampleRate),
+                                  busRouteName);
         refreshInputMonitorForCurrentProject();   // open the mic AudioQueue if recording a physical source
     }
     bool endInputRecording(const std::string& path, int bitDepth, std::string& error,
@@ -1604,7 +1606,7 @@ void RealtimeAudioEngine::setMonitorListenSource(bool active) { impl_->setMonito
 void RealtimeAudioEngine::setMonitorReferenceArmed(bool armed) { impl_->setMonitorReferenceArmed(armed); }
 void RealtimeAudioEngine::setTapInputMonitor(bool active) { impl_->setTapInputMonitor(active); }
 void RealtimeAudioEngine::setTapInputHold(bool active) { impl_->setTapInputHold(active); }
-void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels) { impl_->beginInputRecording(source, channelOffset, channels); }
+void RealtimeAudioEngine::beginInputRecording(int source, int channelOffset, int channels, const std::string& busRouteName) { impl_->beginInputRecording(source, channelOffset, channels, busRouteName); }
 bool RealtimeAudioEngine::endInputRecording(const std::string& path, int bitDepth, std::string& error, double& durationSeconds, int& channels) { return impl_->endInputRecording(path, bitDepth, error, durationSeconds, channels); }
 void RealtimeAudioEngine::cancelInputRecording() { impl_->cancelInputRecording(); }
 bool RealtimeAudioEngine::inputRecordingActive() const { return impl_->inputRecordingActive(); }

@@ -735,6 +735,16 @@ void nc_engine_set_recording(NCEngine* engine, bool active) {
 // ("다른 앱") instead of a physical input pair. Kept in sync with the Swift input menu.
 static const char* kReferenceTapInputBus = "다른 앱";
 
+// Pro-Tools-style INTERNAL BUSES: virtual names ("내부 버스 1"…) any track can output to and any
+// audio track can take as its input — no aux track needed, the mixer graph resolves the name and
+// orders feeders before the receiver. A record pass on a bus-input track captures the bus on the
+// RENDER clock (sample-locked to the timeline). The prefix must not be "Bus ", which the graph
+// reserves for classifying aux tracks.
+static const char* kInternalBusPrefix = "내부 버스 ";
+static bool isInternalBusName(const std::string& busName) {
+    return busName.rfind(kInternalBusPrefix, 0) == 0;
+}
+
 // 0-based index of the first device channel a "Input N-M" bus name refers to (N-1). 0 if none.
 static int firstInputChannelIndex(const std::string& busName) {
     for (size_t i = 0; i < busName.size(); ++i) {
@@ -765,6 +775,10 @@ bool nc_engine_begin_audio_record(NCEngine* engine) {
         // made audible here — the punch (nc_monitor_set_tap_input_monitor) decides when you hear it.
         engine->tapCaptureActive = true;
         engine->engine.setMonitorReferenceArmed(true);
+    } else if (isInternalBusName(it->inputBus)) {
+        // Internal bus: the render thread appends the track's received bus block to the take —
+        // sample-locked to the timeline, so the punched clip lands exactly where the sound was.
+        source = 3; offset = 0; channels = 2;
     } else {
         source = 1;
         channels = std::max(1, neuracoust::daw::inputChannelCountForBusName(it->inputBus));
@@ -773,7 +787,7 @@ bool nc_engine_begin_audio_record(NCEngine* engine) {
     engine->recordStartSeconds = std::max(0.0, engine->engine.status().playbackSeconds);
     engine->recordTargetTrackName = trackName;
     engine->recordingAudio = true;
-    engine->engine.beginInputRecording(source, offset, channels);
+    engine->engine.beginInputRecording(source, offset, channels, trackName);
     // NOTE: transportRecordingActive is deliberately NOT set here. It marks an ACTIVE PUNCH (set by
     // nc_engine_set_recording on the Record button), which silences the armed track's tape under the
     // pass. Background capture must leave the tape audible, so it stays off until a punch-in.
@@ -1319,6 +1333,11 @@ int nc_track_output_option_count(NCEngine* engine, int index) {
             track.trackType == "routing_folder") {
             options.push_back(track.name);
         }
+    }
+    // Pro-Tools-style internal buses: always offered — no aux track needed. A bus nobody takes
+    // as an input is silent (collected, never consumed), same as an unassigned PT bus.
+    for (int bus = 1; bus <= 8; ++bus) {
+        options.push_back(std::string(kInternalBusPrefix) + std::to_string(bus));
     }
     return static_cast<int>(options.size());
 }

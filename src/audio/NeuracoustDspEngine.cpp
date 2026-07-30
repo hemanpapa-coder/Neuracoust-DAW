@@ -2097,6 +2097,28 @@ void NeuracoustDspEngine::renderInterleavedStereo(int64_t frameCount, std::vecto
         }
     } publishRemoteWait {this};
     interleavedStereo.assign(static_cast<size_t>(frameCount) * 2, 0.0f);
+    // Internal-bus recording (source 3): the armed track's received bus block is appended to the
+    // take HERE, on the render clock — sample-locked to the timeline, unlike the input-thread
+    // sources. Re-assigned per block (captures only `this`, so no allocation) so it can never
+    // outlive a recording.
+    if (recordingActive_.load(std::memory_order_acquire) &&
+        recordSource_.load(std::memory_order_relaxed) == 3) {
+        projectRenderState_.captureBusInput =
+            [this](const std::string& routeName, const float* bus, int64_t frames) {
+                if (frames <= 0 || routeName != recordBusRouteName_) return;
+                std::lock_guard<std::mutex> recordLock(recordMutex_);
+                if (!recordTake_) return;
+                const float* samples = bus;
+                if (samples == nullptr) {
+                    recordSilentScratch_.assign(static_cast<size_t>(frames) * 2u, 0.0f);
+                    samples = recordSilentScratch_.data();
+                }
+                recordTake_->appendInterleavedFloat(samples, static_cast<int>(frames));
+                accumulateRecordPeaksLocked(samples, frames, 2);
+            };
+    } else {
+        projectRenderState_.captureBusInput = nullptr;
+    }
     syncProjectMonitorDspRenderPathLocked();
     const ProjectAudioRenderPlan& renderPlan = projectPlan_;
     const bool transportRunning = settings_.transportRunning;
@@ -3966,7 +3988,14 @@ void NeuracoustDspEngine::applyMonitorStationControlsLocked(std::vector<float>& 
 // (stderr is not captured when LaunchServices starts the app). Opened once, truncating.
 namespace { FILE* refDiagLog() { static FILE* f = fopen("/tmp/dw_ref_diag.log", "w"); return f; } }
 
-void NeuracoustDspEngine::beginRecording(int source, int channelOffset, int channels, int sampleRate) {
+void NeuracoustDspEngine::beginRecording(int source, int channelOffset, int channels, int sampleRate,
+                                         const std::string& busRouteName) {
+    // The bus name is read on the render thread under mutex_, so write it under mutex_ FIRST —
+    // the same mutex_ -> recordMutex_ order the render's capture hook takes.
+    {
+        std::lock_guard<std::mutex> graphLock(mutex_);
+        recordBusRouteName_ = source == 3 ? busRouteName : std::string{};
+    }
     std::lock_guard<std::mutex> lock(recordMutex_);
     recordChannelOffset_ = std::max(0, channelOffset);
     recordChannels_ = std::max(1, std::min(2, channels));

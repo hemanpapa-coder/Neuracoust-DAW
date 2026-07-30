@@ -680,6 +680,11 @@ add_executable(neuracoust_toggle_click_probe tools/toggle_click_probe.cpp)
 target_link_libraries(neuracoust_toggle_click_probe PRIVATE neuracoust_daw_core)
 add_test(NAME toggle_click COMMAND neuracoust_toggle_click_probe)
 
+# 내부 버스 라우팅+녹음: 버스로 보낸 톤이 수신 트랙에 들리고, 렌더 클록 녹음이 그 톤을 담는다.
+add_executable(neuracoust_bus_record_probe tools/bus_record_probe.cpp)
+target_link_libraries(neuracoust_bus_record_probe PRIVATE neuracoust_daw_core)
+add_test(NAME bus_record COMMAND neuracoust_bus_record_probe)
+
 # Realtime-path console audibility: comp must duck, EQ must lift, headless, local or NDS.
 # No-arg = fully offline, so it runs in ctest; pass a host to also exercise the remote strips.
 # Caught the plate-model bypass: picking ANY console model muted the whole strip.

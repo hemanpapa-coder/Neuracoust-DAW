@@ -149,6 +149,12 @@ struct ProjectAudioRenderState {
     std::function<bool(const std::string& busName,
                        const std::deque<std::vector<float>>& contributions,
                        std::vector<float>& summed)> remoteBusSum;
+    /// Record tap for an INTERNAL-BUS track input: called for every rendered route with the bus
+    /// block it received this block (nullptr = no contributions). The engine matches the armed
+    /// track's route and appends to the take — nulls included, because a take is a continuous
+    /// stream and a silent bus still advances time. Null except while a bus-input record runs.
+    std::function<void(const std::string& routeName, const float* interleavedStereo, int64_t frames)>
+        captureBusInput;
     MonitorDspProcessor monitorDspProcessor;
     RealtimeMasterInsertChain masterInsertChain;
     int masterInsertChainMaxBlockSize = 0;
