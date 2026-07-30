@@ -46,7 +46,7 @@ bool has(const std::string& s, const char* k) { return s.find(k) != std::string:
 int consoleModelFamily(const std::string& m) {
     if (has(m, "4000G") || has(m, "4000 G") || has(m, "G Series") || has(m, "9000")) return 1;
     if (has(m, "Neve") || has(m, "33609") || has(m, "88") || has(m, "8078") || has(m, "1073")) return 2;
-    if (has(m, "API") || has(m, "2500") || has(m, "Vision")) return 3;
+    if (has(m, "API") || has(m, "2500") || has(m, "525") || has(m, "Vision")) return 3;
     if (has(m, "Neuracoust") || has(m, "NC") || has(m, "Clean") || has(m, "Transparent")) return 4;
     return 0;   // SSL 4000E baseline
 }
@@ -357,20 +357,26 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                     p.dualMono ? std::abs(r) : linked
                 };
                 std::array<float, 2> gain {};
+                // 500-series output stage: CEILING (API 525A) pulls the effective threshold
+                // down and the make-up UP by the same dB — more compression, same output
+                // ceiling. Plain MAKE-UP is post-comp gain in the wet path. Both 0 = inert.
+                const float ceilingDb = clamp(p.compCeilingDb, 0.0f, 24.0f);
+                const float effectiveThresholdDb = p.compThresholdDb - ceilingDb;
+                const float makeupGain = dbToGain(clamp(p.compMakeupDb, 0.0f, 24.0f) + ceilingDb);
                 for (size_t ch = 0; ch < 2; ++ch) {
                     const float d = detectorInput[ch];
                     if (p.compPeakMode) compDetector_[ch] = d;
                     else compDetector_[ch] = d*d + cDet*(compDetector_[ch] - d*d);
                     const float detectorLevel = p.compPeakMode
                         ? compDetector_[ch] : std::sqrt(std::max(0.0f, compDetector_[ch]));
-                    const float over = softKnee(gainToDb(detectorLevel) - p.compThresholdDb, cc.compKneeDb);
+                    const float over = softKnee(gainToDb(detectorLevel) - effectiveThresholdDb, cc.compKneeDb);
                     const float target = -over*(1.0f - 1.0f/clamp(p.compRatio, 1.0f, 20.0f));
                     const float c = target < compGainDb_[ch] ? cAtk : cRel;
                     compGainDb_[ch] = target + c*(compGainDb_[ch] - target);
                     gain[ch] = dbToGain(compGainDb_[ch]);
                 }
-                l=dryL*(1.0f-mix)+(dryL*gain[0])*mix;
-                r=dryR*(1.0f-mix)+(dryR*gain[1])*mix;
+                l=dryL*(1.0f-mix)+(dryL*gain[0]*makeupGain)*mix;
+                r=dryR*(1.0f-mix)+(dryR*gain[1]*makeupGain)*mix;
                 if (p.compCircuitMode) { l=circuitStage(l, cc.compDrive, cc.harmonic); r=circuitStage(r, cc.compDrive, cc.harmonic); }
             } else if (module=="gate" && engage > 0.0f) {
                 const float linked = std::max(std::abs(l), std::abs(r));
@@ -452,6 +458,7 @@ ConsoleParameterRange consoleParameterRange(int index) {
         case 28: return {0.0f, 24.0f};         // saturatorDriveDb
         case 37: return {0.0f, 511.0f};        // channelBiasSeed (512 channels)
         case 39: case 40: case 41: return {0.0f, 15.0f};   // model family indices
+        case 42: case 43: return {0.0f, 24.0f};            // comp make-up / 525A ceiling (dB)
         default: return kUnit;                 // flags, mixes, bias depth
     }
 }
@@ -493,6 +500,7 @@ std::vector<ConsoleChannelParameter> consoleChannelParameterValues(const Console
         {39, static_cast<float>(consoleModelFamily(p.model))},
         {40, static_cast<float>(consoleModelFamily(p.compType))},
         {41, static_cast<float>(consoleModelFamily(p.gateType))},
+        {42, p.compMakeupDb},          {43, p.compCeilingDb},
     };
     std::vector<ConsoleChannelParameter> values;
     values.reserve(std::size(raw));
@@ -546,6 +554,8 @@ void applyConsoleChannelParameter(ConsoleChannelState& p, int index, float norma
         case 37: p.channelBiasSeed = static_cast<int>(value + 0.5f); break;
         case 38: p.channelBiasDepth = value; break;
         case 39: p.model = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
+        case 42: p.compMakeupDb = value; break;
+        case 43: p.compCeilingDb = value; break;
         case 40: p.compType = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
         case 41: p.gateType = consoleModelFamilyName(static_cast<int>(value + 0.5f)); break;
         default: break;

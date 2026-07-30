@@ -125,6 +125,31 @@ int main() {
     check(gBelow > 8.0, "SSL G shelf body survives its overshoot");
     check(neveBelow > 8.0, "Neve shelf body survives its inductor dip");
 
+    // API 525A CEILING: threshold down AND make-up up by the same dB — more gain reduction,
+    // (near-)unchanged output level. That coupling is the whole point of the knob.
+    {
+        ConsoleChannelState p;
+        p.compType = "API 525A";
+        p.channelBiasDepth = 0.0f;
+        p.compEnabled = true;
+        // The neutrality holds when the signal already sits ABOVE the threshold in limit (20:1)
+        // mode — the hardware's own claim ("maintains a constant output ceiling"). The test tone
+        // is a 0.1-amp sine (−23 dB RMS), so −26 puts it 3 dB over.
+        p.compThresholdDb = -26.0f;
+        p.compRatio = 20.0f;
+        p.compMix = 1.0f;
+        const double flat = measuredGainDb(p, 1000.0);
+        p.compCeilingDb = 12.0f;
+        const double ceiling = measuredGainDb(p, 1000.0);
+        std::printf("525A ceiling: 0 -> %.2f dB, 12 -> %.2f dB\n", flat, ceiling);
+        check(std::abs(ceiling - flat) < 3.0, "CEILING compresses without moving the output level");
+        p.compCeilingDb = 0.0f;
+        p.compMakeupDb = 6.0f;
+        const double madeUp = measuredGainDb(p, 1000.0);
+        std::printf("525A make-up: +6 -> %.2f dB (vs %.2f)\n", madeUp, flat);
+        check(madeUp > flat + 4.0, "MAKE-UP raises the wet path");
+    }
+
     if (failures == 0) std::printf("console EQ model curves: all pinned\n");
     return failures == 0 ? 0 : 1;
 }

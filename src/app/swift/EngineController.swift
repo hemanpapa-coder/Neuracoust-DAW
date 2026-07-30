@@ -4691,7 +4691,7 @@ final class EngineController: ObservableObject {
     // Per-module model libraries. Each name maps to a DSP character in ConsoleChannelProcessor
     // (modelChar): attack/release, knee, drive, harmonic. The gate plate picks a gate model, the
     // comp plate a comp model — independently per track.
-    static let compModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 33609", "API 2500", "Neuracoust NC"]
+    static let compModels = ["SSL 4000E", "SSL 4000G", "SSL 9000K", "Neve 33609", "API 2500", "API 525A", "Neuracoust NC"]
     static let gateModels = ["SSL 4000E", "SSL 4000G", "Neve 88R", "API 2500", "Neuracoust NC"]
     /// The internal default "ssl" reads back as the flagship SSL 4000E name.
     static func displayConsoleModel(_ raw: String) -> String {

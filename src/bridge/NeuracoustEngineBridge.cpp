@@ -1508,6 +1508,7 @@ float nc_track_console_value(NCEngine* engine, int index, const char* parameter)
     NC_GET("compThresholdDb", compThresholdDb); NC_GET("compRatio", compRatio);
     NC_GET("compAttackMs", compAttackMs); NC_GET("compReleaseMs", compReleaseMs);
     NC_GET("compMix", compMix);
+    NC_GET("compMakeupDb", compMakeupDb); NC_GET("compCeilingDb", compCeilingDb);
     NC_GET("saturatorDriveDb", saturatorDriveDb); NC_GET("saturatorMix", saturatorMix);
     NC_GET("gateThresholdDb", gateThresholdDb); NC_GET("gateRangeDb", gateRangeDb);
     NC_GET("gateAttackMs", gateAttackMs); NC_GET("gateHoldMs", gateHoldMs); NC_GET("gateReleaseMs", gateReleaseMs);
@@ -1563,15 +1564,16 @@ void nc_track_set_console_value(NCEngine* engine, int index, const char* paramet
     NC_SET("compThresholdDb",compThresholdDb,-20.0f,10.0f) NC_SET("compRatio",compRatio,1.0f,25.0f)
     NC_SET("compAttackMs",compAttackMs,0.1f,100.0f) NC_SET("compReleaseMs",compReleaseMs,40.0f,4000.0f)
     NC_SET("compMix",compMix,0.0f,1.0f)
+    NC_SET("compMakeupDb",compMakeupDb,0.0f,24.0f) NC_SET("compCeilingDb",compCeilingDb,0.0f,24.0f)
     NC_SET("saturatorDriveDb",saturatorDriveDb,0.0f,24.0f) NC_SET("saturatorMix",saturatorMix,0.0f,1.0f)
     NC_SET("gateThresholdDb",gateThresholdDb,-30.0f,5.0f) NC_SET("gateRangeDb",gateRangeDb,0.0f,40.0f)
     NC_SET("gateAttackMs",gateAttackMs,0.05f,20.0f) NC_SET("gateHoldMs",gateHoldMs,0.0f,800.0f)
     NC_SET("gateReleaseMs",gateReleaseMs,40.0f,4000.0f)
-    NC_SET("eqHfGainDb",eqHfGainDb,-18.0f,18.0f) NC_SET("eqHfHz",eqHfHz,1500.0f,16000.0f)
+    NC_SET("eqHfGainDb",eqHfGainDb,-18.0f,18.0f) NC_SET("eqHfHz",eqHfHz,1000.0f,20000.0f)
     NC_SET("eqHmfGainDb",eqHmfGainDb,-18.0f,18.0f) NC_SET("eqHmfHz",eqHmfHz,600.0f,7000.0f)
     NC_SET("eqHmfQ",eqHmfQ,0.2f,10.0f) NC_SET("eqLmfGainDb",eqLmfGainDb,-18.0f,18.0f)
-    NC_SET("eqLmfHz",eqLmfHz,400.0f,2500.0f) NC_SET("eqLmfQ",eqLmfQ,0.2f,10.0f)
-    NC_SET("eqLfGainDb",eqLfGainDb,-18.0f,18.0f) NC_SET("eqLfHz",eqLfHz,30.0f,450.0f) { return; }
+    NC_SET("eqLmfHz",eqLmfHz,100.0f,2500.0f) NC_SET("eqLmfQ",eqLmfQ,0.2f,10.0f)
+    NC_SET("eqLfGainDb",eqLfGainDb,-18.0f,18.0f) NC_SET("eqLfHz",eqLfHz,20.0f,600.0f) { return; }
 #undef NC_SET
     // Continuous knob/wheel changes: push the params straight into the render plan (the processor
     // ramps to them per sample). Calling reconcileProject() here rebuilt the whole render plan on

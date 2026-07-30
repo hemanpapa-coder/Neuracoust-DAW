@@ -403,6 +403,7 @@ if(NEURACOUST_BUILD_SWIFT_APP)
         src/app/swift/MixerControls.swift
         src/app/swift/MixerView.swift
         src/app/swift/ConsoleModulesView.swift
+        src/app/swift/Api525APlate.swift
         src/app/swift/TrackInspector.swift
         src/app/swift/PianoRoll.swift
         src/app/swift/VirtualKeyboard.swift
@@ -948,6 +949,12 @@ if(Torch_FOUND)
         else()
             message(STATUS "crepe_tiny.pt not found — the fast CREPE option will fall back to the full model")
         endif()
+        # Skeuomorphic model faceplates (film-strip knobs, needles): the API 525A comp plate.
+        add_custom_command(TARGET NeuracoustDAW POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/api525a"
+                "$<TARGET_BUNDLE_CONTENT_DIR:NeuracoustDAW>/Resources/api525a"
+            COMMENT "Bundling API 525A faceplate assets")
         if(EXISTS "${NEURACOUST_DENOISER_MODEL}")
             add_custom_command(TARGET NeuracoustDAW POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

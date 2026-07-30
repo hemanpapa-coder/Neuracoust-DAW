@@ -1,0 +1,250 @@
+{
+  "name": "API-525A style 500-series UI kit",
+  "panel": {
+    "width": 182.0,
+    "height": 640.0,
+    "note": "All coordinates below are in PANEL UNITS. Multiply by the asset scale (1/2/3) to get pixels in the matching assets/<n>x folder."
+  },
+  "knobs": {
+    "thresh": {
+      "asset": "knob_green.png",
+      "frames": 128,
+      "frameSize": 74.0,
+      "centre": [
+        55.0,
+        80.0
+      ],
+      "topLeft": [
+        18.0,
+        43.0
+      ],
+      "startAngleDeg": -150.0,
+      "endAngleDeg": 150.0
+    },
+    "makeup": {
+      "asset": "knob_green.png",
+      "frames": 128,
+      "frameSize": 74.0,
+      "centre": [
+        127.0,
+        80.0
+      ],
+      "topLeft": [
+        90.0,
+        43.0
+      ],
+      "startAngleDeg": -150.0,
+      "endAngleDeg": 150.0
+    },
+    "attack": {
+      "asset": "knob_grey.png",
+      "frames": 128,
+      "frameSize": 74.0,
+      "centre": [
+        72.5,
+        269.0
+      ],
+      "topLeft": [
+        35.5,
+        232.0
+      ],
+      "startAngleDeg": -150.0,
+      "endAngleDeg": 150.0
+    },
+    "ceiling": {
+      "asset": "knob_red.png",
+      "frames": 128,
+      "frameSize": 140.0,
+      "centre": [
+        85.0,
+        535.0
+      ],
+      "topLeft": [
+        15.0,
+        465.0
+      ],
+      "startAngleDeg": -150.0,
+      "endAngleDeg": 150.0
+    }
+  },
+  "buttons": {
+    "comp": {
+      "asset": "button.png",
+      "frames": 2,
+      "frameSize": 31.0,
+      "centre": [
+        64.0,
+        357.0
+      ],
+      "topLeft": [
+        48.5,
+        341.5
+      ],
+      "hitBox": [
+        51.5,
+        344.5,
+        25.0,
+        25.0
+      ]
+    },
+    "rel": {
+      "asset": "button.png",
+      "frames": 2,
+      "frameSize": 31.0,
+      "centre": [
+        129.5,
+        357.0
+      ],
+      "topLeft": [
+        114.0,
+        341.5
+      ],
+      "hitBox": [
+        117.0,
+        344.5,
+        25.0,
+        25.0
+      ]
+    },
+    "limit": {
+      "asset": "button.png",
+      "frames": 2,
+      "frameSize": 31.0,
+      "centre": [
+        64.0,
+        413.0
+      ],
+      "topLeft": [
+        48.5,
+        397.5
+      ],
+      "hitBox": [
+        51.5,
+        400.5,
+        25.0,
+        25.0
+      ]
+    },
+    "bypass": {
+      "asset": "button.png",
+      "frames": 2,
+      "frameSize": 31.0,
+      "centre": [
+        129.5,
+        413.0
+      ],
+      "topLeft": [
+        114.0,
+        397.5
+      ],
+      "hitBox": [
+        117.0,
+        400.5,
+        25.0,
+        25.0
+      ]
+    }
+  },
+  "leds": {
+    "gr": {
+      "asset": "led_red_on.png",
+      "frameSize": 22.0,
+      "centre": [
+        154.5,
+        220.0
+      ],
+      "topLeft": [
+        143.5,
+        209.0
+      ]
+    },
+    "release": [
+      {
+        "asset": "led_green_on.png",
+        "frameSize": 22.0,
+        "value": "2.0",
+        "centre": [
+          152.5,
+          250.5
+        ],
+        "topLeft": [
+          141.5,
+          239.5
+        ]
+      },
+      {
+        "asset": "led_green_on.png",
+        "frameSize": 22.0,
+        "value": "0.5",
+        "centre": [
+          152.5,
+          275.0
+        ],
+        "topLeft": [
+          141.5,
+          264.0
+        ]
+      },
+      {
+        "asset": "led_green_on.png",
+        "frameSize": 22.0,
+        "value": "0.2",
+        "centre": [
+          152.5,
+          299.5
+        ],
+        "topLeft": [
+          141.5,
+          288.5
+        ]
+      },
+      {
+        "asset": "led_green_on.png",
+        "frameSize": 22.0,
+        "value": "0.05",
+        "centre": [
+          152.5,
+          324.0
+        ],
+        "topLeft": [
+          141.5,
+          313.0
+        ]
+      }
+    ]
+  },
+  "meter": {
+    "asset": "meter_needle.png",
+    "needleWidth": 2.6,
+    "needlePad": 2.5,
+    "travelY": [
+      163.5,
+      195.0
+    ],
+    "xFor0dB": 121.0,
+    "xFor20dB": 60.0,
+    "scaleMarks": {
+      "0": 113.4,
+      "2": 101.4,
+      "4": 89.2,
+      "6": 80.6,
+      "10": 71.2,
+      "20": 61.6
+    },
+    "note": "Needle x is NON-LINEAR in dB. Interpolate through scaleMarks (or use the helper in juce/API525Layout.h) and draw meter_needle.png centred on that x."
+  },
+  "screws": [
+    {
+      "centre": [
+        90.5,
+        18.0
+      ]
+    },
+    {
+      "centre": [
+        92.0,
+        613.0
+      ]
+    }
+  ]
+}

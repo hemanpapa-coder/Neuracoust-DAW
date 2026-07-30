@@ -2139,6 +2139,8 @@ std::string serializeProject(const ProjectDocument& inputProject) {
             << ",\"consoleCompAttackMs\":" << track.consoleChannel.compAttackMs
             << ",\"consoleCompReleaseMs\":" << track.consoleChannel.compReleaseMs
             << ",\"consoleCompMix\":" << track.consoleChannel.compMix
+            << ",\"consoleCompMakeupDb\":" << track.consoleChannel.compMakeupDb
+            << ",\"consoleCompCeilingDb\":" << track.consoleChannel.compCeilingDb
             << ",\"consoleCompFastAttack\":" << (track.consoleChannel.compFastAttack ? "true" : "false")
             << ",\"consoleCompPeakMode\":" << (track.consoleChannel.compPeakMode ? "true" : "false")
             << ",\"consoleCompType\":\"" << escapeJsonString(track.consoleChannel.compType) << "\""
@@ -2940,6 +2942,8 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
         track.consoleChannel.compAttackMs = finiteRange((float)numberAfterKey(body, "consoleCompAttackMs", 30), 30.0f, 0.1f, 100.0f);
         track.consoleChannel.compReleaseMs = finiteRange((float)numberAfterKey(body, "consoleCompReleaseMs", 360), 360.0f, 40.0f, 1500.0f);
         track.consoleChannel.compMix = finiteRange((float)numberAfterKey(body, "consoleCompMix", 1), 1.0f, 0.0f, 1.0f);
+        track.consoleChannel.compMakeupDb = finiteRange((float)numberAfterKey(body, "consoleCompMakeupDb", 0), 0.0f, 0.0f, 24.0f);
+        track.consoleChannel.compCeilingDb = finiteRange((float)numberAfterKey(body, "consoleCompCeilingDb", 0), 0.0f, 0.0f, 24.0f);
         track.consoleChannel.compFastAttack = boolAfterKey(body, "consoleCompFastAttack", false);
         track.consoleChannel.compPeakMode = boolAfterKey(body, "consoleCompPeakMode", false);
         track.consoleChannel.compType = trim(stringAfterKey(body, "consoleCompType"));

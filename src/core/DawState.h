@@ -113,6 +113,11 @@ struct ConsoleChannelState {
     float compAttackMs = 30.0f;
     float compReleaseMs = 360.0f;
     float compMix = 1.0f;
+    // 500-series style output stage: MAKE-UP is plain post-comp gain; CEILING is the API 525A's
+    // coupled control — it lowers the effective threshold AND raises the make-up by the same dB,
+    // so more compression never moves the output ceiling. 0/0 = inert for every other model.
+    float compMakeupDb = 0.0f;
+    float compCeilingDb = 0.0f;
     bool compFastAttack = false;
     bool compPeakMode = false;
     std::string compType = "ssl";

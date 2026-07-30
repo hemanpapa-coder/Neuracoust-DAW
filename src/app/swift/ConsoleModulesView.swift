@@ -1037,7 +1037,7 @@ struct NeuracoustConsoleModulesView: View {
         switch m {
         case .filter:    return 244
         case .eq:        return 660    // 798 − the 138 pt response graph, now in the viz strip
-        case .comp:      return 300   // was 336 — the GR lane moved out to the strip; the air stayed
+        case .comp:      return compIsApi525A ? 758 : 300   // 525A plate = 205×(640/182) + chrome
         case .gate:      return 280   // same trim, same reason
         case .saturator: return 244
         default:         return 258
@@ -1445,7 +1445,27 @@ struct NeuracoustConsoleModulesView: View {
         }.buttonStyle(.plain)
     }
 
-    private var compress: some View {
+    /// The comp model whose faceplate replaces the SSL knob set entirely.
+    private var compIsApi525A: Bool {
+        (engine.tracks.first(where: { $0.id == trackId })?.consoleCompType ?? "") == "API 525A"
+    }
+
+    @ViewBuilder private var compress: some View {
+        if compIsApi525A {
+            // The skeuomorphic 525A plate carries its own controls (incl. bypass); the chrome
+            // stays for the title + model selector so the user can switch back.
+            ConsoleModuleChrome(title: "COMPRESS", modelName: "API 525A",
+                                models: EngineController.compModels,
+                                onSelectModel: { engine.setCompModel(trackId, $0) },
+                                inOn: inOn, onToggleIn: onToggleIn) {
+                Api525APlate(engine: engine, trackId: trackId, width: 205)
+            }
+        } else {
+            compressSsl
+        }
+    }
+
+    private var compressSsl: some View {
         let tk = engine.tracks.first(where: { $0.id == trackId })
         let gr = trackMeters.level(tk?.name ?? "").compGainReductionDb
         return ConsoleModuleChrome(title: "COMPRESS", modelName: tk?.consoleCompType ?? "SSL 4000E", models: EngineController.compModels, onSelectModel: { engine.setCompModel(trackId, $0) }, inOn: inOn, onToggleIn: onToggleIn) {
