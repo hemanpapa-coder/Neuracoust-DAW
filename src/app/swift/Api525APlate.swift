@@ -69,8 +69,11 @@ private enum K {
         return meterMarks.last!.x
     }
 
-    /// ATTACK detents (ms), dial order slow-CCW→fast? — silkscreen runs 15µ (CCW) → 15 (CW).
+    /// ATTACK detents: the silkscreen dots sit at −120/−90/−60/−30/+30/+90/+120° on the
+    /// −150…+150° dial (panel.py SMALL_DOT_ANGLES + label placement), so the stops are NOT
+    /// evenly spaced in normalized terms — mapping them evenly made only the extremes line up.
     static let attackStepsMs: [Float] = [0.1, 0.25, 1, 2, 5, 10, 15]   // 15µ rides the 0.1 ms floor
+    static let attackStopsNormalized: [Float] = [0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.9]
 }
 
 // MARK: asset cache
@@ -236,13 +239,13 @@ struct Api525APlate: View {
                           onChange: { set("compMakeupDb", $0 * 20) },
                           onCommit: { commit("makeup") },
                           defaultValue: 0)
-            // ATTACK: seven silkscreened detents, 15µ→15 ms.
+            // ATTACK: seven silkscreened detents, 15µ→15 ms, at the dots' true angles.
             FilmStripKnob(knob: K.attack, scale: scale,
                           value: attackNormalized,
                           onChange: { setAttack(normalized: $0) },
                           onCommit: { commit("attack") },
-                          defaultValue: 3.0 / 6.0,
-                          steps: (0...6).map { Float($0) / 6 })
+                          defaultValue: K.attackStopsNormalized[3],
+                          steps: K.attackStopsNormalized)
             // CEILING: 0…20 — compression AND gain, the one-knob 525 move.
             FilmStripKnob(knob: K.ceiling, scale: scale,
                           value: value("compCeilingDb") / 20,
@@ -333,11 +336,12 @@ struct Api525APlate: View {
     private var attackNormalized: Float {
         let ms = value("compAttackMs")
         let index = K.attackStepsMs.enumerated().min(by: { abs($0.element - ms) < abs($1.element - ms) })?.offset ?? 3
-        return Float(index) / Float(K.attackStepsMs.count - 1)
+        return K.attackStopsNormalized[index]
     }
     private func setAttack(normalized: Float) {
-        let index = Int((normalized * Float(K.attackStepsMs.count - 1)).rounded())
-        set("compAttackMs", K.attackStepsMs[max(0, min(K.attackStepsMs.count - 1, index))])
+        let index = K.attackStopsNormalized.enumerated()
+            .min(by: { abs($0.element - normalized) < abs($1.element - normalized) })?.offset ?? 3
+        set("compAttackMs", K.attackStepsMs[index])
     }
 
     private var nearestReleaseValue: Float {

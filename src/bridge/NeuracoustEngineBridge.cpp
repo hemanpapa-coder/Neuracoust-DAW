@@ -1554,7 +1554,12 @@ void nc_track_set_console_bool(NCEngine* engine, int index, const char* paramete
     else if(p=="phaseInvertL")t->consoleChannel.phaseInvertL=value;
     else if(p=="phaseInvertR")t->consoleChannel.phaseInvertR=value;
     else return;
-    engine->reconcileProject(); engine->recordStep("Console channel");
+    // Live push, NOT a reconcile: a full updateProject per lamp press stalled the main thread
+    // for a beat (the plate buttons made it obvious). The full rebuild was only ever needed
+    // when remote-strip membership followed the lamps — membership is assignment-only now, and
+    // the processor's engage crossfades handle the audible transition.
+    engine->engine.updateTrackConsoleChannel(t->name, t->consoleChannel);
+    engine->recordStep("Console channel");
 }
 
 void nc_track_set_console_value(NCEngine* engine, int index, const char* parameter, float value) {

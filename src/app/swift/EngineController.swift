@@ -10281,6 +10281,13 @@ final class EngineController: ObservableObject {
             telemetrySmoothedRemoteJitterUs = telemetrySmoothedRemoteJitterUs * 0.7 + status.remoteDspRoundTripJitterUs * 0.3
             setIfChanged(\.remoteRoundTripJitterUs, telemetrySmoothedRemoteJitterUs.rounded())
             setIfChanged(\.lateWakeCount, Int(status.realtimeLateWakeCount))
+            // The main window's monitor dock steps aside while the 모니터 스테이션 window is
+            // open — derived HERE from the window's real existence every tick, so no
+            // appear/disappear race can ever show the station twice (or zero times).
+            let stationWindowOpen = NSApp.windows.contains {
+                ($0.identifier?.rawValue.contains("monitor-station") ?? false) && $0.isVisible
+            }
+            setIfChanged(\.showMonitorDock, !stationWindowOpen)
             // Engine restart resets the raw count to 0 — drop the stale baseline so new misses show.
             if lateWakeBaseline > lateWakeCount { lateWakeBaseline = lateWakeCount }
             setIfChanged(\.remoteDspRoundTripMs, (status.remoteDspRoundTripMs * 10).rounded() / 10)  // 0.1 ms display

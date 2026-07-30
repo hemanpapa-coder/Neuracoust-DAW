@@ -337,8 +337,9 @@ struct MonitorStationWindowRoot: View {
             .frame(minHeight: 480, maxHeight: .infinity)
             .background(Theme.Palette.panel)
             .preferredColorScheme(.dark)
-            .onAppear { engine.showMonitorDock = false }
-            .onDisappear { engine.showMonitorDock = true }
+            // Dock visibility is DERIVED from this window's actual existence (the engine's
+            // poll tick scans NSApp.windows) — the onAppear/onDisappear pair it replaced could
+            // race window restoration and leave the station on screen twice.
     }
 }
 
