@@ -8,7 +8,7 @@
 //
 // Params are the 525A's own controls, normalized 0..1 on the wire and denormalised here:
 //   0 IN (bypass inverse)   1 THRESH −20…+10 dB   2 MAKE-UP 0…20 dB
-//   3 ATTACK 7 detents (15µ…15 ms)   4 RELEASE 4-step ladder (.05/.2/.5/2.0 s)
+//   3 ATTACK 10 detents (15µ…15 ms, every silkscreen dot)   4 RELEASE ladder (.05/.2/.5/2.0 s)
 //   5 RATIO (C 2:1 / L 20:1)         6 CEILING 0…20 dB (threshold down + make-up up)
 //
 // ABI 2: meter() reports the compressor's gain reduction so the plate's needle keeps moving
@@ -41,7 +41,7 @@ constexpr uint32_t kParamCount = 7u;
 const char* const kParamNames[kParamCount] = {
     "In", "Thresh", "Make-Up", "Attack", "Release", "Ratio", "Ceiling",
 };
-constexpr float kAttackStepsMs[] = {0.1f, 0.25f, 1.0f, 2.0f, 5.0f, 10.0f, 15.0f};
+constexpr float kAttackStepsMs[] = {0.1f, 0.25f, 1.0f, 2.0f, 2.7f, 3.7f, 5.0f, 7.0f, 10.0f, 15.0f};
 constexpr float kReleaseStepsSec[] = {0.05f, 0.2f, 0.5f, 2.0f};
 
 NaRtParamInfo g_params[kParamCount];
@@ -84,8 +84,8 @@ void moduleSetParam(void* ptr, uint32_t index, float value) {
         case 1: p.compThresholdDb = -20.0f + v * 30.0f; break;
         case 2: p.compMakeupDb = v * 20.0f; break;
         case 3: {
-            const int step = static_cast<int>(v * 6.0f + 0.5f);
-            p.compAttackMs = kAttackStepsMs[std::max(0, std::min(6, step))];
+            const int step = static_cast<int>(v * 9.0f + 0.5f);
+            p.compAttackMs = kAttackStepsMs[std::max(0, std::min(9, step))];
             break;
         }
         case 4: {

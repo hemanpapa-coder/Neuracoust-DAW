@@ -69,11 +69,13 @@ private enum K {
         return meterMarks.last!.x
     }
 
-    /// ATTACK detents: the silkscreen dots sit at −120/−90/−60/−30/+30/+90/+120° on the
-    /// −150…+150° dial (panel.py SMALL_DOT_ANGLES + label placement), so the stops are NOT
-    /// evenly spaced in normalized terms — mapping them evenly made only the extremes line up.
-    static let attackStepsMs: [Float] = [0.1, 0.25, 1, 2, 5, 10, 15]   // 15µ rides the 0.1 ms floor
-    static let attackStopsNormalized: [Float] = [0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.9]
+    /// ATTACK detents, per the ORIGINAL hardware: EVERY dot is a stop — ten of them, at
+    /// −150/−120/−90/−60/−30/+30/+60/+90/+120/+150° — with the extremes 15µ and 15 ms and the
+    /// labels silkscreened BESIDE their dots (the labels name seven of the ten). The unlabeled
+    /// dots carry the geometric midpoints of their neighbours (2.7 · 3.7 between 2 and 5, 7
+    /// between 5 and 10). 15µ rides the wire's 0.1 ms floor.
+    static let attackStepsMs: [Float] = [0.1, 0.25, 1, 2, 2.7, 3.7, 5, 7, 10, 15]
+    static let attackStopsNormalized: [Float] = [0, 0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9, 1.0]
 }
 
 // MARK: asset cache
