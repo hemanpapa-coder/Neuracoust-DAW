@@ -317,7 +317,13 @@ struct NCEngine {
         neuracoust::daw::normalizeProjectRouting(project);
         std::string error;
         if (!engine.updateProject(project, error)) {
+            // The fallback rebuild must not teleport the transport: an edit landing here during
+            // playback reset the playhead to zero — and during a RECORDING pass that shrank the
+            // live take's punch bookkeeping (the audio kept capturing; only the picture and the
+            // final clip lengths lied).
+            const double resume = std::max(0.0, engine.status().playbackSeconds);
             engine.loadProject(project, error);
+            engine.seek(resume);
         }
     }
 

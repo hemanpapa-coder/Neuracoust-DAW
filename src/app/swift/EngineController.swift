@@ -4052,6 +4052,11 @@ final class EngineController: ObservableObject {
     private struct PunchRegion { var inSec: Double; var outSec: Double; var inBucket: Int; var outBucket: Int }
     private var recordRegions: [PunchRegion] = []       // completed (punched in AND out)
     private var currentPunchInSeconds: Double? = nil    // the in-progress region (punched in, not out)
+    /// The farthest the playhead has reached during the current punch. Region ends read THIS,
+    /// not the raw playhead: an edit whose reconcile falls back to a full reload can bounce the
+    /// playhead for a moment, and the raw value shrank the live take and cut the final clips
+    /// short (the capture itself was always fine).
+    private var recordPunchFarthestSeconds: Double = 0
     private var currentPunchInBucket = 0
     /// Full capture peaks (from captureStart) accumulated incrementally; each clip slices its window.
     private var captureLivePeaksL: [Float] = []
@@ -4083,6 +4088,7 @@ final class EngineController: ObservableObject {
             if !transportRunning { setTransport(running: true) }   // begins the background capture
             if !audioRecordingActive { beginAudioCapture() }        // if transport was already rolling
             if audioRecordingActive, currentPunchInSeconds == nil {
+                recordPunchFarthestSeconds = playheadSeconds
                 recordCommitted = true
                 currentPunchInSeconds = playheadSeconds            // open a new punch region
                 currentPunchInBucket = captureLivePeaksL.count
@@ -4126,7 +4132,8 @@ final class EngineController: ObservableObject {
             // Record OFF is a punch-out: close the current region as a fixed clip, but keep capturing
             // in the background so a later punch-in starts a NEW clip (each region is kept).
             if audioRecordingActive, let pin = currentPunchInSeconds {
-                recordRegions.append(PunchRegion(inSec: pin, outSec: playheadSeconds,
+                recordRegions.append(PunchRegion(inSec: pin,
+                                                 outSec: max(recordPunchFarthestSeconds, playheadSeconds),
                                                  inBucket: currentPunchInBucket, outBucket: captureLivePeaksL.count))
                 currentPunchInSeconds = nil
                 nc_monitor_set_tap_input_monitor(handle, false)   // punch-out: back to hearing the tape
@@ -4172,7 +4179,8 @@ final class EngineController: ObservableObject {
         audioRecordingActive = false
         // Close any region still open at Stop (punched in, never punched out).
         if let pin = currentPunchInSeconds {
-            recordRegions.append(PunchRegion(inSec: pin, outSec: playheadSeconds,
+            recordRegions.append(PunchRegion(inSec: pin,
+                                             outSec: max(recordPunchFarthestSeconds, playheadSeconds),
                                              inBucket: currentPunchInBucket, outBucket: captureLivePeaksL.count))
             currentPunchInSeconds = nil
         }
@@ -4248,7 +4256,9 @@ final class EngineController: ObservableObject {
             // Draw the growing clip exactly to the PLAYHEAD, never to the captured-seconds count —
             // the tap captures on its own (input) clock, which runs slightly ahead of the output
             // playhead, so using it made the clip overshoot the timeline (worse the longer you punch).
-            let end = max(pin, playheadSeconds)
+            // Monotonic: a playhead bounced by an edit's reconcile must not shrink the take.
+            recordPunchFarthestSeconds = max(recordPunchFarthestSeconds, playheadSeconds)
+            let end = max(pin, recordPunchFarthestSeconds)
             clips.append(RecordingClip(trackId: tid, startSeconds: pin,
                                        durationSeconds: max(0.01, end - pin),
                                        peaksL: slicePeaks(captureLivePeaksL, currentPunchInBucket, captureLivePeaksL.count),
