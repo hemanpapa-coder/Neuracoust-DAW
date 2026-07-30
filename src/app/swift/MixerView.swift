@@ -914,9 +914,10 @@ struct ChannelStrip: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel)
                 .strokeBorder(strokeColor, lineWidth: isSelected ? 2 : 1)
         )
-        // Width grip lives at the bottom-right corner (by the footer), not the ambiguous
-        // mid-right edge. Hidden in the fixed-width Channel column.
-        .overlay(alignment: .bottomTrailing) { if fixedWidth == nil && track.kind != .master { widthResizeHandle } }
+        // Width control is the strip's RIGHT EDGE: the cursor becomes ↔ there, and dragging
+        // steps the width through the three tiers (58/110/182) live. Shift while dragging
+        // resizes EVERY channel. Hidden in the fixed-width Channel column.
+        .overlay(alignment: .trailing) { if fixedWidth == nil && track.kind != .master { widthEdgeGrip } }
         .shadow(color: .black.opacity(reorderDX != 0 ? 0.45 : 0.25), radius: reorderDX != 0 ? 8 : 3, y: 2)
         // Lift and follow the cursor while its header is being dragged sideways to reorder.
         .offset(x: fixedWidth == nil ? reorderDX : 0)
@@ -1748,38 +1749,44 @@ struct ChannelStrip: View {
             )
     }
 
-    /// A corner toggle — click cycles this channel (and the whole mixer selection) through
-    /// narrow → default → EXPANDED. The expanded tier (182 pt) renders a skeuomorphic model
-    /// plate at its native panel width, where the 500-series silkscreen is exactly crisp.
-    private var widthResizeHandle: some View {
-        // Midpoint tests so the tier reads reliably whichever exact widths are in play.
-        let width = engine.channelWidthFor(track.id)
-        let isNarrow = width < (EngineController.channelWidthMin + EngineController.channelWidthDefault) / 2
-        let isExpanded = width > (EngineController.channelWidthDefault + EngineController.channelWidthExpanded) / 2
-        return Button {
-            // Only this channel — or, if it is part of a multi-selection, the whole
-            // selection. Never every strip.
-            let sel = engine.selectedMixerTrackIds
-            let targets: [Int] = (sel.contains(track.id) && sel.count > 1) ? Array(sel) : [track.id]
-            let next: CGFloat = isNarrow ? EngineController.channelWidthDefault
-                : isExpanded ? EngineController.channelWidthMin
-                : EngineController.channelWidthExpanded
-            engine.setChannelWidth(trackIds: targets, width: next)
-            engine.commitChannelWidth()
-        } label: {
-            Text(isExpanded ? "» «" : isNarrow ? "‹ ›" : "« »")
-                .font(Theme.Font.mono(7, .bold))
-                .foregroundStyle(Color.white.opacity(0.5))
-                .frame(width: 16, height: 15)
-                .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.06)))
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 3)
-        .padding(.bottom, 7)
-        .helpTip(engine.tr(isNarrow ? "help.channel_wide" : "help.channel_narrow"))
+    /// The strip's right-edge width grip: hover shows the ↔ cursor, a horizontal drag steps
+    /// the width through the three tiers (narrow 58 / default 110 / expanded 182 — the last is
+    /// the skeuomorphic plates' crisp native width), previewed live and committed on release.
+    /// Shift while dragging resizes EVERY channel; a multi-selection containing this strip
+    /// already moves together.
+    private var widthEdgeGrip: some View {
+        let tiers: [CGFloat] = [EngineController.channelWidthMin,
+                                EngineController.channelWidthDefault,
+                                EngineController.channelWidthExpanded]
+        return Rectangle()
+            .fill(Color.clear)
+            .frame(width: 7)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                .onChanged { drag in
+                    let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+                    let sel = engine.selectedMixerTrackIds
+                    let targets: Set<Int> = shiftHeld
+                        ? Set(engine.tracks.filter { $0.kind != .master }.map(\.id))
+                        : (sel.contains(track.id) && sel.count > 1 ? sel : [track.id])
+                    let anchor = engine.channelWidthDrag?.anchorWidth ?? engine.channelWidthFor(track.id)
+                    // Snap the previewed width to the NEAREST tier — the drag steps, never smears.
+                    let raw = anchor + drag.translation.width
+                    let snapped = tiers.min(by: { abs($0 - raw) < abs($1 - raw) }) ?? anchor
+                    engine.channelWidthDrag = .init(targets: targets, anchorWidth: anchor, width: snapped)
+                }
+                .onEnded { _ in
+                    guard let drag = engine.channelWidthDrag else { return }
+                    engine.setChannelWidth(trackIds: Array(drag.targets), width: drag.width)
+                    engine.commitChannelWidth()
+                    engine.channelWidthDrag = nil
+                })
     }
 
-    /// Selected (a `⌘/⇧`-extendable set); the last-clicked strip also drives the timeline.
     private var isSelected: Bool { engine.selectedMixerTrackIds.contains(track.id) }
 
     private var strokeColor: Color {

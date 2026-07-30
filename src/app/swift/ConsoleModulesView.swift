@@ -947,6 +947,10 @@ private struct ConsoleModuleChrome<Content: View>: View {
     let onSelectModel: (String) -> Void
     let inOn: Bool
     let onToggleIn: () -> Void
+    /// The scaled SSL modules render at the 205 design width; a NATIVE skeuomorphic plate passes
+    /// the real strip width instead — the fixed 205 overflowed its frame there and the clip cut
+    /// the border into stray edge lines.
+    var chromeWidth: CGFloat = 205
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -973,7 +977,7 @@ private struct ConsoleModuleChrome<Content: View>: View {
             // The model name plate is rendered by NeuracoustConsoleModulesView at the module's real
             // width (outside the scale) so it stays legible and clickable — see `modelPlate`.
         }
-        .frame(width: 205)
+        .frame(width: chromeWidth)
         .background(LinearGradient(colors: [Color(hex: 0x2b2d2f), Color(hex: 0x232527)], startPoint: .top, endPoint: .bottom))
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.black, lineWidth: 1))
@@ -1043,7 +1047,7 @@ struct NeuracoustConsoleModulesView: View {
         switch m {
         case .filter:    return 244
         case .eq:        return 660    // 798 − the 138 pt response graph, now in the viz strip
-        case .comp:      return compIsApi525A ? width * 640 / 182 + 30 : 300   // native plate + chrome
+        case .comp:      return compIsApi525A ? width * 640 / 182 + 36 : 300   // native plate + chrome header
         case .gate:      return 280   // same trim, same reason
         case .saturator: return 244
         default:         return 258
@@ -1474,7 +1478,8 @@ struct NeuracoustConsoleModulesView: View {
             ConsoleModuleChrome(title: "COMP", modelName: "API 525A",
                                 models: EngineController.compModels,
                                 onSelectModel: { engine.setCompModel(trackId, $0) },
-                                inOn: inOn, onToggleIn: onToggleIn) {
+                                inOn: inOn, onToggleIn: onToggleIn,
+                                chromeWidth: width) {
                 Api525APlate(engine: engine, trackId: trackId, width: width)
             }
         } else {

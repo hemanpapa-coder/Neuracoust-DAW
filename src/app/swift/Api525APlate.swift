@@ -117,9 +117,13 @@ private struct FilmStripKnob: View {
     @State private var hovering = false
     @State private var wheelAccum: CGFloat = 0
     @State private var wheelCommit: DispatchWorkItem?
+    /// Shown while a gesture is in flight, so the film strip follows the mouse frame-for-frame
+    /// instead of waiting for the engine's published tick (which capped drags at ~30 fps).
+    @State private var liveValue: Float?
 
     var body: some View {
-        let frameIndex = Int((CGFloat(max(0, min(1, value))) * CGFloat(knob.frames - 1)).rounded())
+        let shown = liveValue ?? value
+        let frameIndex = Int((CGFloat(max(0, min(1, shown))) * CGFloat(knob.frames - 1)).rounded())
         let side = knob.frameSize * scale
         Group {
             if let cg = Api525AAssets.shared.frame(knob.asset, index: frameIndex, frames: knob.frames) {
@@ -130,10 +134,14 @@ private struct FilmStripKnob: View {
                 Circle().fill(Color.gray).frame(width: side, height: side)
             }
         }
-        .position(x: knob.centre.x * scale, y: knob.centre.y * scale)
-        .contentShape(Circle().path(in: CGRect(x: knob.centre.x * scale - side / 2,
-                                               y: knob.centre.y * scale - side / 2,
-                                               width: side, height: side)))
+        // Waves-style focus: the control the wheel would turn is the one wearing the ring.
+        .overlay(
+            Circle()
+                .stroke(Color(red: 0.37, green: 0.62, blue: 0.84).opacity(hovering ? 0.85 : 0), lineWidth: 1.5)
+                .padding(1)
+        )
+        .frame(width: side, height: side)          // the view's frame IS the knob → exact hover
+        .contentShape(Circle())
         .onHover { hovering = $0 }
         // The wheel over a knob turns the KNOB — never the mixer's scroll view under it.
         .overlay(KnobScrollWheel(active: hovering) { dy, precise in applyWheel(dy, precise) }
@@ -146,10 +154,13 @@ private struct FilmStripKnob: View {
                 if let steps, !steps.isEmpty {
                     next = steps.min(by: { abs($0 - next) < abs($1 - next) }) ?? next
                 }
+                liveValue = next
                 onChange(next)
             }
-            .onEnded { _ in dragStart = nil; onCommit() })
+            .onEnded { _ in dragStart = nil; liveValue = nil; onCommit() })
         .highPriorityGesture(TapGesture(count: 2).onEnded { onChange(defaultValue); onCommit() })
+        .offset(x: (knob.centre.x - knob.frameSize / 2) * scale,
+                y: (knob.centre.y - knob.frameSize / 2) * scale)
     }
 
     /// One mouse notch = one detent on a stepped knob, a fine nudge on a continuous one.
@@ -167,18 +178,20 @@ private struct FilmStripKnob: View {
             notches = delta > 0 ? 1 : -1
         }
         guard notches != 0 else { return }
+        let base = liveValue ?? value
         var next: Float
         if let steps, !steps.isEmpty {
             let ordered = steps.sorted()
             let currentIndex = ordered.enumerated()
-                .min(by: { abs($0.element - value) < abs($1.element - value) })?.offset ?? 0
+                .min(by: { abs($0.element - base) < abs($1.element - base) })?.offset ?? 0
             next = ordered[max(0, min(ordered.count - 1, currentIndex + notches))]
         } else {
-            next = max(0, min(1, value + Float(notches) * 0.02))
+            next = max(0, min(1, base + Float(notches) * 0.02))
         }
+        liveValue = next
         onChange(next)
         wheelCommit?.cancel()
-        let work = DispatchWorkItem { onCommit() }
+        let work = DispatchWorkItem { onCommit(); liveValue = nil }
         wheelCommit = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
