@@ -1418,24 +1418,12 @@ bool NeuracoustDspEngine::updateTrackConsoleChannel(const std::string& trackName
     if (trackIt == projectPlan_.tracks.end()) return false;
     // The ConsoleChannelProcessor (kept in the render state, keyed by route) ramps its coefficients
     // toward these params per sample, so pushing them here is click-free.
-    const auto& before = trackIt->consoleChannel;
-    const bool enabledSetChanged =
-        before.filterEnabled != console.filterEnabled ||
-        before.eqEnabled != console.eqEnabled ||
-        before.compEnabled != console.compEnabled ||
-        before.gateEnabled != console.gateEnabled ||
-        before.saturatorEnabled != console.saturatorEnabled;
     trackIt->consoleChannel = console;
-    // Switching a module on/off changes whether this strip belongs on a remote machine at all —
-    // the offload list skips all-modules-off strips, and it is derived, not live. Without this,
-    // enabling the first module on an NDS-assigned channel streamed nothing until some unrelated
-    // edit happened to reconcile. Cheap (rebuilds a map, no plug-in loads), so per-toggle is fine;
-    // plain knob turns skip it.
-    if (enabledSetChanged) {
-        prepareRemoteConsoleStripsLocked(maxBlockSize_);
-    } else if (auto strip = remoteConsoleStrips_.find(trackName); strip != remoteConsoleStrips_.end()) {
-        // The strip is remote and a parameter moved: refresh the values the stream sends, or the
-        // node keeps processing with the settings from assignment time.
+    // Strip membership is the ASSIGNMENT (machine/role), never the module lamps — an idle
+    // assigned strip stays streaming as a passthrough, so a lamp toggle is only a parameter
+    // refresh and the node's own engage crossfade handles the rest. Rebuilding membership here
+    // (the old behaviour) made every first-lamp toggle a local↔remote handoff, which clicked.
+    if (auto strip = remoteConsoleStrips_.find(trackName); strip != remoteConsoleStrips_.end()) {
         strip->second.parameters.clear();
         for (const auto& parameter : consoleChannelParameterValues(console)) {
             strip->second.parameters.push_back({static_cast<uint32_t>(parameter.index), parameter.normalized});
@@ -3390,12 +3378,12 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
         if (!remoteDspModeAvailable(settings_.remoteDspServer, mode)) {
             continue;
         }
-        // A strip with every module off is a passthrough; sending it over the network would add
-        // latency and a dropout risk to buy nothing.
+        // Membership is the ASSIGNMENT, not the module lamps. An idle assigned strip streams a
+        // passthrough — that wire cost buys clickless lamp toggles: skipping idle strips made
+        // every first-module toggle a local↔remote handoff (plus a delay-compensation step),
+        // which was the digital click on NDS strips. Assignment changes go through the declicked
+        // reconcile, so entering/leaving the map lands in silence.
         const auto& c = track.consoleChannel;
-        if (!c.filterEnabled && !c.eqEnabled && !c.compEnabled && !c.gateEnabled && !c.saturatorEnabled) {
-            continue;
-        }
         RemoteConsoleStrip strip;
         strip.mode = mode;
         for (const auto& parameter : consoleChannelParameterValues(c)) {

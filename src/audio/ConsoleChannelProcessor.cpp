@@ -241,6 +241,8 @@ void ConsoleChannelProcessor::reset(double sr) {
     for (auto& channel : eq_) for (auto& band : channel) band.clear();
     compDetector_.fill(0); gateDetector_.fill(0);
     compGainDb_.fill(0); gateGainDb_.fill(0); gateHold_.fill(0);
+    moduleEngage_.fill(0.0f);
+    moduleEngagePrimed_ = false;
 }
 
 void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio,
@@ -250,8 +252,11 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
     // to the SSL E baseline. This used to demand exactly "4000e"/"4001e", from before the model
     // library existed; picking ANY model from the plate (the UI stores "SSL 4000G", "Neve 8078",
     // even "SSL 4000E") silently bypassed the whole strip while its lamps kept shining.
+    const bool anyEngaged = moduleEngage_[0] > 0.0f || moduleEngage_[1] > 0.0f ||
+                            moduleEngage_[2] > 0.0f || moduleEngage_[3] > 0.0f ||
+                            moduleEngage_[4] > 0.0f;
     if (!p.filterEnabled && !p.eqEnabled && !p.compEnabled && !p.gateEnabled &&
-        !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR) return;
+        !p.saturatorEnabled && !p.phaseInvertL && !p.phaseInvertR && !anyEngaged) return;
     if (sampleRate_ != sr) reset(sr);
     // Analog-console channel variation: a tiny per-strip EQ-frequency drift and an output trim,
     // both deterministic from the channel seed (no-op at depth 0). modelChar gets nudged too below.
@@ -302,10 +307,36 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
         order.push_back(p.moduleOrder.substr(start,end==std::string::npos?std::string::npos:end-start));
         if(end==std::string::npos) break; start=end+1;
     }
+    // Engage envelopes: enable flags are TARGETS; the wet path crossfades over ~10 ms. The first
+    // block after a reset snaps instead (a bounce that starts with modules on must not fade in).
+    const std::array<bool, 5> engageTarget {
+        p.filterEnabled, p.eqEnabled, p.compEnabled, p.gateEnabled, p.saturatorEnabled};
+    if (!moduleEngagePrimed_) {
+        for (size_t m = 0; m < moduleEngage_.size(); ++m) moduleEngage_[m] = engageTarget[m] ? 1.0f : 0.0f;
+        moduleEngagePrimed_ = true;
+    }
+    const float engageStep = 1.0f / static_cast<float>(std::max(1.0, sr * 0.010));
+    const auto engageIndexFor = [](const std::string& module) -> int {
+        if (module == "filter") return 0;
+        if (module == "eq") return 1;
+        if (module == "comp") return 2;
+        if (module == "gate") return 3;
+        if (module == "saturator") return 4;
+        return -1;
+    };
     for (size_t i = 0; i + 1 < audio.size(); i += 2) {
         float l = audio[i], r = audio[i + 1];
         for (const auto& module : order) {
-            if (module=="filter" && p.filterEnabled) {
+            const int engageIndex = engageIndexFor(module);
+            float engage = 0.0f;
+            if (engageIndex >= 0) {
+                engage = clamp(moduleEngage_[static_cast<size_t>(engageIndex)] +
+                                   (engageTarget[static_cast<size_t>(engageIndex)] ? engageStep : -engageStep),
+                               0.0f, 1.0f);
+                moduleEngage_[static_cast<size_t>(engageIndex)] = engage;
+            }
+            const float bypassL = l, bypassR = r;
+            if (module=="filter" && engage > 0.0f) {
                 if (p.highPassEnabled) {
                     l=eq_[0][0].process(l); r=eq_[1][0].process(r);
                 }
@@ -313,11 +344,11 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                     l=eq_[0][1].process(l); r=eq_[1][1].process(r);
                 }
                 if (p.filterCircuitMode) { l=circuitStage(l,0.35f,mc.harmonic); r=circuitStage(r,0.35f,mc.harmonic); }
-            } else if (module=="eq" && p.eqEnabled) {
+            } else if (module=="eq" && engage > 0.0f) {
                 for(size_t b=2;b<8;++b)l=eq_[0][b].process(l);
                 for(size_t b=2;b<8;++b)r=eq_[1][b].process(r);
                 if (p.eqCircuitMode) { l=circuitStage(l,0.55f,mc.harmonic); r=circuitStage(r,0.55f,mc.harmonic); }
-            } else if (module=="comp" && p.compEnabled) {
+            } else if (module=="comp" && engage > 0.0f) {
                 const float dryL = l, dryR = r;
                 const float mix=clamp(p.compMix,0.0f,1.0f);
                 const float linked = std::max(std::abs(l), std::abs(r));
@@ -341,7 +372,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 l=dryL*(1.0f-mix)+(dryL*gain[0])*mix;
                 r=dryR*(1.0f-mix)+(dryR*gain[1])*mix;
                 if (p.compCircuitMode) { l=circuitStage(l, cc.compDrive, cc.harmonic); r=circuitStage(r, cc.compDrive, cc.harmonic); }
-            } else if (module=="gate" && p.gateEnabled) {
+            } else if (module=="gate" && engage > 0.0f) {
                 const float linked = std::max(std::abs(l), std::abs(r));
                 const std::array<float, 2> detectorInput {
                     p.dualMono ? std::abs(l) : linked,
@@ -365,7 +396,7 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 }
                 l*=gain[0]; r*=gain[1];
                 if (p.gateCircuitMode) { l=circuitStage(l, 0.4f, gc.harmonic); r=circuitStage(r, 0.4f, gc.harmonic); }
-            } else if (module=="saturator" && p.saturatorEnabled) {
+            } else if (module=="saturator" && engage > 0.0f) {
                 const float dryL=l, dryR=r;
                 // Warm models (high harmonic) reach saturation a touch sooner; clean models later —
                 // a bounded drive trim so the model choice is clearly audible, not just a nameplate.
@@ -373,6 +404,12 @@ void ConsoleChannelProcessor::processInterleavedStereo(std::vector<float>& audio
                 const float mix=clamp(p.saturatorMix,0.0f,1.0f);
                 l=dryL*(1.0f-mix)+saturate(dryL,drive,p.saturatorCircuitMode,mc.harmonic)*mix;
                 r=dryR*(1.0f-mix)+saturate(dryR,drive,p.saturatorCircuitMode,mc.harmonic)*mix;
+            }
+            // The engage crossfade: mid-fade a module contributes proportionally, so a lamp
+            // toggle slides between bypass and processed instead of stepping.
+            if (engageIndex >= 0 && engage < 1.0f) {
+                l = bypassL + (l - bypassL) * engage;
+                r = bypassR + (r - bypassR) * engage;
             }
         }
         if (p.phaseInvertL) l = -l;               // channel polarity (Ø), per side, end of chain

@@ -1980,6 +1980,10 @@ void renderProjectAudioBlockWithMeters(const ProjectAudioRenderPlan& plan,
 void ProjectAudioRenderState::reset() {
     routeDelayLines.clear();
     consoleChannelProcessors.clear();
+    consoleStripWasRemote.clear();
+    consoleStripHold.clear();
+    consoleStripDeclickRemaining.clear();
+    consoleStripDeclickTotal.clear();
     masterInsertChain.reset();
     instrumentProcessors.clear();
     instrumentProcessorKeys.clear();
@@ -2007,6 +2011,10 @@ void ProjectAudioRenderState::reset() {
 void ProjectAudioRenderState::resetForSeek() {
     routeDelayLines.clear();
     consoleChannelProcessors.clear();
+    consoleStripWasRemote.clear();
+    consoleStripHold.clear();
+    consoleStripDeclickRemaining.clear();
+    consoleStripDeclickTotal.clear();
     sourceGeneratorPhases.clear();
     for (auto& [name, gen] : sourceGenerators) gen.reset();
     liveMidiEvents.clear();
@@ -2262,6 +2270,34 @@ void renderProjectAudioBlockWithStateAndMeters(const ProjectAudioRenderPlan& pla
             auto& consoleProcessor = state.consoleChannelProcessors[route->name];
             if (!handledRemotely) {
                 consoleProcessor.processInterleavedStereo(routeInput, track->consoleChannel, plan.sampleRate);
+            }
+            // Local↔remote handoff declick: the remote path rides a network pipeline, so a missed
+            // block's local fallback (and the recovery after it) is TIME-SHIFTED — a step at the
+            // seam. Crossfade ~10 ms from the held last output into whichever path runs now.
+            {
+                const auto wasRemote = state.consoleStripWasRemote.find(route->name);
+                if (wasRemote != state.consoleStripWasRemote.end() &&
+                    wasRemote->second != (handledRemotely ? 1 : 0)) {
+                    const int fadeSamples = static_cast<int>(plan.sampleRate * 0.010);
+                    state.consoleStripDeclickRemaining[route->name] = fadeSamples;
+                    state.consoleStripDeclickTotal[route->name] = fadeSamples;
+                }
+                state.consoleStripWasRemote[route->name] = handledRemotely ? 1 : 0;
+                int& remaining = state.consoleStripDeclickRemaining[route->name];
+                if (remaining > 0) {
+                    const int total = std::max(1, state.consoleStripDeclickTotal[route->name]);
+                    auto& hold = state.consoleStripHold[route->name];
+                    for (size_t sample = 0; sample + 1 < routeInput.size() && remaining > 0;
+                         sample += 2, --remaining) {
+                        const float t = 1.0f - static_cast<float>(remaining) / static_cast<float>(total);
+                        routeInput[sample] = hold.first + (routeInput[sample] - hold.first) * t;
+                        routeInput[sample + 1] = hold.second + (routeInput[sample + 1] - hold.second) * t;
+                    }
+                }
+                if (routeInput.size() >= 2) {
+                    state.consoleStripHold[route->name] = {routeInput[routeInput.size() - 2],
+                                                           routeInput[routeInput.size() - 1]};
+                }
             }
             if (meters != nullptr) {
                 const auto meterIt = meterIndexByTrack.find(route->name);

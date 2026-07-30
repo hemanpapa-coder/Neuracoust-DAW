@@ -674,6 +674,12 @@ target_link_libraries(neuracoust_remote_mix_probe PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_remote_jitter_probe tools/remote_jitter_probe.cpp)
 target_link_libraries(neuracoust_remote_jitter_probe PRIVATE neuracoust_daw_core)
 
+# 토글 클릭 재현기: 렌더 스레드를 돌리면서 역할 스위치/EQ 램프 편집을 수행하고 캡처된
+# 스트림에서 불연속을 수치로 검출한다. 로컬 시나리오는 ctest에서도 돈다.
+add_executable(neuracoust_toggle_click_probe tools/toggle_click_probe.cpp)
+target_link_libraries(neuracoust_toggle_click_probe PRIVATE neuracoust_daw_core)
+add_test(NAME toggle_click COMMAND neuracoust_toggle_click_probe)
+
 # Realtime-path console audibility: comp must duck, EQ must lift, headless, local or NDS.
 # No-arg = fully offline, so it runs in ctest; pass a host to also exercise the remote strips.
 # Caught the plate-model bypass: picking ANY console model muted the whole strip.

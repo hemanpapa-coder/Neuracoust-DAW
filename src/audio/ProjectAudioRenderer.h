@@ -105,6 +105,14 @@ struct ProjectAudioBlockMeters {
 struct ProjectAudioRenderState {
     std::map<std::string, std::deque<MixerStereoFrame>> routeDelayLines;
     std::map<std::string, ConsoleChannelProcessor> consoleChannelProcessors;
+    // Local↔remote strip handoff declick. A remote strip's audio rides a network pipeline, so a
+    // missed block's local fallback (and the recovery after it) lands time-shifted — a step no
+    // fade upstream can see. Same held-sample crossfade the insert dry↔wet swap uses: on a flip,
+    // ~10 ms from the held last output into the new path. Keyed by route.
+    std::map<std::string, int> consoleStripWasRemote;                 // absent = first sight
+    std::map<std::string, std::pair<float, float>> consoleStripHold;  // last emitted L/R
+    std::map<std::string, int> consoleStripDeclickRemaining;
+    std::map<std::string, int> consoleStripDeclickTotal;
     /// Optional detour for a track's console strip, set only by the realtime engine: return true
     /// having processed the block on a remote node, false to let the local processor run.
     ///

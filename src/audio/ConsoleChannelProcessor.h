@@ -41,6 +41,13 @@ private:
     // 0 HP · 1 LP · 2 HF · 3 HMF · 4 LMF · 5 LF · 6/7 model companions (shelf overshoot /
     // inductor dip). The companions sit at unity for models that have no such behaviour.
     std::array<std::array<Biquad, 8>, 2> eq_;
+    // Per-module engage envelopes (filter/eq/comp/gate/saturator): an enable flag is a TARGET,
+    // and the wet path crossfades in/out over ~10 ms — a hard bypass switch stepped the whole
+    // transfer function between two samples, which is the digital click every lamp toggle made.
+    // Snapped (not ramped) on the first block after reset, so a bounce that starts with modules
+    // on does not fade them in.
+    std::array<float, 5> moduleEngage_ {0, 0, 0, 0, 0};
+    bool moduleEngagePrimed_ = false;
     std::array<float, 2> compDetector_ {0, 0};
     std::array<float, 2> gateDetector_ {0, 0};
     std::array<float, 2> compGainDb_ {0, 0};
