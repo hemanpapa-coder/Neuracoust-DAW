@@ -59,6 +59,11 @@ struct MonitorDspModule {
     // aggregate-init order.
     std::string headphoneOutput;
     bool monitorToHeadphone = false;
+    // Simultaneous speaker+headphone: the inactive tab's output pair ALSO carries the monitor
+    // signal (same processed block — per-path correction is future engine work). Mirrored from
+    // the project's monitorSpeakerHeadphoneExclusive switch (this is its inverse) so the
+    // realtime routing can read it from the modules it already holds. Kept LAST.
+    bool simultaneousOutput = false;
 };
 
 std::vector<MonitorDspModule> defaultMonitorDspModules();

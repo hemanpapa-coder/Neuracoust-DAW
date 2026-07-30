@@ -357,6 +357,13 @@ struct NCEngine {
     }
 
     void pushModules() {
+        // The simultaneous-output flag is the project's speaker/headphone exclusive switch,
+        // inverted, mirrored into the speaker-sim module so the realtime routing can read it
+        // from the modules it already holds. Re-mirroring on every push means the two can
+        // never drift, whatever set either of them.
+        if (auto* sim = speakerSimulation(); sim != nullptr) {
+            sim->simultaneousOutput = !project.monitorSpeakerHeadphoneExclusive;
+        }
         engine.setMonitorDspModules(project.monitorModules, monitorDspEnabled);
     }
 
@@ -7671,6 +7678,100 @@ void nc_track_set_insert_dsp_machine(NCEngine* engine, int trackIndex, int slot,
     engine->recordStep("Insert DSP");
 }
 
+// 서버 지터 자가진단. 두 종류의 교환을 연달아 보내 왕복 분포를 재고, 어느 쪽이 흔들리는지로
+// 원인을 사람 말로 추정한다:
+//   - 상태 핑(작은 패킷, 상태 포트): 경로 자체의 최소 변동.
+//   - 오디오 블록 교환(256프레임 믹스, 오디오 포트): 실제 스트림이 겪는 변동.
+// 작은 패킷은 안정한데 큰 패킷만 흔들리면 링크 속도/케이블/스위치 큐잉, 둘 다 흔들리면 공유
+// 트래픽·절전, 드문 스파이크는 절전/백그라운드 전송/무선 구간, 손실은 케이블/커넥터 순으로
+// 본다 — 진단은 추정이며 리포트에 근거 수치를 함께 적는다. 엔진 프리·블로킹(~1 s):
+// 백그라운드 스레드에서 부를 것.
+bool nc_remote_jitter_probe(const char* hostPort, char* out, size_t outLen) {
+    if (out == nullptr || outLen == 0) return false;
+    copyText(out, outLen, "");
+    if (hostPort == nullptr || *hostPort == '\0') return false;
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.nodes.clear();
+    settings.host = hostPort;
+    neuracoust::daw::applyRemoteDspHostPort(settings);
+    settings.enabled = true;
+
+    const auto quantiles = [](std::vector<double>& ms, double& p50, double& p95, double& peak) {
+        std::sort(ms.begin(), ms.end());
+        p50 = ms[ms.size() / 2];
+        p95 = ms[std::min(ms.size() - 1, static_cast<size_t>(ms.size() * 95 / 100))];
+        peak = ms.back();
+    };
+
+    // Small-packet baseline: status pings.
+    std::vector<double> statusMs;
+    statusMs.reserve(60);
+    auto statusSettings = settings;
+    statusSettings.timeoutMs = 50;
+    for (int i = 0; i < 60; ++i) {
+        const auto info = neuracoust::daw::queryRemoteDspServerInfo(statusSettings);
+        if (info.reachable && info.roundTripMs > 0.0) statusMs.push_back(info.roundTripMs);
+    }
+    if (statusMs.size() < 30) {
+        copyText(out, outLen, "노드가 상태 핑에 답하지 않습니다 — 주소/전원/케이블부터 확인하세요.");
+        return true;
+    }
+
+    // Audio-sized exchanges: one-contribution mixes, the realtime stream's own packet shape.
+    neuracoust::daw::RemoteMixSession session;
+    auto mixSettings = settings;
+    mixSettings.channelCount = 2;
+    mixSettings.timeoutMs = 10;
+    const std::vector<std::vector<float>> contributions{std::vector<float>(512, 0.0f)};
+    std::vector<float> summed;
+    std::vector<double> audioMs;
+    audioMs.reserve(150);
+    int misses = 0;
+    for (int i = 0; i < 150; ++i) {
+        const auto result = session.mix(mixSettings, contributions, summed);
+        if (result.processed && result.roundTripMs > 0.0) audioMs.push_back(result.roundTripMs);
+        else ++misses;
+    }
+    if (audioMs.size() < 50) {
+        copyText(out, outLen,
+                 "상태 핑은 통하는데 오디오 교환이 거의 실패합니다 — 오디오 포트(방화벽)나 엔진 상태를 확인하세요.");
+        return true;
+    }
+
+    double statusP50 = 0, statusP95 = 0, statusMax = 0;
+    double audioP50 = 0, audioP95 = 0, audioMax = 0;
+    quantiles(statusMs, statusP50, statusP95, statusMax);
+    quantiles(audioMs, audioP50, audioP95, audioMax);
+    const double statusJitterUs = (statusP95 - statusP50) * 1000.0;
+    const double audioJitterUs = (audioP95 - audioP50) * 1000.0;
+    const double spikeRatio = audioP50 > 0.0 ? audioMax / audioP50 : 1.0;
+    const double missRate = 150.0 > 0 ? static_cast<double>(misses) / 150.0 : 0.0;
+
+    std::string verdict;
+    if (missRate > 0.05) {
+        verdict = "패킷 손실이 보입니다 → 케이블/커넥터/포트 불량을 가장 먼저 점검하세요.";
+    } else if (audioJitterUs < 150.0) {
+        verdict = "정상 — 유선 기가비트 직결 수준입니다. 지금 배선을 유지하세요.";
+    } else if (statusJitterUs < 150.0 && audioJitterUs >= 400.0) {
+        verdict = "큰(오디오) 패킷에서만 변동 → 링크 속도(100 Mbps 협상)·케이블 등급·스위치 큐잉 의심. "
+                  "기가비트 확인 및 DAW-노드 직결(또는 같은 스위치)로 좁혀 보세요.";
+    } else if (spikeRatio > 8.0 && audioJitterUs < 400.0) {
+        verdict = "평소엔 안정한데 간헐 스파이크 → 절전(EEE/링크 절전)·백그라운드 전송·무선 구간 의심.";
+    } else {
+        verdict = "작은 패킷까지 함께 변동 → 경로 공유 트래픽(허브/스위치에 물린 다른 장비)이나 "
+                  "노드 쪽 스케줄링 의심. 스위치에서 다른 장비를 빼고 재측정해 보세요.";
+    }
+
+    char report[1024];   // Korean UTF-8 runs ~3 bytes/char; NC_TEXT_LEN truncated the numbers line
+    std::snprintf(report, sizeof(report),
+                  "%s\n오디오 왕복 p50 %.2f ms · p95 %.2f ms · 최대 %.2f ms · 지터 %.0f µs · 손실 %d/150\n"
+                  "상태 핑 p50 %.2f ms · 지터 %.0f µs",
+                  verdict.c_str(), audioP50, audioP95, audioMax, audioJitterUs, misses,
+                  statusP50, statusJitterUs);
+    copyText(out, outLen, report);
+    return true;
+}
+
 // SoundGrid-style inventory scan: broadcast on both status-port generations and return EVERY
 // server that answers — appliance engines (20003) normalized to their host:20002 audio address,
 // legacy remote_core_servers (20001) as plain hosts. Engine-free and blocking (~1 s): call it
@@ -9355,6 +9456,9 @@ void nc_monitor_set_output_exclusive(NCEngine* engine, bool exclusive) {
     if (engine == nullptr || engine->project.monitorSpeakerHeadphoneExclusive == exclusive) return;
     engine->project.monitorSpeakerHeadphoneExclusive = exclusive;
     engine->recordStep(exclusive ? "Enable speaker/headphone exclusive" : "Disable speaker/headphone exclusive");
+    // Off = simultaneous: the inactive tab's pair also carries the monitor signal. pushModules
+    // mirrors the flag into the speaker-sim module and hands the set to the engine live.
+    engine->pushModules();
 }
 
 namespace {

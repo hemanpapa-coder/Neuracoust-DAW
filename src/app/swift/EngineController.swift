@@ -3161,6 +3161,29 @@ final class EngineController: ObservableObject {
     /// user-owned engine, and confirm the module list — over ssh KEY auth, so no login prompt
     /// and no root, ever. Runs tools/node/update-node-engine.sh from the source checkout.
     @Published private(set) var nodeUpdateStatus = ""
+    /// 서버 지터 자가진단 리포트 (empty = none yet, "진단 중…" while the probe runs).
+    @Published private(set) var jitterDiagnosis = ""
+
+    /// Runs the server-jitter self-diagnosis against the NDS node: status pings vs audio-sized
+    /// exchanges, distribution stats, and a human verdict. Engine-free probe, so it runs detached.
+    func diagnoseServerJitter() {
+        guard jitterDiagnosis != "진단 중…" else { return }
+        let host = ndsHost
+        guard !host.isEmpty else {
+            jitterDiagnosis = "NDS 주소가 비어 있습니다"
+            return
+        }
+        jitterDiagnosis = "진단 중…"
+        Task.detached(priority: .userInitiated) {
+            var report = [CChar](repeating: 0, count: 2048)
+            let ok = nc_remote_jitter_probe(host, &report, report.count)
+            let text = String(cString: report)
+            await MainActor.run { [weak self] in
+                self?.jitterDiagnosis = ok && !text.isEmpty ? text : "진단에 실패했습니다"
+            }
+        }
+    }
+    func clearJitterDiagnosis() { jitterDiagnosis = "" }
 
     func updateNodeEngine() {
         guard nodeUpdateStatus != "업데이트 중…" else { return }

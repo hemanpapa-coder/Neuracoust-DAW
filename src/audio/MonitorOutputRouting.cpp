@@ -212,4 +212,24 @@ MonitorOutputRoute resolveMonitorOutputRoute(const std::vector<MonitorDspModule>
     return result;
 }
 
+MonitorSecondaryOutputRoute resolveMonitorSecondaryOutputRoute(const std::vector<MonitorDspModule>& modules,
+                                                               int availableChannels) {
+    MonitorSecondaryOutputRoute secondary;
+    if (modules.empty() || !modules.front().simultaneousOutput) {
+        return secondary;
+    }
+    // The OTHER tab's route: flip monitorToHeadphone and resolve with the same rules — the
+    // headphone pair while the speaker tab is active, the active speaker slot's pair while the
+    // headphone tab is. Same processed signal on both; per-path correction is future work.
+    std::vector<MonitorDspModule> flipped = modules;
+    flipped.front().monitorToHeadphone = !flipped.front().monitorToHeadphone;
+    secondary.route = resolveMonitorOutputRoute(flipped, availableChannels);
+    const auto primary = resolveMonitorOutputRoute(modules, availableChannels);
+    // The same pair twice is one output, not two — writing it twice would double the level.
+    secondary.active = secondary.route.assigned && secondary.route.available &&
+                       (secondary.route.leftChannel != primary.leftChannel ||
+                        secondary.route.rightChannel != primary.rightChannel);
+    return secondary;
+}
+
 } // namespace neuracoust::daw

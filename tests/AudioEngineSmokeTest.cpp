@@ -98,6 +98,38 @@ int main() {
             std::cerr << "Monitor speaker C modelled (None) route should still resolve to Main 1-2\n";
             return 46;
         }
+
+        // Simultaneous speaker+headphone (배타 off): the OTHER tab's pair also carries the
+        // signal — headphone pair while the speaker tab is active, and never the same pair
+        // twice (that would double the level, not add an output).
+        modules[0].activeTargetSlot = 0;             // Speaker A -> Main 1-2
+        modules[0].headphoneOutput = "Output 5-6";
+        modules[0].monitorToHeadphone = false;
+        modules[0].simultaneousOutput = false;
+        auto secondary = neuracoust::daw::resolveMonitorSecondaryOutputRoute(modules, 8);
+        if (secondary.active) {
+            std::cerr << "Exclusive mode must not resolve a secondary output\n";
+            return 47;
+        }
+        modules[0].simultaneousOutput = true;
+        secondary = neuracoust::daw::resolveMonitorSecondaryOutputRoute(modules, 8);
+        if (!secondary.active || secondary.route.leftChannel != 4 || secondary.route.rightChannel != 5) {
+            std::cerr << "Simultaneous mode should route the headphone pair (Output 5-6) as secondary\n";
+            return 48;
+        }
+        modules[0].monitorToHeadphone = true;        // headphone tab active -> speaker pair secondary
+        secondary = neuracoust::daw::resolveMonitorSecondaryOutputRoute(modules, 8);
+        if (!secondary.active || secondary.route.leftChannel != 0 || secondary.route.rightChannel != 1) {
+            std::cerr << "Simultaneous mode should route the speaker pair as secondary on the headphone tab\n";
+            return 49;
+        }
+        modules[0].monitorToHeadphone = false;
+        modules[0].headphoneOutput = "Main 1-2";     // same pair as Speaker A
+        secondary = neuracoust::daw::resolveMonitorSecondaryOutputRoute(modules, 8);
+        if (secondary.active) {
+            std::cerr << "The primary's own pair must never resolve as secondary (level doubling)\n";
+            return 50;
+        }
     }
 
     {

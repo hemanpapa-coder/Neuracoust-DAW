@@ -1125,10 +1125,25 @@ struct MonitorDock: View {
             // node's block-to-block round-trip variation. One number hid the other.
             StatRow(label: "내장 지터", value: String(format: "%.0f µs", engine.wakeJitterUs))
             if engine.ndsEnabled || engine.externalDspEnabled {
-                StatRow(label: "서버 지터",
-                        value: engine.remoteRoundTripJitterUs > 0
-                            ? String(format: "%.0f µs", engine.remoteRoundTripJitterUs)
-                            : "–")
+                HStack(spacing: 6) {
+                    StatRow(label: "서버 지터",
+                            value: engine.remoteRoundTripJitterUs > 0
+                                ? String(format: "%.0f µs", engine.remoteRoundTripJitterUs)
+                                : "–")
+                    // Self-diagnosis: status pings vs audio-sized exchanges, then a verdict in
+                    // plain words (cable/switch vs shared traffic vs power-save spikes).
+                    Button("진단") { engine.diagnoseServerJitter() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.accent)
+                }
+                if !engine.jitterDiagnosis.isEmpty {
+                    Text(engine.jitterDiagnosis)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onTapGesture { engine.clearJitterDiagnosis() }
+                }
             }
             // The jitter row above watches the OUTPUT render thread. A crackle while listening to
             // another app comes from the TAP CAPTURE side, which that number can never see — so it

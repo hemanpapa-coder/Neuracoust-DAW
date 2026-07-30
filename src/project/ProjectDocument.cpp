@@ -2497,6 +2497,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
 	            << "\",\"activeTargetSlot\":" << std::max(0, std::min(2, module.activeTargetSlot))
 	            << ",\"headphoneOutput\":\"" << escapeJsonString(module.headphoneOutput)
 	            << "\",\"monitorToHeadphone\":" << (module.monitorToHeadphone ? "true" : "false")
+	            << ",\"simultaneousOutput\":" << (module.simultaneousOutput ? "true" : "false")
 	            << ",\"speakerRoomEqA\":" << (module.speakerRoomEqA ? "true" : "false")
 	            << ",\"speakerRoomEqB\":" << (module.speakerRoomEqB ? "true" : "false")
 	            << ",\"speakerRoomEqC\":" << (module.speakerRoomEqC ? "true" : "false")
@@ -3687,6 +3688,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
 	            // Direct assign (allows clearing back to the main pair); absent in older projects.
 	            found->headphoneOutput = stringAfterKey(body, "headphoneOutput");
 	            found->monitorToHeadphone = boolAfterKey(body, "monitorToHeadphone", found->monitorToHeadphone);
+	            found->simultaneousOutput = boolAfterKey(body, "simultaneousOutput", found->simultaneousOutput);
 	            found->speakerRoomEqA = boolAfterKey(body, "speakerRoomEqA", found->speakerRoomEqA);
 	            found->speakerRoomEqB = boolAfterKey(body, "speakerRoomEqB", found->speakerRoomEqB);
 	            found->speakerRoomEqC = boolAfterKey(body, "speakerRoomEqC", found->speakerRoomEqC);

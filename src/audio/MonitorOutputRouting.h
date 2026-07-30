@@ -20,4 +20,14 @@ struct MonitorOutputRoute {
 int monitorOutputRequiredChannels(const std::vector<MonitorDspModule>& modules);
 MonitorOutputRoute resolveMonitorOutputRoute(const std::vector<MonitorDspModule>& modules, int availableChannels);
 
+/// Simultaneous speaker+headphone: the OTHER tab's output pair, valid only while the module's
+/// simultaneousOutput flag is on (the 배타 switch, inverted) AND it lands on a different pair
+/// than the primary — the same pair twice is one output, and writing it twice doubles the level.
+struct MonitorSecondaryOutputRoute {
+    MonitorOutputRoute route;
+    bool active = false;
+};
+MonitorSecondaryOutputRoute resolveMonitorSecondaryOutputRoute(const std::vector<MonitorDspModule>& modules,
+                                                               int availableChannels);
+
 } // namespace neuracoust::daw

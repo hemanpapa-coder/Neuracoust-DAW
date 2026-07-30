@@ -1331,6 +1331,20 @@ private:
                 writeAudioBufferListChannel(outputData, route.leftChannel, frame, left);
                 writeAudioBufferListChannel(outputData, route.rightChannel, frame, right);
             }
+            // Simultaneous speaker+headphone (배타 off): the OTHER tab's pair carries the same
+            // processed block. resolveMonitorSecondaryOutputRoute already refuses the primary's
+            // own pair, so this can never double a channel.
+            const auto secondary = resolveMonitorSecondaryOutputRoute(settings_.monitorModules,
+                                                                      availableChannels);
+            if (secondary.active) {
+                for (UInt32 frame = 0; frame < frameCount; ++frame) {
+                    const auto source = static_cast<size_t>(frame * 2);
+                    const float left = source + 1 < renderBlock_.size() ? renderBlock_[source] : 0.0f;
+                    const float right = source + 1 < renderBlock_.size() ? renderBlock_[source + 1] : left;
+                    writeAudioBufferListChannel(outputData, secondary.route.leftChannel, frame, left);
+                    writeAudioBufferListChannel(outputData, secondary.route.rightChannel, frame, right);
+                }
+            }
         }
         const auto renderEnd = std::chrono::steady_clock::now();
         recordRealtimeTelemetry(wakeTime, renderStart, renderEnd, frameCount);
