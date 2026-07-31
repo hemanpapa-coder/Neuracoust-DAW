@@ -2025,6 +2025,12 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"externalDspEnabled\": " << (project.externalDspEnabled ? "true" : "false") << ",\n";
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
     out << "  \"ndsHost\": \"" << escapeJsonString(project.ndsHost) << "\",\n";
+    out << "  \"ndsPoolHosts\": [";
+    for (size_t i = 0; i < project.ndsPoolHosts.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << '\"' << escapeJsonString(project.ndsPoolHosts[i]) << '\"';
+    }
+    out << "],\n";
     out << "  \"ndsEnabled\": " << (project.ndsEnabled ? "true" : "false") << ",\n";
     out << "  \"dspRoleMonitor\": \"" << escapeJsonString(project.dspRoleMonitor) << "\",\n";
     out << "  \"dspRoleChannelStrip\": \"" << escapeJsonString(project.dspRoleChannelStrip) << "\",\n";
@@ -2735,6 +2741,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     {
         const std::string host = stringAfterKey(text, "ndsHost");
         parsed.ndsHost = host.empty() ? std::string("192.168.0.198") : host;
+        parsed.ndsPoolHosts = stringArrayAfterKey(text, "ndsPoolHosts");
     }
     parsed.ndsEnabled = boolAfterKey(text, "ndsEnabled", false);
     // A role only accepts the three machines it can name; anything else loads as local, so a

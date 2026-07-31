@@ -39,6 +39,10 @@ struct RemoteDspServerSettings {
     std::string host = "studio.local";
     std::string ndsHost = "192.168.0.198";
     bool ndsEnabled = false;
+    /// Additional NDS appliances pooled with ndsHost: console strips distribute round-robin
+    /// across [ndsHost] + this list, so N boxes carry the strips as ONE machine. Bus summing
+    /// and the master chain stay on the primary for coherence.
+    std::vector<std::string> ndsPoolHosts;
     // Which machine carries which job ("internal" | "nds" | "external"). The user assigns these
     // explicitly; autoOverflow turns them into starting points that spill to the next machine
     // when one runs short. Carried here because this struct is what already reaches every place

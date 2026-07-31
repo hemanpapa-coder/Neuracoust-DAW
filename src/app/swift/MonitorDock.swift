@@ -1649,6 +1649,15 @@ struct MonitorDock: View {
                         engine.setRemoteDspHost(core.address)
                         engine.setExternalDspEnabled(true)
                     }
+                    // The POOL: strips distribute round-robin across the primary + every pooled
+                    // appliance — N boxes as one machine. Only appliance engines qualify.
+                    if core.address.contains(":20002"), core.address != engine.ndsHost {
+                        Divider()
+                        Button(engine.ndsPoolContains(core.address)
+                               ? "NDS 풀에서 제거" : "NDS 풀에 추가 (스트립 분산)") {
+                            engine.togglePoolHost(core.address)
+                        }
+                    }
                 }
             }
 

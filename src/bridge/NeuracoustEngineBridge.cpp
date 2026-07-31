@@ -487,6 +487,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     settings.roleInserts = project.dspRoleInserts;
     settings.autoOverflow = project.dspAutoOverflow;
     settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, project.remoteMixerChannels)));
+    settings.ndsPoolHosts = project.ndsPoolHosts;
     settings.nodes.clear();
     return settings;
 }
@@ -516,6 +517,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     settings.roleInserts = engine->project.dspRoleInserts;
     settings.autoOverflow = engine->project.dspAutoOverflow;
     settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, engine->project.remoteMixerChannels)));
+    settings.ndsPoolHosts = engine->project.ndsPoolHosts;
     settings.nodes.clear();
     return settings;
 }
@@ -7611,6 +7613,32 @@ void nc_dsp_set_mixer_channels(NCEngine* engine, int channels) {
     engine->recordStep("Remote mixer channels");
     // The ladder is a live cap on the remote summing sessions now, not stored intent — push the
     // new settings so a bus over the new size falls back locally (bit-identical) at once.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->reconcileProjectDeclicked();
+}
+
+// The NDS POOL: appliances beyond the primary that carry console strips together
+// (round-robin). Membership changes rebuild the offload lists through the declicked reconcile.
+int nc_dsp_pool_count(NCEngine* engine) {
+    return engine != nullptr ? static_cast<int>(engine->project.ndsPoolHosts.size()) : 0;
+}
+void nc_dsp_pool_host(NCEngine* engine, int index, char* out, size_t outLen) {
+    const bool valid = engine != nullptr && index >= 0 &&
+        static_cast<size_t>(index) < engine->project.ndsPoolHosts.size();
+    copyText(out, outLen, valid ? engine->project.ndsPoolHosts[static_cast<size_t>(index)] : std::string{});
+}
+bool nc_dsp_pool_contains(NCEngine* engine, const char* host) {
+    if (engine == nullptr || host == nullptr) return false;
+    const auto& pool = engine->project.ndsPoolHosts;
+    return std::find(pool.begin(), pool.end(), std::string(host)) != pool.end();
+}
+void nc_dsp_pool_toggle(NCEngine* engine, const char* host) {
+    if (engine == nullptr || host == nullptr || *host == '\0') return;
+    auto& pool = engine->project.ndsPoolHosts;
+    const auto found = std::find(pool.begin(), pool.end(), std::string(host));
+    if (found != pool.end()) pool.erase(found);
+    else pool.push_back(host);
+    engine->recordStep(found != pool.end() ? "NDS pool" : "NDS pool");
     engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
     engine->reconcileProjectDeclicked();
 }

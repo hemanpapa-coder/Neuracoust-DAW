@@ -228,6 +228,9 @@ private:
     /// strip is the same code, just executed elsewhere.
     struct RemoteConsoleStrip {
         std::string mode;                       // "nds" | "remote_external" | "auto"
+        /// Pool distribution: the appliance THIS strip streams to. Empty = the mode's default
+        /// host. Strips round-robin across [ndsHost] + ndsPoolHosts so N boxes act as one.
+        std::string hostOverride;
         std::vector<RemoteDspParameterValue> parameters;
         std::unique_ptr<RemoteDspAsyncStream> stream;
     };

@@ -318,6 +318,8 @@ struct ProjectDocument {
     // is trustworthy (mic has a calibration file) or only L/R matching + relative correction.
     std::string measurementMicModel;
     bool monitorSpeakerHeadphoneExclusive = true;
+    // NDS pool: appliances beyond ndsHost that carry console strips together (round-robin).
+    std::vector<std::string> ndsPoolHosts;
     // Auto fade-out: a fade written into the Master track's volume automation over the
     // last N seconds. 0 = off. Curve is one of linear/equal_power/exponential/logarithmic.
     double autoFadeOutSeconds = 0.0;

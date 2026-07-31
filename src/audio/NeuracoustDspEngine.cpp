@@ -3408,13 +3408,23 @@ void NeuracoustDspEngine::prepareRemoteConsoleStripsLocked(int maxBlockSize) {
         const auto& c = track.consoleChannel;
         RemoteConsoleStrip strip;
         strip.mode = mode;
+        // Pool distribution: NDS strips round-robin across [primary] + ndsPoolHosts, so any
+        // number of appliances carry the strips as ONE machine. "" = the mode's default host.
+        if (mode == "nds" && !settings_.remoteDspServer.ndsPoolHosts.empty()) {
+            const auto& pool = settings_.remoteDspServer.ndsPoolHosts;
+            const size_t slot = activeRemoteConsoleStripCount_ % (pool.size() + 1u);
+            strip.hostOverride = slot == 0u ? std::string{} : pool[slot - 1u];
+        }
         for (const auto& parameter : consoleChannelParameterValues(c)) {
             strip.parameters.push_back({static_cast<uint32_t>(parameter.index), parameter.normalized});
         }
         // Reuse the running stream for a channel that is still on the same machine — rebuilding it
         // would re-handshake and drop a block for an unrelated edit elsewhere in the project.
+        // "Same machine" includes the pool assignment, or a membership change would keep a
+        // stream pointed at the wrong box.
         auto existing = remoteConsoleStrips_.find(track.name);
-        strip.stream = (existing != remoteConsoleStrips_.end() && existing->second.mode == mode)
+        strip.stream = (existing != remoteConsoleStrips_.end() && existing->second.mode == mode &&
+                        existing->second.hostOverride == strip.hostOverride)
                            ? std::move(existing->second.stream)
                            : std::make_unique<RemoteDspAsyncStream>();
         if (strip.stream == nullptr) {
@@ -3510,6 +3520,11 @@ bool NeuracoustDspEngine::processRemoteConsoleStripLocked(const std::string& rou
         return false;
     }
     auto settings = remoteDspSettingsForMode(settings_.remoteDspServer, found->second.mode);
+    if (!found->second.hostOverride.empty()) {
+        // Pool member: this strip streams to ITS appliance, not the mode's default.
+        settings.host = found->second.hostOverride;
+        applyRemoteDspHostPort(settings);
+    }
     settings.channelCount = 2;
     settings.frameCount = static_cast<uint16_t>(std::min<size_t>(interleavedStereo.size() / 2u, 1024u));
     settings.sampleRate = settings_.sampleRate;

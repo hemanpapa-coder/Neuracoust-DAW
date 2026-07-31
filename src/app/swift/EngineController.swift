@@ -3151,6 +3151,18 @@ final class EngineController: ObservableObject {
     /// NDS switch verification status ("" = quiet). Shown under the switch.
     @Published var ndsLinkStatus = ""
 
+    /// NDS pool membership — see nc_dsp_pool_*. Strips round-robin across primary + pool.
+    func ndsPoolContains(_ host: String) -> Bool {
+        guard let handle else { return false }
+        return host.withCString { nc_dsp_pool_contains(handle, $0) }
+    }
+    func togglePoolHost(_ host: String) {
+        guard let handle else { return }
+        host.withCString { nc_dsp_pool_toggle(handle, $0) }
+        reloadDspRoles()
+        refreshHistory()
+    }
+
     func reloadDspRoles() {
         guard let handle else { return }
         var roles: [String: DspMachine] = [:]

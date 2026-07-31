@@ -1289,6 +1289,11 @@ void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen);
 // Inventory scan (engine-free, blocking ~1 s — background thread): every answering server,
 // newline-joined; appliance engines come back as host:20002, legacy cores as plain hosts.
 void nc_dsp_scan_lan(char* out, size_t outLen);
+/// NDS 풀: 프라이머리 외 어플라이언스들이 채널 스트립을 라운드로빈으로 나눠 짊어진다.
+int nc_dsp_pool_count(NCEngine* engine);
+void nc_dsp_pool_host(NCEngine* engine, int index, char* out, size_t outLen);
+bool nc_dsp_pool_contains(NCEngine* engine, const char* host);
+void nc_dsp_pool_toggle(NCEngine* engine, const char* host);
 /// 서버 지터 자가진단: 상태 핑 vs 오디오 블록 교환의 왕복 분포를 재서 원인 추정 + 근거 수치를
 /// 사람 말로 리포트. 엔진 프리·블로킹(~1 s) — 백그라운드 스레드에서 부를 것.
 bool nc_remote_jitter_probe(const char* host_port, char* out, size_t outLen);
