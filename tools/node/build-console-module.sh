@@ -12,6 +12,8 @@ set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST="${1:-linux-dsp}"
+# Same node-locating rule as the update script: LAN alias, or IPv6 link-local with scope.
+NODE_OPT="$("$(dirname "$0")/find-node.sh")" || exit 1
 # Resolved on the node, not here: scp does not expand $HOME remotely, so the path has to be real
 # by the time it reaches the command line.
 REMOTE_DIR="${2:-}"
@@ -33,31 +35,31 @@ if [ "$HOST" = "--local" ]; then
 fi
 
 if [ -z "$REMOTE_DIR" ]; then
-    REMOTE_DIR="$(ssh -o BatchMode=yes "$HOST" 'echo $HOME')/neuracoust-node"
+    REMOTE_DIR="$(ssh -o BatchMode=yes $NODE_OPT "$HOST" 'echo $HOME')/neuracoust-node"
 fi
 
 say "Sending sources to $HOST:$REMOTE_DIR"
-ssh -o BatchMode=yes "$HOST" "mkdir -p $REMOTE_DIR/node-module/audio $REMOTE_DIR/node-module/core"
+ssh -o BatchMode=yes $NODE_OPT "$HOST" "mkdir -p $REMOTE_DIR/node-module/audio $REMOTE_DIR/node-module/core"
 # Only what the module needs. The node gets source, never a binary: it has to compile the strip
 # with its own compiler for its own CPU, and a macOS object could not be loaded there anyway.
-scp -q "$SOURCE_DIR/tools/node/na_console_channel.cpp" \
+scp -q $NODE_OPT "$SOURCE_DIR/tools/node/na_console_channel.cpp" \
        "$SOURCE_DIR/tools/node/na_api525a.cpp" \
        "$SOURCE_DIR/tools/node/na_rt_plugin.h" \
        "$HOST:$REMOTE_DIR/node-module/"
-scp -q "$SOURCE_DIR/src/audio/ConsoleChannelProcessor.cpp" \
+scp -q $NODE_OPT "$SOURCE_DIR/src/audio/ConsoleChannelProcessor.cpp" \
        "$SOURCE_DIR/src/audio/ConsoleChannelProcessor.h" \
        "$HOST:$REMOTE_DIR/node-module/audio/"
-scp -q "$SOURCE_DIR/src/core/DawState.h" "$HOST:$REMOTE_DIR/node-module/core/"
+scp -q $NODE_OPT "$SOURCE_DIR/src/core/DawState.h" "$HOST:$REMOTE_DIR/node-module/core/"
 # DawState.h includes these; they are declaration-only headers, so the module needs them present
 # but links nothing from them.
 for header in audio/AudioDeviceModel.h audio/RemoteDspServerClient.h core/AppIdentity.h \
               license/LicenseAgentClient.h plugins/Vst3HostFoundation.h; do
-    ssh -o BatchMode=yes "$HOST" "mkdir -p $REMOTE_DIR/node-module/$(dirname "$header")"
-    scp -q "$SOURCE_DIR/src/$header" "$HOST:$REMOTE_DIR/node-module/$header"
+    ssh -o BatchMode=yes $NODE_OPT "$HOST" "mkdir -p $REMOTE_DIR/node-module/$(dirname "$header")"
+    scp -q $NODE_OPT "$SOURCE_DIR/src/$header" "$HOST:$REMOTE_DIR/node-module/$header"
 done
 
 say "Compiling on $HOST"
-ssh -o BatchMode=yes "$HOST" "cd $REMOTE_DIR/node-module && \
+ssh -o BatchMode=yes $NODE_OPT "$HOST" "cd $REMOTE_DIR/node-module && \
   g++ -std=c++20 -O3 -fPIC -shared -fno-math-errno -DNDEBUG \
       -I. na_console_channel.cpp audio/ConsoleChannelProcessor.cpp \
       -o na_console_channel.so -lm && \
