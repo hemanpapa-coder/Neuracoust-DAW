@@ -675,6 +675,10 @@ target_link_libraries(neuracoust_remote_mix_probe PRIVATE neuracoust_daw_core)
 add_executable(neuracoust_remote_jitter_probe tools/remote_jitter_probe.cpp)
 target_link_libraries(neuracoust_remote_jitter_probe PRIVATE neuracoust_daw_core)
 
+# 인벤토리 스캔 CLI: 모든 세그먼트(직결 포함)에 브로드캐스트해 응답 서버를 나열.
+add_executable(neuracoust_scan_probe tools/scan_probe.cpp)
+target_link_libraries(neuracoust_scan_probe PRIVATE neuracoust_daw_core)
+
 # 토글 클릭 재현기: 렌더 스레드를 돌리면서 역할 스위치/EQ 램프 편집을 수행하고 캡처된
 # 스트림에서 불연속을 수치로 검출한다. 로컬 시나리오는 ctest에서도 돈다.
 add_executable(neuracoust_toggle_click_probe tools/toggle_click_probe.cpp)

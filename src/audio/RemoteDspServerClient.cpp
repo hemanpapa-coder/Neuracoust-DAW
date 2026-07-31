@@ -22,6 +22,8 @@
 #else
 #include <arpa/inet.h>
 #include <cerrno>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/select.h>
@@ -1436,6 +1438,30 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
     // skipped outright and the probe sent nothing at all while the node sat there answering.
     std::vector<std::string> targets = broadcastHosts;
     targets.push_back("255.255.255.255");
+#ifndef _WIN32
+    // 255.255.255.255 leaves on ONE interface (the default route's), so a node on any OTHER
+    // segment — most importantly a DIRECT cable, where both ends sit on self-assigned
+    // 169.254.x — was never probed. Enumerate every broadcast-capable IPv4 interface and probe
+    // its own broadcast address too; a direct-connected appliance then turns up in the scan.
+    {
+        ifaddrs* interfaces = nullptr;
+        if (getifaddrs(&interfaces) == 0) {
+            for (const ifaddrs* ifa = interfaces; ifa != nullptr; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET ||
+                    (ifa->ifa_flags & IFF_BROADCAST) == 0 || (ifa->ifa_flags & IFF_UP) == 0 ||
+                    (ifa->ifa_flags & IFF_LOOPBACK) != 0 || ifa->ifa_broadaddr == nullptr) {
+                    continue;
+                }
+                char broadcast[INET_ADDRSTRLEN] = {0};
+                const auto* addr = reinterpret_cast<const sockaddr_in*>(ifa->ifa_broadaddr);
+                if (inet_ntop(AF_INET, &addr->sin_addr, broadcast, sizeof(broadcast)) != nullptr) {
+                    targets.emplace_back(broadcast);
+                }
+            }
+            freeifaddrs(interfaces);
+        }
+    }
+#endif
     const char request[] = "NA_DISCOVER\n";
     std::set<std::string> probed;
     for (const auto& host : targets) {

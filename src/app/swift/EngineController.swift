@@ -3103,9 +3103,53 @@ final class EngineController: ObservableObject {
 
     func setNdsEnabled(_ on: Bool) {
         guard let handle else { return }
-        nc_dsp_set_nds_enabled(handle, on ? 1 : 0)
-        reloadDspRoles()
+        // Turning NDS ON is a claim about a real machine — verify it. If the configured address
+        // answers, engage. If not, SCAN (every attached segment, direct cables included): an
+        // appliance found at a new address is re-bound and engaged — SoundGrid-style, the server
+        // is something you select, not an IP you babysit. Nothing answering leaves the switch
+        // OFF with an honest status instead of a lit button feeding a dead address.
+        guard on else {
+            nc_dsp_set_nds_enabled(handle, 0)
+            reloadDspRoles()
+            return
+        }
+        let host = ndsHost
+        ndsLinkStatus = "확인 중…"
+        Task.detached(priority: .userInitiated) {
+            if Self.probeNode(host) != nil {
+                await MainActor.run { [weak self] in
+                    guard let self, let handle = self.handle else { return }
+                    nc_dsp_set_nds_enabled(handle, 1)
+                    self.reloadDspRoles()
+                    self.ndsLinkStatus = ""
+                }
+                return
+            }
+            // The configured address is dead — hunt for the appliance itself.
+            var scanBuffer = [CChar](repeating: 0, count: 4096)
+            nc_dsp_scan_lan(&scanBuffer, scanBuffer.count)
+            let entries = String(cString: scanBuffer)
+                .split(separator: "\n").map(String.init)
+                .filter { $0.contains(":20002") }   // appliance engines only
+            await MainActor.run { [weak self] in
+                guard let self, let handle = self.handle else { return }
+                if let address = entries.first {
+                    address.withCString { nc_dsp_set_nds_host(handle, $0) }
+                    self.ndsHost = address
+                    nc_dsp_set_nds_enabled(handle, 1)
+                    self.reloadDspRoles()
+                    self.ndsLinkStatus = "주소가 바뀌어 재체결: \(address)"
+                } else {
+                    nc_dsp_set_nds_enabled(handle, 0)
+                    self.reloadDspRoles()
+                    self.ndsLinkStatus = "NDS 서버 응답 없음 — 연결(케이블/전원)을 확인하세요"
+                }
+            }
+        }
     }
+
+    /// NDS switch verification status ("" = quiet). Shown under the switch.
+    @Published var ndsLinkStatus = ""
 
     func reloadDspRoles() {
         guard let handle else { return }
