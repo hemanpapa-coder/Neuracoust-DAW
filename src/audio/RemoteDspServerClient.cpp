@@ -136,6 +136,89 @@ void closeSocket(SocketHandle socketHandle) {
 }
 #endif
 
+
+// ---------------------------------------------------------------------------
+// Link-local scoping. A 169.254/16 destination is AMBIGUOUS on a machine with several
+// link-local interfaces (Thunderbolt bridges, spare NICs): the route table picks ONE of
+// them — usually the wrong one — leaving a direct-cabled or audio-hub node ARP-visible but
+// unreachable on every port (measured live: the appliance sat on en7 while every unicast
+// left on en0). The fix is to BIND the socket to the interface that actually reaches the
+// host (macOS IP_BOUND_IF), found once by probing each link-local-capable interface with a
+// status ping and cached for the session.
+// ---------------------------------------------------------------------------
+
+bool addressIsLinkLocal(const sockaddr_in& target) {
+    return (ntohl(target.sin_addr.s_addr) & 0xFFFF0000u) == 0xA9FE0000u;   // 169.254/16
+}
+
+#if defined(__APPLE__)
+unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statusPort) {
+    static std::mutex cacheMutex;
+    static std::map<uint32_t, unsigned int> cache;
+    const uint32_t hostKey = target.sin_addr.s_addr;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        const auto found = cache.find(hostKey);
+        if (found != cache.end()) {
+            return found->second;
+        }
+    }
+    unsigned int resolved = 0;
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) == 0) {
+        for (const ifaddrs* ifa = interfaces; ifa != nullptr && resolved == 0; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET ||
+                (ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+                continue;
+            }
+            const auto* local = reinterpret_cast<const sockaddr_in*>(ifa->ifa_addr);
+            if ((ntohl(local->sin_addr.s_addr) & 0xFFFF0000u) != 0xA9FE0000u) {
+                continue;   // only link-local interfaces can carry link-local traffic
+            }
+            const unsigned int ifindex = if_nametoindex(ifa->ifa_name);
+            if (ifindex == 0) continue;
+            const SocketHandle probe = socket(AF_INET, SOCK_DGRAM, 0);
+            if (probe == kInvalidSocket) continue;
+            setsockopt(probe, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
+            sockaddr_in statusTarget = target;
+            statusTarget.sin_port = htons(statusPort);
+            const char ping[] = "NA_STATUS\n";
+            sendto(probe, ping, sizeof(ping) - 1u, 0,
+                   reinterpret_cast<const sockaddr*>(&statusTarget),
+                   static_cast<SocketLength>(sizeof(statusTarget)));
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(probe, &readSet);
+            timeval wait {0, 150000};   // 150 ms per candidate interface
+            if (select(static_cast<int>(probe) + 1, &readSet, nullptr, nullptr, &wait) > 0) {
+                resolved = ifindex;
+            }
+            closeSocket(probe);
+        }
+        freeifaddrs(interfaces);
+    }
+    if (resolved != 0) {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        cache[hostKey] = resolved;   // positive answers only: a dead host may come back elsewhere
+    }
+    return resolved;
+}
+#endif
+
+// Applies the scope to `socketHandle` when (and only when) the target is link-local. A no-op
+// everywhere else — normal subnet routing is unambiguous.
+void applyLinkLocalScope(SocketHandle socketHandle, const sockaddr_in& target, uint16_t statusPort) {
+#if defined(__APPLE__)
+    if (!addressIsLinkLocal(target)) return;
+    const unsigned int ifindex = linkLocalInterfaceForHost(target, statusPort);
+    if (ifindex != 0) {
+        setsockopt(socketHandle, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
+    }
+#else
+    (void)socketHandle; (void)target; (void)statusPort;
+#endif
+}
+
 bool resolveIpv4Endpoint(const std::string& host, uint16_t port, sockaddr_in& target, std::string& message) {
     target = {};
     target.sin_family = AF_INET;
@@ -528,6 +611,8 @@ RemoteDspServerProbeResult probeRemoteDspServer(const RemoteDspServerSettings& s
         return result;
     }
 
+    applyLinkLocalScope(socketHandle, target, settings.statusPort);
+
     constexpr uint32_t sequence = 1u;
     const auto packet = makeProbePacket(sequence, settings.channelCount, settings.frameCount);
     const auto started = std::chrono::steady_clock::now();
@@ -647,6 +732,8 @@ RemoteDspProcessResult processRemoteDspInterleavedStereo(const RemoteDspServerSe
         result.message = resolveError;
         return result;
     }
+
+    applyLinkLocalScope(socketHandle, target, settings.statusPort);
 
     static std::atomic<uint32_t> sequenceCounter {1000u};
     const uint32_t sequence = sequenceCounter.fetch_add(1u, std::memory_order_relaxed);
@@ -785,6 +872,7 @@ struct RemoteMixSession::Impl {
             message = "could not open a UDP socket for the remote mix bus";
             return false;
         }
+        applyLinkLocalScope(socketHandle, target, settings.statusPort);
         if (connect(socketHandle, reinterpret_cast<const sockaddr*>(&target),
                     static_cast<SocketLength>(sizeof(target))) != 0) {
             message = "could not connect the remote mix socket";
@@ -1026,6 +1114,7 @@ struct RemoteDspProcessSession::Impl {
             message = resolveError;
             return false;
         }
+        applyLinkLocalScope(socketHandle, target, settings.statusPort);
         if (connect(socketHandle,
                     reinterpret_cast<const sockaddr*>(&target),
                     static_cast<SocketLength>(sizeof(target))) != 0) {
@@ -1271,6 +1360,7 @@ RemoteDspServerInfo queryRemoteDspServerInfo(const RemoteDspServerSettings& sett
         info.message = resolveError;
         return info;
     }
+    applyLinkLocalScope(socketHandle, target, settings.statusPort);
 
     const char request[] = "NA_STATUS\n";
     const auto started = std::chrono::steady_clock::now();
@@ -1436,13 +1526,16 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
     // host made `targets` non-empty and suppressed the broadcast, and the address was parsed with
     // inet_pton alone — which accepts numeric IPs only, so a hostname like "studio.local" was
     // skipped outright and the probe sent nothing at all while the node sat there answering.
-    std::vector<std::string> targets = broadcastHosts;
-    targets.push_back("255.255.255.255");
+    // Each target carries the interface it must leave on (0 = the route table's choice). A
+    // shared link-local broadcast (169.254.255.255) is otherwise sent on ONE interface only —
+    // whichever the route table favours — so a node on any other segment (a DIRECT cable, an
+    // audio-only hub) was never probed even though its address was enumerated.
+    std::vector<std::pair<std::string, unsigned int>> targets;
+    for (const auto& host : broadcastHosts) targets.emplace_back(host, 0u);
+    targets.emplace_back("255.255.255.255", 0u);
 #ifndef _WIN32
-    // 255.255.255.255 leaves on ONE interface (the default route's), so a node on any OTHER
-    // segment — most importantly a DIRECT cable, where both ends sit on self-assigned
-    // 169.254.x — was never probed. Enumerate every broadcast-capable IPv4 interface and probe
-    // its own broadcast address too; a direct-connected appliance then turns up in the scan.
+    // Probe every broadcast-capable IPv4 interface's own broadcast address, scoped to THAT
+    // interface, so every attached segment hears the discovery.
     {
         ifaddrs* interfaces = nullptr;
         if (getifaddrs(&interfaces) == 0) {
@@ -1455,7 +1548,7 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
                 char broadcast[INET_ADDRSTRLEN] = {0};
                 const auto* addr = reinterpret_cast<const sockaddr_in*>(ifa->ifa_broadaddr);
                 if (inet_ntop(AF_INET, &addr->sin_addr, broadcast, sizeof(broadcast)) != nullptr) {
-                    targets.emplace_back(broadcast);
+                    targets.emplace_back(broadcast, if_nametoindex(ifa->ifa_name));
                 }
             }
             freeifaddrs(interfaces);
@@ -1464,8 +1557,8 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
 #endif
     const char request[] = "NA_DISCOVER\n";
     std::set<std::string> probed;
-    for (const auto& host : targets) {
-        if (host.empty() || !probed.insert(host).second) {
+    for (const auto& [host, scopeInterface] : targets) {
+        if (host.empty() || !probed.insert(host + "#" + std::to_string(scopeInterface)).second) {
             continue;
         }
         sockaddr_in target {};
@@ -1483,12 +1576,25 @@ std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspSe
             target.sin_addr = reinterpret_cast<sockaddr_in*>(resolved->ai_addr)->sin_addr;
             freeaddrinfo(resolved);
         }
+#if defined(__APPLE__)
+        // Scope the send to the segment's own interface, then unbind so the shared socket
+        // keeps RECEIVING replies from every interface.
+        if (scopeInterface != 0u) {
+            setsockopt(socketHandle, IPPROTO_IP, IP_BOUND_IF, &scopeInterface, sizeof(scopeInterface));
+        }
+#endif
         sendto(socketHandle,
                request,
                static_cast<int>(sizeof(request) - 1u),
                0,
                reinterpret_cast<const sockaddr*>(&target),
                static_cast<SocketLength>(sizeof(target)));
+#if defined(__APPLE__)
+        if (scopeInterface != 0u) {
+            const unsigned int unbound = 0u;
+            setsockopt(socketHandle, IPPROTO_IP, IP_BOUND_IF, &unbound, sizeof(unbound));
+        }
+#endif
     }
 
     const auto deadline = std::chrono::steady_clock::now() +
