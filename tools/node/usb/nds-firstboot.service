@@ -1,0 +1,17 @@
+[Unit]
+Description=Neuracoust NDS appliance first-boot setup
+# No network dependency on purpose: everything this needs came in on the USB, so a node whose
+# first boot happens on a direct cable with no DHCP still finishes its setup.
+After=local-fs.target
+ConditionPathExists=/opt/nds-install/firstboot.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /opt/nds-install/firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

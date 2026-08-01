@@ -12,11 +12,13 @@ set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST="${1:-linux-dsp}"
-# Same node-locating rule as the update script: LAN alias, or IPv6 link-local with scope.
-NODE_OPT="$("$(dirname "$0")/find-node.sh")" || exit 1
 # Resolved on the node, not here: scp does not expand $HOME remotely, so the path has to be real
 # by the time it reaches the command line.
 REMOTE_DIR="${2:-}"
+# Same node-locating rule as the update script: as given, or mDNS / link-local with scope.
+# Looked up only when a node is actually involved — --local must work with every node powered off.
+NODE_OPT=""
+[ "$HOST" = "--local" ] || NODE_OPT="$("$(dirname "$0")/find-node.sh" "$HOST")" || exit 1
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 

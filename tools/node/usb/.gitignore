@@ -1,0 +1,3 @@
+# Downloaded Debian image and the remastered installer — hundreds of megabytes, both
+# reproducible from make-appliance-usb.sh.
+dist/

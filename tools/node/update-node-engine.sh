@@ -16,7 +16,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST="${1:-linux-dsp}"
 # Locate the node wherever it is plugged in (LAN, direct cable, audio hub): find-node.sh emits
 # an extra ssh option ("" on the LAN) or fails when the node is nowhere.
-NODE_OPT="$("$(dirname "$0")/find-node.sh")" || exit 1
+NODE_OPT="$("$(dirname "$0")/find-node.sh" "$HOST")" || exit 1
 RT_SRC="/Volumes/Program Dev/Linux DSP Server/rt_engine"
 
 say() { printf '==> %s\n' "$*"; }
