@@ -7478,6 +7478,31 @@ int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* ou
     return fillNodeInfo(settings, out);
 }
 
+int nc_dsp_probe_node_audio(const char* host, int timeoutMs, int attempts) {
+    if (host == nullptr || *host == '\0') return 0;
+    const int rounds = attempts > 0 ? attempts : 8;
+    auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
+    settings.nodes.clear();
+    settings.host = host;
+    neuracoust::daw::applyRemoteDspHostPort(settings);
+    settings.enabled = true;
+    settings.channelCount = 2;
+    settings.timeoutMs = timeoutMs > 0 ? timeoutMs : 60;
+
+    // One 256-frame stereo contribution — the shape the realtime stream itself sends, so a server
+    // that would refuse the real traffic refuses this too. Silence is fine: what is being asked is
+    // whether a block goes out and comes back, not what it sounds like.
+    neuracoust::daw::RemoteMixSession session;
+    const std::vector<std::vector<float>> contributions{std::vector<float>(512, 0.0f)};
+    std::vector<float> summed;
+    int carried = 0;
+    for (int i = 0; i < rounds; ++i) {
+        const auto result = session.mix(settings, contributions, summed);
+        if (result.processed && summed.size() == contributions.front().size()) ++carried;
+    }
+    return carried;
+}
+
 void nc_dsp_remote_host(NCEngine* engine, char* out, size_t outLen) {
     copyText(out, outLen, engine != nullptr ? engine->project.remoteDspHost : std::string{});
 }
@@ -7841,18 +7866,45 @@ void nc_dsp_scan_lan(char* out, size_t outLen) {
     copyText(out, outLen, "");
     auto settings = neuracoust::daw::defaultRemoteDspServerSettings();
     settings.nodes.clear();
-    std::string joined;
     std::set<std::string> seen;
+    // One machine with two NICs answers the broadcast on BOTH, and listing it twice reads as two
+    // DSP servers — the inventory then invites assigning work to a second machine that does not
+    // exist. The name a node reports for itself is the identity; the address is only a way to
+    // reach it. 20003 is swept first, so an appliance engine outranks the legacy server on the
+    // same box; between two addresses of one machine a routable one beats a self-assigned
+    // 169.254, which changes on every replug.
+    std::vector<std::string> order;                        // identities, in the order they answered
+    std::map<std::string, std::string> chosen;             // identity -> address to show
+    const auto isLinkLocal = [](const std::string& address) {
+        return address.rfind("169.254.", 0) == 0;
+    };
     for (const uint16_t statusPort : {uint16_t(20003), uint16_t(20001)}) {
         settings.statusPort = statusPort;
         for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 500)) {
             if (found.node.host.empty()) continue;
-            const std::string address = statusPort == 20003 ? found.node.host + ":20002"
-                                                            : found.node.host;
+            // Hand back the name the node answers to, not the number it happens to hold: over a
+            // direct cable or an audio hub that number is a self-assigned 169.254 address and it
+            // changes on every replug, so a saved one stops working the next time the box is
+            // plugged in. preferredNodeAddress only substitutes a name that resolves back here.
+            const std::string stable =
+                neuracoust::daw::preferredNodeAddress(found.node.host, found.info.hostname);
+            const std::string address = statusPort == 20003 ? stable + ":20002" : stable;
             if (!seen.insert(address).second) continue;
-            if (!joined.empty()) joined += '\n';
-            joined += address;
+            const std::string identity =
+                found.info.hostname.empty() ? address : found.info.hostname;
+            const auto existing = chosen.find(identity);
+            if (existing == chosen.end()) {
+                order.push_back(identity);
+                chosen.emplace(identity, address);
+            } else if (isLinkLocal(existing->second) && !isLinkLocal(address)) {
+                existing->second = address;
+            }
         }
+    }
+    std::string joined;
+    for (const auto& identity : order) {
+        if (!joined.empty()) joined += '\n';
+        joined += chosen[identity];
     }
     copyText(out, outLen, joined);
 }
@@ -7867,8 +7919,10 @@ void nc_dsp_discover_remote_host(NCEngine* engine, char* out, size_t outLen) {
         settings.statusPort = statusPort;
         for (const auto& found : neuracoust::daw::discoverRemoteDspServers(settings, {}, 400)) {
             if (!found.node.host.empty()) {
-                copyText(out, outLen, statusPort == 20003 ? found.node.host + ":20002"
-                                                          : found.node.host);
+                // Same rule as the scan: prefer the node's own name so the setting survives a replug.
+                const std::string stable =
+                    neuracoust::daw::preferredNodeAddress(found.node.host, found.info.hostname);
+                copyText(out, outLen, statusPort == 20003 ? stable + ":20002" : stable);
                 return;
             }
         }

@@ -3116,7 +3116,7 @@ final class EngineController: ObservableObject {
         let host = ndsHost
         ndsLinkStatus = "확인 중…"
         Task.detached(priority: .userInitiated) {
-            if Self.probeNode(host) != nil {
+            if Self.carriesAudio(host) {
                 await MainActor.run { [weak self] in
                     guard let self, let handle = self.handle else { return }
                     nc_dsp_set_nds_enabled(handle, 1)
@@ -3125,15 +3125,25 @@ final class EngineController: ObservableObject {
                 }
                 return
             }
+            // Answering status but carrying no audio is its own failure, and a different one:
+            // the box is up, the port is open, and not one block comes back. Scanning would just
+            // find the same machine again, so say what is wrong instead of hunting.
+            let statusOnly = Self.probeNode(host) != nil
             // The configured address is dead — hunt for the appliance itself.
             var scanBuffer = [CChar](repeating: 0, count: 4096)
             nc_dsp_scan_lan(&scanBuffer, scanBuffer.count)
-            let entries = String(cString: scanBuffer)
-                .split(separator: "\n").map(String.init)
-                .filter { $0.contains(":20002") }   // appliance engines only
+            // Prefer an appliance engine (host:20002) — its OS and timing are ours — but take a
+            // legacy remote_core_server (bare host, ports 20000/20001) when that is what answered.
+            // Insisting on ":20002" meant a node running the legacy server was thrown away and the
+            // switch reported "no response" while the box sat there answering every probe.
+            let all = String(cString: scanBuffer)
+                .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            let entries = all.filter { $0.contains(":20002") } + all.filter { !$0.contains(":20002") }
+            // A found address still has to prove it moves audio before the switch engages.
+            let usable = entries.first(where: { Self.carriesAudio($0) })
             await MainActor.run { [weak self] in
                 guard let self, let handle = self.handle else { return }
-                if let address = entries.first {
+                if let address = usable {
                     address.withCString { nc_dsp_set_nds_host(handle, $0) }
                     self.ndsHost = address
                     nc_dsp_set_nds_enabled(handle, 1)
@@ -3142,7 +3152,9 @@ final class EngineController: ObservableObject {
                 } else {
                     nc_dsp_set_nds_enabled(handle, 0)
                     self.reloadDspRoles()
-                    self.ndsLinkStatus = "NDS 서버 응답 없음 — 연결(케이블/전원)을 확인하세요"
+                    self.ndsLinkStatus = (statusOnly || !entries.isEmpty)
+                        ? "서버가 상태에만 응답하고 오디오는 오지 않습니다 — 서버의 DSP 모듈이 올라와 있는지 확인하세요"
+                        : "NDS 서버 응답 없음 — 연결(케이블/전원)을 확인하세요"
                 }
             }
         }
@@ -3390,6 +3402,15 @@ final class EngineController: ObservableObject {
 
     /// One blocking probe of one address. 120 ms is long enough for a LAN answer and short enough
     /// that both machines together stay well under the two-second poll period.
+    /// Does this address move audio, not just answer? The NDS switch is a claim that work will be
+    /// done somewhere else; a status reply alone has proven to be a claim it cannot back — the
+    /// borrowed computer answered every probe with its DSP unlinked and passed not one block.
+    /// A few attempts, because the first exchange of a fresh session can miss while it settles.
+    nonisolated private static func carriesAudio(_ host: String) -> Bool {
+        guard !host.isEmpty else { return false }
+        return host.withCString { nc_dsp_probe_node_audio($0, 60, 8) } > 0
+    }
+
     nonisolated private static func probeNode(_ host: String) -> RemoteNodeSpecs? {
         guard !host.isEmpty else { return nil }
         var info = NCRemoteNodeInfo()

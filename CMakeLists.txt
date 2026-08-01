@@ -679,6 +679,11 @@ target_link_libraries(neuracoust_remote_jitter_probe PRIVATE neuracoust_daw_core
 add_executable(neuracoust_scan_probe tools/scan_probe.cpp)
 target_link_libraries(neuracoust_scan_probe PRIVATE neuracoust_daw_core)
 
+# 상태만 응답하는 서버와 실제로 오디오를 나르는 서버를 가른다 — NDS 스위치가 켜지기 전에
+# 묻는 것과 같은 질문. Not in ctest — needs a node.
+add_executable(neuracoust_node_audio_probe tools/node_audio_probe.cpp)
+target_link_libraries(neuracoust_node_audio_probe PRIVATE neuracoust_daw_core)
+
 # 토글 클릭 재현기: 렌더 스레드를 돌리면서 역할 스위치/EQ 램프 편집을 수행하고 캡처된
 # 스트림에서 불연속을 수치로 검출한다. 로컬 시나리오는 ctest에서도 돈다.
 add_executable(neuracoust_toggle_click_probe tools/toggle_click_probe.cpp)

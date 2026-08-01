@@ -1359,6 +1359,14 @@ int nc_dsp_remote_node_info(NCEngine* engine, NCRemoteNodeInfo* out);
 // against a dead address costs a known amount of time rather than the client default.
 int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* out);
 
+// Does this address actually CARRY AUDIO? Returns how many of `attempts` audio-block exchanges
+// came back. A status answer proves a process is listening; it does not prove the process will
+// process a block. A server that is up with no product DSP linked answers every status probe and
+// no audio block at all — engaging it on the strength of the status reply lights the switch over
+// a link that moves nothing. Blocks on the network (attempts × timeoutMs worst case), so call it
+// off the UI hot path; like nc_dsp_probe_node_info it takes no NCEngine and touches only a socket.
+int nc_dsp_probe_node_audio(const char* host, int timeoutMs, int attempts);
+
 // Per-item overrides of the project-wide DSP assignment: which machine runs THIS channel's console
 // strip, or THIS insert. Empty string follows the project assignment; otherwise "internal" | "nds" |
 // "external". A session is rarely uniform, so the global rows are defaults, not verdicts.
