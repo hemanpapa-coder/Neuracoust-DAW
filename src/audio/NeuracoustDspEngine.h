@@ -610,6 +610,9 @@ private:
     std::atomic<uint64_t> referenceUnderrunBlocks_ {0};
     std::atomic<uint64_t> referenceOverrunDrops_ {0};
     double remoteDspAverageRoundTripJitterUs_ = 0.0;
+    /// Consecutive blocks whose remote exchange failed. Past a threshold the round-trip and
+    /// jitter readings are cleared, so the dock cannot show numbers for a dead link.
+    int remoteDspConsecutiveMissBlocks_ = 0;
     double remoteDspMaxRoundTripJitterUs_ = 0.0;
     bool remoteDspRoundTripInitialized_ = false;
     // Wall-clock µs the CURRENT render block has spent inside remote exchanges (node round

@@ -3781,6 +3781,7 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
     if (exchanged) {
         interleavedStereo = remoteDspProcessedBlock_;
         remoteDspMonitorActive_ = true;
+        remoteDspConsecutiveMissBlocks_ = 0;
         const auto streamStatus = remoteMonitorDspStream_.status();
         remoteDspRoundTripMs_ = streamStatus.averageRoundTripMs;
         remoteDspAverageRoundTripJitterUs_ = streamStatus.averageRoundTripJitterUs;
@@ -3791,8 +3792,15 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
         return true;
     }
 
+    // A failed exchange must not keep re-publishing the last good numbers. Doing that is how the
+    // dock ends up showing a round trip and a jitter figure for a link that is not carrying any
+    // audio at all — a reading of the past, presented as the present. A single miss is normal
+    // while the stream warms, so the numbers only go blank once the misses are sustained
+    // (32 blocks, under 0.2 s at 256/48k).
     const auto streamStatus = remoteMonitorDspStream_.status();
-    if (streamStatus.running) {
+    if (++remoteDspConsecutiveMissBlocks_ >= 32) {
+        resetRemoteDspTelemetryLocked();
+    } else if (streamStatus.running) {
         remoteDspRoundTripMs_ = streamStatus.averageRoundTripMs;
         remoteDspAverageRoundTripJitterUs_ = streamStatus.averageRoundTripJitterUs;
         remoteDspMaxRoundTripJitterUs_ = streamStatus.maxRoundTripJitterUs;
@@ -3826,6 +3834,7 @@ void NeuracoustDspEngine::resetRemoteDspTelemetryLocked() {
     remoteDspAverageRoundTripJitterUs_ = 0.0;
     remoteDspMaxRoundTripJitterUs_ = 0.0;
     remoteDspRoundTripInitialized_ = false;
+    remoteDspConsecutiveMissBlocks_ = 0;
 }
 
 void NeuracoustDspEngine::updateProjectMonitorPolicyLocked() {
