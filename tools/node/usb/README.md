@@ -54,6 +54,23 @@ tools/node/usb/make-appliance-usb.sh --write /dev/disk4  # USB에 쓰기
    - `neuracoust-nds.service` 등록 후 자기 자신을 삭제
 4. **재부팅** → 엔진 가동, 검색에 응답
 
+## 검증 상태
+
+빌드된 ISO에 대해 확인한 것:
+
+- 두 부팅 메뉴가 통째로 교체되었고 대기 시간이 0 (`isolinux.cfg`, `grub.cfg` 를 이미지에서
+  다시 꺼내 확인)
+- 하이브리드 MBR 서명(`55aa`), El Torito, `EFI/boot/{bootx64,grubx64}.efi` 가 원본 그대로
+- 인스톨러 initrd 끝에 붙인 `preseed.cfg` 가 이미지 안에서도 온전하고 소유자가 root
+- 페이로드에 첫 부팅 스크립트가 찾는 파일이 하나도 빠짐없이 들어 있음
+- preseed 69개 지시어 형식·중복·필수 항목 검사 통과
+- **디스크 선택 로직은 실제로 실행해서 검증** — `test-preseed-disk-pick.sh` 가 preseed에서
+  스니펫을 꺼내 가짜 머신 5종(USB가 먼저 잡히는 경우 포함)에 돌립니다
+
+확인하지 **못한** 것: 가상머신에서의 실제 부팅. 이 맥의 Homebrew 구성에서 qemu 의존성
+(vde)이 컴파일되지 않습니다. 첫 실물 부팅이 곧 첫 부팅 테스트입니다 — 만에 하나 멈추면
+화면에 무엇이 떠 있는지 알려주세요. 설치 중 화면은 그대로 두면 됩니다.
+
 ## 파일
 
 - `make-appliance-usb.sh` — 이미지 내려받기·검증, 페이로드 꾸리기, initrd/메뉴 손질, 재조립, USB 쓰기
