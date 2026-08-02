@@ -617,6 +617,8 @@ private:
     /// Consecutive blocks whose remote exchange failed. Past a threshold the round-trip and
     /// jitter readings are cleared, so the dock cannot show numbers for a dead link.
     int remoteDspConsecutiveMissBlocks_ = 0;
+    /// Blocks to skip before the next probe while the remote monitor path is backed off.
+    uint32_t remoteDspProbeCountdown_ = 0u;
     /// When a block last made it to the node and back. Read by status() without the render lock,
     /// which is why it is atomic; readings older than a moment are reported as nothing at all.
     std::atomic<int64_t> remoteDspLastExchangeSteadyUs_{0};
