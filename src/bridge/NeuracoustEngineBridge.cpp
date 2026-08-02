@@ -7478,6 +7478,31 @@ int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* ou
     return fillNodeInfo(settings, out);
 }
 
+int nc_dsp_probe_node_kind(const char* host, int timeoutMs, char* canonicalOut, size_t canonicalLen) {
+    if (canonicalOut != nullptr && canonicalLen > 0) copyText(canonicalOut, canonicalLen, "");
+    if (host == nullptr || *host == '\0') return 0;
+
+    // Strip any explicit port so both generations can be tried. A single colon is "ip:port"; more
+    // than one means an IPv6 literal, which carries no port here and is left alone.
+    std::string base = host;
+    const auto lastColon = base.rfind(':');
+    if (lastColon != std::string::npos && base.find(':') == lastColon) {
+        base = base.substr(0, lastColon);
+    }
+
+    NCRemoteNodeInfo info{};
+    const std::string appliance = base + ":20002";
+    if (nc_dsp_probe_node_info(appliance.c_str(), timeoutMs, &info) != 0) {
+        copyText(canonicalOut, canonicalLen, appliance);
+        return 2;
+    }
+    if (nc_dsp_probe_node_info(base.c_str(), timeoutMs, &info) != 0) {
+        copyText(canonicalOut, canonicalLen, base);
+        return 1;
+    }
+    return 0;
+}
+
 int nc_dsp_probe_node_audio(const char* host, int timeoutMs, int attempts) {
     if (host == nullptr || *host == '\0') return 0;
     const int rounds = attempts > 0 ? attempts : 8;

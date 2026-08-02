@@ -1367,6 +1367,17 @@ int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* ou
 // off the UI hot path; like nc_dsp_probe_node_info it takes no NCEngine and touches only a socket.
 int nc_dsp_probe_node_audio(const char* host, int timeoutMs, int attempts);
 
+// Which KIND of DSP machine is at this address? 2 = NDS appliance (our engine, ports 20002/20003),
+// 1 = a borrowed computer running the legacy remote_core_server (20000/20001), 0 = nothing there.
+// `canonicalOut` receives the address to actually use for that kind, port included, so a bare
+// address typed into the NDS field is resolved rather than rejected.
+//
+// The two are NOT interchangeable and the UI must not blur them: an appliance is a machine we
+// built, on an OS whose timing we chose; a borrowed computer is somebody's desktop that answers
+// the same protocol. Binding the NDS switch to the second one is how the dock ended up reporting
+// a connected NDS server that was really a Mac with no DSP linked.
+int nc_dsp_probe_node_kind(const char* host, int timeoutMs, char* canonicalOut, size_t canonicalLen);
+
 // Per-item overrides of the project-wide DSP assignment: which machine runs THIS channel's console
 // strip, or THIS insert. Empty string follows the project assignment; otherwise "internal" | "nds" |
 // "external". A session is rarely uniform, so the global rows are defaults, not verdicts.

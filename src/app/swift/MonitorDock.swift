@@ -999,15 +999,27 @@ struct MonitorDock: View {
                         // A job with no remote path yet still stores its assignment, but it must
                         // not look live: amber, not teal, so the row reads as "saved, not routed".
                         let live = picked && machineOn && (job.routed || machine == .internalDsp)
+                        // Picked on a machine that is not up is NOT a lit button. A filled chip —
+                        // teal or amber — reads as "the work is going there", and it is not: the
+                        // job falls back to 내장. So it draws as an empty outline, and 내장 takes
+                        // a ring to show where the audio is really being processed.
+                        let pending = picked && !live
+                        let fallbackHere = machine == .internalDsp && !live
+                            && !dspMachineEnabled(engine.dspRole(job))
                         Button { engine.setDspRole(job, machine) } label: {
-                            Text(machine.label)
-                                .font(Theme.Font.mono(7.5, picked ? .bold : .regular))
-                                .foregroundStyle(picked ? Theme.Palette.background : Theme.Palette.textFaint)
+                            Text(machine.label + (pending ? " 대기" : ""))
+                                .font(Theme.Font.mono(7.5, live ? .bold : .regular))
+                                .foregroundStyle(live ? Theme.Palette.background
+                                                 : pending ? Theme.Palette.amber : Theme.Palette.textFaint)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 3)
                                 .background(RoundedRectangle(cornerRadius: 3)
-                                    .fill(!picked ? Theme.Palette.keyFace
-                                          : live ? Theme.Palette.teal : Theme.Palette.amber))
+                                    .fill(live ? Theme.Palette.teal : Theme.Palette.keyFace))
+                                .overlay(RoundedRectangle(cornerRadius: 3)
+                                    .strokeBorder(pending ? Theme.Palette.amber
+                                                  : fallbackHere ? Theme.Palette.teal : .clear,
+                                                  style: StrokeStyle(lineWidth: 1,
+                                                                     dash: pending ? [2, 2] : [])))
                         }
                         .buttonStyle(.plain)
                         .disabled(!machineOn && !picked)
@@ -1616,9 +1628,12 @@ struct MonitorDock: View {
                             .font(Theme.Font.ui(9, .semibold))
                             .foregroundStyle(Theme.Palette.text)
                             .lineLimit(1)
-                        Text("\(core.address)\(core.coreCount > 0 ? " · 코어 \(core.coreCount)개" : "")\(core.roundTripMs > 0 ? String(format: " · %.1f ms", core.roundTripMs) : "")")
+                        // The KIND comes first, in words. Two machines that answer the same
+                        // protocol are not the same thing: one is an appliance we built, the
+                        // other is a computer being borrowed, and only the first can be NDS.
+                        Text("\(core.isAppliance ? "NDS 어플라이언스" : "외부 노드 (빌려 쓰는 컴퓨터)") · \(core.address)\(core.coreCount > 0 ? " · 코어 \(core.coreCount)개" : "")\(core.roundTripMs > 0 ? String(format: " · %.1f ms", core.roundTripMs) : "")")
                             .font(Theme.Font.mono(7))
-                            .foregroundStyle(Theme.Palette.textFaint)
+                            .foregroundStyle(core.isAppliance ? Theme.Palette.textFaint : Theme.Palette.textMuted)
                             .lineLimit(1)
                     }
                     Spacer(minLength: Theme.Space.sm)
@@ -1626,25 +1641,40 @@ struct MonitorDock: View {
                         Text("● NDS")
                             .font(Theme.Font.mono(7.5, .semibold))
                             .foregroundStyle(Theme.Palette.teal)
-                    } else {
-                        Button("연결") {
+                    } else if core.isAppliance {
+                        Button("NDS 연결") {
                             engine.setNdsHost(core.address)
                             engine.setNdsEnabled(true)
                         }
                         .font(Theme.Font.ui(8.5, .semibold))
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
-                        .help("이 서버를 NDS로 연결합니다 (우클릭: 외부 노드로)")
+                        .help("이 어플라이언스를 NDS로 연결합니다")
+                    } else {
+                        // No NDS button at all on a borrowed computer: the one click it offers is
+                        // the one that is true for this machine.
+                        Button("외부 연결") {
+                            engine.setRemoteDspHost(core.address)
+                            engine.setExternalDspEnabled(true)
+                        }
+                        .font(Theme.Font.ui(8.5, .semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("빌려 쓰는 컴퓨터입니다 — 외부 노드로 연결합니다 (NDS 아님)")
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Color(hex: 0x22282e)))
                 .contextMenu {
+                    // Offered only where it is true. A borrowed computer used to sit behind an
+                    // enabled "NDS로 연결" that engaged the switch over a machine that is not an
+                    // appliance — the menu was inviting the wrong answer.
                     Button("NDS로 연결") {
                         engine.setNdsHost(core.address)
                         engine.setNdsEnabled(true)
                     }
+                    .disabled(!core.isAppliance)
                     Button("외부 노드로 연결") {
                         engine.setRemoteDspHost(core.address)
                         engine.setExternalDspEnabled(true)

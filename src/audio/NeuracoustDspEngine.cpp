@@ -2525,16 +2525,24 @@ void NeuracoustDspEngine::populateStatusLocked(AudioEngineStatus& status) const 
     status.playbackStabilityBufferSize = std::max(1, settings_.bufferSize) * std::max(1, settings_.playbackStabilityBufferMultiplier);
     status.dspEngineName = "Neuracoust DSP Engine";
     status.monitorDspPathMode = settings_.monitorDspPathMode;
-    status.remoteDspMonitorActive = remoteDspMonitorActive_;
-    status.remoteDspRoundTripMs = remoteDspRoundTripMs_;
+    // Remote telemetry ages out. These numbers are only true while blocks are actually crossing:
+    // once the stream stops being called at all — transport stopped, no monitor signal, the node
+    // unplugged — the last values would sit on the dock forever, and a link that no longer exists
+    // would go on reporting a round trip and a "connected" lamp.
+    const int64_t lastExchangeUs = remoteDspLastExchangeSteadyUs_.load(std::memory_order_relaxed);
+    const int64_t nowSteadyUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const bool remoteTelemetryFresh = lastExchangeUs > 0 && (nowSteadyUs - lastExchangeUs) < 1500000;
+    status.remoteDspMonitorActive = remoteDspMonitorActive_ && remoteTelemetryFresh;
+    status.remoteDspRoundTripMs = remoteTelemetryFresh ? remoteDspRoundTripMs_ : 0.0;
     status.remoteMixBusCount = remoteMixerMode_.empty()
         ? 0u : static_cast<uint32_t>(realtimeMixSessions_.size());
     status.remoteMixSums = remoteMixSums_;
     status.remoteMixMisses = remoteMixMisses_;
     status.referenceUnderrunBlocks = referenceUnderrunBlocks_.load(std::memory_order_relaxed);
     status.referenceOverrunDrops = referenceOverrunDrops_.load(std::memory_order_relaxed);
-    status.remoteDspAverageRoundTripJitterUs = remoteDspAverageRoundTripJitterUs_;
-    status.remoteDspMaxRoundTripJitterUs = remoteDspMaxRoundTripJitterUs_;
+    status.remoteDspAverageRoundTripJitterUs = remoteTelemetryFresh ? remoteDspAverageRoundTripJitterUs_ : 0.0;
+    status.remoteDspMaxRoundTripJitterUs = remoteTelemetryFresh ? remoteDspMaxRoundTripJitterUs_ : 0.0;
     status.requestedPerformanceCoreCount = std::max(1, settings_.requestedPerformanceCoreCount);
     status.monitorPathDescription = lowLatencyRecordMonitoringActive_
         ? "Record-armed tracks are reserved for the low-latency monitor path; playback uses the stability buffer."
@@ -3782,6 +3790,10 @@ bool NeuracoustDspEngine::applyRemoteMonitorDspLocked(std::vector<float>& interl
         interleavedStereo = remoteDspProcessedBlock_;
         remoteDspMonitorActive_ = true;
         remoteDspConsecutiveMissBlocks_ = 0;
+        remoteDspLastExchangeSteadyUs_.store(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count(),
+            std::memory_order_relaxed);
         const auto streamStatus = remoteMonitorDspStream_.status();
         remoteDspRoundTripMs_ = streamStatus.averageRoundTripMs;
         remoteDspAverageRoundTripJitterUs_ = streamStatus.averageRoundTripJitterUs;

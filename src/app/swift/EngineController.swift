@@ -3116,31 +3116,45 @@ final class EngineController: ObservableObject {
         let host = ndsHost
         ndsLinkStatus = "확인 중…"
         Task.detached(priority: .userInitiated) {
-            if Self.carriesAudio(host) {
+            // NDS means OUR appliance, and nothing else. A borrowed computer speaks the same
+            // protocol on the older ports, which is precisely why the switch has to ask what kind
+            // of machine answered instead of accepting whatever does: engaging NDS on somebody's
+            // desktop is a claim the dock cannot keep.
+            let (kind, canonical) = Self.classifyNode(host)
+            if kind == .appliance, Self.carriesAudio(canonical) {
                 await MainActor.run { [weak self] in
                     guard let self, let handle = self.handle else { return }
+                    if canonical != host {
+                        canonical.withCString { nc_dsp_set_nds_host(handle, $0) }
+                        self.ndsHost = canonical
+                    }
                     nc_dsp_set_nds_enabled(handle, 1)
                     self.reloadDspRoles()
                     self.ndsLinkStatus = ""
                 }
                 return
             }
-            // Answering status but carrying no audio is its own failure, and a different one:
-            // the box is up, the port is open, and not one block comes back. Scanning would just
-            // find the same machine again, so say what is wrong instead of hunting.
-            let statusOnly = Self.probeNode(host) != nil
-            // The configured address is dead — hunt for the appliance itself.
+            if kind == .borrowedComputer {
+                await MainActor.run { [weak self] in
+                    guard let self, let handle = self.handle else { return }
+                    nc_dsp_set_nds_enabled(handle, 0)
+                    self.reloadDspRoles()
+                    self.ndsLinkStatus = "이 주소는 NDS 어플라이언스가 아니라 외부 노드(빌려 쓰는 컴퓨터)입니다 — 아래 '외부 노드'로 연결하세요"
+                }
+                return
+            }
+            // An appliance that answers status but passes no audio is its own failure: the box is
+            // up, the port is open, and not one block comes back. Say that rather than hunt.
+            let applianceStatusOnly = kind == .appliance
+            // Nothing at the configured address — hunt for an appliance, and only an appliance.
             var scanBuffer = [CChar](repeating: 0, count: 4096)
             nc_dsp_scan_lan(&scanBuffer, scanBuffer.count)
-            // Prefer an appliance engine (host:20002) — its OS and timing are ours — but take a
-            // legacy remote_core_server (bare host, ports 20000/20001) when that is what answered.
-            // Insisting on ":20002" meant a node running the legacy server was thrown away and the
-            // switch reported "no response" while the box sat there answering every probe.
             let all = String(cString: scanBuffer)
                 .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-            let entries = all.filter { $0.contains(":20002") } + all.filter { !$0.contains(":20002") }
-            // A found address still has to prove it moves audio before the switch engages.
-            let usable = entries.first(where: { Self.carriesAudio($0) })
+            let appliances = all.filter { $0.contains(":20002") }
+            let borrowedOnly = appliances.isEmpty && !all.isEmpty
+            // A found appliance still has to prove it moves audio before the switch engages.
+            let usable = appliances.first(where: { Self.carriesAudio($0) })
             await MainActor.run { [weak self] in
                 guard let self, let handle = self.handle else { return }
                 if let address = usable {
@@ -3152,11 +3166,30 @@ final class EngineController: ObservableObject {
                 } else {
                     nc_dsp_set_nds_enabled(handle, 0)
                     self.reloadDspRoles()
-                    self.ndsLinkStatus = (statusOnly || !entries.isEmpty)
-                        ? "서버가 상태에만 응답하고 오디오는 오지 않습니다 — 서버의 DSP 모듈이 올라와 있는지 확인하세요"
-                        : "NDS 서버 응답 없음 — 연결(케이블/전원)을 확인하세요"
+                    if applianceStatusOnly || !appliances.isEmpty {
+                        self.ndsLinkStatus = "어플라이언스가 상태에만 응답하고 오디오는 오지 않습니다 — 노드의 엔진 상태를 확인하세요"
+                    } else if borrowedOnly {
+                        self.ndsLinkStatus = "NDS 어플라이언스가 없습니다 — 응답한 것은 외부 노드뿐입니다"
+                    } else {
+                        self.ndsLinkStatus = "NDS 서버 응답 없음 — 연결(케이블/전원)을 확인하세요"
+                    }
                 }
             }
+        }
+    }
+
+    /// What kind of machine is at an address. The dock must never present these as one thing.
+    enum NodeKind { case none, borrowedComputer, appliance }
+
+    nonisolated static func classifyNode(_ host: String) -> (NodeKind, String) {
+        guard !host.isEmpty else { return (.none, host) }
+        var buffer = [CChar](repeating: 0, count: 256)
+        let kind = host.withCString { nc_dsp_probe_node_kind($0, 120, &buffer, buffer.count) }
+        let canonical = String(cString: buffer)
+        switch kind {
+        case 2: return (.appliance, canonical.isEmpty ? host : canonical)
+        case 1: return (.borrowedComputer, canonical.isEmpty ? host : canonical)
+        default: return (.none, host)
         }
     }
 
