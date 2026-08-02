@@ -43,6 +43,10 @@ public:
     void setMetronomeAccentPattern(const std::vector<float>& pattern);
     void setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled);
     void setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer);
+    /// Throw away the remote monitor stream so the next block builds a fresh socket. The socket
+    /// is what carries the interface binding, so this is how a link that moved to another port
+    /// of this machine — same address, different cable — is picked up without a restart.
+    void resetRemoteMonitorDspStream();
     void setListenRoomSettings(const ListenRoomSettings& settings);
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room");
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, float volumeDb) {

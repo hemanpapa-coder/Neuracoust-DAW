@@ -488,6 +488,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettingsFromProject(
     settings.autoOverflow = project.dspAutoOverflow;
     settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, project.remoteMixerChannels)));
     settings.ndsPoolHosts = project.ndsPoolHosts;
+    settings.preferredInterface = project.remoteDspInterface;
     settings.nodes.clear();
     return settings;
 }
@@ -518,6 +519,7 @@ neuracoust::daw::RemoteDspServerSettings buildRemoteDspSettings(NCEngine* engine
     settings.autoOverflow = engine->project.dspAutoOverflow;
     settings.mixerChannels = static_cast<uint16_t>(std::max(8, std::min(64, engine->project.remoteMixerChannels)));
     settings.ndsPoolHosts = engine->project.ndsPoolHosts;
+    settings.preferredInterface = engine->project.remoteDspInterface;
     settings.nodes.clear();
     return settings;
 }
@@ -7476,6 +7478,53 @@ int nc_dsp_probe_node_info(const char* host, int timeoutMs, NCRemoteNodeInfo* ou
     neuracoust::daw::applyRemoteDspHostPort(settings);   // "ip:port" probes a scratch instance
     settings.timeoutMs = timeoutMs > 0 ? timeoutMs : 150;
     return fillNodeInfo(settings, out);
+}
+
+void nc_net_ports_for_host(const char* host, char* out, size_t outLen) {
+    copyText(out, outLen, "");
+    if (host == nullptr || *host == '\0') return;
+
+    // Strip a port suffix: the probe uses the status port, not whatever the caller addressed.
+    std::string base = host;
+    const auto lastColon = base.rfind(':');
+    uint16_t statusPort = 20001;
+    if (lastColon != std::string::npos && base.find(':') == lastColon) {
+        const std::string portText = base.substr(lastColon + 1);
+        base = base.substr(0, lastColon);
+        const int parsed = std::atoi(portText.c_str());
+        if (parsed > 0 && parsed < 65535) statusPort = static_cast<uint16_t>(parsed + 1);
+    }
+
+    std::string joined;
+    for (const auto& port : neuracoust::daw::enumerateHostNetworkPorts(base, statusPort)) {
+        if (!joined.empty()) joined += '\n';
+        char line[192];
+        std::snprintf(line, sizeof(line), "%s|%s|%.2f",
+                      port.name.c_str(), port.address.c_str(), port.roundTripMs);
+        joined += line;
+    }
+    copyText(out, outLen, joined);
+}
+
+void nc_dsp_preferred_interface(NCEngine* engine, char* out, size_t outLen) {
+    copyText(out, outLen, engine != nullptr ? engine->project.remoteDspInterface : std::string{});
+}
+
+void nc_dsp_set_preferred_interface(NCEngine* engine, const char* name) {
+    if (engine == nullptr) return;
+    const std::string next = name != nullptr ? name : "";
+    if (engine->project.remoteDspInterface == next) return;
+    engine->project.remoteDspInterface = next;
+    // The binding lives on the socket, so the stream has to be rebuilt for this to take effect.
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->engine.resetRemoteMonitorDspStream();
+    engine->recordStep("DSP 랜 포트");
+}
+
+void nc_dsp_reconnect_remote(NCEngine* engine) {
+    if (engine == nullptr) return;
+    engine->engine.setMonitorDspPathMode(engine->monitorDspPathMode, buildRemoteDspSettings(engine));
+    engine->engine.resetRemoteMonitorDspStream();
 }
 
 int nc_dsp_probe_node_kind(const char* host, int timeoutMs, char* canonicalOut, size_t canonicalLen) {

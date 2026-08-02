@@ -1368,6 +1368,35 @@ struct MonitorDock: View {
 
     /// The machine cards' switches gate everything above them that names the machine — the
     /// role-table columns and these source buttons. Off machine, dead controls.
+    /// One selectable port line. `name` empty is the automatic choice.
+    private func portRow(name: String, label: String, detail: String, reaches: Bool) -> some View {
+        let picked = engine.preferredNetworkPort == name
+        return Button { engine.setPreferredNetworkPort(name) } label: {
+            HStack(spacing: Theme.Space.sm) {
+                Image(systemName: picked ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(picked ? Theme.Palette.teal : Theme.Palette.textFaint)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                        .font(Theme.Font.ui(9, picked ? .semibold : .regular))
+                        .foregroundStyle(Theme.Palette.text)
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(Theme.Font.mono(7))
+                            .foregroundStyle(reaches ? Theme.Palette.textFaint : Color(hex: 0xd98a5a))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.card)
+                .fill(picked ? Color(hex: 0x22282e) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func dspMachineEnabled(_ machine: EngineController.DspMachine) -> Bool {
         switch machine {
         case .internalDsp: return true
@@ -1760,6 +1789,30 @@ struct MonitorDock: View {
                         Text(engine.nodeUpdateStatus)
                     }
                 }
+
+            // Which cable goes where. On link-local addressing the routing table cannot answer
+            // this, and this Mac has several ports that do not go to the same switch — so the
+            // ports are listed with what each one actually measures to the node, and either the
+            // fastest is taken automatically or the user pins one.
+            if !engine.networkPorts.isEmpty {
+                HStack(spacing: Theme.Space.sm) {
+                    sectionLabel("랜 포트")
+                    Spacer(minLength: 0)
+                    Button("재연결") { engine.reconnectRemote() }
+                        .font(Theme.Font.ui(8))
+                        .buttonStyle(.bordered).controlSize(.mini)
+                        .help("케이블을 옮긴 뒤 곧바로 다시 붙일 때")
+                }
+                portRow(name: "", label: "자동 (가장 빠른 포트)", detail: "", reaches: true)
+                ForEach(engine.networkPorts) { port in
+                    portRow(name: port.name,
+                            label: port.name,
+                            detail: port.reaches
+                                ? String(format: "노드 %.2f ms · %@", port.roundTripMs, port.address)
+                                : "노드에 닿지 않음 · \(port.address)",
+                            reaches: port.reaches)
+                }
+            }
 
             // Verification result of the last switch-ON attempt: 확인 중 / 재체결 주소 / 응답 없음.
             // BELOW the card, not laid over it — as an overlay this sat on top of the address

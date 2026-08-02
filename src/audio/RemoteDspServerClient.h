@@ -26,6 +26,19 @@ struct RemoteDspServerNode {
     uint16_t pluginCoreReserve = 2;
 };
 
+/// One Ethernet port of THIS machine, and whether a given node answers through it.
+/// roundTripMs < 0 means the port does not reach that node.
+struct HostNetworkPort {
+    std::string name;        // "en7"
+    std::string address;     // this machine's address on that port
+    double roundTripMs = -1.0;
+};
+
+/// Probe every up, non-loopback IPv4 port for `host` on `statusPort`. Blocking (one ping per
+/// port); the answer is what tells a studio Mac's several ports apart, which is not something
+/// the routing table can do for a link-local node.
+std::vector<HostNetworkPort> enumerateHostNetworkPorts(const std::string& host, uint16_t statusPort);
+
 struct RemoteDspServerSettings {
     // Two distinct machines answer the same NART protocol, and they are not interchangeable:
     // `host` is the EXTERNAL node, a general-purpose computer borrowed for spare cores;
@@ -43,6 +56,10 @@ struct RemoteDspServerSettings {
     /// across [ndsHost] + this list, so N boxes carry the strips as ONE machine. Bus summing
     /// and the master chain stay on the primary for coherence.
     std::vector<std::string> ndsPoolHosts;
+    /// Which Ethernet port of THIS machine the link must leave by ("en7"); empty = pick the one
+    /// that measures fastest to the node. A studio Mac has several ports going to several
+    /// places, and with link-local addressing the routing table cannot tell them apart.
+    std::string preferredInterface;
     // Which machine carries which job ("internal" | "nds" | "external"). The user assigns these
     // explicitly; autoOverflow turns them into starting points that spill to the next machine
     // when one runs short. Carried here because this struct is what already reaches every place
@@ -276,6 +293,18 @@ private:
 };
 
 RemoteDspServerInfo queryRemoteDspServerInfo(const RemoteDspServerSettings& settings);
+/// The address worth REMEMBERING for a node that answered at `numericHost` and called itself
+/// `advertisedHostname`.
+///
+/// A node reached over a direct cable or an audio-only hub has no DHCP, so it self-assigns a
+/// link-local 169.254.x.y — and picks a DIFFERENT one every time it is replugged. Saving that
+/// number means the node is lost at the next reconnect, which is exactly what happens. Its mDNS
+/// name does not move, so prefer the name — but only after checking it resolves back to the very
+/// address that answered, so a stale or duplicated name can never redirect us to another machine.
+/// Falls back to `numericHost` whenever that check does not hold.
+std::string preferredNodeAddress(const std::string& numericHost,
+                                 const std::string& advertisedHostname);
+
 std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspServerSettings& settings,
                                                                const std::vector<std::string>& broadcastHosts = {},
                                                                int timeoutMs = 350);

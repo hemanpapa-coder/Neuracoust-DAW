@@ -988,6 +988,13 @@ void NeuracoustDspEngine::setMonitorDspModules(const std::vector<MonitorDspModul
     }
 }
 
+void NeuracoustDspEngine::resetRemoteMonitorDspStream() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    remoteMonitorDspStream_.reset();
+    resetRemoteDspTelemetryLocked();
+    remoteDspMonitorActive_ = false;
+}
+
 void NeuracoustDspEngine::setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer) {
     std::lock_guard<std::mutex> lock(mutex_);
     const std::string safeMode = (mode == "external" || mode == "nds" || mode == "remote_external" || mode == "auto") ? mode : "internal";

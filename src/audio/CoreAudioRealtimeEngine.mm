@@ -686,6 +686,8 @@ public:
         dspEngine_.setMonitorDspPathMode(settings_.monitorDspPathMode, settings_.remoteDspServer);
     }
 
+    void resetRemoteMonitorDspStream() { dspEngine_.resetRemoteMonitorDspStream(); }
+
     void setListenRoomSettings(const ListenRoomSettings& settings) {
         settings_.listenRoom = normalizedListenRoomSettings(settings);
         dspEngine_.setListenRoomSettings(settings_.listenRoom);
@@ -1597,6 +1599,7 @@ void RealtimeAudioEngine::setMetronomeEnabled(bool enabled,
 void RealtimeAudioEngine::setMetronomeAccentPattern(const std::vector<float>& pattern) { impl_->setMetronomeAccentPattern(pattern); }
 void RealtimeAudioEngine::setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled) { impl_->setMonitorDspModules(modules, enabled); }
 void RealtimeAudioEngine::setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer) { impl_->setMonitorDspPathMode(mode, remoteDspServer); }
+void RealtimeAudioEngine::resetRemoteMonitorDspStream() { impl_->resetRemoteMonitorDspStream(); }
 void RealtimeAudioEngine::setListenRoomSettings(const ListenRoomSettings& settings) { impl_->setListenRoomSettings(settings); }
 void RealtimeAudioEngine::setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb, const std::string& talkbackRoute) {
     impl_->setMonitorStationControls(mono, listenMode, swapLeftRight, invertLeft, invertRight, mute, dim, talkback, inputTrimDb, volumeDb, dimDb, talkbackRoute);

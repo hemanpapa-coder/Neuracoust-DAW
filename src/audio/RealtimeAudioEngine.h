@@ -209,6 +209,9 @@ public:
     void setMetronomeAccentPattern(const std::vector<float>& pattern);
     void setMonitorDspModules(const std::vector<MonitorDspModule>& modules, bool enabled);
     void setMonitorDspPathMode(const std::string& mode, const RemoteDspServerSettings& remoteDspServer);
+    /// Drop the remote monitor stream so the next block opens a fresh socket — how a link that
+    /// moved to another port of this machine is picked up without restarting anything.
+    void resetRemoteMonitorDspStream();
     void setListenRoomSettings(const ListenRoomSettings& settings);
     void setMonitorStationControls(bool mono, const std::string& listenMode, bool swapLeftRight, bool invertLeft, bool invertRight, bool mute, bool dim, bool talkback, float inputTrimDb, float volumeDb, float dimDb = -20.0f, const std::string& talkbackRoute = "listen_room");
     void setPhysicalInputAccessAllowed(bool allowed);

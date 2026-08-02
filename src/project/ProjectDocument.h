@@ -266,6 +266,9 @@ struct ProjectDocument {
     // falls back to "studio.local". This is what makes External/NDS reach a real node
     // instead of the hardcoded default.
     std::string remoteDspHost = "studio.local";
+    /// Which Ethernet port of this Mac the remote link leaves by ("en7"); empty = measure and
+    /// pick. Saved with the session because the answer is a property of the room's wiring.
+    std::string remoteDspInterface;
     // The dedicated NDS appliance, addressed separately from the general-purpose node above.
     // They speak the same protocol but are not the same class of machine: the appliance runs its
     // own RT kernel and measures tighter in the tail, which is what decides quality for live work.

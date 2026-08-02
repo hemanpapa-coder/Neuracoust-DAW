@@ -2024,6 +2024,7 @@ std::string serializeProject(const ProjectDocument& inputProject) {
     out << "  \"externalDspCoreCount\": " << std::max(1, std::min(16, project.externalDspCoreCount)) << ",\n";
     out << "  \"externalDspEnabled\": " << (project.externalDspEnabled ? "true" : "false") << ",\n";
     out << "  \"remoteDspHost\": \"" << escapeJsonString(project.remoteDspHost) << "\",\n";
+    out << "  \"remoteDspInterface\": \"" << escapeJsonString(project.remoteDspInterface) << "\",\n";
     out << "  \"ndsHost\": \"" << escapeJsonString(project.ndsHost) << "\",\n";
     out << "  \"ndsPoolHosts\": [";
     for (size_t i = 0; i < project.ndsPoolHosts.size(); ++i) {
@@ -2737,6 +2738,7 @@ bool deserializeProject(const std::string& text, ProjectDocument& project, std::
     {
         const std::string host = stringAfterKey(text, "remoteDspHost");
         parsed.remoteDspHost = host.empty() ? std::string("studio.local") : host;
+        parsed.remoteDspInterface = stringAfterKey(text, "remoteDspInterface");
     }
     {
         const std::string host = stringAfterKey(text, "ndsHost");

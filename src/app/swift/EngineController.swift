@@ -3196,6 +3196,54 @@ final class EngineController: ObservableObject {
     /// NDS switch verification status ("" = quiet). Shown under the switch.
     @Published var ndsLinkStatus = ""
 
+    /// This Mac's Ethernet ports and whether the appliance answers through each of them. A studio
+    /// machine has several, and they do not go to the same place — one to the room switch, one to
+    /// the audio hub, one to a direct cable. Which one carries the node is otherwise invisible.
+    struct NetworkPort: Identifiable, Equatable {
+        var id: String { name }
+        let name: String            // "en7"
+        let address: String         // this Mac's address on that port
+        let roundTripMs: Double     // < 0 = does not reach the node
+        var reaches: Bool { roundTripMs >= 0 }
+    }
+    @Published private(set) var networkPorts: [NetworkPort] = []
+    /// "" = 자동 (measure and pick the quickest). Otherwise the pinned port name.
+    @Published private(set) var preferredNetworkPort = ""
+
+    func refreshNetworkPorts() {
+        let host = ndsEnabled || !ndsHost.isEmpty ? ndsHost : remoteDspHost
+        guard !host.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            var buffer = [CChar](repeating: 0, count: 2048)
+            host.withCString { nc_net_ports_for_host($0, &buffer, buffer.count) }
+            let ports = String(cString: buffer).split(separator: "\n").compactMap { line -> NetworkPort? in
+                let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                guard f.count == 3 else { return nil }
+                return NetworkPort(name: f[0], address: f[1], roundTripMs: Double(f[2]) ?? -1)
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.networkPorts != ports { self.networkPorts = ports }
+            }
+        }
+    }
+
+    func setPreferredNetworkPort(_ name: String) {
+        guard let handle else { return }
+        name.withCString { nc_dsp_set_preferred_interface(handle, $0) }
+        preferredNetworkPort = name
+        refreshNetworkPorts()
+    }
+
+    /// Rebuild the remote stream's socket — the manual version of what the recovery does when a
+    /// link goes quiet, for when the cable has just been moved and waiting is no fun.
+    func reconnectRemote() {
+        guard let handle else { return }
+        nc_dsp_reconnect_remote(handle)
+        ndsLinkStatus = "재연결 시도 중…"
+        refreshNetworkPorts()
+    }
+
     /// NDS pool membership — see nc_dsp_pool_*. Strips round-robin across primary + pool.
     func ndsPoolContains(_ host: String) -> Bool {
         guard let handle else { return false }
@@ -3221,6 +3269,7 @@ final class EngineController: ObservableObject {
         dspAutoOverflow = nc_dsp_auto_overflow(handle) != 0
         ndsHost = readString { nc_dsp_nds_host(handle, $0, $1) }
         ndsEnabled = nc_dsp_nds_enabled(handle) != 0
+        setIfChanged(\.preferredNetworkPort, readString { nc_dsp_preferred_interface(handle, $0, $1) })
         setIfChanged(\.remoteNetworkBufferFrames, Int(nc_dsp_network_buffer_frames(handle)))
         setIfChanged(\.remoteMixerChannels, Int(nc_dsp_mixer_channels(handle)))
         setIfChanged(\.remoteLatencyMode, readEngineString { nc_dsp_latency_mode(handle, $0, $1) })
@@ -3425,15 +3474,22 @@ final class EngineController: ObservableObject {
         if now.timeIntervalSince(lastAutoScanAt) > 30 {
             lastAutoScanAt = now
             scanForCores()
+            refreshNetworkPorts()
         }
         // Only when NDS is meant to be up and is not: a working link is left alone.
         guard ndsEnabled, !remoteDspActive, now.timeIntervalSince(lastNdsRecoveryAt) > 15 else { return }
         lastNdsRecoveryAt = now
         let host = ndsHost
         Task.detached(priority: .utility) {
-            // Still there? Then nothing is wrong with the address — the silence is elsewhere
-            // (no monitor signal, for one), and re-binding would be noise.
-            if Self.carriesAudio(host) { return }
+            // Still there? Then the address is fine and the stream is the stale part — its socket
+            // is bound to a port that may no longer reach the node. Rebuild it rather than hunt.
+            if Self.carriesAudio(host) {
+                await MainActor.run { [weak self] in
+                    guard let self, let handle = self.handle, self.ndsEnabled else { return }
+                    nc_dsp_reconnect_remote(handle)
+                }
+                return
+            }
             var scanBuffer = [CChar](repeating: 0, count: 4096)
             nc_dsp_scan_lan(&scanBuffer, scanBuffer.count)
             let appliances = String(cString: scanBuffer)

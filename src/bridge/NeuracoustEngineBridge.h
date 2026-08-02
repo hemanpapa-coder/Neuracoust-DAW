@@ -1378,6 +1378,26 @@ int nc_dsp_probe_node_audio(const char* host, int timeoutMs, int attempts);
 // a connected NDS server that was really a Mac with no DSP linked.
 int nc_dsp_probe_node_kind(const char* host, int timeoutMs, char* canonicalOut, size_t canonicalLen);
 
+// Which of this machine's Ethernet ports reaches `host`, and how fast. One line per port:
+//
+//     en7|169.254.164.54|0.42        ← answers, round trip in ms
+//     en0|169.254.61.248|-1          ← this port does not reach it
+//
+// A studio Mac has several ports and they do not go to the same place — one to the room switch,
+// one to the audio hub, one to a direct cable. Which one carries the node is otherwise invisible,
+// and on link-local addressing it is not something the routing table can answer. Blocking
+// (a ping per port); call it off the UI hot path.
+void nc_net_ports_for_host(const char* host, char* out, size_t outLen);
+
+// The port the remote link must use, by name ("en7"); empty = choose automatically by measuring.
+// Changing it rebuilds the stream's socket, which is what carries the binding.
+void nc_dsp_preferred_interface(NCEngine* engine, char* out, size_t outLen);
+void nc_dsp_set_preferred_interface(NCEngine* engine, const char* name);
+
+// Drop the remote monitor stream so the next block opens a fresh socket — the way a link that
+// moved to another port of this machine is picked up without restarting anything.
+void nc_dsp_reconnect_remote(NCEngine* engine);
+
 // Per-item overrides of the project-wide DSP assignment: which machine runs THIS channel's console
 // strip, or THIS insert. Empty string follows the project assignment; otherwise "internal" | "nds" |
 // "external". A session is rarely uniform, so the global rows are defaults, not verdicts.

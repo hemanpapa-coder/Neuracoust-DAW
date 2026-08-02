@@ -152,15 +152,16 @@ bool addressIsLinkLocal(const sockaddr_in& target) {
 }
 
 #if defined(__APPLE__)
-// One status ping out one specific port. Used both to revalidate a remembered port and to sweep
-// the candidates, so the two paths cannot drift apart.
-bool interfaceReachesHost(unsigned int ifindex, const sockaddr_in& target, uint16_t statusPort) {
+// One status ping out one specific port, timed. Negative = no answer. Used both to revalidate a
+// remembered port and to sweep the candidates, so the two paths cannot drift apart.
+double interfaceRoundTripMs(unsigned int ifindex, const sockaddr_in& target, uint16_t statusPort) {
     const SocketHandle probe = socket(AF_INET, SOCK_DGRAM, 0);
-    if (probe == kInvalidSocket) return false;
+    if (probe == kInvalidSocket) return -1.0;
     setsockopt(probe, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
     sockaddr_in statusTarget = target;
     statusTarget.sin_port = htons(statusPort);
     const char ping[] = "NA_STATUS\n";
+    const auto sentAt = std::chrono::steady_clock::now();
     sendto(probe, ping, sizeof(ping) - 1u, 0,
            reinterpret_cast<const sockaddr*>(&statusTarget),
            static_cast<SocketLength>(sizeof(statusTarget)));
@@ -169,8 +170,14 @@ bool interfaceReachesHost(unsigned int ifindex, const sockaddr_in& target, uint1
     FD_SET(probe, &readSet);
     timeval wait {0, 150000};   // 150 ms
     const bool answered = select(static_cast<int>(probe) + 1, &readSet, nullptr, nullptr, &wait) > 0;
+    const double elapsedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - sentAt).count();
     closeSocket(probe);
-    return answered;
+    return answered ? elapsedMs : -1.0;
+}
+
+bool interfaceReachesHost(unsigned int ifindex, const sockaddr_in& target, uint16_t statusPort) {
+    return interfaceRoundTripMs(ifindex, target, statusPort) >= 0.0;
 }
 
 unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statusPort) {
@@ -206,10 +213,16 @@ unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statu
         return remembered;
     }
 
+    // Sweep EVERY candidate and keep the quickest, rather than stopping at the first that
+    // answers. Two ports of this Mac can be on the same audio switch, so more than one will
+    // answer — and they are not equally good (one may be a shared/adapter port, or negotiating
+    // energy-efficient Ethernet). Choosing by measured round trip picks the right one without
+    // asking anybody to unplug a cable.
     unsigned int resolved = 0;
+    double bestMs = 0.0;
     ifaddrs* interfaces = nullptr;
     if (getifaddrs(&interfaces) == 0) {
-        for (const ifaddrs* ifa = interfaces; ifa != nullptr && resolved == 0; ifa = ifa->ifa_next) {
+        for (const ifaddrs* ifa = interfaces; ifa != nullptr; ifa = ifa->ifa_next) {
             if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET ||
                 (ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
                 continue;
@@ -220,8 +233,10 @@ unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statu
             }
             const unsigned int ifindex = if_nametoindex(ifa->ifa_name);
             if (ifindex == 0) continue;
-            if (interfaceReachesHost(ifindex, target, statusPort)) {
+            const double roundTripMs = interfaceRoundTripMs(ifindex, target, statusPort);
+            if (roundTripMs >= 0.0 && (resolved == 0 || roundTripMs < bestMs)) {
                 resolved = ifindex;
+                bestMs = roundTripMs;
             }
         }
         freeifaddrs(interfaces);
@@ -234,17 +249,29 @@ unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statu
 }
 #endif
 
-// Applies the scope to `socketHandle` when (and only when) the target is link-local. A no-op
-// everywhere else — normal subnet routing is unambiguous.
-void applyLinkLocalScope(SocketHandle socketHandle, const sockaddr_in& target, uint16_t statusPort) {
+// Binds `socketHandle` to the port the link should leave by: the one the user pinned, or — for a
+// link-local target, where the routing table cannot decide — the one that measures fastest. A
+// no-op otherwise; normal subnet routing is unambiguous.
+void applyLinkLocalScope(SocketHandle socketHandle, const sockaddr_in& target, uint16_t statusPort,
+                         const std::string& preferredInterface = std::string{}) {
 #if defined(__APPLE__)
+    if (!preferredInterface.empty()) {
+        const unsigned int pinned = if_nametoindex(preferredInterface.c_str());
+        if (pinned != 0) {
+            // The user's choice wins outright, including over the measurement. That is what a
+            // manual override is for; the port list in the dock shows which ports reach the node,
+            // so the choice is made with the evidence in view rather than blind.
+            setsockopt(socketHandle, IPPROTO_IP, IP_BOUND_IF, &pinned, sizeof(pinned));
+            return;
+        }
+    }
     if (!addressIsLinkLocal(target)) return;
     const unsigned int ifindex = linkLocalInterfaceForHost(target, statusPort);
     if (ifindex != 0) {
         setsockopt(socketHandle, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
     }
 #else
-    (void)socketHandle; (void)target; (void)statusPort;
+    (void)socketHandle; (void)target; (void)statusPort; (void)preferredInterface;
 #endif
 }
 
@@ -415,6 +442,37 @@ RemoteDspServerProbeResult parseProbeResponse(const uint8_t* data,
 }
 
 } // namespace
+
+std::vector<HostNetworkPort> enumerateHostNetworkPorts(const std::string& host, uint16_t statusPort) {
+    std::vector<HostNetworkPort> ports;
+    sockaddr_in target {};
+    std::string message;
+    if (!resolveIpv4Endpoint(host, statusPort, target, message)) return ports;
+#if defined(__APPLE__)
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) return ports;
+    for (const ifaddrs* ifa = interfaces; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET ||
+            (ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+            continue;
+        }
+        const unsigned int ifindex = if_nametoindex(ifa->ifa_name);
+        if (ifindex == 0) continue;
+        const auto* local = reinterpret_cast<const sockaddr_in*>(ifa->ifa_addr);
+        char address[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &local->sin_addr, address, sizeof(address));
+        HostNetworkPort port;
+        port.name = ifa->ifa_name;
+        port.address = address;
+        port.roundTripMs = interfaceRoundTripMs(ifindex, target, statusPort);
+        ports.push_back(port);
+    }
+    freeifaddrs(interfaces);
+#else
+    (void)statusPort;
+#endif
+    return ports;
+}
 
 RemoteDspServerSettings defaultRemoteDspServerSettings() {
     RemoteDspServerSettings settings;
@@ -640,7 +698,7 @@ RemoteDspServerProbeResult probeRemoteDspServer(const RemoteDspServerSettings& s
         return result;
     }
 
-    applyLinkLocalScope(socketHandle, target, settings.statusPort);
+    applyLinkLocalScope(socketHandle, target, settings.statusPort, settings.preferredInterface);
 
     constexpr uint32_t sequence = 1u;
     const auto packet = makeProbePacket(sequence, settings.channelCount, settings.frameCount);
@@ -762,7 +820,7 @@ RemoteDspProcessResult processRemoteDspInterleavedStereo(const RemoteDspServerSe
         return result;
     }
 
-    applyLinkLocalScope(socketHandle, target, settings.statusPort);
+    applyLinkLocalScope(socketHandle, target, settings.statusPort, settings.preferredInterface);
 
     static std::atomic<uint32_t> sequenceCounter {1000u};
     const uint32_t sequence = sequenceCounter.fetch_add(1u, std::memory_order_relaxed);
@@ -901,7 +959,7 @@ struct RemoteMixSession::Impl {
             message = "could not open a UDP socket for the remote mix bus";
             return false;
         }
-        applyLinkLocalScope(socketHandle, target, settings.statusPort);
+        applyLinkLocalScope(socketHandle, target, settings.statusPort, settings.preferredInterface);
         if (connect(socketHandle, reinterpret_cast<const sockaddr*>(&target),
                     static_cast<SocketLength>(sizeof(target))) != 0) {
             message = "could not connect the remote mix socket";
@@ -1143,7 +1201,7 @@ struct RemoteDspProcessSession::Impl {
             message = resolveError;
             return false;
         }
-        applyLinkLocalScope(socketHandle, target, settings.statusPort);
+        applyLinkLocalScope(socketHandle, target, settings.statusPort, settings.preferredInterface);
         if (connect(socketHandle,
                     reinterpret_cast<const sockaddr*>(&target),
                     static_cast<SocketLength>(sizeof(target))) != 0) {
@@ -1389,7 +1447,7 @@ RemoteDspServerInfo queryRemoteDspServerInfo(const RemoteDspServerSettings& sett
         info.message = resolveError;
         return info;
     }
-    applyLinkLocalScope(socketHandle, target, settings.statusPort);
+    applyLinkLocalScope(socketHandle, target, settings.statusPort, settings.preferredInterface);
 
     const char request[] = "NA_STATUS\n";
     const auto started = std::chrono::steady_clock::now();
