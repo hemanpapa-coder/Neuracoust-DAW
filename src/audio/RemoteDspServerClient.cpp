@@ -152,17 +152,60 @@ bool addressIsLinkLocal(const sockaddr_in& target) {
 }
 
 #if defined(__APPLE__)
+// One status ping out one specific port. Used both to revalidate a remembered port and to sweep
+// the candidates, so the two paths cannot drift apart.
+bool interfaceReachesHost(unsigned int ifindex, const sockaddr_in& target, uint16_t statusPort) {
+    const SocketHandle probe = socket(AF_INET, SOCK_DGRAM, 0);
+    if (probe == kInvalidSocket) return false;
+    setsockopt(probe, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
+    sockaddr_in statusTarget = target;
+    statusTarget.sin_port = htons(statusPort);
+    const char ping[] = "NA_STATUS\n";
+    sendto(probe, ping, sizeof(ping) - 1u, 0,
+           reinterpret_cast<const sockaddr*>(&statusTarget),
+           static_cast<SocketLength>(sizeof(statusTarget)));
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(probe, &readSet);
+    timeval wait {0, 150000};   // 150 ms
+    const bool answered = select(static_cast<int>(probe) + 1, &readSet, nullptr, nullptr, &wait) > 0;
+    closeSocket(probe);
+    return answered;
+}
+
 unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statusPort) {
+    struct CachedScope {
+        unsigned int ifindex = 0;
+        std::chrono::steady_clock::time_point verifiedAt {};
+    };
     static std::mutex cacheMutex;
-    static std::map<uint32_t, unsigned int> cache;
+    static std::map<uint32_t, CachedScope> cache;
     const uint32_t hostKey = target.sin_addr.s_addr;
+    const auto now = std::chrono::steady_clock::now();
+
+    // The answer EXPIRES. Two ports of this Mac can sit on the same audio switch, and which one
+    // reaches the node changes when a cable moves — measured live as a node that answered on en0,
+    // then only on en7. A cache that was written once and never revisited kept aiming every
+    // packet at the port that no longer worked, so the link "kept dropping out" and only an app
+    // restart brought it back. Revalidating costs one small ping every few seconds; the full
+    // sweep below runs only when the remembered port has actually stopped answering.
+    unsigned int remembered = 0;
     {
         std::lock_guard<std::mutex> lock(cacheMutex);
         const auto found = cache.find(hostKey);
         if (found != cache.end()) {
-            return found->second;
+            if (now - found->second.verifiedAt < std::chrono::seconds(5)) {
+                return found->second.ifindex;
+            }
+            remembered = found->second.ifindex;
         }
     }
+    if (remembered != 0 && interfaceReachesHost(remembered, target, statusPort)) {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        cache[hostKey] = CachedScope{remembered, now};
+        return remembered;
+    }
+
     unsigned int resolved = 0;
     ifaddrs* interfaces = nullptr;
     if (getifaddrs(&interfaces) == 0) {
@@ -177,29 +220,15 @@ unsigned int linkLocalInterfaceForHost(const sockaddr_in& target, uint16_t statu
             }
             const unsigned int ifindex = if_nametoindex(ifa->ifa_name);
             if (ifindex == 0) continue;
-            const SocketHandle probe = socket(AF_INET, SOCK_DGRAM, 0);
-            if (probe == kInvalidSocket) continue;
-            setsockopt(probe, IPPROTO_IP, IP_BOUND_IF, &ifindex, sizeof(ifindex));
-            sockaddr_in statusTarget = target;
-            statusTarget.sin_port = htons(statusPort);
-            const char ping[] = "NA_STATUS\n";
-            sendto(probe, ping, sizeof(ping) - 1u, 0,
-                   reinterpret_cast<const sockaddr*>(&statusTarget),
-                   static_cast<SocketLength>(sizeof(statusTarget)));
-            fd_set readSet;
-            FD_ZERO(&readSet);
-            FD_SET(probe, &readSet);
-            timeval wait {0, 150000};   // 150 ms per candidate interface
-            if (select(static_cast<int>(probe) + 1, &readSet, nullptr, nullptr, &wait) > 0) {
+            if (interfaceReachesHost(ifindex, target, statusPort)) {
                 resolved = ifindex;
             }
-            closeSocket(probe);
         }
         freeifaddrs(interfaces);
     }
     if (resolved != 0) {
         std::lock_guard<std::mutex> lock(cacheMutex);
-        cache[hostKey] = resolved;   // positive answers only: a dead host may come back elsewhere
+        cache[hostKey] = CachedScope{resolved, now};   // positive answers only
     }
     return resolved;
 }
@@ -1496,6 +1525,40 @@ RemoteDspServerInfo queryRemoteDspServerInfo(const RemoteDspServerSettings& sett
     info.badPackets = integer("bad_packets");
     info.message = "RT DSP status server responded";
     return info;
+}
+
+std::string preferredNodeAddress(const std::string& numericHost,
+                                 const std::string& advertisedHostname) {
+    if (advertisedHostname.empty() || numericHost.empty() || advertisedHostname == numericHost) {
+        return numericHost;
+    }
+    // A name with a port or a scope in it is not something we can verify; keep the number.
+    if (advertisedHostname.find(':') != std::string::npos ||
+        advertisedHostname.find('%') != std::string::npos) {
+        return numericHost;
+    }
+    in_addr expected {};
+    if (inet_pton(AF_INET, numericHost.c_str(), &expected) != 1) {
+        return numericHost;
+    }
+
+    addrinfo hints {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* resolved = nullptr;
+    if (getaddrinfo(advertisedHostname.c_str(), nullptr, &hints, &resolved) != 0 || resolved == nullptr) {
+        return numericHost;
+    }
+    bool matches = false;
+    for (const addrinfo* entry = resolved; entry != nullptr && !matches; entry = entry->ai_next) {
+        if (entry->ai_addr == nullptr || entry->ai_family != AF_INET) {
+            continue;
+        }
+        const auto* candidate = reinterpret_cast<const sockaddr_in*>(entry->ai_addr);
+        matches = candidate->sin_addr.s_addr == expected.s_addr;
+    }
+    freeaddrinfo(resolved);
+    return matches ? advertisedHostname : numericHost;
 }
 
 std::vector<RemoteDspDiscoveryResult> discoverRemoteDspServers(const RemoteDspServerSettings& settings,

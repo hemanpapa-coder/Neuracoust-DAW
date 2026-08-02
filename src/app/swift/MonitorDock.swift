@@ -1717,17 +1717,6 @@ struct MonitorDock: View {
                         setOn: { engine.setNdsEnabled($0) },
                         host: RemoteHostField(kind: .nds),
                         detail: machineDetail(.nds, on: engine.ndsEnabled))
-                // Verification result of the last switch-ON attempt: 확인 중 / 재체결 주소 /
-                // 응답 없음. The switch only ever lights on a server that actually answered.
-                .overlay(alignment: .bottomLeading) {
-                    if !engine.ndsLinkStatus.isEmpty {
-                        Text(engine.ndsLinkStatus)
-                            .font(.system(size: 9))
-                            .foregroundStyle(engine.ndsLinkStatus.contains("응답 없음")
-                                ? Color(hex: 0xd98a5a) : Theme.Palette.textSecondary)
-                            .padding(.leading, 10).padding(.bottom, 3)
-                    }
-                }
                 // SoundGrid-style server options, where SoundGrid puts them: on the server card.
                 .contextMenu {
                     // SoundGrid's two performance modes, split the way the user works: tracking
@@ -1771,6 +1760,20 @@ struct MonitorDock: View {
                         Text(engine.nodeUpdateStatus)
                     }
                 }
+
+            // Verification result of the last switch-ON attempt: 확인 중 / 재체결 주소 / 응답 없음.
+            // BELOW the card, not laid over it — as an overlay this sat on top of the address
+            // field and the two texts were unreadable through each other. It also has to wrap:
+            // these sentences say what to do next, and a clipped instruction is no instruction.
+            if !engine.ndsLinkStatus.isEmpty {
+                Text(engine.ndsLinkStatus)
+                    .font(.system(size: 9))
+                    .foregroundStyle(engine.ndsLinkStatus.contains("응답 없음")
+                        ? Color(hex: 0xd98a5a) : Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+            }
 
             machineCard(title: "외부 노드",
                         subtitle: "범용 컴퓨터 · 여유 코어 빌려 쓰기",

@@ -3406,6 +3406,50 @@ final class EngineController: ObservableObject {
     /// SoundGrid-style inventory: broadcast, list every answering server with its specs. Runs
     /// off the main thread (the scan blocks ~1 s); both the scan and the per-host probe are
     /// engine-free bridge calls, so the main-thread-only engine rule is untouched.
+    /// Last automatic sweep, and last automatic re-bind attempt. Both are throttled: the scan
+    /// broadcasts on every segment and each probe waits on a socket, so they are cheap only if
+    /// they are rare.
+    private var lastAutoScanAt = Date.distantPast
+    private var lastNdsRecoveryAt = Date.distantPast
+
+    /// Plug the appliance in anywhere and it comes back by itself.
+    ///
+    /// On an audio switch there is no DHCP, so the node self-assigns a link-local address — and a
+    /// self-assigned address is a DIFFERENT number every time the cable moves. A saved address is
+    /// therefore worth nothing, and the old behaviour (hunt for the node only when the user
+    /// presses the switch or the refresh button) meant a node that moved looked dead until
+    /// somebody noticed. The inventory now refreshes itself, and an engaged NDS link that stops
+    /// carrying audio re-hunts for the same appliance at its new address without being asked.
+    func maintainRemoteCoreDiscovery() {
+        let now = Date()
+        if now.timeIntervalSince(lastAutoScanAt) > 30 {
+            lastAutoScanAt = now
+            scanForCores()
+        }
+        // Only when NDS is meant to be up and is not: a working link is left alone.
+        guard ndsEnabled, !remoteDspActive, now.timeIntervalSince(lastNdsRecoveryAt) > 15 else { return }
+        lastNdsRecoveryAt = now
+        let host = ndsHost
+        Task.detached(priority: .utility) {
+            // Still there? Then nothing is wrong with the address — the silence is elsewhere
+            // (no monitor signal, for one), and re-binding would be noise.
+            if Self.carriesAudio(host) { return }
+            var scanBuffer = [CChar](repeating: 0, count: 4096)
+            nc_dsp_scan_lan(&scanBuffer, scanBuffer.count)
+            let appliances = String(cString: scanBuffer)
+                .split(separator: "\n").map(String.init)
+                .filter { $0.contains(":20002") && $0 != host }
+            guard let recovered = appliances.first(where: { Self.carriesAudio($0) }) else { return }
+            await MainActor.run { [weak self] in
+                guard let self, let handle = self.handle, self.ndsEnabled else { return }
+                recovered.withCString { nc_dsp_set_nds_host(handle, $0) }
+                self.ndsHost = recovered
+                self.reloadDspRoles()
+                self.ndsLinkStatus = "주소가 바뀌어 자동 재체결: \(recovered)"
+            }
+        }
+    }
+
     func scanForCores() {
         guard !scanningForCores else { return }
         scanningForCores = true
@@ -10522,6 +10566,9 @@ final class EngineController: ObservableObject {
         if measurementLevelCheckActive || measuringInterface {
             measurementInputLevel = nc_measure_input_level(handle)
         }
+        // Both the sweep and the re-bind are throttled inside and run detached — this only
+        // decides WHEN to look, never blocks the poll.
+        maintainRemoteCoreDiscovery()
         listenRoom?.refresh()
     }
     private var deviceRescanTicks = 0
