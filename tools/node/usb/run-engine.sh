@@ -50,9 +50,17 @@ if systemctl is-enabled neuracoust-nds.service >/dev/null 2>&1; then
     exit 1
 fi
 
-# No unit: run it detached, the way the hand-built node does.
+# No unit: run it detached, the way the hand-built node does — which is also driven by a
+# once-a-minute cron watchdog there, so this path must be safe to call when the engine is
+# ALREADY up. Without this guard every watchdog tick would start another engine, and the copies
+# would fight over the ports.
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+    echo "엔진이 이미 가동 중입니다 (pid $(cat "$PIDFILE"))"
+    exit 0
+fi
 # shellcheck disable=SC2086
-nohup "$ENGINE" $MODULES --port "$AUDIO_PORT" --monitor-port "$MONITOR_PORT" >> "$LOGFILE" 2>&1 &
+setsid "$ENGINE" $MODULES --port "$AUDIO_PORT" --monitor-port "$MONITOR_PORT" \
+    < /dev/null >> "$LOGFILE" 2>&1 &
 echo $! > "$PIDFILE"
 sleep 1
 echo "엔진 시작 (pid $(cat "$PIDFILE"), UDP $AUDIO_PORT/$MONITOR_PORT)"
